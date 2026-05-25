@@ -3499,6 +3499,20 @@ void HierRTLMP::multiLevelMacroPlacement(Cluster* parent)
   std::vector<SACoreSoftMacro*>
       sa_containers;  // store all the SA runs to avoid memory leakage
   float best_cost = std::numeric_limits<float>::max();
+  // 重要:check_group_size 不是“开多少个线程/job”。真正并行跑几个退火,是由
+  // run_thread = min(剩余次数, num_threads_) 决定的(也就是 set_thread_count)。
+  //
+  // 退火总共要跑 target_util_list.size() 个配置,每轮并行跑 run_thread 个。如果
+  // “跑完一轮就立刻挑赢家”,赢家就会取决于这一轮有几个(=线程数)。所以这里改成:
+  // 把跑完的解按生成顺序攒进 sa_containers,再按固定大小的“组”检查,与一次并行了
+  // 几个无关,因此结果可复现:
+  //   check_group_size —— 每组检查多少个解(固定值,与线程数无关;调大=考虑的候
+  //                       选更多、质量可能更好但更慢;无需等于核数/线程数)
+  //   num_checked      —— 已经检查过的解的个数(游标,从 0 往后递增)
+  //   check_target     —— 攒够这么多个解(下标 0..check_target)就检查一组
+  const int check_group_size = 10;
+  int num_checked = 0;
+  int check_target = std::min(check_group_size, remaining_runs);
   logger_->report("[MultiLevelMacroPlacement] Start Simulated Annealing Core");
   while (remaining_runs > 0) {
     std::vector<SACoreSoftMacro*> sa_vector;
@@ -3594,20 +3608,33 @@ void HierRTLMP::multiLevelMacroPlacement(Cluster* parent)
         th.join();
       }
     }
-    // add macro tilings
+    remaining_runs -= run_thread;
+    // 把这一批跑完的解先全部攒进 sa_containers,先不急着挑最优
     for (auto& sa : sa_vector) {
-      sa_containers.push_back(sa);  // add SA to containers
-      if (sa->isValid() && sa->getNormCost() < best_cost) {
-        best_cost = sa->getNormCost();
-        best_sa = sa;
-      }
+      sa_containers.push_back(sa);
     }
-    sa_vector.clear();
-    // add early stop mechanism
-    if (best_sa != nullptr) {
+    // 每攒够一组(check_group_size 个)就检查一次。这样“选中第几个解”只取
+    // 决于解的总数,而不取决于一次跑了几个线程,结果因此可复现。
+    while (sa_containers.size() >= check_target) {
+      // 扫描当前这一组,记录代价最低的合格解
+      while (num_checked < check_target) {
+        auto& sa = sa_containers[num_checked];
+        if (sa->isValid() && sa->getNormCost() < best_cost) {
+          best_cost = sa->getNormCost();
+          best_sa = sa;
+        }
+        ++num_checked;
+      }
+      // 已经找到合格解就提前停止
+      if (best_sa) {
+        break;
+      }
+      // 这一组没找到,把检查目标再往后扩一组(不超过剩余次数)
+      check_target = num_checked + std::min(check_group_size, remaining_runs);
+    }
+    if (best_sa) {
       break;
     }
-    remaining_runs -= run_thread;
   }
   logger_->report("[MultiLevelMacroPlacement] Finish Simulated Annealing Core");
   if (best_sa == nullptr) {
@@ -3717,6 +3744,9 @@ void HierRTLMP::multiLevelMacroPlacement(Cluster* parent)
     best_sa = nullptr;
     sa_containers.clear();
     best_cost = std::numeric_limits<float>::max();
+    // 引脚访问处理之后要再跑一轮退火,这里把检查游标和目标一并重置
+    num_checked = 0;
+    check_target = std::min(check_group_size, remaining_runs);
     logger_->report(
         "[MultiLevelMacroPlacement] Start Simulated Annealing Core");
     while (remaining_runs > 0) {
@@ -3814,20 +3844,33 @@ void HierRTLMP::multiLevelMacroPlacement(Cluster* parent)
           th.join();
         }
       }
-      // add macro tilings
+      remaining_runs -= run_thread;
+      // 把这一批跑完的解先全部攒进 sa_containers,先不急着挑最优
       for (auto& sa : sa_vector) {
-        sa_containers.push_back(sa);  // add SA to containers
-        if (sa->isValid() && sa->getNormCost() < best_cost) {
-          best_cost = sa->getNormCost();
-          best_sa = sa;
-        }
+        sa_containers.push_back(sa);
       }
-      sa_vector.clear();
-      // add early stop mechanism
-      if (best_sa != nullptr) {
+      // 每攒够一组(check_group_size 个)就检查一次。这样“选中第几个解”只取
+      // 决于解的总数,而不取决于一次跑了几个线程,结果因此可复现。
+      while (sa_containers.size() >= check_target) {
+        // 扫描当前这一组,记录代价最低的合格解
+        while (num_checked < check_target) {
+          auto& sa = sa_containers[num_checked];
+          if (sa->isValid() && sa->getNormCost() < best_cost) {
+            best_cost = sa->getNormCost();
+            best_sa = sa;
+          }
+          ++num_checked;
+        }
+        // 已经找到合格解就提前停止
+        if (best_sa) {
+          break;
+        }
+        // 这一组没找到,把检查目标再往后扩一组(不超过剩余次数)
+        check_target = num_checked + std::min(check_group_size, remaining_runs);
+      }
+      if (best_sa) {
         break;
       }
-      remaining_runs -= run_thread;
     }
     debugPrint(logger_,
                MPL,
@@ -4225,8 +4268,21 @@ void HierRTLMP::multiLevelMacroPlacementWithoutBusPlanning(Cluster* parent)
   int remaining_runs = target_util_list.size();
   int run_id = 0;
   SACoreSoftMacro* best_sa = nullptr;
-  std::vector<SACoreSoftMacro*>
-      sa_containers;  // store all the SA runs to avoid memory leakage
+  std::vector<SACoreSoftMacro*> sa_containers;
+  // 重要:check_group_size 不是“开多少个线程/job”。真正并行跑几个退火,是由
+  // run_thread = min(剩余次数, num_threads_) 决定的(也就是 set_thread_count)。
+  //
+  // 退火总共要跑 target_util_list.size() 个配置,每轮并行跑 run_thread 个。如果
+  // “跑完一轮就立刻挑赢家”,赢家就会取决于这一轮有几个(=线程数)。所以这里改成:
+  // 把跑完的解按生成顺序攒进 sa_containers,再按固定大小的“组”检查,与一次并行了
+  // 几个无关,因此结果可复现:
+  //   check_group_size —— 每组检查多少个解(固定值,与线程数无关;调大=考虑的候
+  //                       选更多、质量可能更好但更慢;无需等于核数/线程数)
+  //   num_checked      —— 已经检查过的解的个数(游标,从 0 往后递增)
+  //   check_target     —— 攒够这么多个解(下标 0..check_target)就检查一组
+  const int check_group_size = 10;
+  int num_checked = 0;
+  int check_target = std::min(check_group_size, remaining_runs);
   float best_cost = std::numeric_limits<float>::max();
   logger_->report("[MultiLevelMacroPlacement] Start Simulated Annealing Core");
   while (remaining_runs > 0) {
@@ -4323,20 +4379,33 @@ void HierRTLMP::multiLevelMacroPlacementWithoutBusPlanning(Cluster* parent)
         th.join();
       }
     }
-    // add macro tilings
+    remaining_runs -= run_thread;
+    // 把这一批跑完的解先全部攒进 sa_containers,先不急着挑最优
     for (auto& sa : sa_vector) {
-      sa_containers.push_back(sa);  // add SA to containers
-      if (sa->isValid() && sa->getNormCost() < best_cost) {
-        best_cost = sa->getNormCost();
-        best_sa = sa;
-      }
+      sa_containers.push_back(sa);
     }
-    sa_vector.clear();
-    // add early stop mechanism
-    if (best_sa != nullptr) {
+    // 每攒够一组(check_group_size 个)就检查一次。这样“选中第几个解”只取
+    // 决于解的总数,而不取决于一次跑了几个线程,结果因此可复现。
+    while (sa_containers.size() >= check_target) {
+      // 扫描当前这一组,记录代价最低的合格解
+      while (num_checked < check_target) {
+        auto& sa = sa_containers[num_checked];
+        if (sa->isValid() && sa->getNormCost() < best_cost) {
+          best_cost = sa->getNormCost();
+          best_sa = sa;
+        }
+        ++num_checked;
+      }
+      // 已经找到合格解就提前停止
+      if (best_sa) {
+        break;
+      }
+      // 这一组没找到,把检查目标再往后扩一组(不超过剩余次数)
+      check_target = num_checked + std::min(check_group_size, remaining_runs);
+    }
+    if (best_sa) {
       break;
     }
-    remaining_runs -= run_thread;
   }
   logger_->report("[MultiLevelMacroPlacement] Finish Simulated Annealing Core");
   if (best_sa == nullptr) {
@@ -4690,6 +4759,20 @@ void HierRTLMP::enhancedMacroPlacement(Cluster* parent)
   std::vector<SACoreSoftMacro*>
       sa_containers;  // store all the SA runs to avoid memory leakage
   float best_cost = std::numeric_limits<float>::max();
+  // 重要:check_group_size 不是“开多少个线程/job”。真正并行跑几个退火,是由
+  // run_thread = min(剩余次数, num_threads_) 决定的(也就是 set_thread_count)。
+  //
+  // 退火总共要跑 target_util_list.size() 个配置,每轮并行跑 run_thread 个。如果
+  // “跑完一轮就立刻挑赢家”,赢家就会取决于这一轮有几个(=线程数)。所以这里改成:
+  // 把跑完的解按生成顺序攒进 sa_containers,再按固定大小的“组”检查,与一次并行了
+  // 几个无关,因此结果可复现:
+  //   check_group_size —— 每组检查多少个解(固定值,与线程数无关;调大=考虑的候
+  //                       选更多、质量可能更好但更慢;无需等于核数/线程数)
+  //   num_checked      —— 已经检查过的解的个数(游标,从 0 往后递增)
+  //   check_target     —— 攒够这么多个解(下标 0..check_target)就检查一组
+  const int check_group_size = 10;
+  int num_checked = 0;
+  int check_target = std::min(check_group_size, remaining_runs);
   logger_->report("[EnhancedMacroPlacement] Start Simulated Annealing Core");
   while (remaining_runs > 0) {
     std::vector<SACoreSoftMacro*> sa_vector;
@@ -4785,20 +4868,33 @@ void HierRTLMP::enhancedMacroPlacement(Cluster* parent)
         th.join();
       }
     }
-    // add macro tilings
+    remaining_runs -= run_thread;
+    // 把这一批跑完的解先全部攒进 sa_containers,先不急着挑最优
     for (auto& sa : sa_vector) {
-      sa_containers.push_back(sa);  // add SA to containers
-      if (sa->isValid() && sa->getNormCost() < best_cost) {
-        best_cost = sa->getNormCost();
-        best_sa = sa;
-      }
+      sa_containers.push_back(sa);
     }
-    sa_vector.clear();
-    // add early stop mechanism
-    if (best_sa != nullptr) {
+    // 每攒够一组(check_group_size 个)就检查一次。这样“选中第几个解”只取
+    // 决于解的总数,而不取决于一次跑了几个线程,结果因此可复现。
+    while (sa_containers.size() >= check_target) {
+      // 扫描当前这一组,记录代价最低的合格解
+      while (num_checked < check_target) {
+        auto& sa = sa_containers[num_checked];
+        if (sa->isValid() && sa->getNormCost() < best_cost) {
+          best_cost = sa->getNormCost();
+          best_sa = sa;
+        }
+        ++num_checked;
+      }
+      // 已经找到合格解就提前停止
+      if (best_sa) {
+        break;
+      }
+      // 这一组没找到,把检查目标再往后扩一组(不超过剩余次数)
+      check_target = num_checked + std::min(check_group_size, remaining_runs);
+    }
+    if (best_sa) {
       break;
     }
-    remaining_runs -= run_thread;
   }
   logger_->report("[EnhancedMacroPlacement] Finish Simulated Annealing Core");
   if (best_sa == nullptr) {
