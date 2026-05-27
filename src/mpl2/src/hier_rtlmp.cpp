@@ -3612,6 +3612,13 @@ void HierRTLMP::multiLevelMacroPlacement(Cluster* parent)
     // 把这一批跑完的解先全部攒进 sa_containers,先不急着挑最优
     for (auto& sa : sa_vector) {
       sa_containers.push_back(sa);
+      // [调试] 打印每个 run 的 cost,用于对比连续运行 / 重载运行两次的结果
+      logger_->report(
+          "[SA-cost-debug] cluster = {}, sa_id = {}, valid = {}, cost = {}",
+          parent->getName(),
+          static_cast<int>(sa_containers.size()) - 1,
+          sa->isValid(),
+          sa->getNormCost());
     }
     // 每攒够一组(check_group_size 个)就检查一次。这样“选中第几个解”只取
     // 决于解的总数,而不取决于一次跑了几个线程,结果因此可复现。
@@ -3848,6 +3855,13 @@ void HierRTLMP::multiLevelMacroPlacement(Cluster* parent)
       // 把这一批跑完的解先全部攒进 sa_containers,先不急着挑最优
       for (auto& sa : sa_vector) {
         sa_containers.push_back(sa);
+        // [调试] 打印每个 run 的 cost,用于对比连续运行 / 重载运行两次的结果
+        logger_->report(
+            "[SA-cost-debug] cluster = {}, sa_id = {}, valid = {}, cost = {}",
+            parent->getName(),
+            static_cast<int>(sa_containers.size()) - 1,
+            sa->isValid(),
+            sa->getNormCost());
       }
       // 每攒够一组(check_group_size 个)就检查一次。这样“选中第几个解”只取
       // 决于解的总数,而不取决于一次跑了几个线程,结果因此可复现。
@@ -4383,6 +4397,13 @@ void HierRTLMP::multiLevelMacroPlacementWithoutBusPlanning(Cluster* parent)
     // 把这一批跑完的解先全部攒进 sa_containers,先不急着挑最优
     for (auto& sa : sa_vector) {
       sa_containers.push_back(sa);
+      // [调试] 打印每个 run 的 cost,用于对比连续运行 / 重载运行两次的结果
+      logger_->report(
+          "[SA-cost-debug] cluster = {}, sa_id = {}, valid = {}, cost = {}",
+          parent->getName(),
+          static_cast<int>(sa_containers.size()) - 1,
+          sa->isValid(),
+          sa->getNormCost());
     }
     // 每攒够一组(check_group_size 个)就检查一次。这样“选中第几个解”只取
     // 决于解的总数,而不取决于一次跑了几个线程,结果因此可复现。
@@ -4872,6 +4893,13 @@ void HierRTLMP::enhancedMacroPlacement(Cluster* parent)
     // 把这一批跑完的解先全部攒进 sa_containers,先不急着挑最优
     for (auto& sa : sa_vector) {
       sa_containers.push_back(sa);
+      // [调试] 打印每个 run 的 cost,用于对比连续运行 / 重载运行两次的结果
+      logger_->report(
+          "[SA-cost-debug] cluster = {}, sa_id = {}, valid = {}, cost = {}",
+          parent->getName(),
+          static_cast<int>(sa_containers.size()) - 1,
+          sa->isValid(),
+          sa->getNormCost());
     }
     // 每攒够一组(check_group_size 个)就检查一次。这样“选中第几个解”只取
     // 决于解的总数,而不取决于一次跑了几个线程,结果因此可复现。
