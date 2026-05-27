@@ -5350,6 +5350,9 @@ void HierRTLMP::hardMacroClusterMacroPlacement(Cluster* cluster)
     }
     for (int i = 0; i < run_thread; i++) {
       // change the aspect ratio
+      // 用全局 run 序号 sa_id(而非批内下标 i)决定权重,使结果与线程数无关;
+      // 当 num_threads_ >= num_runs_(单批)时 sa_id == i,行为与原来完全一致。
+      const int sa_id = run_id;
       const float width = outline_width * vary_factor_list[run_id++];
       const float height = outline_width * outline_height / width;
       SACoreHardMacro* sa
@@ -5357,8 +5360,8 @@ void HierRTLMP::hardMacroClusterMacroPlacement(Cluster* cluster)
                                 height,
                                 macros,
                                 area_weight_,
-                                outline_weight_ * (i + 1) * 10,
-                                wirelength_weight_ / (i + 1),
+                                outline_weight_ * (sa_id + 1) * 10,
+                                wirelength_weight_ / (sa_id + 1),
                                 guidance_weight_,
                                 fence_weight_,
                                 pos_swap_prob_ * 10 / action_sum,
