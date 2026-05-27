@@ -34,6 +34,7 @@
 ///////////////////////////////////////////////////////////////////////////////
 #include "hier_rtlmp.h"
 
+#include <chrono>
 #include <fstream>
 #include <iostream>
 #include <queue>
@@ -629,11 +630,19 @@ void HierRTLMP::hierRTLMacroPlacer()
     // Perform macro placement in a top-down manner (pre-order DFS)
     //
     logger_->report("Perform Multilevel macro placement...");
+    // [调试] 计时整个(递归的)宏摆放阶段,用于对比不同 check_group_size 的运行时间
+    const auto sa_place_start = std::chrono::steady_clock::now();
     if (bus_planning_flag_ == true) {
       multiLevelMacroPlacement(root_cluster_);
     } else {
       multiLevelMacroPlacementWithoutBusPlanning(root_cluster_);
     }
+    const double sa_place_sec
+        = std::chrono::duration<double>(std::chrono::steady_clock::now()
+                                        - sa_place_start)
+              .count();
+    logger_->report(
+        "[SA-time-debug] total macro placement time = {:.3f} s", sa_place_sec);
   }
 
   for (auto& [inst, hard_macro] : hard_macro_map_) {
