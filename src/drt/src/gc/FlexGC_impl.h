@@ -178,7 +178,9 @@ class FlexGCWorker::Impl
                frBlockObject* obj,
                bool isFixed);
   gcNet* initDRObj(drConnFig* obj, gcNet* currNet = nullptr);
-  gcNet* initRouteObj(frBlockObject* obj, gcNet* currNet = nullptr);
+  gcNet* initRouteObj(frBlockObject* obj,
+                      gcNet* currNet = nullptr,
+                      bool isFixed = false);
   void initDesign(const frDesign* design, bool skipDR = false);
   bool initDesign_skipObj(frBlockObject* obj);
   // Returns true if `obj` belongs to a power/ground (supply) net. Used by the

@@ -169,12 +169,8 @@ Number of guides:     2
 [INFO DRT-0245] skipped writing guide updates to database.
 [INFO DRT-0185] Post process initialize RPin region query.
 [DEBUG DRT-checkPG] [check_drc] effective drc box=(0,0)-(20000,20000)
-[DEBUG DRT-checkPG] [filter] skip non-PG obj typeId=frcInstTerm
-[DEBUG DRT-checkPG] [filter] skip non-PG obj typeId=frcInstTerm
-[DEBUG DRT-checkPG] [filter] skip non-PG obj typeId=frcInstTerm
-[DEBUG DRT-checkPG] [filter] skip non-PG obj typeId=frcInstTerm
-[DEBUG DRT-checkPG] [init] fixed objs read=15 kept(PG/obs)=11 (DR objs skipped)
-[DEBUG DRT-checkPG] [filter] skip non-PG net net1
-[DEBUG DRT-checkPG] [filter] skip non-PG net net2
-[DEBUG DRT-checkPG] [check_drc] done: 2 marker(s) reported (PG-only)
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=10, background-fixed(signal/obs)=5 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net net1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net net2 as fixed background
+[DEBUG DRT-checkPG] [check_drc] done: 3 marker(s) reported (PG-only)
 No differences found.

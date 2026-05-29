@@ -19,7 +19,8 @@ COMPONENTS 2 ;
 END COMPONENTS
 NETS 2 ;
     - net1 ( inst1 ZN ) ( inst2 A )
-      + ROUTED metal1 ( 12000 14000 ) ( 16000 14000 ) ;
+      + ROUTED metal1 ( 12000 14000 ) ( 16000 14000 )
+        NEW metal2 ( 3000 6000 ) ( 7000 6000 ) ;
     - net2 ( inst2 ZN ) ( inst1 A )
       + ROUTED metal1 ( 14000 12000 ) ( 14000 16000 ) ;
 END NETS

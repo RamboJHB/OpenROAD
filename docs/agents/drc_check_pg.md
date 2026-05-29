@@ -14,24 +14,29 @@ Without `-check_pg`, `check_drc` behaves exactly as before: every object in
 the design (signal, clock, power, ground, blockages, …) is loaded into the
 geometry checker (GC) and every DRC violation is reported.
 
-With `-check_pg`, the DRC engine only loads and checks **power/ground (PG)
-objects**:
+With `-check_pg`, the engine reports **only the DRC violations that involve a
+power/ground (PG) object** — PG-to-PG, PG-to-signal, and PG-to-blockage —
+while suppressing violations that involve no PG geometry (signal-to-signal,
+signal-to-blockage, …).
 
-* it checks each PG object's own properties (min-area, min-width, min-step,
-  etc.), and
-* it checks the relationships **between PG objects** (PG-to-PG spacing,
-  PG-to-PG short, …).
+This is achieved **not by deleting objects, but by how they are loaded**: PG
+(supply) geometry is loaded **non-fixed** (the geometry "under test"), and
+every other object — signal/clock pins and routing, blockages, obstructions —
+is loaded **fixed** ("background"). The GC engine skips spacing/short checks
+when *both* shapes of a pair are fixed, so:
 
-Signal, clock and every other non-PG *net* object is **completely excluded** —
-it is never even loaded into a GC worker, so it can neither produce a violation
-on its own nor interact with a PG shape to produce one.
+* PG-vs-PG, PG-vs-signal, PG-vs-blockage pairs → one side is non-fixed → **checked**;
+* signal-vs-signal, signal-vs-blockage pairs → both fixed → **suppressed**.
 
-**Blockages/obstructions/keepouts are an exception: they are kept.** They are
-not signal/clock geometry — they are constraint objects that PG must respect.
-Keeping them lets the engine report PG-to-blockage spacing/short violations
-(otherwise that whole class would be silently dropped). They are loaded as
-*fixed*, while PG shapes are loaded as *non-fixed* (see §2.1), so a PG shape
-that overlaps or crowds an obstruction is flagged with an `obstruction:` source.
+This matches how Cadence Innovus scopes a PG DRC: `verify_drc -check_only
+special` reports special-net (PG) violations against the surrounding
+geometry, e.g. *"Special Wire of Net X & Blockage of Cell Y"* and special-vs-
+regular shorts — it does not make signal/blockages invisible, it checks PG
+against them.
+
+> Note: this means a PG strap that shorts or crowds a *signal* wire **is**
+> reported (with both net names as the violation source). That is intentional
+> — it is exactly the kind of PG violation a real PG DRC must catch.
 
 The switch is carried by the global `DRC_CHECK_PG` (declared in
 `src/drt/src/global.h`, defined in `src/drt/src/global.cpp`, default
@@ -52,28 +57,30 @@ mirrors the owner-resolution switch used by `getNet()`:
 | `frcInstTerm`                       | net's `getType().isSupply()`, else terminal's type |
 | `frcPathSeg`/`frcVia`/`frcPatchWire`| owning `frNet`'s `getType().isSupply()`            |
 | `drcPathSeg`/`drcVia`/`drcPatchWire`| backing `frNet`'s `getType().isSupply()`           |
-| `frcBlockage`/`frcInstBlockage`     | `false` (not PG) — but **kept as a constraint**    |
-| anything else                       | `false` (not PG → excluded)                        |
+| `frcBlockage`/`frcInstBlockage`     | `false` (background constraint, loaded fixed)      |
+| anything else                       | `false` (background, loaded fixed)                 |
 
-This is the **hard part**: the filter has to recognise PG geometry across the
+This is the **hard part**: `isPGObj()` has to recognise PG geometry across the
 several different object types the region query returns, and treat "no net"
-shapes as non-PG. The filter in `initDesign_skipObj()` keeps an object when it
-is PG **or** a blockage/obstruction; only true non-PG net objects are dropped.
+shapes (blockages) as non-PG. Note that **no object is dropped** — the PG vs
+non-PG decision only controls the *fixed* flag (see §2.1).
 
-### 2.1 Fixed vs non-fixed in PG-only mode
+### 2.1 Fixed vs non-fixed is the whole mechanism
 
 The GC engine skips spacing/short checks when **both** shapes of a pair are
-fixed (`FlexGC_main.cpp`). PG geometry comes from special nets, which are
-loaded fixed by default — so two fixed PG straps that overlap would *not* be
-flagged. To make `-check_pg` actually evaluate PG relationships,
-`initDesign()` loads:
+fixed (`FlexGC_main.cpp:422/603/752/...`). In PG-only mode we exploit that:
 
-* **PG shapes as non-fixed** (`isFixed = false`) — they are the geometry under
-  test, so PG-to-PG and PG-to-obstruction pairs are no longer "both fixed".
-* **blockages/obstructions as fixed** — they are the constraint objects.
+* **PG shapes → non-fixed** — the geometry under test
+  (`initDesign()`: `isFixed = DRC_CHECK_PG ? !isPGObj(obj) : true`).
+* **everything else → fixed** — signal/clock pins, blockages, obstructions are
+  loaded as fixed background. Signal/clock *routing* is loaded through
+  `initNetsFromDesign()` → `initRouteObj(obj, net, /*isFixed=*/true)`.
 
-So `isFixed = DRC_CHECK_PG ? !isPGObj(obj) : true`. Normal mode is unchanged
-(everything fixed).
+Result: every pair that involves a PG shape has a non-fixed side and is
+checked; every pair with no PG shape is "both fixed" and skipped. Normal mode
+is unchanged (everything fixed, full DRC). PG nets cannot be regular nets
+(`DRT-0305`), so all routing in `initNetsFromDesign()` is non-PG and loaded
+fixed; PG geometry only ever comes from special nets via `initDesign()`.
 
 ## 3. The logic chain (top to bottom)
 
@@ -96,16 +103,19 @@ TritonRoute::checkDRC(..., check_pg)     src/drt/src/TritonRoute.cpp
   └─ DRC_CHECK_PG = false                // reset switch
 
 FlexGCWorker::Impl::initDesign(design)   src/drt/src/gc/FlexGC_init.cpp
-  └─ region-query every fixed/DR object in the worker box
-  └─ for each object: initDesign_skipObj(obj)
-       └─ if DRC_CHECK_PG && !isPGObj(obj):
-            [debug] "[filter] skip non-PG obj typeId=..."
-            return true                  // object dropped, never checked
-  └─ [debug] "[init] fixed objs read=R kept(PG)=K; dr objs read=.. kept(PG)=.."
+  └─ region-query every fixed object in the worker box (no object is dropped)
+  └─ for each object:
+       isFixed = DRC_CHECK_PG ? !isPGObj(obj) : true   // PG→non-fixed, else fixed
+  └─ [debug] "[init] PG(non-fixed)=N, background-fixed(signal/obs)=M"
+
+FlexGCWorker::Impl::initNetsFromDesign() src/drt/src/gc/FlexGC_init.cpp
+  └─ for each design net: load its routing as fixed background
+       initRouteObj(obj, net, /*isFixed=*/ DRC_CHECK_PG && !net->isSupply())
+  └─ [debug] "[netinit] load non-PG net <name> as fixed background"
 ```
 
-The kept PG objects are the only geometry handed to `worker->main()`, so the
-markers it produces can only involve PG shapes.
+PG shapes are the only non-fixed geometry handed to `worker->main()`, so every
+marker it produces has a PG shape on at least one side.
 
 ## 4. Reading the debug log
 
@@ -121,17 +131,18 @@ Typical output (one `[init]` line per GC worker):
 ```
 [DEBUG DRT-checkPG] [check_drc] entry: mode=PG-ONLY (-check_pg), box=(0,0)-(0,0)
 [DEBUG DRT-checkPG] [check_drc] effective drc box=(0,0)-(20000,20000)
-[DEBUG DRT-checkPG] [filter] skip non-PG obj typeId=frcInstTerm   # a signal pin
-[DEBUG DRT-checkPG] [init] fixed objs read=15 kept(PG/obs)=11 (DR objs skipped)
-[DEBUG DRT-checkPG] [filter] skip non-PG net net1
-[DEBUG DRT-checkPG] [check_drc] done: 2 marker(s) reported (PG-only)
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=10, background-fixed(signal/obs)=5 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net net1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net net2 as fixed background
+[DEBUG DRT-checkPG] [check_drc] done: 3 marker(s) reported (PG-only)
 ```
 
-* `read` vs `kept(PG/obs)` shows exactly how many objects were seen by the
-  region query and how many survived the filter (PG geometry + kept blockages).
-* each `skip non-PG obj` / `skip non-PG net` line shows a single object/net
-  being dropped, so you can see precisely what was excluded. Note that
-  blockages do NOT appear in skip lines — they are intentionally kept.
+* `PG(non-fixed)` vs `background-fixed` shows how the worker classified the
+  geometry: PG shapes under test vs. everything else loaded as fixed backdrop.
+* each `[netinit] load non-PG net <name> as fixed background` line shows a
+  signal/clock net being loaded as a fixed obstacle (so PG-vs-that-net is
+  checked but that-net-vs-another-signal is suppressed).
+* `done: N marker(s)` is the count of PG-involving violations reported.
 
 ## 5. Files touched
 
@@ -143,18 +154,19 @@ Typical output (one `[init]` line per GC worker):
 | `src/drt/src/TritonRoute.cpp`          | set/reset `DRC_CHECK_PG`, debug logic-chain logs    |
 | `src/drt/src/global.h` / `global.cpp`  | `DRC_CHECK_PG` global (default false)               |
 | `src/drt/src/serialization.h`          | serialize `DRC_CHECK_PG` for distributed workers    |
-| `src/drt/src/gc/FlexGC_impl.h`         | declare `isPGObj`                                   |
-| `src/drt/src/gc/FlexGC_init.cpp`       | `isPGObj`, PG filter (keeps blockages) in `initDesign_skipObj`/`initNetsFromDesign`, non-fixed PG load, debug |
+| `src/drt/src/gc/FlexGC_impl.h`         | declare `isPGObj`; `initRouteObj(..., bool isFixed)` |
+| `src/drt/src/gc/FlexGC_init.cpp`       | `isPGObj`; PG→non-fixed / non-PG→fixed classification in `initDesign`; non-PG routing loaded fixed in `initNetsFromDesign`; debug |
 
 ## 6. Test
 
 `src/drt/test/drc_test_pg.tcl` builds a tiny case (Nangate45) containing a
-signal-to-signal short (net1/net2, metal1), a PG-to-PG short (VDD/VSS, metal2)
-and a PG-to-obstruction short (VDD vs a metal2 OBS). It runs
-`check_drc -check_pg` and diffs the report against
-`src/drt/test/drc_test_pg.drcok`. The golden contains **only** the two PG
-violations (VDD/VSS and VDD/obstruction), proving the signal violation was
-filtered out while the obstruction constraint was honored.
+signal-to-signal short (net1/net2, metal1), a PG-to-signal short (net1/VDD,
+metal2), a PG-to-PG short (VDD/VSS, metal2) and a PG-to-obstruction short (VDD
+vs a metal2 OBS). It runs `check_drc -check_pg` and diffs the report against
+`src/drt/test/drc_test_pg.drcok`. The golden contains the **three PG-involving
+violations** (net1/VDD, VDD/VSS, VDD/obstruction) and **not** the pure
+signal-to-signal short — proving signal-vs-signal is suppressed while every
+PG interaction (including PG-to-signal) is reported.
 
 Run it with the prebuilt binary:
 
@@ -168,12 +180,13 @@ Run it with the prebuilt binary:
 
 In a standalone `check_drc` the GC engine runs with `targetNet_==nullptr` and
 no DR worker, and it skips spacing/short checks for pairs where **both** shapes
-are fixed. Combined with the PG filter + non-fixed PG load, coverage is:
+are fixed. Combined with PG→non-fixed / non-PG→fixed loading, coverage is:
 
 | Rule category | Covered? | Notes |
 | ------------- | -------- | ----- |
 | PG-to-PG spacing / short | ✅ | `checkMetalSpacing_prl` / `_short` (incl. PRL/TW spacing tables) |
-| PG to blockage / keepout | ✅ | blockages kept (fixed) + PG non-fixed → `checkMetalSpacing_short_obs`; EOL keepout also applies |
+| PG-to-signal spacing / short | ✅ | signal loaded fixed, PG non-fixed → reported with both net names |
+| PG to blockage / keepout | ✅ | blockages loaded fixed + PG non-fixed → `checkMetalSpacing_short_obs`; EOL keepout also applies |
 | Layer-dependent spacing | ✅ | spacing tables via `checkMetalSpacing_prl` |
 | NDR / metal multi-patterning | ⚠️ | PG special nets rarely carry NDR; metal SAMEMASK is unsupported by the engine |
 | Min width / off-grid (track) | ✅ | `checkMetalShape_minWidth` / `_offGrid` (single-shape, skip fully-fixed) |

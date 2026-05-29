@@ -1,4 +1,7 @@
   violation type: Short
+    srcs: net:net1 net:VDD 
+    bbox = ( 2.4, 2.965 ) - ( 2.6, 3.035 ) on Layer metal2
+  violation type: Short
     srcs: net:VDD net:VSS 
     bbox = ( 2.4, 4.9 ) - ( 2.6, 5.1 ) on Layer metal2
   violation type: Short

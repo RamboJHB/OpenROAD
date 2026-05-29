@@ -185,18 +185,13 @@ bool FlexGCWorker::Impl::isPGObj(frBlockObject* obj)
 
 bool FlexGCWorker::Impl::initDesign_skipObj(frBlockObject* obj)
 {
-  // PG-only mode (-check_pg): keep PG (supply) geometry, and ALSO keep
-  // blockages/obstructions/keepouts -- those are constraint objects that PG
-  // must respect, so dropping them would hide PG-to-blockage violations. Only
-  // truly non-PG objects (signal/clock pins and their routing) are removed
-  // here, before any rectangles/polygons are added to a gcNet.
-  if (DRC_CHECK_PG && !isPGObj(obj) && obj->typeId() != frcBlockage
-      && obj->typeId() != frcInstBlockage) {
-    logger_->debug(
-        DRT, "checkPG", "[filter] skip non-PG obj typeId={}", obj->typeId());
-    return true;
-  }
-
+  // NOTE on -check_pg: in PG-only mode we do NOT drop any object here. Instead,
+  // every non-PG object (signal/clock pins, blockages, obstructions) is loaded
+  // as a FIXED background object and only PG geometry is loaded NON-fixed (see
+  // initDesign below). Because the GC engine skips spacing/short checks when
+  // *both* shapes are fixed, this reports exactly the violations that involve
+  // PG (PG-PG, PG-signal, PG-blockage) while suppressing non-PG vs non-PG
+  // noise -- matching how Innovus `verify_drc -check_only special` behaves.
   if (targetObjs_.empty()) {
     return false;
   }
@@ -237,28 +232,28 @@ void FlexGCWorker::Impl::initDesign(const frDesign* design, bool skipDR)
                  point_t(extBox.xMax(), extBox.yMax()));
   auto regionQuery = design->getRegionQuery();
   frRegionQuery::Objects<frBlockObject> queryResult;
-  // Counters used only for the -check_pg debug log: how many objects the region
-  // query returned vs. how many were actually loaded into gcNets.
-  int read_fixed = 0, kept_fixed = 0, read_dr = 0, kept_dr = 0;
+  // Counters used only for the -check_pg debug log: how many objects were
+  // loaded as PG (non-fixed, "under test") vs. as fixed background.
+  int n_pg = 0, n_bg = 0;
   // init all non-dr objs from design
   for (auto i = 0; i <= getTech()->getTopLayerNum(); i++) {
     queryResult.clear();
     regionQuery->query(queryBox, i, queryResult);
     for (auto& [box, obj] : queryResult) {
-      ++read_fixed;
       if (initDesign_skipObj(obj)) {
         continue;
       }
-      ++kept_fixed;
-      // In PG-only mode the surviving PG shapes are loaded as NON-fixed
-      // (isFixed=false) so the GC engine actually evaluates PG relationships:
-      // spacing/short checks are skipped when *both* shapes are fixed
-      // (FlexGC_main.cpp), and PG geometry always comes from special nets which
-      // are otherwise fixed. Blockages/obstructions are kept FIXED -- they are
-      // the constraint objects, so a non-fixed PG shape vs a fixed obstruction
-      // still fires (only both-fixed pairs are skipped). In normal mode design
-      // shapes stay fixed as before.
-      const bool is_fixed = DRC_CHECK_PG ? !isPGObj(obj) : true;
+      // In PG-only mode, classify by net type: PG (supply) geometry is loaded
+      // NON-fixed (the geometry "under test"); every other object -- signal/
+      // clock pins, blockages, obstructions -- is loaded FIXED ("background").
+      // The GC engine skips spacing/short checks when *both* shapes are fixed,
+      // so this reports exactly the violations involving PG and suppresses the
+      // non-PG vs non-PG ones. In normal mode all design shapes stay fixed.
+      const bool is_pg = DRC_CHECK_PG && isPGObj(obj);
+      const bool is_fixed = DRC_CHECK_PG ? !is_pg : true;
+      if (DRC_CHECK_PG) {
+        is_pg ? ++n_pg : ++n_bg;
+      }
       initObj(box, i, obj, is_fixed);
     }
   }
@@ -267,10 +262,10 @@ void FlexGCWorker::Impl::initDesign(const frDesign* design, bool skipDR)
     if (DRC_CHECK_PG) {
       logger_->debug(DRT,
                      "checkPG",
-                     "[init] fixed objs read={} kept(PG/obs)={} (DR objs "
-                     "skipped)",
-                     read_fixed,
-                     kept_fixed);
+                     "[init] PG(non-fixed)={}, background-fixed(signal/obs)={} "
+                     "(DR objs skipped)",
+                     n_pg,
+                     n_bg);
     }
     return;
   }
@@ -280,26 +275,20 @@ void FlexGCWorker::Impl::initDesign(const frDesign* design, bool skipDR)
     queryResult.clear();
     regionQuery->queryDRObj(queryBox, i, queryResult);
     for (auto& [box, obj] : queryResult) {
-      ++read_dr;
       if (initDesign_skipObj(obj)) {
         continue;
       }
-      ++kept_dr;
       initObj(box, i, obj, false);
     }
   }
   if (DRC_CHECK_PG) {
-    // Final per-worker summary of the PG filter: this is the bottom of the
-    // logic chain "check_drc -> getDRCMarkers -> FlexGCWorker::init ->
-    // initDesign -> initDesign_skipObj/isPGObj".
+    // Final per-worker summary: bottom of the logic chain "check_drc ->
+    // getDRCMarkers -> FlexGCWorker::init -> initDesign".
     logger_->debug(DRT,
                    "checkPG",
-                   "[init] fixed objs read={} kept(PG/obs)={}; dr objs read={} "
-                   "kept(PG)={}",
-                   read_fixed,
-                   kept_fixed,
-                   read_dr,
-                   kept_dr);
+                   "[init] PG(non-fixed)={}, background-fixed(signal/obs)={}",
+                   n_pg,
+                   n_bg);
   }
 }
 
@@ -421,7 +410,9 @@ gcNet* FlexGCWorker::Impl::initDRObj(drConnFig* obj, gcNet* currNet)
   }
   return currNet;
 }
-gcNet* FlexGCWorker::Impl::initRouteObj(frBlockObject* obj, gcNet* currNet)
+gcNet* FlexGCWorker::Impl::initRouteObj(frBlockObject* obj,
+                                        gcNet* currNet,
+                                        bool isFixed)
 {
   if (currNet == nullptr) {
     currNet = getNet(obj);
@@ -431,7 +422,7 @@ gcNet* FlexGCWorker::Impl::initRouteObj(frBlockObject* obj, gcNet* currNet)
   if (obj->typeId() == frcPathSeg) {
     auto pathSeg = static_cast<frPathSeg*>(obj);
     Rect box = pathSeg->getBBox();
-    currNet->addPolygon(box, pathSeg->getLayerNum());
+    currNet->addPolygon(box, pathSeg->getLayerNum(), isFixed);
     if (pathSeg->isTapered())
       currNet->addTaperedRect(box, pathSeg->getLayerNum() / 2 - 1);
     else if (pathSeg->hasNet() && pathSeg->getNet()->hasNDR()
@@ -448,14 +439,14 @@ gcNet* FlexGCWorker::Impl::initRouteObj(frBlockObject* obj, gcNet* currNet)
         currNet->addTaperedRect(box, layerNum / 2 - 1);
       else if (via->hasNet() && via->getNet()->hasNDR() && AUTO_TAPER_NDR_NETS)
         currNet->addNonTaperedRect(box, layerNum / 2 - 1);
-      currNet->addPolygon(box, layerNum);
+      currNet->addPolygon(box, layerNum, isFixed);
     }
     // push cut layer rect
     layerNum = via->getViaDef()->getCutLayerNum();
     for (auto& fig : via->getViaDef()->getCutFigs()) {
       Rect box = fig->getBBox();
       xform.apply(box);
-      currNet->addRectangle(box, layerNum);
+      currNet->addRectangle(box, layerNum, isFixed);
     }
     // push layer2 rect
     layerNum = via->getViaDef()->getLayer2Num();
@@ -466,11 +457,11 @@ gcNet* FlexGCWorker::Impl::initRouteObj(frBlockObject* obj, gcNet* currNet)
         currNet->addTaperedRect(box, layerNum / 2 - 1);
       else if (via->hasNet() && via->getNet()->hasNDR() && AUTO_TAPER_NDR_NETS)
         currNet->addNonTaperedRect(box, layerNum / 2 - 1);
-      currNet->addPolygon(box, layerNum);
+      currNet->addPolygon(box, layerNum, isFixed);
     }
   } else if (obj->typeId() == frcPatchWire) {
     auto pwire = static_cast<frPatchWire*>(obj);
-    currNet->addPolygon(pwire->getBBox(), pwire->getLayerNum());
+    currNet->addPolygon(pwire->getBBox(), pwire->getLayerNum(), isFixed);
   }
   return currNet;
 }
@@ -501,14 +492,17 @@ void FlexGCWorker::Impl::initNetsFromDesign(const frDesign* design)
 {
   auto block = design->getTopBlock();
   for (auto& net : block->getNets()) {
-    // PG-only mode (-check_pg): the routed shapes of a net are loaded here
-    // (not through initDesign_skipObj), so the PG filter must be applied again
-    // at the net level. Skip every net that is not a supply (power/ground)
-    // net, so signal/clock routing never enters the GC engine.
-    if (DRC_CHECK_PG && !net->getType().isSupply()) {
-      logger_->debug(
-          DRT, "checkPG", "[filter] skip non-PG net {}", net->getName());
-      continue;
+    // PG-only mode (-check_pg): a net's routed shapes are loaded here (not via
+    // initDesign_skipObj). PG (supply) nets cannot be regular nets (DRT-0305),
+    // so every net seen here is non-PG -- load it as FIXED background so the
+    // GC engine reports its interaction with PG (PG is non-fixed) but skips
+    // pure signal-vs-signal pairs (both fixed). In normal mode, fixed=false.
+    const bool route_fixed = DRC_CHECK_PG ? !net->getType().isSupply() : false;
+    if (DRC_CHECK_PG) {
+      logger_->debug(DRT,
+                     "checkPG",
+                     "[netinit] load non-PG net {} as fixed background",
+                     net->getName());
     }
     // always first generate gcnet in case owner does not have any object
     bool netExists = (owner2nets_.find(net.get()) != owner2nets_.end());
@@ -521,7 +515,7 @@ void FlexGCWorker::Impl::initNetsFromDesign(const frDesign* design)
         addNet(net.get());
         netExists = true;
       }
-      gNet = initRouteObj(obj.get());
+      gNet = initRouteObj(obj.get(), nullptr, route_fixed);
     }
     for (auto& obj : net->getVias()) {
       if (!drcBox_.intersects(obj->getBBox()))
@@ -530,7 +524,7 @@ void FlexGCWorker::Impl::initNetsFromDesign(const frDesign* design)
         addNet(net.get());
         netExists = true;
       }
-      gNet = initRouteObj(obj.get());
+      gNet = initRouteObj(obj.get(), nullptr, route_fixed);
     }
     for (auto& pwire : net->getPatchWires()) {
       if (!drcBox_.intersects(pwire->getBBox()))
@@ -539,7 +533,7 @@ void FlexGCWorker::Impl::initNetsFromDesign(const frDesign* design)
         addNet(net.get());
         netExists = true;
       }
-      gNet = initRouteObj(pwire.get());
+      gNet = initRouteObj(pwire.get(), nullptr, route_fixed);
       Rect box = pwire->getBBox();
       int z = pwire->getLayerNum() / 2 - 1;
       for (auto& nt : gNet->getNonTaperedRects(z)) {
