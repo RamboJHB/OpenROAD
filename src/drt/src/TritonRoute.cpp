@@ -977,7 +977,8 @@ void TritonRoute::checkDRC(const char* filename,
                            int y1,
                            int x2,
                            int y2,
-                           bool check_pg)
+                           bool check_pg,
+                           int pg_boundary_margin)
 {
   GC_IGNORE_PDN_LAYER = -1;
   // Propagate the -check_pg switch into the global config so that the GC
@@ -1014,6 +1015,65 @@ void TritonRoute::checkDRC(const char* filename,
   // Step 3: run the GC workers and collect markers. Object filtering for
   // -check_pg happens inside FlexGCWorker::Impl::initDesign.
   getDRCMarkers(markers, requiredDrcBox);
+  // Step 3b (PG-only): the GC engine has no die/block boundary DRC, so when a
+  // PG-to-boundary keepout margin is requested, scan PG (supply) special-net
+  // shapes and report any whose distance to the die boundary is below the
+  // margin (or that cross it). This is the ring/mesh-perimeter check.
+  frPGBoundaryConstraint pg_boundary_con;  // outlives reportDRC below
+  if (check_pg && pg_boundary_margin > 0) {
+    auto block = db_->getChip()->getBlock();
+    const odb::Rect die = block->getDieArea();
+    auto top_block = design_->getTopBlock();
+    int n_boundary = 0;
+    for (auto db_net : block->getNets()) {
+      if (!db_net->getSigType().isSupply()) {
+        continue;
+      }
+      frNet* fr_net = top_block->findNet(db_net->getName());
+      for (auto swire : db_net->getSWires()) {
+        for (auto sbox : swire->getWires()) {
+          const odb::Rect r = sbox->getBox();
+          if (!requiredDrcBox.intersects(r)) {
+            continue;
+          }
+          // signed distance to the nearest die edge (<0 means it crosses)
+          const int dmin = std::min({r.xMin() - die.xMin(),
+                                     die.xMax() - r.xMax(),
+                                     r.yMin() - die.yMin(),
+                                     die.yMax() - r.yMax()});
+          if (dmin >= pg_boundary_margin) {
+            continue;
+          }
+          auto* tech_layer = sbox->getTechLayer();
+          if (tech_layer == nullptr) {
+            continue;
+          }
+          auto fr_layer = design_->getTech()->getLayer(tech_layer->getName());
+          if (fr_layer == nullptr) {
+            continue;
+          }
+          auto marker = std::make_unique<frMarker>();
+          marker->setBBox(r);
+          marker->setLayerNum(fr_layer->getLayerNum());
+          marker->setConstraint(&pg_boundary_con);
+          if (fr_net != nullptr) {
+            marker->addSrc(fr_net);
+            marker->addVictim(
+                fr_net, std::make_tuple(fr_layer->getLayerNum(), r, false));
+            marker->addAggressor(
+                fr_net, std::make_tuple(fr_layer->getLayerNum(), r, false));
+          }
+          markers.push_back(std::move(marker));
+          ++n_boundary;
+        }
+      }
+    }
+    logger_->debug(DRT,
+                   "checkPG",
+                   "[check_drc] PG boundary margin={} -> {} marker(s)",
+                   pg_boundary_margin,
+                   n_boundary);
+  }
   // Step 4: summarize how many violations survived the (optional) PG filter.
   logger_->debug(DRT,
                  "checkPG",

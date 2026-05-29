@@ -7,7 +7,8 @@ logic chain you can follow in the debug log.
 ## 1. What the option does
 
 ```tcl
-check_drc -output_file <file> [-box {x1 y1 x2 y2}] [-check_pg]
+check_drc -output_file <file> [-box {x1 y1 x2 y2}] [-check_pg] \
+          [-pg_boundary_margin <um>]
 ```
 
 Without `-check_pg`, `check_drc` behaves exactly as before: every object in
@@ -168,6 +169,8 @@ Typical output (one `[init]` line per GC worker):
 | `src/drt/src/gc/FlexGC_impl.h`         | declare `isPGObj`; `initRouteObj(..., bool isFixed)` |
 | `src/drt/src/gc/FlexGC_init.cpp`       | `isPGObj`; PG→non-fixed / non-PG→fixed classification in `initDesign`; non-PG routing loaded fixed in `initNetsFromDesign`; debug |
 | `src/drt/src/gc/FlexGC_main.cpp`        | `checkMetalShape_minArea`: report a marker (not a patch) in PG mode; null-`drWorker_` guard (see §2.2) |
+| `src/drt/src/TritonRoute.cpp` / `.h` / `.i` / `.tcl` | `-pg_boundary_margin`: PG-to-die-boundary check (the ring/mesh-perimeter rule) |
+| `src/drt/src/frBaseTypes.h` / `db/tech/frConstraint.h` | new `frcPGBoundaryConstraint` + "PG Boundary Spacing" name |
 | `src/drt/test/drc_test_pg*`             | toy (Nangate45) for spacing/short/width/off-grid/cut-spacing |
 | `src/drt/test/drc_test_pg_adv*`         | companion toy (Nangate45 stack + injected `AREA`/`MINIMUMCUT`) for min-area & minimum-cut |
 
@@ -175,7 +178,8 @@ Typical output (one `[init]` line per GC worker):
 
 `src/drt/test/drc_test_pg.tcl` (Nangate45) lays out spatially-separated
 clusters so the golden exercises every rule the Nangate45 tech can express in
-PG-only mode. `check_drc -check_pg` produces 9 markers, all PG-involving:
+PG-only mode. `check_drc -check_pg -pg_boundary_margin 0.25` produces 10
+markers, all PG-involving:
 
 | Cluster | Marker | Source |
 | ------- | ------ | ------ |
@@ -185,6 +189,7 @@ PG-only mode. `check_drc -check_pg` produces 9 markers, all PG-involving:
 | PG width    | Min Width | narrow VDD strap |
 | PG grid     | Off Grid | off-grid VDD strap |
 | PG via      | Cut Spacing | two VDD via1 cuts too close |
+| PG boundary | PG Boundary Spacing | VDD strap at the die edge |
 
 The Metal Spacing markers use metal2's width-dependent `SPACINGTABLE` (PRL), so
 they also cover layer/width-dependent spacing. The pure signal-to-signal short
@@ -216,7 +221,7 @@ are fixed. Combined with PG→non-fixed / non-PG→fixed loading, coverage is:
 | Min area | ✅ (PG-only) | `checkMetalShape_minArea` is ungated under `DRC_CHECK_PG` and emits a marker instead of a DR patch (see §2.2); tested in `drc_test_pg_adv` |
 | Minimum cut | ✅ | `checkMinimumCut` runs standalone (else-branch); tested in `drc_test_pg_adv` |
 | Via cut spacing / short | ✅ | `checkCutSpacing*`; tested in `drc_test_pg` (PG via1 cuts) |
-| Min step | ⚠️ | reportable if the tech defines `MINSTEP`; hard to trigger with axis-aligned PG stripes without also tripping min-width — not exercised |
 | Via enclosure (metalWidthViaTable) | ⚠️ | `checkMetalWidthViaTable` runs standalone but needs a LEF58 `METALWIDTHVIATABLE` rule (absent in Nangate45) |
 | NDR / metal multi-patterning | ⚠️ | PG special nets rarely carry NDR; metal SAMEMASK is unsupported by the engine |
-| Die/block boundary, ring/mesh perimeter | ❌ | the GC engine has **no** boundary/perimeter DRC at all — would require a new check subsystem (out of scope) |
+| Die/block boundary, ring/mesh perimeter | ✅ (opt-in) | the GC engine has no boundary DRC, so this is a dedicated check added for `-check_pg`: `-pg_boundary_margin <um>` flags PG special-net shapes whose distance to the die boundary is below the margin (constraint `frPGBoundaryConstraint`, "PG Boundary Spacing"); tested in `drc_test_pg` |
+| Min step | ⚠️ | the engine's `checkMetalShape_minStep` does not surface markers in a standalone `check_drc` (no targetNet_/DR context) even when the tech defines `MINSTEP`; not exercised |

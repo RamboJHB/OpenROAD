@@ -84,6 +84,8 @@ class frConstraint
     switch (typeId()) {
       case frConstraintTypeEnum::frcShortConstraint:
         return "Short";
+      case frConstraintTypeEnum::frcPGBoundaryConstraint:
+        return "PG Boundary Spacing";
       case frConstraintTypeEnum::frcMinWidthConstraint:
         return "Min Width";
 
@@ -277,6 +279,21 @@ class frRecheckConstraint : public frConstraint
     return frConstraintTypeEnum::frcRecheckConstraint;
   }
   void report(utl::Logger* logger) const override { logger->report("Recheck"); }
+};
+
+// Minimum spacing between a power/ground shape and the die/block boundary.
+// Used only by `check_drc -check_pg -pg_boundary_margin`; not a LEF rule.
+class frPGBoundaryConstraint : public frConstraint
+{
+ public:
+  frConstraintTypeEnum typeId() const override
+  {
+    return frConstraintTypeEnum::frcPGBoundaryConstraint;
+  }
+  void report(utl::Logger* logger) const override
+  {
+    logger->report("PGBoundary");
+  }
 };
 
 // short

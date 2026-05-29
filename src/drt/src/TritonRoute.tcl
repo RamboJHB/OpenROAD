@@ -437,10 +437,11 @@ sta::define_cmd_args "check_drc" {
     [-box box]
     [-output_file filename]
     [-check_pg]
+    [-pg_boundary_margin margin]
 }
 proc check_drc { args } {
   sta::parse_key_args "check_drc" args \
-      keys { -box -output_file } \
+      keys { -box -output_file -pg_boundary_margin } \
       flags { -check_pg }
   sta::check_argc_eq0 "check_drc" $args
   set box { 0 0 0 0 }
@@ -452,13 +453,21 @@ proc check_drc { args } {
   }
   # -check_pg restricts the DRC engine to power/ground objects only.
   set check_pg [info exists flags(-check_pg)]
+  # -pg_boundary_margin (microns): required PG keepout from the die boundary.
+  set pg_boundary_margin 0
+  if { [info exists keys(-pg_boundary_margin)] } {
+    set tech [ord::get_db_tech]
+    set dbu [$tech getDbUnitsPerMicron]
+    set pg_boundary_margin \
+      [expr { int(round($keys(-pg_boundary_margin) * $dbu)) }]
+  }
   lassign $box x1 y1 x2 y2
    if { [info exists keys(-output_file)] } {
     set output_file $keys(-output_file)
   } else {
     utl::error DRT 613 "-output_file is required for check_drc command"
   }
-  drt::check_drc_cmd $output_file $x1 $y1 $x2 $y2 $check_pg
+  drt::check_drc_cmd $output_file $x1 $y1 $x2 $y2 $check_pg $pg_boundary_margin
 }
 
 }

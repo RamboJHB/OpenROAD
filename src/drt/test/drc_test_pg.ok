@@ -78,7 +78,7 @@ Number of nets:           2
 [INFO DRT-0033] FR_VIA shape region query size = 0.
 [INFO DRT-0033] metal1 shape region query size = 14.
 [INFO DRT-0033] via1 shape region query size = 2.
-[INFO DRT-0033] metal2 shape region query size = 14.
+[INFO DRT-0033] metal2 shape region query size = 15.
 [INFO DRT-0033] via2 shape region query size = 0.
 [INFO DRT-0033] metal3 shape region query size = 0.
 [INFO DRT-0033] via3 shape region query size = 0.
@@ -169,8 +169,9 @@ Number of guides:     2
 [INFO DRT-0245] skipped writing guide updates to database.
 [INFO DRT-0185] Post process initialize RPin region query.
 [DEBUG DRT-checkPG] [check_drc] effective drc box=(0,0)-(20000,20000)
-[DEBUG DRT-checkPG] [init] PG(non-fixed)=24, background-fixed(signal/obs)=6 (DR objs skipped)
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=25, background-fixed(signal/obs)=6 (DR objs skipped)
 [DEBUG DRT-checkPG] [netinit] load non-PG net net1 as fixed background
 [DEBUG DRT-checkPG] [netinit] load non-PG net net2 as fixed background
-[DEBUG DRT-checkPG] [check_drc] done: 9 marker(s) reported (PG-only)
+[DEBUG DRT-checkPG] [check_drc] PG boundary margin=500 -> 1 marker(s)
+[DEBUG DRT-checkPG] [check_drc] done: 10 marker(s) reported (PG-only)
 No differences found.
