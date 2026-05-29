@@ -78,7 +78,7 @@ Number of nets:           2
 [INFO DRT-0033] FR_VIA shape region query size = 0.
 [INFO DRT-0033] metal1 shape region query size = 12.
 [INFO DRT-0033] via1 shape region query size = 0.
-[INFO DRT-0033] metal2 shape region query size = 2.
+[INFO DRT-0033] metal2 shape region query size = 3.
 [INFO DRT-0033] via2 shape region query size = 0.
 [INFO DRT-0033] metal3 shape region query size = 0.
 [INFO DRT-0033] via3 shape region query size = 0.
@@ -173,8 +173,8 @@ Number of guides:     2
 [DEBUG DRT-checkPG] [filter] skip non-PG obj typeId=frcInstTerm
 [DEBUG DRT-checkPG] [filter] skip non-PG obj typeId=frcInstTerm
 [DEBUG DRT-checkPG] [filter] skip non-PG obj typeId=frcInstTerm
-[DEBUG DRT-checkPG] [init] fixed objs read=14 kept(PG)=10 (DR objs skipped)
+[DEBUG DRT-checkPG] [init] fixed objs read=15 kept(PG/obs)=11 (DR objs skipped)
 [DEBUG DRT-checkPG] [filter] skip non-PG net net1
 [DEBUG DRT-checkPG] [filter] skip non-PG net net2
-[DEBUG DRT-checkPG] [check_drc] done: 1 marker(s) reported (PG-only)
+[DEBUG DRT-checkPG] [check_drc] done: 2 marker(s) reported (PG-only)
 No differences found.

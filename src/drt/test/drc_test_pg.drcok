@@ -1,3 +1,6 @@
   violation type: Short
     srcs: net:VDD net:VSS 
     bbox = ( 2.4, 4.9 ) - ( 2.6, 5.1 ) on Layer metal2
+  violation type: Short
+    srcs: obstruction: net:VDD 
+    bbox = ( 2.45, 7.5 ) - ( 2.6, 8 ) on Layer metal2

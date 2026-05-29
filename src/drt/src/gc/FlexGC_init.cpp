@@ -185,11 +185,13 @@ bool FlexGCWorker::Impl::isPGObj(frBlockObject* obj)
 
 bool FlexGCWorker::Impl::initDesign_skipObj(frBlockObject* obj)
 {
-  // PG-only mode (-check_pg): drop every object that is not on a supply net,
-  // so the GC engine only ever sees PG geometry. This is the core of the
-  // "PG vs non-PG" filter -- signal, clock and all other nets are removed
+  // PG-only mode (-check_pg): keep PG (supply) geometry, and ALSO keep
+  // blockages/obstructions/keepouts -- those are constraint objects that PG
+  // must respect, so dropping them would hide PG-to-blockage violations. Only
+  // truly non-PG objects (signal/clock pins and their routing) are removed
   // here, before any rectangles/polygons are added to a gcNet.
-  if (DRC_CHECK_PG && !isPGObj(obj)) {
+  if (DRC_CHECK_PG && !isPGObj(obj) && obj->typeId() != frcBlockage
+      && obj->typeId() != frcInstBlockage) {
     logger_->debug(
         DRT, "checkPG", "[filter] skip non-PG obj typeId={}", obj->typeId());
     return true;
@@ -249,11 +251,15 @@ void FlexGCWorker::Impl::initDesign(const frDesign* design, bool skipDR)
       }
       ++kept_fixed;
       // In PG-only mode the surviving PG shapes are loaded as NON-fixed
-      // (isFixed=false) so the GC engine actually evaluates PG-to-PG
-      // relationships: spacing/short checks are skipped when *both* shapes are
-      // fixed (FlexGC_main.cpp), and PG geometry always comes from special nets
-      // which are otherwise fixed. In normal mode design shapes stay fixed.
-      initObj(box, i, obj, !DRC_CHECK_PG);
+      // (isFixed=false) so the GC engine actually evaluates PG relationships:
+      // spacing/short checks are skipped when *both* shapes are fixed
+      // (FlexGC_main.cpp), and PG geometry always comes from special nets which
+      // are otherwise fixed. Blockages/obstructions are kept FIXED -- they are
+      // the constraint objects, so a non-fixed PG shape vs a fixed obstruction
+      // still fires (only both-fixed pairs are skipped). In normal mode design
+      // shapes stay fixed as before.
+      const bool is_fixed = DRC_CHECK_PG ? !isPGObj(obj) : true;
+      initObj(box, i, obj, is_fixed);
     }
   }
   // init all dr objs from design
@@ -261,7 +267,8 @@ void FlexGCWorker::Impl::initDesign(const frDesign* design, bool skipDR)
     if (DRC_CHECK_PG) {
       logger_->debug(DRT,
                      "checkPG",
-                     "[init] fixed objs read={} kept(PG)={} (DR objs skipped)",
+                     "[init] fixed objs read={} kept(PG/obs)={} (DR objs "
+                     "skipped)",
                      read_fixed,
                      kept_fixed);
     }
@@ -287,7 +294,7 @@ void FlexGCWorker::Impl::initDesign(const frDesign* design, bool skipDR)
     // initDesign -> initDesign_skipObj/isPGObj".
     logger_->debug(DRT,
                    "checkPG",
-                   "[init] fixed objs read={} kept(PG)={}; dr objs read={} "
+                   "[init] fixed objs read={} kept(PG/obs)={}; dr objs read={} "
                    "kept(PG)={}",
                    read_fixed,
                    kept_fixed,
