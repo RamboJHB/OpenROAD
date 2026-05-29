@@ -176,7 +176,13 @@ class TritonRoute
   void reportDRC(const std::string& file_name,
                  const std::list<std::unique_ptr<fr::frMarker>>& markers,
                  odb::Rect bbox = odb::Rect(0, 0, 0, 0));
-  void checkDRC(const char* drc_file, int x0, int y0, int x1, int y1);
+  // check_pg: when true, only power/ground objects are checked (-check_pg).
+  void checkDRC(const char* drc_file,
+                int x0,
+                int y0,
+                int x1,
+                int y1,
+                bool check_pg = false);
 
  private:
   std::unique_ptr<fr::frDesign> design_;

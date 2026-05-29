@@ -206,9 +206,10 @@ std::string TritonRoute::runDRWorker(const std::string& workerStr,
 {
   bool on = debug_->debugDR;
   std::unique_ptr<FlexDRGraphics> graphics_
-      = on && FlexDRGraphics::guiActive() ? std::make_unique<FlexDRGraphics>(
-            debug_.get(), design_.get(), db_, logger_)
-                                          : nullptr;
+      = on && FlexDRGraphics::guiActive()
+            ? std::make_unique<FlexDRGraphics>(
+                  debug_.get(), design_.get(), db_, logger_)
+            : nullptr;
   auto worker
       = FlexDRWorker::load(workerStr, logger_, design_.get(), graphics_.get());
   worker->setViaData(viaData);
@@ -231,9 +232,10 @@ void TritonRoute::debugSingleWorker(const std::string& dumpDir,
   ar >> viaData;
 
   std::unique_ptr<FlexDRGraphics> graphics_
-      = on && FlexDRGraphics::guiActive() ? std::make_unique<FlexDRGraphics>(
-            debug_.get(), design_.get(), db_, logger_)
-                                          : nullptr;
+      = on && FlexDRGraphics::guiActive()
+            ? std::make_unique<FlexDRGraphics>(
+                  debug_.get(), design_.get(), db_, logger_)
+            : nullptr;
   std::ifstream workerFile(fmt::format("{}/worker.bin", dumpDir),
                            std::ios::binary);
   std::string workerStr((std::istreambuf_iterator<char>(workerFile)),
@@ -970,9 +972,28 @@ void TritonRoute::getDRCMarkers(frList<std::unique_ptr<frMarker>>& markers,
   }
 }
 
-void TritonRoute::checkDRC(const char* filename, int x1, int y1, int x2, int y2)
+void TritonRoute::checkDRC(const char* filename,
+                           int x1,
+                           int y1,
+                           int x2,
+                           int y2,
+                           bool check_pg)
 {
   GC_IGNORE_PDN_LAYER = -1;
+  // Propagate the -check_pg switch into the global config so that the GC
+  // workers (which read globals, not a per-call argument) can filter objects.
+  DRC_CHECK_PG = check_pg;
+  // ===== check_drc logic chain (entry) =====
+  // Step 1: announce the requested mode so the log clearly shows whether this
+  // run is a normal DRC run or a PG-only run.
+  logger_->debug(DRT,
+                 "checkPG",
+                 "[check_drc] entry: mode={}, box=({},{})-({},{})",
+                 check_pg ? "PG-ONLY (-check_pg)" : "ALL-OBJECTS",
+                 x1,
+                 y1,
+                 x2,
+                 y2);
   initDesign();
   if (design_->getTopBlock()->getGCellPatterns().empty()) {
     initGuide();
@@ -981,9 +1002,27 @@ void TritonRoute::checkDRC(const char* filename, int x1, int y1, int x2, int y2)
   if (requiredDrcBox.area() == 0) {
     requiredDrcBox = design_->getTopBlock()->getBBox();
   }
+  // Step 2: drcBox is finalized; log the actual region that will be checked.
+  logger_->debug(DRT,
+                 "checkPG",
+                 "[check_drc] effective drc box=({},{})-({},{})",
+                 requiredDrcBox.xMin(),
+                 requiredDrcBox.yMin(),
+                 requiredDrcBox.xMax(),
+                 requiredDrcBox.yMax());
   frList<std::unique_ptr<frMarker>> markers;
+  // Step 3: run the GC workers and collect markers. Object filtering for
+  // -check_pg happens inside FlexGCWorker::Impl::initDesign.
   getDRCMarkers(markers, requiredDrcBox);
+  // Step 4: summarize how many violations survived the (optional) PG filter.
+  logger_->debug(DRT,
+                 "checkPG",
+                 "[check_drc] done: {} marker(s) reported{}",
+                 markers.size(),
+                 DRC_CHECK_PG ? " (PG-only)" : "");
   reportDRC(filename, markers, requiredDrcBox);
+  // Reset the switch so subsequent (non -check_pg) runs are unaffected.
+  DRC_CHECK_PG = false;
 }
 
 void TritonRoute::readParams(const string& fileName)

@@ -668,6 +668,8 @@ void serializeGlobals(Archive& ar)
   (ar) & MISALIGNMENTCOST;
   (ar) & HISTCOST;
   (ar) & CONGCOST;
+  // Serialize the PG-only DRC switch so distributed workers honor -check_pg.
+  (ar) & DRC_CHECK_PG;
 }
 
 }  // namespace fr

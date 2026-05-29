@@ -114,6 +114,8 @@ int CONGCOST = 8;
 int HISTCOST = 32;
 std::string REPAIR_PDN_LAYER_NAME;
 frLayerNum GC_IGNORE_PDN_LAYER = -1;
+// Default off: regular check_drc behaves exactly as before (all objects).
+bool DRC_CHECK_PG = false;
 namespace fr {
 
 ostream& operator<<(ostream& os, const frRect& pinFigIn)

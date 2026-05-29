@@ -181,6 +181,9 @@ class FlexGCWorker::Impl
   gcNet* initRouteObj(frBlockObject* obj, gcNet* currNet = nullptr);
   void initDesign(const frDesign* design, bool skipDR = false);
   bool initDesign_skipObj(frBlockObject* obj);
+  // Returns true if `obj` belongs to a power/ground (supply) net. Used by the
+  // -check_pg flow to keep only PG objects.
+  bool isPGObj(frBlockObject* obj);
   void initDRWorker();
   void initNets();
   void initNet(gcNet* net);

@@ -110,6 +110,10 @@ extern int CONGCOST;
 
 extern std::string REPAIR_PDN_LAYER_NAME;
 extern fr::frLayerNum GC_IGNORE_PDN_LAYER;
+// When true, `check_drc -check_pg` was requested: the DRC engine only loads
+// and checks power/ground (PG) objects, completely excluding signal, clock
+// and any other non-PG objects. See docs/agents/drc_check_pg.md.
+extern bool DRC_CHECK_PG;
 
 #define DIRBITSIZE 3
 #define WAVEFRONTBUFFERSIZE 2

@@ -29,6 +29,7 @@
 #include <iostream>
 
 #include "db/drObj/drNet.h"
+#include "db/obj/frNet.h"
 #include "dr/FlexDR.h"
 #include "frProfileTask.h"
 #include "gc/FlexGC_impl.h"
@@ -134,8 +135,66 @@ void FlexGCWorker::Impl::initObj(const Rect& box,
   }
 }
 
+// Decide whether `obj` belongs to a power/ground (supply) net.
+//
+// This mirrors the owner-resolution switch in getNet(): we walk from the raw
+// shape/terminal object to the net that owns it and inspect its dbSigType.
+// Objects that have no net (e.g. routing blockages) are treated as non-PG so
+// they are filtered out by -check_pg.
+bool FlexGCWorker::Impl::isPGObj(frBlockObject* obj)
+{
+  switch (obj->typeId()) {
+    case frcBTerm: {
+      // Block (top-level) terminal: prefer its net's type; if it is a floating
+      // terminal with no net, fall back to the terminal's own sig type.
+      auto bterm = static_cast<frBTerm*>(obj);
+      if (bterm->hasNet()) {
+        return bterm->getNet()->getType().isSupply();
+      }
+      return bterm->getType().isSupply();
+    }
+    case frcInstTerm: {
+      // Instance terminal (cell pin): same rule as frcBTerm.
+      auto instTerm = static_cast<frInstTerm*>(obj);
+      if (instTerm->hasNet()) {
+        return instTerm->getNet()->getType().isSupply();
+      }
+      return instTerm->getTerm()->getType().isSupply();
+    }
+    case frcPathSeg:
+    case frcVia:
+    case frcPatchWire: {
+      // Fixed routing shapes: PG iff their owning frNet is a supply net.
+      auto shape = static_cast<frPinFig*>(obj);
+      return shape->hasNet() && shape->getNet()->getType().isSupply();
+    }
+    case drcPathSeg:
+    case drcVia:
+    case drcPatchWire: {
+      // Detailed-routing shapes: resolve to the backing frNet, then check type.
+      auto shape = static_cast<drShape*>(obj);
+      return shape->hasNet() && shape->getNet()->getFrNet() != nullptr
+             && shape->getNet()->getFrNet()->getType().isSupply();
+    }
+    // Blockages (frcBlockage / frcInstBlockage) and anything else are not part
+    // of a PG net, so they are excluded in PG-only mode.
+    default:
+      return false;
+  }
+}
+
 bool FlexGCWorker::Impl::initDesign_skipObj(frBlockObject* obj)
 {
+  // PG-only mode (-check_pg): drop every object that is not on a supply net,
+  // so the GC engine only ever sees PG geometry. This is the core of the
+  // "PG vs non-PG" filter -- signal, clock and all other nets are removed
+  // here, before any rectangles/polygons are added to a gcNet.
+  if (DRC_CHECK_PG && !isPGObj(obj)) {
+    logger_->debug(
+        DRT, "checkPG", "[filter] skip non-PG obj typeId={}", obj->typeId());
+    return true;
+  }
+
   if (targetObjs_.empty()) {
     return false;
   }
@@ -176,19 +235,36 @@ void FlexGCWorker::Impl::initDesign(const frDesign* design, bool skipDR)
                  point_t(extBox.xMax(), extBox.yMax()));
   auto regionQuery = design->getRegionQuery();
   frRegionQuery::Objects<frBlockObject> queryResult;
+  // Counters used only for the -check_pg debug log: how many objects the region
+  // query returned vs. how many were actually loaded into gcNets.
+  int read_fixed = 0, kept_fixed = 0, read_dr = 0, kept_dr = 0;
   // init all non-dr objs from design
   for (auto i = 0; i <= getTech()->getTopLayerNum(); i++) {
     queryResult.clear();
     regionQuery->query(queryBox, i, queryResult);
     for (auto& [box, obj] : queryResult) {
+      ++read_fixed;
       if (initDesign_skipObj(obj)) {
         continue;
       }
-      initObj(box, i, obj, true);
+      ++kept_fixed;
+      // In PG-only mode the surviving PG shapes are loaded as NON-fixed
+      // (isFixed=false) so the GC engine actually evaluates PG-to-PG
+      // relationships: spacing/short checks are skipped when *both* shapes are
+      // fixed (FlexGC_main.cpp), and PG geometry always comes from special nets
+      // which are otherwise fixed. In normal mode design shapes stay fixed.
+      initObj(box, i, obj, !DRC_CHECK_PG);
     }
   }
   // init all dr objs from design
   if (getDRWorker() || skipDR) {
+    if (DRC_CHECK_PG) {
+      logger_->debug(DRT,
+                     "checkPG",
+                     "[init] fixed objs read={} kept(PG)={} (DR objs skipped)",
+                     read_fixed,
+                     kept_fixed);
+    }
     return;
   }
   for (auto i = getTech()->getBottomLayerNum();
@@ -197,11 +273,26 @@ void FlexGCWorker::Impl::initDesign(const frDesign* design, bool skipDR)
     queryResult.clear();
     regionQuery->queryDRObj(queryBox, i, queryResult);
     for (auto& [box, obj] : queryResult) {
+      ++read_dr;
       if (initDesign_skipObj(obj)) {
         continue;
       }
+      ++kept_dr;
       initObj(box, i, obj, false);
     }
+  }
+  if (DRC_CHECK_PG) {
+    // Final per-worker summary of the PG filter: this is the bottom of the
+    // logic chain "check_drc -> getDRCMarkers -> FlexGCWorker::init ->
+    // initDesign -> initDesign_skipObj/isPGObj".
+    logger_->debug(DRT,
+                   "checkPG",
+                   "[init] fixed objs read={} kept(PG)={}; dr objs read={} "
+                   "kept(PG)={}",
+                   read_fixed,
+                   kept_fixed,
+                   read_dr,
+                   kept_dr);
   }
 }
 
@@ -403,6 +494,15 @@ void FlexGCWorker::Impl::initNetsFromDesign(const frDesign* design)
 {
   auto block = design->getTopBlock();
   for (auto& net : block->getNets()) {
+    // PG-only mode (-check_pg): the routed shapes of a net are loaded here
+    // (not through initDesign_skipObj), so the PG filter must be applied again
+    // at the net level. Skip every net that is not a supply (power/ground)
+    // net, so signal/clock routing never enters the GC engine.
+    if (DRC_CHECK_PG && !net->getType().isSupply()) {
+      logger_->debug(
+          DRT, "checkPG", "[filter] skip non-PG net {}", net->getName());
+      continue;
+    }
     // always first generate gcnet in case owner does not have any object
     bool netExists = (owner2nets_.find(net.get()) != owner2nets_.end());
     gcNet* gNet = nullptr;
