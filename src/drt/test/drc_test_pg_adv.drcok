@@ -1,0 +1,6 @@
+  violation type: Min Area
+    srcs: net:VDD 
+    bbox = ( 2.45, 2.5 ) - ( 2.55, 2.6 ) on Layer metal2
+  violation type: Minimum Cut
+    srcs: net:VDD 
+    bbox = ( 4.965, 3.965 ) - ( 5.035, 4.035 ) on Layer metal2

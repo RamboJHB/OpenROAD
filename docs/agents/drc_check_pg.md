@@ -82,6 +82,17 @@ is unchanged (everything fixed, full DRC). PG nets cannot be regular nets
 (`DRT-0305`), so all routing in `initNetsFromDesign()` is non-PG and loaded
 fixed; PG geometry only ever comes from special nets via `initDesign()`.
 
+### 2.2 Min-area is reported (not patched) in PG mode
+
+`checkMetalShape_minArea` (`FlexGC_main.cpp`) is normally gated to detailed
+routing (`!targetNet_` → return) and *fixes* a min-area violation by adding a
+patch (needs the DR worker). In PG-only mode there is no DR worker, so the
+check is (a) allowed to run when `DRC_CHECK_PG`, (b) guarded so it never
+dereferences a null `drWorker_`, and (c) made to **emit a marker** (the
+`AreaConstraint`) instead of a patch. This is the only check that needed a
+code change to be reportable; it stays inert during routing
+(`DRC_CHECK_PG` is false there).
+
 ## 3. The logic chain (top to bottom)
 
 ```
@@ -156,22 +167,35 @@ Typical output (one `[init]` line per GC worker):
 | `src/drt/src/serialization.h`          | serialize `DRC_CHECK_PG` for distributed workers    |
 | `src/drt/src/gc/FlexGC_impl.h`         | declare `isPGObj`; `initRouteObj(..., bool isFixed)` |
 | `src/drt/src/gc/FlexGC_init.cpp`       | `isPGObj`; PG→non-fixed / non-PG→fixed classification in `initDesign`; non-PG routing loaded fixed in `initNetsFromDesign`; debug |
+| `src/drt/src/gc/FlexGC_main.cpp`        | `checkMetalShape_minArea`: report a marker (not a patch) in PG mode; null-`drWorker_` guard (see §2.2) |
+| `src/drt/test/drc_test_pg*`             | toy (Nangate45) for spacing/short/width/off-grid/cut-spacing |
+| `src/drt/test/drc_test_pg_adv*`         | companion toy (Nangate45 stack + injected `AREA`/`MINIMUMCUT`) for min-area & minimum-cut |
 
 ## 6. Test
 
-`src/drt/test/drc_test_pg.tcl` builds a tiny case (Nangate45) containing a
-signal-to-signal short (net1/net2, metal1), a PG-to-signal short (net1/VDD,
-metal2), a PG-to-PG short (VDD/VSS, metal2) and a PG-to-obstruction short (VDD
-vs a metal2 OBS). It runs `check_drc -check_pg` and diffs the report against
-`src/drt/test/drc_test_pg.drcok`. The golden contains the **three PG-involving
-violations** (net1/VDD, VDD/VSS, VDD/obstruction) and **not** the pure
-signal-to-signal short — proving signal-vs-signal is suppressed while every
-PG interaction (including PG-to-signal) is reported.
+`src/drt/test/drc_test_pg.tcl` (Nangate45) lays out spatially-separated
+clusters so the golden exercises every rule the Nangate45 tech can express in
+PG-only mode. `check_drc -check_pg` produces 9 markers, all PG-involving:
 
-Run it with the prebuilt binary:
+| Cluster | Marker | Source |
+| ------- | ------ | ------ |
+| PG-PG       | Short + Metal Spacing | VDD vs VSS (metal2) |
+| PG-signal   | Short + Metal Spacing | VDD vs net1/net2 (metal2) |
+| PG-blockage | Short + Metal Spacing | VDD vs metal2 OBS |
+| PG width    | Min Width | narrow VDD strap |
+| PG grid     | Off Grid | off-grid VDD strap |
+| PG via      | Cut Spacing | two VDD via1 cuts too close |
+
+The Metal Spacing markers use metal2's width-dependent `SPACINGTABLE` (PRL), so
+they also cover layer/width-dependent spacing. The pure signal-to-signal short
+(net1/net2 on metal1) is **not** reported — proving non-PG-vs-non-PG is
+suppressed. Rules Nangate45 cannot express (Min Step, Min Area, Minimum Cut)
+are covered by the companion `drc_test_pg_adv` test (custom tech LEF).
+
+Run with the prebuilt binary:
 
 ```
-./src/drt/test/regression drc_test_pg          # harness, gives pass/fail vs golden
+./src/drt/test/regression drc_test_pg drc_test_pg_adv   # pass/fail vs golden
 # or, from inside src/drt/test/:
 ../../../build/src/openroad -no_init -no_splash -exit drc_test_pg.tcl
 ```
@@ -187,10 +211,12 @@ are fixed. Combined with PG→non-fixed / non-PG→fixed loading, coverage is:
 | PG-to-PG spacing / short | ✅ | `checkMetalSpacing_prl` / `_short` (incl. PRL/TW spacing tables) |
 | PG-to-signal spacing / short | ✅ | signal loaded fixed, PG non-fixed → reported with both net names |
 | PG to blockage / keepout | ✅ | blockages loaded fixed + PG non-fixed → `checkMetalSpacing_short_obs`; EOL keepout also applies |
-| Layer-dependent spacing | ✅ | spacing tables via `checkMetalSpacing_prl` |
+| Layer-dependent spacing | ✅ | width-dependent PRL `SPACINGTABLE` via `checkMetalSpacing_prl`; tested in `drc_test_pg` |
+| Min width / off-grid (track) | ✅ | `checkMetalShape_minWidth` / `_offGrid` (single-shape, skip fully-fixed); tested in `drc_test_pg` |
+| Min area | ✅ (PG-only) | `checkMetalShape_minArea` is ungated under `DRC_CHECK_PG` and emits a marker instead of a DR patch (see §2.2); tested in `drc_test_pg_adv` |
+| Minimum cut | ✅ | `checkMinimumCut` runs standalone (else-branch); tested in `drc_test_pg_adv` |
+| Via cut spacing / short | ✅ | `checkCutSpacing*`; tested in `drc_test_pg` (PG via1 cuts) |
+| Min step | ⚠️ | reportable if the tech defines `MINSTEP`; hard to trigger with axis-aligned PG stripes without also tripping min-width — not exercised |
+| Via enclosure (metalWidthViaTable) | ⚠️ | `checkMetalWidthViaTable` runs standalone but needs a LEF58 `METALWIDTHVIATABLE` rule (absent in Nangate45) |
 | NDR / metal multi-patterning | ⚠️ | PG special nets rarely carry NDR; metal SAMEMASK is unsupported by the engine |
-| Min width / off-grid (track) | ✅ | `checkMetalShape_minWidth` / `_offGrid` (single-shape, skip fully-fixed) |
-| Min area / min-enclosed-area | ❌ | gated by `targetNet_`, not run in standalone `check_drc` |
-| Via cut spacing / short | ✅ | `checkCutSpacing*` (needs PG vias in the design) |
-| Via enclosure / min-cut | ⚠️ | involves `targetNet_`; explicit cut-size min/max is not a dedicated check |
-| Die/block boundary, ring/mesh perimeter | ❌ | the GC engine has no boundary DRC at all |
+| Die/block boundary, ring/mesh perimeter | ❌ | the GC engine has **no** boundary/perimeter DRC at all — would require a new check subsystem (out of scope) |

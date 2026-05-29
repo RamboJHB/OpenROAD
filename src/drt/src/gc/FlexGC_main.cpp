@@ -1294,7 +1294,11 @@ gcSegment* bestSuitable(gcSegment* a, gcSegment* b)
 }
 void FlexGCWorker::Impl::checkMetalShape_minArea(gcPin* pin)
 {
-  if (ignoreMinArea_ || !targetNet_) {
+  // Normally min-area is only evaluated during detailed routing (targetNet_
+  // set) where it is auto-fixed with a patch. In PG-only check_drc (-check_pg)
+  // we also want to *report* it on PG shapes, so allow it when DRC_CHECK_PG
+  // even without a targetNet_.
+  if (ignoreMinArea_ || (!targetNet_ && !DRC_CHECK_PG)) {
     return;
   }
   auto poly = pin->getPolygon();
@@ -1315,13 +1319,29 @@ void FlexGCWorker::Impl::checkMetalShape_minArea(gcPin* pin)
   gtl::rectangle_data<frCoord> bbox;
   gtl::extents(bbox, *pin->getPolygon());
   Rect bbox2(gtl::xl(bbox), gtl::yl(bbox), gtl::xh(bbox), gtl::yh(bbox));
-  if (!drWorker_->getDrcBox().contains(bbox2))
+  // drWorker_ is null in a standalone check_drc run; only constrain to the DR
+  // worker's box when there is one.
+  if (drWorker_ && !drWorker_->getDrcBox().contains(bbox2))
     return;
   for (auto& edges : pin->getPolygonEdges()) {
     for (auto& edge : edges) {
       if (edge->isFixed())
         return;
     }
+  }
+
+  if (DRC_CHECK_PG) {
+    // PG-only DRC: there is no DR worker to patch, so emit a marker instead.
+    auto marker = make_unique<frMarker>();
+    marker->setBBox(bbox2);
+    marker->setLayerNum(layerNum);
+    marker->setConstraint(con);
+    auto owner = poly->getNet()->getOwner();
+    marker->addSrc(owner);
+    marker->addVictim(owner, make_tuple(layerNum, bbox2, false));
+    marker->addAggressor(owner, make_tuple(layerNum, bbox2, false));
+    addMarker(std::move(marker));
+    return;
   }
 
   checkMetalShape_addPatch(pin, reqArea);
