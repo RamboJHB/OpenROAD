@@ -34,7 +34,5 @@ set_thread_count 1
 set_debug_level DRT checkPG 1
 
 set drc_file [make_result_file drc_test_pg.drc]
-# -check_pg also runs the ring/mesh-perimeter check: PG shapes that extend
-# outside the die boundary are flagged (the VDD strap crossing the right edge).
 drt::check_drc -output_file $drc_file -check_pg
 diff_files $drc_file drc_test_pg.drcok

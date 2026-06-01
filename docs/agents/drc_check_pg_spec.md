@@ -57,53 +57,38 @@ detailed routing，并以 patch 修复（依赖 `drWorker_`）。改动（仅 `D
 - `DRC_CHECK_PG` 时 **emit marker (`AreaConstraint`) 而非 `addPatch`**。
 - routing 时 `DRC_CHECK_PG == false`，行为不变。
 
-## 6. PG-to-boundary check (ring / mesh perimeter)
-GC engine 无 die/block boundary DRC，故在 `checkDRC` 内、`getDRCMarkers` 之后
-内建一个检查（仅 `check_pg` 时运行，**无参数**）：
-- 遍历 odb 中 `getSigType().isSupply()` 的 special net 的 `dbSWire` / `dbSBox`。
-- 计算 shape 到四条 die edge 的最小有符号距离 `dmin`；`dmin < 0`（即 shape
-  **越出** die boundary）→ violation；齐边（`dmin == 0`）不报。
-- 生成 `frMarker`（bbox = shape，layer = 对应 drt layer，src = `findNet(name)`
-  得到的 `frNet`），constraint 用新增的 `frPGBoundaryConstraint`，追加进 markers，
-  再 `reportDRC`。
-- 新增 violation type：`frConstraintTypeEnum::frcPGBoundaryConstraint`
-  （`frBaseTypes.h`）、`class frPGBoundaryConstraint`（`frConstraint.h`）、
-  `getViolName()` 返回 `"PG Boundary Spacing"`。
-
-## 7. Debug logic chain
+## 6. Debug logic chain
 debug stream tag `checkPG`（`set_debug_level DRT checkPG 1`）输出清晰链条：
 ```
 [check_drc] entry: mode=PG-ONLY (-check_pg), box=...
 [check_drc] effective drc box=...
 [init] PG(non-fixed)=N, background-fixed(signal/obs)=M
 [netinit] load non-PG net <name> as fixed background
-[check_drc] PG boundary: K marker(s) (shapes crossing the die edge)
 [check_drc] done: T marker(s) reported (PG-only)
 ```
 
-## 8. Reported rules under `-check_pg`
+## 7. Reported rules under `-check_pg`
 - Metal **Short** / **Metal Spacing**（含 metal2 width-dependent `SPACINGTABLE`
   / PRL）：PG-PG、PG-signal、PG-blockage。
 - **Min Width**、**Off Grid**（single-shape，跳过全 fixed shape）。
 - **Cut Spacing** / cut short（PG via）；**Minimum Cut**。
 - **Min Area**（见 §5）。
-- **PG Boundary Spacing**（见 §6）。
 - 引擎 / tech 限制未覆盖：**Min Step**（standalone `check_drc` 不 surface
   marker）、**NDR** / metal multi-patterning mask、LEF58 `METALWIDTHVIATABLE`
   enclosure（需对应 LEF rule）。
+- **Die/block boundary（ring/mesh perimeter）**：GC engine 无此 DRC，超出范围。
 
-## 9. Behavior guarantees
+## 8. Behavior guarantees
 - 无 `-check_pg` 时 `check_drc` 与改动前完全一致（所有条件分支取原 branch）。
 - detailed routing 不受影响：`DRC_CHECK_PG` 在 routing 期间恒为 `false`，且 GC
-  在 DR 模式下走 `initDRObj`（非 `initNetsFromDesign`），boundary 检查不运行。
+  在 DR 模式下走 `initDRObj`（非 `initNetsFromDesign`）。
 
-## 10. Files changed
+## 9. Files changed
 | File | Change |
 |---|---|
 | `src/drt/src/global.h` / `global.cpp` | `DRC_CHECK_PG` global |
 | `src/drt/src/serialization.h` | serialize `DRC_CHECK_PG` |
 | `src/drt/src/TritonRoute.tcl` / `.i` / `include/triton_route/TritonRoute.h` | `-check_pg` flag → `checkDRC(..., bool check_pg)` |
-| `src/drt/src/TritonRoute.cpp` | set/reset `DRC_CHECK_PG`；PG-boundary check；debug chain |
+| `src/drt/src/TritonRoute.cpp` | set/reset `DRC_CHECK_PG`；debug chain |
 | `src/drt/src/gc/FlexGC_init.cpp` / `FlexGC_impl.h` | `isPGObj`；fixed/non-fixed classification；`initRouteObj` `isFixed` 形参；debug |
 | `src/drt/src/gc/FlexGC_main.cpp` | `checkMetalShape_minArea`：PG 模式 emit marker + null-`drWorker_` guard |
-| `src/drt/src/frBaseTypes.h` / `db/tech/frConstraint.h` | `frcPGBoundaryConstraint` + `frPGBoundaryConstraint` + `"PG Boundary Spacing"` |
