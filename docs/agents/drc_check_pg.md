@@ -168,14 +168,15 @@ Typical output (one `[init]` line per GC worker):
 | `src/drt/src/gc/FlexGC_impl.h`         | declare `isPGObj`; `initRouteObj(..., bool isFixed)` |
 | `src/drt/src/gc/FlexGC_init.cpp`       | `isPGObj`; PG→non-fixed / non-PG→fixed classification in `initDesign`; non-PG routing loaded fixed in `initNetsFromDesign`; debug |
 | `src/drt/src/gc/FlexGC_main.cpp`        | `checkMetalShape_minArea`: report a marker (not a patch) in PG mode; null-`drWorker_` guard (see §2.2) |
-| `src/drt/test/drc_test_pg*`             | toy (Nangate45) for spacing/short/width/off-grid/cut-spacing |
-| `src/drt/test/drc_test_pg_adv*`         | companion toy (Nangate45 stack + injected `AREA`/`MINIMUMCUT`) for min-area & minimum-cut |
+| `src/drt/test/drc_test_pg*`             | single toy (`drc_test_pg.lef` = Nangate45 stack + injected `AREA`/`MINSTEP`/`MINIMUMCUT`) covering all PG rules |
 
 ## 6. Test
 
-`src/drt/test/drc_test_pg.tcl` (Nangate45) lays out spatially-separated
-clusters so the golden exercises every rule the Nangate45 tech can express in
-PG-only mode. `check_drc -check_pg` produces 9 markers, all PG-involving:
+`src/drt/test/drc_test_pg.tcl` lays out spatially-separated clusters so the
+golden exercises every rule expressible in PG-only mode. It uses
+`drc_test_pg.lef` (the Nangate45 stack with `AREA`/`MINSTEP`/`MINIMUMCUT`
+injected into metal2, which stock Nangate45 lacks). `check_drc -check_pg`
+produces 11 markers, all PG-involving:
 
 | Cluster | Marker | Source |
 | ------- | ------ | ------ |
@@ -185,17 +186,19 @@ PG-only mode. `check_drc -check_pg` produces 9 markers, all PG-involving:
 | PG width    | Min Width | narrow VDD strap |
 | PG grid     | Off Grid | off-grid VDD strap |
 | PG via      | Cut Spacing | two VDD via1 cuts too close |
+| PG area     | Min Area | small VDD metal2 shape |
+| PG min-cut  | Minimum Cut | wide VDD strap, single via1 cut |
 
 The Metal Spacing markers use metal2's width-dependent `SPACINGTABLE` (PRL), so
 they also cover layer/width-dependent spacing. The pure signal-to-signal short
 (net1/net2 on metal1) is **not** reported — proving non-PG-vs-non-PG is
-suppressed. Rules Nangate45 cannot express (Min Step, Min Area, Minimum Cut)
-are covered by the companion `drc_test_pg_adv` test (custom tech LEF).
+suppressed. Min Step is not surfaced by standalone `check_drc` and the GC engine
+has no boundary check; both are out of scope (see §7).
 
 Run with the prebuilt binary:
 
 ```
-./src/drt/test/regression drc_test_pg drc_test_pg_adv   # pass/fail vs golden
+./src/drt/test/regression drc_test_pg            # pass/fail vs golden
 # or, from inside src/drt/test/:
 ../../../build/src/openroad -no_init -no_splash -exit drc_test_pg.tcl
 ```
@@ -213,8 +216,8 @@ are fixed. Combined with PG→non-fixed / non-PG→fixed loading, coverage is:
 | PG to blockage / keepout | ✅ | blockages loaded fixed + PG non-fixed → `checkMetalSpacing_short_obs`; EOL keepout also applies |
 | Layer-dependent spacing | ✅ | width-dependent PRL `SPACINGTABLE` via `checkMetalSpacing_prl`; tested in `drc_test_pg` |
 | Min width / off-grid (track) | ✅ | `checkMetalShape_minWidth` / `_offGrid` (single-shape, skip fully-fixed); tested in `drc_test_pg` |
-| Min area | ✅ (PG-only) | `checkMetalShape_minArea` is ungated under `DRC_CHECK_PG` and emits a marker instead of a DR patch (see §2.2); tested in `drc_test_pg_adv` |
-| Minimum cut | ✅ | `checkMinimumCut` runs standalone (else-branch); tested in `drc_test_pg_adv` |
+| Min area | ✅ (PG-only) | `checkMetalShape_minArea` is ungated under `DRC_CHECK_PG` and emits a marker instead of a DR patch (see §2.2); tested in `drc_test_pg` |
+| Minimum cut | ✅ | `checkMinimumCut` runs standalone (else-branch); tested in `drc_test_pg` |
 | Via cut spacing / short | ✅ | `checkCutSpacing*`; tested in `drc_test_pg` (PG via1 cuts) |
 | Via enclosure (metalWidthViaTable) | ⚠️ | `checkMetalWidthViaTable` runs standalone but needs a LEF58 `METALWIDTHVIATABLE` rule (absent in Nangate45) |
 | NDR / metal multi-patterning | ⚠️ | PG special nets rarely carry NDR; metal SAMEMASK is unsupported by the engine |

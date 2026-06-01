@@ -4,7 +4,6 @@ record_tests {
   ta_ap_aligned
   ta_pin_aligned
   drc_test_pg
-  drc_test_pg_adv
 }
 record_pass_fail_tests {
   gc_test

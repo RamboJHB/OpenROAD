@@ -1,7 +1,7 @@
-[INFO ODB-0222] Reading LEF file: Nangate45/Nangate45_tech.lef
+[INFO ODB-0222] Reading LEF file: drc_test_pg.lef
 [INFO ODB-0223]     Created 22 technology layers
 [INFO ODB-0224]     Created 27 technology vias
-[INFO ODB-0226] Finished LEF file:  Nangate45/Nangate45_tech.lef
+[INFO ODB-0226] Finished LEF file:  drc_test_pg.lef
 [INFO ODB-0222] Reading LEF file: Nangate45/Nangate45_stdcell.lef
 [INFO ODB-0225]     Created 135 library cells
 [INFO ODB-0226] Finished LEF file:  Nangate45/Nangate45_stdcell.lef
@@ -76,9 +76,9 @@ Number of nets:           2
 [INFO DRT-0024]   Complete metal10.
 [INFO DRT-0033] active shape region query size = 0.
 [INFO DRT-0033] FR_VIA shape region query size = 0.
-[INFO DRT-0033] metal1 shape region query size = 14.
-[INFO DRT-0033] via1 shape region query size = 2.
-[INFO DRT-0033] metal2 shape region query size = 14.
+[INFO DRT-0033] metal1 shape region query size = 15.
+[INFO DRT-0033] via1 shape region query size = 3.
+[INFO DRT-0033] metal2 shape region query size = 18.
 [INFO DRT-0033] via2 shape region query size = 0.
 [INFO DRT-0033] metal3 shape region query size = 0.
 [INFO DRT-0033] via3 shape region query size = 0.
@@ -169,8 +169,8 @@ Number of guides:     2
 [INFO DRT-0245] skipped writing guide updates to database.
 [INFO DRT-0185] Post process initialize RPin region query.
 [DEBUG DRT-checkPG] [check_drc] effective drc box=(0,0)-(20000,20000)
-[DEBUG DRT-checkPG] [init] PG(non-fixed)=24, background-fixed(signal/obs)=6 (DR objs skipped)
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=30, background-fixed(signal/obs)=6 (DR objs skipped)
 [DEBUG DRT-checkPG] [netinit] load non-PG net net1 as fixed background
 [DEBUG DRT-checkPG] [netinit] load non-PG net net2 as fixed background
-[DEBUG DRT-checkPG] [check_drc] done: 9 marker(s) reported (PG-only)
+[DEBUG DRT-checkPG] [check_drc] done: 11 marker(s) reported (PG-only)
 No differences found.
