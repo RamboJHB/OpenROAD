@@ -27,4 +27,4 @@
     bbox = ( 1.535, 8.465 ) - ( 1.61, 8.535 ) on Layer via1
   violation type: PG Boundary Spacing
     srcs: net:VDD 
-    bbox = ( 0, 3.5 ) - ( 0.2, 4.5 ) on Layer metal2
+    bbox = ( 9.95, 3.5 ) - ( 10.15, 4.5 ) on Layer metal2

@@ -176,16 +176,14 @@ class TritonRoute
   void reportDRC(const std::string& file_name,
                  const std::list<std::unique_ptr<fr::frMarker>>& markers,
                  odb::Rect bbox = odb::Rect(0, 0, 0, 0));
-  // check_pg: when true, only power/ground objects are checked (-check_pg).
-  // pg_boundary_margin: when >0 (and check_pg), also report PG shapes whose
-  // distance to the die boundary is below this margin (DBU).
+  // check_pg: when true, only power/ground objects are checked (-check_pg);
+  // this also reports PG shapes that extend outside the die boundary.
   void checkDRC(const char* drc_file,
                 int x0,
                 int y0,
                 int x1,
                 int y1,
-                bool check_pg = false,
-                int pg_boundary_margin = 0);
+                bool check_pg = false);
 
  private:
   std::unique_ptr<fr::frDesign> design_;

@@ -977,8 +977,7 @@ void TritonRoute::checkDRC(const char* filename,
                            int y1,
                            int x2,
                            int y2,
-                           bool check_pg,
-                           int pg_boundary_margin)
+                           bool check_pg)
 {
   GC_IGNORE_PDN_LAYER = -1;
   // Propagate the -check_pg switch into the global config so that the GC
@@ -1015,12 +1014,12 @@ void TritonRoute::checkDRC(const char* filename,
   // Step 3: run the GC workers and collect markers. Object filtering for
   // -check_pg happens inside FlexGCWorker::Impl::initDesign.
   getDRCMarkers(markers, requiredDrcBox);
-  // Step 3b (PG-only): the GC engine has no die/block boundary DRC, so when a
-  // PG-to-boundary keepout margin is requested, scan PG (supply) special-net
-  // shapes and report any whose distance to the die boundary is below the
-  // margin (or that cross it). This is the ring/mesh-perimeter check.
+  // Step 3b (PG-only): the GC engine has no die/block boundary DRC, so scan PG
+  // (supply) special-net shapes and report any that extend outside the die
+  // boundary. This is the ring/mesh-perimeter check; it needs no parameter
+  // (a shape flush with the edge is fine, one crossing it is not).
   frPGBoundaryConstraint pg_boundary_con;  // outlives reportDRC below
-  if (check_pg && pg_boundary_margin > 0) {
+  if (check_pg) {
     auto block = db_->getChip()->getBlock();
     const odb::Rect die = block->getDieArea();
     auto top_block = design_->getTopBlock();
@@ -1036,12 +1035,12 @@ void TritonRoute::checkDRC(const char* filename,
           if (!requiredDrcBox.intersects(r)) {
             continue;
           }
-          // signed distance to the nearest die edge (<0 means it crosses)
+          // signed distance to the nearest die edge (<0 means it crosses out)
           const int dmin = std::min({r.xMin() - die.xMin(),
                                      die.xMax() - r.xMax(),
                                      r.yMin() - die.yMin(),
                                      die.yMax() - r.yMax()});
-          if (dmin >= pg_boundary_margin) {
+          if (dmin >= 0) {
             continue;
           }
           auto* tech_layer = sbox->getTechLayer();
@@ -1070,8 +1069,8 @@ void TritonRoute::checkDRC(const char* filename,
     }
     logger_->debug(DRT,
                    "checkPG",
-                   "[check_drc] PG boundary margin={} -> {} marker(s)",
-                   pg_boundary_margin,
+                   "[check_drc] PG boundary: {} marker(s) (shapes crossing the "
+                   "die edge)",
                    n_boundary);
   }
   // Step 4: summarize how many violations survived the (optional) PG filter.

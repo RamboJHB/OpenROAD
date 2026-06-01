@@ -172,6 +172,6 @@ Number of guides:     2
 [DEBUG DRT-checkPG] [init] PG(non-fixed)=25, background-fixed(signal/obs)=6 (DR objs skipped)
 [DEBUG DRT-checkPG] [netinit] load non-PG net net1 as fixed background
 [DEBUG DRT-checkPG] [netinit] load non-PG net net2 as fixed background
-[DEBUG DRT-checkPG] [check_drc] PG boundary margin=500 -> 1 marker(s)
+[DEBUG DRT-checkPG] [check_drc] PG boundary: 1 marker(s) (shapes crossing the die edge)
 [DEBUG DRT-checkPG] [check_drc] done: 10 marker(s) reported (PG-only)
 No differences found.

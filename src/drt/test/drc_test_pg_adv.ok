@@ -171,5 +171,6 @@ Number of guides:     1
 [DEBUG DRT-checkPG] [check_drc] effective drc box=(0,0)-(20000,20000)
 [DEBUG DRT-checkPG] [init] PG(non-fixed)=13, background-fixed(signal/obs)=4 (DR objs skipped)
 [DEBUG DRT-checkPG] [netinit] load non-PG net net1 as fixed background
+[DEBUG DRT-checkPG] [check_drc] PG boundary: 0 marker(s) (shapes crossing the die edge)
 [DEBUG DRT-checkPG] [check_drc] done: 2 marker(s) reported (PG-only)
 No differences found.
