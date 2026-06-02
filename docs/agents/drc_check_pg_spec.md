@@ -1,7 +1,7 @@
 # Implementation Spec — `check_drc -check_pg` (PG-only DRC)
 
 ## 1. Goal
-给 `drt::check_drc` 增加一个 `-check_pg` flag，使 `check_drc` 只报告**涉及
+给 `check_drc` 增加一个 `-check_pg` flag，使 `check_drc` 只报告**涉及
 power/ground (PG) 几何的 DRC violation**（PG-PG、PG-signal、PG-blockage、PG
 自身、PG 越界），并抑制纯非 PG 的 violation（signal-vs-signal 等）。语义对齐
 Cadence Innovus `verify_drc -check_only special`。不改变无 flag 时 `check_drc`

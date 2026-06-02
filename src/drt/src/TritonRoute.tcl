@@ -433,6 +433,8 @@ proc step_dr { args } {
   drt::detailed_route_step_drt {*}$args
 }
 
+}
+
 sta::define_cmd_args "check_drc" {
     [-box box]
     [-output_file filename]
@@ -459,6 +461,4 @@ proc check_drc { args } {
     utl::error DRT 613 "-output_file is required for check_drc command"
   }
   drt::check_drc_cmd $output_file $x1 $y1 $x2 $y2 $check_pg
-}
-
 }

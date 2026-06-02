@@ -38,5 +38,5 @@ set_thread_count 1
 set_debug_level DRT checkPG 1
 
 set drc_file [make_result_file drc_test_pg.drc]
-drt::check_drc -output_file $drc_file -check_pg
+check_drc -output_file $drc_file -check_pg
 diff_files $drc_file drc_test_pg.drcok
