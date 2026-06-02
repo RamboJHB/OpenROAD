@@ -33,6 +33,8 @@
 #include <boost/bind/bind.hpp>
 #include <fstream>
 #include <iostream>
+#include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -71,6 +73,99 @@ extern const char* drt_tcl_inits[];
 extern "C" {
 extern int Drt_Init(Tcl_Interp* interp);
 }
+
+namespace {
+// Print a violation-count summary table: rows are layers, columns are
+// violation types, with a Totals column (per-layer) and a Totals row
+// (per-type) plus the grand total in the bottom-right cell. Only layers/types
+// that actually have violations appear; columns and rows are sorted so the
+// table is deterministic. Counts are emitted with logger->report (plain lines).
+void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
+                      frTechObject* tech,
+                      utl::Logger* logger)
+{
+  std::map<frLayerNum, std::map<std::string, long>> counts;
+  std::set<std::string> typeSet;
+  std::set<frLayerNum> layerSet;
+  for (const auto& marker : markers) {
+    if (!marker->getConstraint()) {
+      continue;
+    }
+    const std::string type = marker->getConstraint()->getViolName();
+    const frLayerNum layerNum = marker->getLayerNum();
+    counts[layerNum][type]++;
+    typeSet.insert(type);
+    layerSet.insert(layerNum);
+  }
+  if (typeSet.empty()) {
+    return;
+  }
+
+  const std::vector<std::string> cols(typeSet.begin(), typeSet.end());
+  std::map<std::string, long> colTotal;
+  std::map<frLayerNum, long> rowTotal;
+  long grandTotal = 0;
+  for (const auto& [layerNum, perType] : counts) {
+    for (const auto& [type, cnt] : perType) {
+      colTotal[type] += cnt;
+      rowTotal[layerNum] += cnt;
+      grandTotal += cnt;
+    }
+  }
+
+  // Column widths: first column fits the layer names / "Totals" label; each
+  // type column fits its header and the largest count in it; the totals column
+  // fits the grand total.
+  const std::string kTotals = "Totals";
+  size_t firstW = kTotals.size();
+  for (const auto layerNum : layerSet) {
+    firstW = std::max(firstW, tech->getLayer(layerNum)->getName().size());
+  }
+  std::vector<size_t> colW(cols.size());
+  for (size_t i = 0; i < cols.size(); i++) {
+    size_t w
+        = std::max(cols[i].size(), std::to_string(colTotal[cols[i]]).size());
+    for (const auto layerNum : layerSet) {
+      w = std::max(w, std::to_string(counts[layerNum][cols[i]]).size());
+    }
+    colW[i] = w;
+  }
+  const size_t totW
+      = std::max(kTotals.size(), std::to_string(grandTotal).size());
+
+  auto rjust = [](const std::string& s, size_t width) {
+    return std::string(width - s.size(), ' ') + s;
+  };
+  auto ljust = [](const std::string& s, size_t width) {
+    return s + std::string(width - s.size(), ' ');
+  };
+  const std::string gap = "  ";
+
+  // header
+  std::string line = std::string(firstW, ' ');
+  for (size_t i = 0; i < cols.size(); i++) {
+    line += gap + rjust(cols[i], colW[i]);
+  }
+  line += gap + rjust(kTotals, totW);
+  logger->report(line);
+  // one row per layer
+  for (const auto layerNum : layerSet) {
+    line = ljust(tech->getLayer(layerNum)->getName(), firstW);
+    for (size_t i = 0; i < cols.size(); i++) {
+      line += gap + rjust(std::to_string(counts[layerNum][cols[i]]), colW[i]);
+    }
+    line += gap + rjust(std::to_string(rowTotal[layerNum]), totW);
+    logger->report(line);
+  }
+  // totals row
+  line = ljust(kTotals, firstW);
+  for (size_t i = 0; i < cols.size(); i++) {
+    line += gap + rjust(std::to_string(colTotal[cols[i]]), colW[i]);
+  }
+  line += gap + rjust(std::to_string(grandTotal), totW);
+  logger->report(line);
+}
+}  // namespace
 
 TritonRoute::TritonRoute()
     : debug_(std::make_unique<frDebugSettings>()),
@@ -1023,8 +1118,10 @@ void TritonRoute::checkDRC(const char* filename,
                  "[check_drc] done: {} marker(s) reported{}",
                  markers.size(),
                  DRC_CHECK_PG ? " (PG-only)" : "");
-  // Always report the violation count (with or without -check_pg).
+  // Always report the violation count (with or without -check_pg), followed by
+  // a per-layer / per-type breakdown table.
   logger_->info(DRT, 618, "check_drc found {} violations.", markers.size());
+  reportDRCSummary(markers, getDesign()->getTech(), logger_);
   reportDRC(filename, markers, requiredDrcBox);
   // Reset the switch so subsequent (non -check_pg) runs are unaffected.
   DRC_CHECK_PG = false;
