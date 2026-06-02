@@ -34,6 +34,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "DesignCallBack.h"
@@ -71,6 +72,50 @@ extern const char* drt_tcl_inits[];
 extern "C" {
 extern int Drt_Init(Tcl_Interp* interp);
 }
+
+namespace {
+// Format a marker's sources as sorted strings. A marker stores its sources in
+// a std::set<frBlockObject*>, whose iteration order follows pointer addresses
+// and is therefore not stable across runs. Sorting the formatted strings makes
+// both the report's "srcs" line and the marker ordering deterministic. Shared
+// by reportDRC (printing) and checkDRC (sort key).
+std::vector<std::string> formatMarkerSrcs(const frMarker* marker,
+                                          utl::Logger* logger)
+{
+  std::vector<std::string> srcStrs;
+  for (auto src : marker->getSrcs()) {
+    if (!src) {
+      continue;
+    }
+    switch (src->typeId()) {
+      case frcNet:
+        srcStrs.push_back("net:" + static_cast<frNet*>(src)->getName());
+        break;
+      case frcInstTerm: {
+        frInstTerm* instTerm = static_cast<frInstTerm*>(src);
+        srcStrs.push_back("iterm:" + instTerm->getInst()->getName() + "/"
+                          + instTerm->getTerm()->getName());
+        break;
+      }
+      case frcBTerm:
+        srcStrs.push_back("bterm:" + static_cast<frBTerm*>(src)->getName());
+        break;
+      case frcInstBlockage:
+        srcStrs.push_back(
+            "inst:" + static_cast<frInstBlockage*>(src)->getInst()->getName());
+        break;
+      case frcBlockage:
+        srcStrs.push_back("obstruction:");
+        break;
+      default:
+        logger->error(
+            DRT, 291, "Unexpected source type in marker: {}", src->typeId());
+    }
+  }
+  std::sort(srcStrs.begin(), srcStrs.end());
+  return srcStrs;
+}
+}  // namespace
 
 TritonRoute::TritonRoute()
     : debug_(std::make_unique<frDebugSettings>()),
@@ -1017,12 +1062,36 @@ void TritonRoute::checkDRC(const char* filename,
   // Step 3: run the GC workers and collect markers. Object filtering for
   // -check_pg happens inside FlexGCWorker::Impl::initDesign.
   getDRCMarkers(markers, requiredDrcBox);
-  // Step 4: summarize how many violations survived the (optional) PG filter.
+  // Step 4: sort the markers so the report order is deterministic. The GC
+  // worker batches run under OpenMP and each marker's srcs_ is a pointer-
+  // ordered set, so the raw collection order varies between runs.
+  markers.sort([this](const std::unique_ptr<frMarker>& a,
+                      const std::unique_ptr<frMarker>& b) {
+    auto key = [this](const frMarker* m) {
+      auto con = m->getConstraint();
+      Rect bbox = m->getBBox();
+      std::string srcs;
+      for (const auto& s : formatMarkerSrcs(m, logger_)) {
+        srcs += s + " ";
+      }
+      return std::make_tuple(con ? con->getViolName() : std::string(),
+                             m->getLayerNum(),
+                             bbox.xMin(),
+                             bbox.yMin(),
+                             bbox.xMax(),
+                             bbox.yMax(),
+                             srcs);
+    };
+    return key(a.get()) < key(b.get());
+  });
+  // Step 5: summarize how many violations survived the (optional) PG filter.
   logger_->debug(DRT,
                  "checkPG",
                  "[check_drc] done: {} marker(s) reported{}",
                  markers.size(),
                  DRC_CHECK_PG ? " (PG-only)" : "");
+  // Always report the violation count (with or without -check_pg).
+  logger_->info(DRT, 618, "check_drc found {} violations.", markers.size());
   reportDRC(filename, markers, requiredDrcBox);
   // Reset the switch so subsequent (non -check_pg) runs are unaffected.
   DRC_CHECK_PG = false;
@@ -1240,47 +1309,7 @@ void TritonRoute::reportDRC(const string& file_name,
       // get source(s) of violation
       // format: type:name/identifier
       drcRpt << "    srcs: ";
-      // srcs_ is a std::set<frBlockObject*>, so its iteration order follows
-      // pointer addresses and is not stable across runs. Collect the formatted
-      // strings and sort them so the report is deterministic.
-      std::vector<std::string> srcStrs;
-      for (auto src : marker->getSrcs()) {
-        if (src) {
-          switch (src->typeId()) {
-            case frcNet:
-              srcStrs.push_back("net:" + (static_cast<frNet*>(src))->getName());
-              break;
-            case frcInstTerm: {
-              frInstTerm* instTerm = (static_cast<frInstTerm*>(src));
-              srcStrs.push_back("iterm:" + instTerm->getInst()->getName() + "/"
-                                + instTerm->getTerm()->getName());
-              break;
-            }
-            case frcBTerm: {
-              frBTerm* bterm = (static_cast<frBTerm*>(src));
-              srcStrs.push_back("bterm:" + bterm->getName());
-              break;
-            }
-            case frcInstBlockage: {
-              frInstBlockage* instBlockage
-                  = (static_cast<frInstBlockage*>(src));
-              srcStrs.push_back("inst:" + instBlockage->getInst()->getName());
-              break;
-            }
-            case frcBlockage: {
-              srcStrs.push_back("obstruction:");
-              break;
-            }
-            default:
-              logger_->error(DRT,
-                             291,
-                             "Unexpected source type in marker: {}",
-                             src->typeId());
-          }
-        }
-      }
-      std::sort(srcStrs.begin(), srcStrs.end());
-      for (const auto& srcStr : srcStrs) {
+      for (const auto& srcStr : formatMarkerSrcs(marker.get(), logger_)) {
         drcRpt << srcStr << " ";
       }
       drcRpt << "\n";

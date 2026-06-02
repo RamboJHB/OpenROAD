@@ -173,4 +173,5 @@ Number of guides:     2
 [DEBUG DRT-checkPG] [netinit] load non-PG net net1 as fixed background
 [DEBUG DRT-checkPG] [netinit] load non-PG net net2 as fixed background
 [DEBUG DRT-checkPG] [check_drc] done: 11 marker(s) reported (PG-only)
+[INFO DRT-0618] check_drc found 11 violations.
 No differences found.
