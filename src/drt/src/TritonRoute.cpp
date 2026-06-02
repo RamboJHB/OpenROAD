@@ -28,10 +28,13 @@
 
 #include "triton_route/TritonRoute.h"
 
+#include <algorithm>
 #include <boost/asio/post.hpp>
 #include <boost/bind/bind.hpp>
 #include <fstream>
 #include <iostream>
+#include <string>
+#include <vector>
 
 #include "DesignCallBack.h"
 #include "db/tech/frTechObject.h"
@@ -1237,31 +1240,35 @@ void TritonRoute::reportDRC(const string& file_name,
       // get source(s) of violation
       // format: type:name/identifier
       drcRpt << "    srcs: ";
+      // srcs_ is a std::set<frBlockObject*>, so its iteration order follows
+      // pointer addresses and is not stable across runs. Collect the formatted
+      // strings and sort them so the report is deterministic.
+      std::vector<std::string> srcStrs;
       for (auto src : marker->getSrcs()) {
         if (src) {
           switch (src->typeId()) {
             case frcNet:
-              drcRpt << "net:" << (static_cast<frNet*>(src))->getName() << " ";
+              srcStrs.push_back("net:" + (static_cast<frNet*>(src))->getName());
               break;
             case frcInstTerm: {
               frInstTerm* instTerm = (static_cast<frInstTerm*>(src));
-              drcRpt << "iterm:" << instTerm->getInst()->getName() << "/"
-                     << instTerm->getTerm()->getName() << " ";
+              srcStrs.push_back("iterm:" + instTerm->getInst()->getName() + "/"
+                                + instTerm->getTerm()->getName());
               break;
             }
             case frcBTerm: {
               frBTerm* bterm = (static_cast<frBTerm*>(src));
-              drcRpt << "bterm:" << bterm->getName() << " ";
+              srcStrs.push_back("bterm:" + bterm->getName());
               break;
             }
             case frcInstBlockage: {
               frInstBlockage* instBlockage
                   = (static_cast<frInstBlockage*>(src));
-              drcRpt << "inst:" << instBlockage->getInst()->getName() << " ";
+              srcStrs.push_back("inst:" + instBlockage->getInst()->getName());
               break;
             }
             case frcBlockage: {
-              drcRpt << "obstruction: ";
+              srcStrs.push_back("obstruction:");
               break;
             }
             default:
@@ -1271,6 +1278,10 @@ void TritonRoute::reportDRC(const string& file_name,
                              src->typeId());
           }
         }
+      }
+      std::sort(srcStrs.begin(), srcStrs.end());
+      for (const auto& srcStr : srcStrs) {
+        drcRpt << srcStr << " ";
       }
       drcRpt << "\n";
 
