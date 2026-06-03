@@ -1692,7 +1692,9 @@ void FlexGCWorker::Impl::checkMetalShape_minEnclosedArea(gcPin* pin)
 
 void FlexGCWorker::Impl::checkMetalShape_lef58Area(gcPin* pin)
 {
-  if (ignoreMinArea_ || !targetNet_) {
+  // Like checkMetalShape_minArea: normally detailed-routing only (patches via
+  // the DR worker), but under -check_pg we also *report* it on PG shapes.
+  if (ignoreMinArea_ || (!targetNet_ && !DRC_CHECK_PG)) {
     return;
   }
 
@@ -1732,13 +1734,45 @@ void FlexGCWorker::Impl::checkMetalShape_lef58Area(gcPin* pin)
     gtl::rectangle_data<frCoord> bbox;
     gtl::extents(bbox, *pin->getPolygon());
     Rect bbox2(gtl::xl(bbox), gtl::yl(bbox), gtl::xh(bbox), gtl::yh(bbox));
-    if (!drWorker_->getDrcBox().contains(bbox2))
+    // drWorker_ is null in a standalone check_drc run; only constrain to the DR
+    // worker's box when there is one.
+    if (drWorker_ && !drWorker_->getDrcBox().contains(bbox2))
       continue;
     for (auto& edges : pin->getPolygonEdges()) {
       for (auto& edge : edges) {
         if (edge->isFixed())
           continue;
       }
+    }
+
+    if (DRC_CHECK_PG) {
+      // PG-only DRC: there is no DR worker to patch, so emit a marker instead
+      // (mirrors checkMetalShape_minArea). Skip fully-fixed shapes.
+      bool anyFixed = false;
+      for (auto& edges : pin->getPolygonEdges()) {
+        for (auto& edge : edges) {
+          if (edge->isFixed()) {
+            anyFixed = true;
+            break;
+          }
+        }
+        if (anyFixed) {
+          break;
+        }
+      }
+      if (anyFixed) {
+        continue;
+      }
+      auto marker = make_unique<frMarker>();
+      marker->setBBox(bbox2);
+      marker->setLayerNum(layer_idx);
+      marker->setConstraint(con);
+      auto owner = poly->getNet()->getOwner();
+      marker->addSrc(owner);
+      marker->addVictim(owner, make_tuple(layer_idx, bbox2, false));
+      marker->addAggressor(owner, make_tuple(layer_idx, bbox2, false));
+      addMarker(std::move(marker));
+      continue;
     }
 
     if (checkMetalShape_lef58Area_exceptRectangle(poly, db_rule)) {

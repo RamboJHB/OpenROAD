@@ -82,16 +82,22 @@ is unchanged (everything fixed, full DRC). PG nets cannot be regular nets
 (`DRT-0305`), so all routing in `initNetsFromDesign()` is non-PG and loaded
 fixed; PG geometry only ever comes from special nets via `initDesign()`.
 
-### 2.2 Min-area is reported (not patched) in PG mode
+### 2.2 Min-area / LEF58-area are reported (not patched) in PG mode
 
 `checkMetalShape_minArea` (`FlexGC_main.cpp`) is normally gated to detailed
 routing (`!targetNet_` → return) and *fixes* a min-area violation by adding a
 patch (needs the DR worker). In PG-only mode there is no DR worker, so the
 check is (a) allowed to run when `DRC_CHECK_PG`, (b) guarded so it never
 dereferences a null `drWorker_`, and (c) made to **emit a marker** (the
-`AreaConstraint`) instead of a patch. This is the only check that needed a
-code change to be reportable; it stays inert during routing
+`AreaConstraint`) instead of a patch. It stays inert during routing
 (`DRC_CHECK_PG` is false there).
+
+`checkMetalShape_lef58Area` gets the **same treatment** (the `LEF58_AREA`
+counterpart): gate changed to `(!targetNet_ && !DRC_CHECK_PG)`, the
+`drWorker_->getDrcBox()` access null-guarded, and under `DRC_CHECK_PG` it emits
+a `Lef58Area` marker (skipping fully-fixed shapes) instead of patching. These
+are the only two checks that needed a code change to be reportable under
+`-check_pg`.
 
 ## 3. The logic chain (top to bottom)
 
@@ -245,7 +251,7 @@ fires when the tech defines the matching LEF/LEF58 rule (absent in Nangate45);
 | `Lef58CornerSpacingConcaveCorner`/`ConvexCorner`/`Spacing`/`Spacing1D`/`Spacing2D` | LEF58 corner family | `checkMetalCornerSpacing` | ⚠️ | ❌ |
 | `Lef58CutSpacingTable`/`TablePrl`/`TableLayer`/`ParallelWithin`/`AdjacentCuts`/`Layer`, `Lef58CutClass` | LEF58 cut family | `checkLef58CutSpacing` | ⚠️ | ❌ |
 | `Lef58SpacingTable` | LEF58 metal spacing table | `checkMetalSpacing` | ⚠️ | ❌ |
-| `Lef58Area` | LEF58 min area | `checkMetalShape_lef58Area` | ❌ **DR-only** (not enabled for `-check_pg`, unlike `Min Area`) | ❌ |
+| `Lef58Area` | LEF58 min area | `checkMetalShape_lef58Area` | ✅ **only under `-check_pg`** (emits marker, not patch; §2.2) — needs a `LEF58_AREA` rule | ❌ (no toy rule) |
 | `Recheck` | internal "needs recheck" flag (not a DRC rule) | — | — | — |
 | Die/block boundary, ring/mesh perimeter | — | none (no such check in the GC engine) | ❌ | ❌ (out of scope) |
 
@@ -254,11 +260,10 @@ fires when the tech defines the matching LEF/LEF58 rule (absent in Nangate45);
 `Minimum Cut`.
 
 Notable code facts:
-* `Min Area` is the only check specially enabled for PG mode — `DRC_CHECK_PG`
-  ungates it and makes it emit a marker instead of a DR patch (§2.2).
-* `Lef58Area` is **not** enabled for `-check_pg` (still `targetNet_`-gated), so
-  LEF58 area violations are not reported by `check_drc`; mirroring the
-  `Min Area` change would close that gap.
+* `Min Area` and `Lef58Area` are the two checks specially enabled for PG mode —
+  `DRC_CHECK_PG` ungates them and makes them emit a marker instead of a DR
+  patch (§2.2). `Lef58Area` only fires if the tech defines a `LEF58_AREA` rule
+  (Nangate45 does not), so the toy does not exercise it.
 * `Min Step` runs in `check_drc` but the engine only emits it for specific jog
   geometry, so the toy does not exercise it.
 * NDR / metal multi-patterning (SAMEMASK) is not a separate violation type here
