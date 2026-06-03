@@ -205,21 +205,61 @@ Run with the prebuilt binary:
 
 ## 7. PG rule coverage (what `-check_pg` actually checks)
 
-In a standalone `check_drc` the GC engine runs with `targetNet_==nullptr` and
-no DR worker, and it skips spacing/short checks for pairs where **both** shapes
-are fixed. Combined with PG→non-fixed / non-PG→fixed loading, coverage is:
+In a standalone `check_drc` the GC worker runs its **full** check sequence with
+`targetNet_ == nullptr` (no DR worker), and skips spacing/short checks for pairs
+where **both** shapes are fixed. Combined with PG→non-fixed / non-PG→fixed
+loading, every check below runs; only violations that involve a (non-fixed) PG
+shape are reported.
 
-| Rule category | Covered? | Notes |
-| ------------- | -------- | ----- |
-| PG-to-PG spacing / short | ✅ | `checkMetalSpacing_prl` / `_short` (incl. PRL/TW spacing tables) |
-| PG-to-signal spacing / short | ✅ | signal loaded fixed, PG non-fixed → reported with both net names |
-| PG to blockage / keepout | ✅ | blockages loaded fixed + PG non-fixed → `checkMetalSpacing_short_obs`; EOL keepout also applies |
-| Layer-dependent spacing | ✅ | width-dependent PRL `SPACINGTABLE` via `checkMetalSpacing_prl`; tested in `drc_test_pg` |
-| Min width / off-grid (track) | ✅ | `checkMetalShape_minWidth` / `_offGrid` (single-shape, skip fully-fixed); tested in `drc_test_pg` |
-| Min area | ✅ (PG-only) | `checkMetalShape_minArea` is ungated under `DRC_CHECK_PG` and emits a marker instead of a DR patch (see §2.2); tested in `drc_test_pg` |
-| Minimum cut | ✅ | `checkMinimumCut` runs standalone (else-branch); tested in `drc_test_pg` |
-| Via cut spacing / short | ✅ | `checkCutSpacing*`; tested in `drc_test_pg` (PG via1 cuts) |
-| Via enclosure (metalWidthViaTable) | ⚠️ | `checkMetalWidthViaTable` runs standalone but needs a LEF58 `METALWIDTHVIATABLE` rule (absent in Nangate45) |
-| NDR / metal multi-patterning | ⚠️ | PG special nets rarely carry NDR; metal SAMEMASK is unsupported by the engine |
-| Die/block boundary, ring/mesh perimeter | ❌ | the GC engine has **no** boundary/perimeter DRC; out of scope (would need a new check subsystem) |
-| Min step | ⚠️ | the engine's `checkMetalShape_minStep` does not surface markers in a standalone `check_drc` (no targetNet_/DR context) even when the tech defines `MINSTEP`; not exercised |
+Worker check sequence (`FlexGCWorker::Impl::main`):
+`checkMetalCornerSpacing → checkMetalSpacing → checkMetalShape →
+checkMetalEndOfLine → checkCutSpacing → checkMetalSpacingTableInfluence →
+checkMinimumCut → checkMetalWidthViaTable`. Each has a standalone (non-
+`targetNet_`) branch, so all run under `check_drc`.
+
+Legend — **check_drc?**: ✅ runs in standalone `check_drc`; ⚠️ runs but only
+fires when the tech defines the matching LEF/LEF58 rule (absent in Nangate45);
+❌ detailed-routing only (gated by `targetNet_`). **PG?**: exercised by
+`drc_test_pg` (`-check_pg`).
+
+| Violation (`getViolName`) | What it checks | Check fn | check_drc? | PG? |
+| --- | --- | --- | --- | --- |
+| `Short` | metal overlap / short | `checkMetalSpacing_short` | ✅ | ✅ |
+| `Metal Spacing` | min spacing incl. PRL `SPACINGTABLE` | `checkMetalSpacing_prl` | ✅ | ✅ |
+| `NS Metal` | non-sufficient metal (notch) overlap | `checkMetalSpacing` | ✅ | ❌ |
+| `SpacingTable`, `SpacingTableTw` | table / two-width spacing | `checkMetalSpacing` | ✅ | ❌ (toy PRL reports as `Metal Spacing`) |
+| `MetSpacingInf` | spacing-table influence | `checkMetalSpacingTableInfluence` | ✅ | ❌ |
+| `EOL Spacing`, `SpacingEOLParallelEdge` | end-of-line spacing | `checkMetalEndOfLine` | ✅ | ❌ |
+| `Min Width` | min metal width | `checkMetalShape_minWidth` (skips fully-fixed) | ✅ | ✅ |
+| `Off Grid` | off manufacturing grid | `checkMetalShape_offGrid` | ✅ | ✅ |
+| `Min Area` | min metal area | `checkMetalShape_minArea` | ✅ **only under `-check_pg`** (emits marker, not patch; §2.2) | ✅ |
+| `Min Step` | min step / jog | `checkMetalShape_minStep` | ✅ (runs, but needs jog geometry — not exercised) | ❌ |
+| `Min Hole` | min enclosed (hole) area | `checkMetalShape_minEnclosedArea` | ✅ | ❌ |
+| `Rect Only`, `RightWayOnGridOnly` | LEF58 RECTONLY / wrong-way on-grid | `checkMetalShape` | ⚠️ | ❌ |
+| `Corner Spacing` | convex-corner spacing | `checkMetalCornerSpacing` | ✅ | ❌ |
+| `Cut Spacing` | cut-to-cut spacing | `checkCutSpacing_spc` | ✅ | ✅ |
+| `Short` on CUT (shown `Cut Short`) | cut overlap short | `checkCutSpacing_short` | ✅ | ❌ |
+| `Minimum Cut` | min #cuts on wide metal | `checkMinimumCut_main` | ✅ | ✅ |
+| `MetalWidthViaMap` | LEF58 `METALWIDTHVIATABLE` | `checkMetalWidthViaTable` | ⚠️ | ❌ |
+| `Lef58SpacingEndOfLine` (+`Within`/`EndToEnd`/`EncloseCut`/`ParallelEdge`/`MaxMinLength`), `Lef58EolKeepOut`, `Lef58EolExtension` | LEF58 EOL family | `checkMetalEndOfLine` | ⚠️ | ❌ |
+| `Lef58CornerSpacingConcaveCorner`/`ConvexCorner`/`Spacing`/`Spacing1D`/`Spacing2D` | LEF58 corner family | `checkMetalCornerSpacing` | ⚠️ | ❌ |
+| `Lef58CutSpacingTable`/`TablePrl`/`TableLayer`/`ParallelWithin`/`AdjacentCuts`/`Layer`, `Lef58CutClass` | LEF58 cut family | `checkLef58CutSpacing` | ⚠️ | ❌ |
+| `Lef58SpacingTable` | LEF58 metal spacing table | `checkMetalSpacing` | ⚠️ | ❌ |
+| `Lef58Area` | LEF58 min area | `checkMetalShape_lef58Area` | ❌ **DR-only** (not enabled for `-check_pg`, unlike `Min Area`) | ❌ |
+| `Recheck` | internal "needs recheck" flag (not a DRC rule) | — | — | — |
+| Die/block boundary, ring/mesh perimeter | — | none (no such check in the GC engine) | ❌ | ❌ (out of scope) |
+
+`drc_test_pg` (`-check_pg`) produces exactly seven types: `Short`,
+`Metal Spacing`, `Min Width`, `Off Grid`, `Min Area`, `Cut Spacing`,
+`Minimum Cut`.
+
+Notable code facts:
+* `Min Area` is the only check specially enabled for PG mode — `DRC_CHECK_PG`
+  ungates it and makes it emit a marker instead of a DR patch (§2.2).
+* `Lef58Area` is **not** enabled for `-check_pg` (still `targetNet_`-gated), so
+  LEF58 area violations are not reported by `check_drc`; mirroring the
+  `Min Area` change would close that gap.
+* `Min Step` runs in `check_drc` but the engine only emits it for specific jog
+  geometry, so the toy does not exercise it.
+* NDR / metal multi-patterning (SAMEMASK) is not a separate violation type here
+  and is not surfaced by `-check_pg`.
