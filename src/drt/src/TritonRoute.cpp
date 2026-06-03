@@ -102,6 +102,46 @@ void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
   }
 
   const std::vector<std::string> cols(typeSet.begin(), typeSet.end());
+
+  // Short, image-style column headers so the table stays narrow. Unmapped
+  // types fall back to a space-stripped, length-capped form.
+  static const std::map<std::string, std::string> kAbbrev
+      = {{"Short", "Short"},
+         {"Metal Spacing", "MetSpc"},
+         {"Cut Spacing", "CutSpc"},
+         {"EOL Spacing", "EOLSpc"},
+         {"Corner Spacing", "CrnSpc"},
+         {"Off Grid", "OffGrd"},
+         {"Min Area", "MinAr"},
+         {"Min Width", "MinWid"},
+         {"Min Hole", "MinHol"},
+         {"Min Step", "MinStp"},
+         {"Minimum Cut", "MinCut"},
+         {"NS Metal", "NSMet"},
+         {"Rect Only", "RectOn"},
+         {"SpacingTable", "SpcTbl"},
+         {"SpacingTableTw", "SpcTblTw"},
+         {"MetSpacingInf", "MetSpcIn"},
+         {"MetalWidthViaMap", "MWViaMap"},
+         {"RightWayOnGridOnly", "RWGrd"},
+         {"SpacingEOLParallelEdge", "EOLPrlE"},
+         {"Lef58SpacingEndOfLine", "EOL"},
+         {"Lef58CutSpacingTable", "CutSpcT"},
+         {"Lef58EolKeepOut", "EolKO"}};
+  auto abbrev = [](const std::string& name) {
+    auto it = kAbbrev.find(name);
+    if (it != kAbbrev.end()) {
+      return it->second;
+    }
+    std::string s;
+    for (const char c : name) {
+      if (c != ' ') {
+        s += c;
+      }
+    }
+    return s.size() > 9 ? s.substr(0, 9) : s;
+  };
+
   std::map<std::string, long> colTotal;
   std::map<frLayerNum, long> rowTotal;
   long grandTotal = 0;
@@ -114,8 +154,8 @@ void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
   }
 
   // Column widths: first column fits the layer names / "Totals" label; each
-  // type column fits its header and the largest count in it; the totals column
-  // fits the grand total.
+  // type column fits its (abbreviated) header and the largest count in it; the
+  // totals column fits the grand total.
   const std::string kTotals = "Totals";
   size_t firstW = kTotals.size();
   for (const auto layerNum : layerSet) {
@@ -123,8 +163,8 @@ void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
   }
   std::vector<size_t> colW(cols.size());
   for (size_t i = 0; i < cols.size(); i++) {
-    size_t w
-        = std::max(cols[i].size(), std::to_string(colTotal[cols[i]]).size());
+    size_t w = std::max(abbrev(cols[i]).size(),
+                        std::to_string(colTotal[cols[i]]).size());
     for (const auto layerNum : layerSet) {
       w = std::max(w, std::to_string(counts[layerNum][cols[i]]).size());
     }
@@ -144,7 +184,7 @@ void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
   // header
   std::string line = std::string(firstW, ' ');
   for (size_t i = 0; i < cols.size(); i++) {
-    line += gap + rjust(cols[i], colW[i]);
+    line += gap + rjust(abbrev(cols[i]), colW[i]);
   }
   line += gap + rjust(kTotals, totW);
   logger->report(line);
