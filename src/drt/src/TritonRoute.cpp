@@ -103,31 +103,54 @@ void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
 
   const std::vector<std::string> cols(typeSet.begin(), typeSet.end());
 
-  // Short, image-style column headers so the table stays narrow. Unmapped
-  // types fall back to a space-stripped, length-capped form.
+  // Short, image-style column headers so the table stays narrow. Covers every
+  // frConstraint::getViolName() output; unmapped types (e.g. a future
+  // constraint) fall back to a space-stripped, length-capped form.
   static const std::map<std::string, std::string> kAbbrev
-      = {{"Short", "Short"},
-         {"Metal Spacing", "MetSpc"},
-         {"Cut Spacing", "CutSpc"},
-         {"EOL Spacing", "EOLSpc"},
-         {"Corner Spacing", "CrnSpc"},
-         {"Off Grid", "OffGrd"},
-         {"Min Area", "MinAr"},
+      = {// base / common
+         {"Short", "Short"},
          {"Min Width", "MinWid"},
-         {"Min Hole", "MinHol"},
+         {"Metal Spacing", "MetSpc"},
+         {"EOL Spacing", "EOLSpc"},
+         {"Cut Spacing", "CutSpc"},
          {"Min Step", "MinStp"},
-         {"Minimum Cut", "MinCut"},
          {"NS Metal", "NSMet"},
+         {"Off Grid", "OffGrd"},
+         {"Min Hole", "MinHol"},
+         {"Min Area", "MinAr"},
+         {"Corner Spacing", "CrnSpc"},
          {"Rect Only", "RectOn"},
+         {"RightWayOnGridOnly", "RWGrid"},
+         {"MetSpacingInf", "MetSpcInf"},
+         {"SpacingEOLParallelEdge", "EOLPrlEdg"},
          {"SpacingTable", "SpcTbl"},
          {"SpacingTableTw", "SpcTblTw"},
-         {"MetSpacingInf", "MetSpcIn"},
+         {"Minimum Cut", "MinCut"},
+         {"Recheck", "Recheck"},
          {"MetalWidthViaMap", "MWViaMap"},
-         {"RightWayOnGridOnly", "RWGrd"},
-         {"SpacingEOLParallelEdge", "EOLPrlE"},
-         {"Lef58SpacingEndOfLine", "EOL"},
-         {"Lef58CutSpacingTable", "CutSpcT"},
-         {"Lef58EolKeepOut", "EolKO"}};
+         // LEF58 family (consistent L58 prefix, all distinct)
+         {"Lef58Area", "L58Area"},
+         {"Lef58SpacingTable", "L58SpcTbl"},
+         {"Lef58CutSpacingTable", "L58CutTbl"},
+         {"Lef58CutSpacingTableLayer", "L58CutTblL"},
+         {"Lef58CutSpacingTablePrl", "L58CutTblP"},
+         {"Lef58CutSpacingParallelWithin", "L58CutPrl"},
+         {"Lef58CutSpacingAdjacentCuts", "L58CutAdj"},
+         {"Lef58CutSpacingLayer", "L58CutLyr"},
+         {"Lef58CutClass", "L58CutCls"},
+         {"Lef58CornerSpacingConcaveCorner", "L58CrnCcv"},
+         {"Lef58CornerSpacingConvexCorner", "L58CrnCvx"},
+         {"Lef58CornerSpacingSpacing", "L58CrnSpc"},
+         {"Lef58CornerSpacingSpacing1D", "L58CrnS1D"},
+         {"Lef58CornerSpacingSpacing2D", "L58CrnS2D"},
+         {"Lef58SpacingEndOfLine", "L58EOL"},
+         {"Lef58SpacingEndOfLineWithin", "L58EOLW"},
+         {"Lef58SpacingEndOfLineWithinEncloseCut", "L58EOLEnc"},
+         {"Lef58SpacingEndOfLineWithinEndToEnd", "L58EOLE2E"},
+         {"Lef58SpacingEndOfLineWithinMaxMinLength", "L58EOLMxM"},
+         {"Lef58SpacingEndOfLineWithinParallelEdge", "L58EOLPrl"},
+         {"Lef58EolExtension", "L58EolExt"},
+         {"Lef58EolKeepOut", "L58EolKO"}};
   auto abbrev = [](const std::string& name) {
     auto it = kAbbrev.find(name);
     if (it != kAbbrev.end()) {
