@@ -11,10 +11,16 @@
 # shapes, so the entire signal-vs-signal row produces no markers -- proving the
 # -check_pg scoping. See docs/agents/drc_check_pg.md.
 #
-# (The DEF/guide are generated; this covers the reliably-triggerable rule
-# families. LEF58 sub-variants need a foundry-style rule deck.)
+# Tech is drc_test_pg_full.lef = Nangate45 + injected rules on dedicated layers
+# (metal2 AREA/MINSTEP/MINIMUMCUT; metal3 PROPERTY LEF58_AREA; metal4
+# MINENCLOSEDAREA) so each rule fires in isolation. Covered types: Short,
+# Min Width, Metal Spacing, Cut Spacing, Min Hole, Off Grid, Min Area,
+# Minimum Cut, Lef58Area. Pairwise types (Short, Metal Spacing) appear in all
+# three rows; single-shape types only in rows 1 and 3. The DEF/guide are
+# generated. The remaining LEF58 sub-variant families (cut/corner/EOL) plus
+# Min Step need a foundry-style rule deck and crafted geometry -- follow-up.
 source "helpers.tcl"
-read_lef drc_test_pg.lef
+read_lef drc_test_pg_full.lef
 read_lef Nangate45/Nangate45_stdcell.lef
 read_def drc_test_pg_full.def
 read_guides drc_test_pg_full.route_guide

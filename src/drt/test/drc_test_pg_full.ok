@@ -1,7 +1,7 @@
-[INFO ODB-0222] Reading LEF file: drc_test_pg.lef
+[INFO ODB-0222] Reading LEF file: drc_test_pg_full.lef
 [INFO ODB-0223]     Created 22 technology layers
 [INFO ODB-0224]     Created 27 technology vias
-[INFO ODB-0226] Finished LEF file:  drc_test_pg.lef
+[INFO ODB-0226] Finished LEF file:  drc_test_pg_full.lef
 [INFO ODB-0222] Reading LEF file: Nangate45/Nangate45_stdcell.lef
 [INFO ODB-0225]     Created 135 library cells
 [INFO ODB-0226] Finished LEF file:  Nangate45/Nangate45_stdcell.lef
@@ -22,7 +22,7 @@ Number of viarulegen: 19
 [INFO DRT-0150] Reading design.
 
 Design:                   drc_test_pg_full
-Die area:                 ( 0 0 ) ( 232000 128000 )
+Die area:                 ( 0 0 ) ( 288000 128000 )
 Number of track patterns: 6
 Number of DEF vias:       0
 Number of components:     2
@@ -80,9 +80,9 @@ Number of nets:           2
 [INFO DRT-0033] via1 shape region query size = 6.
 [INFO DRT-0033] metal2 shape region query size = 28.
 [INFO DRT-0033] via2 shape region query size = 0.
-[INFO DRT-0033] metal3 shape region query size = 0.
+[INFO DRT-0033] metal3 shape region query size = 2.
 [INFO DRT-0033] via3 shape region query size = 0.
-[INFO DRT-0033] metal4 shape region query size = 0.
+[INFO DRT-0033] metal4 shape region query size = 8.
 [INFO DRT-0033] via4 shape region query size = 0.
 [INFO DRT-0033] metal5 shape region query size = 0.
 [INFO DRT-0033] via5 shape region query size = 0.
@@ -99,7 +99,7 @@ Number of nets:           2
 Number of guides:     2
 
 [INFO DRT-0169] Post process guides.
-[INFO DRT-0176] GCELLGRID X 0 DO 55 STEP 4200 ;
+[INFO DRT-0176] GCELLGRID X 0 DO 68 STEP 4200 ;
 [INFO DRT-0177] GCELLGRID Y 0 DO 30 STEP 4200 ;
 [INFO DRT-0028]   Complete active.
 [INFO DRT-0028]   Complete Fr_VIA.
@@ -170,7 +170,7 @@ Number of guides:     2
 [INFO DRT-0179] Init gr pin query.
 [INFO DRT-0245] skipped writing guide updates to database.
 [INFO DRT-0185] Post process initialize RPin region query.
-[DEBUG DRT-checkPG] [check_drc] effective drc box=(0,0)-(232000,128000)
+[DEBUG DRT-checkPG] [check_drc] effective drc box=(0,0)-(288000,128000)
 [DEBUG DRT-checkPG] [init] PG(non-fixed)=8, background-fixed(signal/obs)=5 (DR objs skipped)
 [DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
 [DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
@@ -231,6 +231,21 @@ Number of guides:     2
 [DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=0 (DR objs skipped)
 [DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
 [DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=3 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=4 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=0 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=4, background-fixed(signal/obs)=0 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=0 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
 [DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=1 (DR objs skipped)
 [DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
 [DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
@@ -279,7 +294,13 @@ Number of guides:     2
 [DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=0 (DR objs skipped)
 [DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
 [DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=1 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
 [DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=0 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=1, background-fixed(signal/obs)=0 (DR objs skipped)
 [DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
 [DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
 [DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=0 (DR objs skipped)
@@ -291,10 +312,21 @@ Number of guides:     2
 [DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=0 (DR objs skipped)
 [DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
 [DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
-[DEBUG DRT-checkPG] [check_drc] done: 9 marker(s) reported (PG-only)
-[INFO DRT-0618] check_drc found 9 violations.
-        CutSpc  MetSpc  MinAr  MinWid  MinCut  OffGrd  Short  Totals
-via1         1       0      0       0       0       0      0       1
-metal2       0       2      1       1       1       1      2       8
-Totals       1       2      1       1       1       1      2       9
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=0 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=0 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
+[DEBUG DRT-checkPG] [init] PG(non-fixed)=0, background-fixed(signal/obs)=0 (DR objs skipped)
+[DEBUG DRT-checkPG] [netinit] load non-PG net g1 as fixed background
+[DEBUG DRT-checkPG] [netinit] load non-PG net g2 as fixed background
+[DEBUG DRT-checkPG] [check_drc] done: 11 marker(s) reported (PG-only)
+[INFO DRT-0618] check_drc found 11 violations.
+        CutSpc  L58Area  MetSpc  MinAr  MinHol  MinWid  MinCut  OffGrd  Short  Totals
+via1         1        0       0      0       0       0       0       0      0       1
+metal2       0        0       2      1       0       1       1       1      2       8
+metal3       0        1       0      0       0       0       0       0      0       1
+metal4       0        0       0      0       1       0       0       0      0       1
+Totals       1        1       2      1       1       1       1       1      2      11
 No differences found.
