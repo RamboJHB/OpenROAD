@@ -1,0 +1,17 @@
+		1. PG–PG Spacing (Spacing between PG shapes)
+		• Minimum spacing violations between different PG shapes (e.g., VDD straps vs VSS straps, or different PG classes/domains).
+		2. Spacing to / Encroachment into Blockage & Keepout
+		• PG overlaps or encroaches into keepout/blockage areas (touch/overlap/encroachment)
+		• or the minimum required distance to blockage/keepout is not met.
+		3. Width / Discretization / Grid–Track–Pitch Alignment
+		• PG width below minimum allowed value
+		• or violations of required pitch/track/grid alignment (including discrete/quantized alignment constraints).
+		4. Via Physical Constraints (Cut size / Enclosure / Overlap)
+		• Via cut size out of allowed range (min/max)
+		• insufficient enclosure of the via by upper/lower metal
+		• insufficient overlap/coverage between the via and the target shapes.
+		5. Boundary / Ring & Mesh Perimeter Rules
+		• Minimum spacing violations between PG ring/mesh and die/block boundaries or special boundary objects
+		• ring/mesh geometry near boundaries not compliant with perimeter rules (e.g., corner/edge keepout margins).
+		6. Layer-Dependent / NDR / Multi-Pattern Spacing Constraints
+		• On certain layers, PG spacing follows more complex rules (e.g., NDR or double-patterning mapped spacing) leading to “stricter-than-basic spacing” PG violations.
