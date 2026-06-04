@@ -37,6 +37,7 @@ UNITS
   DATABASE MICRONS 2000 ;
 END UNITS
 
+# DRC violation -> Off Grid (OffGrd)
 MANUFACTURINGGRID 0.0050 ;
 
 LAYER poly
@@ -63,6 +64,7 @@ END metal1
 
 LAYER via1
   TYPE CUT ;
+  # DRC violation -> Cut Spacing (CutSpc)
   SPACING 0.08 ;
   WIDTH 0.07 ;
   RESISTANCE 5 ;
@@ -70,8 +72,10 @@ END via1
 
 LAYER metal2
   TYPE ROUTING ;
+  # DRC violation -> Metal Spacing (MetSpc); diff-net overlap -> Short (Short)
   SPACINGTABLE 
     PARALLELRUNLENGTH    0.0000     0.3000     0.9000     1.8000     2.7000     4.0000     
+      # DRC violation -> Min Width (MinWid)
       WIDTH 0.0000       0.0700     0.0700     0.0700     0.0700     0.0700     0.0700     
       WIDTH 0.0900       0.0700     0.0900     0.0900     0.0900     0.0900     0.0900     
       WIDTH 0.2700       0.0700     0.0900     0.2700     0.2700     0.2700     0.2700     
@@ -79,8 +83,11 @@ LAYER metal2
       WIDTH 0.9000       0.0700     0.0900     0.2700     0.5000     0.9000     0.9000     
       WIDTH 1.5000       0.0700     0.0900     0.2700     0.5000     0.9000     1.5000      ;
   WIDTH 0.07 ;
+  # DRC violation -> Min Area (MinAr)
   AREA 0.2 ;
+  # DRC violation -> Min Step (MinStp)  [present but not surfaced by standalone check_drc]
   MINSTEP 0.05 ;
+  # DRC violation -> Minimum Cut (MinCut)
   MINIMUMCUT 2 WIDTH 0.15 ;
   PITCH 0.19 ;
   DIRECTION VERTICAL ;
