@@ -31,3 +31,21 @@
   violation type: Lef58Area
     srcs: net:VDD 
     bbox = ( 123.95, 50 ) - ( 124.05, 50.1 ) on Layer metal3
+  violation type: Lef58SpacingEndOfLine
+    srcs: net:VDD 
+    bbox = ( 138, 49.93 ) - ( 138.2, 50.07 ) on Layer metal6
+  violation type: Lef58EolExtension
+    srcs: net:VDD 
+    bbox = ( 152, 49.93 ) - ( 152.34, 50.07 ) on Layer metal5
+  violation type: Lef58EolExtension
+    srcs: net:VDD 
+    bbox = ( 152, 49.93 ) - ( 152.2, 50.07 ) on Layer metal5
+  violation type: Lef58EolKeepOut
+    srcs: net:VDD 
+    bbox = ( 165.93, 50 ) - ( 166.07, 50.2 ) on Layer metal4
+  violation type: Lef58EolKeepOut
+    srcs: net:VDD 
+    bbox = ( 166.07, 50 ) - ( 166.2, 50.2 ) on Layer metal4
+  violation type: Lef58EolKeepOut
+    srcs: net:VDD 
+    bbox = ( 165.8, 50 ) - ( 165.93, 50.2 ) on Layer metal4

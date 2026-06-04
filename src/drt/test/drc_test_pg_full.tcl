@@ -15,10 +15,13 @@
 # (metal2 AREA/MINSTEP/MINIMUMCUT; metal3 PROPERTY LEF58_AREA; metal4
 # MINENCLOSEDAREA) so each rule fires in isolation. Covered types: Short,
 # Min Width, Metal Spacing, Cut Spacing, Min Hole, Off Grid, Min Area,
-# Minimum Cut, Lef58Area. Pairwise types (Short, Metal Spacing) appear in all
-# three rows; single-shape types only in rows 1 and 3. The DEF/guide are
-# generated. The remaining LEF58 sub-variant families (cut/corner/EOL) plus
-# Min Step need a foundry-style rule deck and crafted geometry -- follow-up.
+# Minimum Cut, Lef58Area, Lef58SpacingEndOfLine, Lef58EolExtension,
+# Lef58EolKeepOut -- i.e. the LEF58 types the GC engine can actually emit as
+# markers. (Most other Lef58* getViolName values are never a marker's
+# constraint, so check_drc can never output them; see the UNREACH tags in
+# kAbbrev, TritonRoute.cpp. The LEF58 algorithms are unit-tested in gcTest.cpp.)
+# Pairwise types (Short, Metal Spacing) appear in all three rows; single-shape
+# and LEF58 types only in rows 1 and 3. The DEF/guide are generated.
 source "helpers.tcl"
 read_lef drc_test_pg_full.lef
 read_lef Nangate45/Nangate45_stdcell.lef

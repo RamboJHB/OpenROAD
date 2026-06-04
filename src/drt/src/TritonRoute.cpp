@@ -109,12 +109,17 @@ void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
   //
   // The trailing tag records PG support under `check_drc -check_pg`:
   //   PG       reported on PG shapes by standalone check_drc
-  //   PG,test  additionally exercised by the drc_test_pg toy
+  //   PG,test  additionally exercised by a drc_test_pg* toy
   //   PG,mark  specially enabled for -check_pg to emit a marker (not a DR
   //            patch): checkMetalShape_minArea / checkMetalShape_lef58Area
   //   PG,rule  PG-reportable, but only when the tech defines the LEF/LEF58 rule
   //            (absent in Nangate45)
   //   no PG    never user-reported (internal)
+  //   UNREACH  getViolName exists in the enum but is never set on a marker, so
+  //            check_drc can never output it -- only the *parent* constraint is
+  //            reported (corner sub-variants -> "Corner Spacing", EOL Within-
+  //            variants -> "Lef58SpacingEndOfLine", cut-table sub-variants ->
+  //            "Lef58CutSpacingTable"). Verified: 0 setConstraint sites in gc/.
   static const std::map<std::string, std::string> kAbbrev
       = {                                   // base / common
          {"Short", "Short"},                // PG,test
@@ -125,9 +130,9 @@ void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
          {"Min Step", "MinStp"},            // PG (not exercised: needs jog)
          {"NS Metal", "NSMet"},             // PG
          {"Off Grid", "OffGrd"},            // PG,test
-         {"Min Hole", "MinHol"},            // PG
+         {"Min Hole", "MinHol"},            // PG,test
          {"Min Area", "MinAr"},             // PG,test,mark
-         {"Corner Spacing", "CrnSpc"},      // PG
+         {"Corner Spacing", "CrnSpc"},      // PG (Lef58 corner reports as this)
          {"Rect Only", "RectOn"},           // PG,rule
          {"RightWayOnGridOnly", "RWGrid"},  // PG,rule
          {"MetSpacingInf", "MetSpcInf"},    // PG
@@ -138,29 +143,30 @@ void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
          {"Recheck", "Recheck"},                   // no PG (internal)
          {"MetalWidthViaMap",
           "MWViaMap"},  // PG,rule
-                        // LEF58 family (consistent L58 prefix, all distinct)
-         {"Lef58Area", "L58Area"},                          // PG,mark,rule
-         {"Lef58SpacingTable", "L58SpcTbl"},                // PG,rule
+                        // LEF58 family (consistent L58 prefix, all distinct).
+                        // Most are UNREACH: never a marker's constraint.
+         {"Lef58Area", "L58Area"},                          // PG,mark,rule,test
+         {"Lef58SpacingTable", "L58SpcTbl"},                // UNREACH
          {"Lef58CutSpacingTable", "L58CutTbl"},             // PG,rule
-         {"Lef58CutSpacingTableLayer", "L58CutTblL"},       // PG,rule
-         {"Lef58CutSpacingTablePrl", "L58CutTblP"},         // PG,rule
-         {"Lef58CutSpacingParallelWithin", "L58CutPrl"},    // PG,rule
-         {"Lef58CutSpacingAdjacentCuts", "L58CutAdj"},      // PG,rule
-         {"Lef58CutSpacingLayer", "L58CutLyr"},             // PG,rule
-         {"Lef58CutClass", "L58CutCls"},                    // PG,rule
-         {"Lef58CornerSpacingConcaveCorner", "L58CrnCcv"},  // PG,rule
-         {"Lef58CornerSpacingConvexCorner", "L58CrnCvx"},   // PG,rule
-         {"Lef58CornerSpacingSpacing", "L58CrnSpc"},        // PG,rule
-         {"Lef58CornerSpacingSpacing1D", "L58CrnS1D"},      // PG,rule
-         {"Lef58CornerSpacingSpacing2D", "L58CrnS2D"},      // PG,rule
-         {"Lef58SpacingEndOfLine", "L58EOL"},               // PG,rule
-         {"Lef58SpacingEndOfLineWithin", "L58EOLW"},        // PG,rule
-         {"Lef58SpacingEndOfLineWithinEncloseCut", "L58EOLEnc"},    // PG,rule
-         {"Lef58SpacingEndOfLineWithinEndToEnd", "L58EOLE2E"},      // PG,rule
-         {"Lef58SpacingEndOfLineWithinMaxMinLength", "L58EOLMxM"},  // PG,rule
-         {"Lef58SpacingEndOfLineWithinParallelEdge", "L58EOLPrl"},  // PG,rule
-         {"Lef58EolExtension", "L58EolExt"},                        // PG,rule
-         {"Lef58EolKeepOut", "L58EolKO"}};                          // PG,rule
+         {"Lef58CutSpacingTableLayer", "L58CutTblL"},       // UNREACH
+         {"Lef58CutSpacingTablePrl", "L58CutTblP"},         // UNREACH
+         {"Lef58CutSpacingParallelWithin", "L58CutPrl"},    // UNREACH
+         {"Lef58CutSpacingAdjacentCuts", "L58CutAdj"},      // UNREACH
+         {"Lef58CutSpacingLayer", "L58CutLyr"},             // UNREACH
+         {"Lef58CutClass", "L58CutCls"},                    // UNREACH
+         {"Lef58CornerSpacingConcaveCorner", "L58CrnCcv"},  // UNREACH
+         {"Lef58CornerSpacingConvexCorner", "L58CrnCvx"},   // UNREACH
+         {"Lef58CornerSpacingSpacing", "L58CrnSpc"},        // UNREACH
+         {"Lef58CornerSpacingSpacing1D", "L58CrnS1D"},      // UNREACH
+         {"Lef58CornerSpacingSpacing2D", "L58CrnS2D"},      // UNREACH
+         {"Lef58SpacingEndOfLine", "L58EOL"},               // PG,rule,test
+         {"Lef58SpacingEndOfLineWithin", "L58EOLW"},        // UNREACH
+         {"Lef58SpacingEndOfLineWithinEncloseCut", "L58EOLEnc"},    // UNREACH
+         {"Lef58SpacingEndOfLineWithinEndToEnd", "L58EOLE2E"},      // UNREACH
+         {"Lef58SpacingEndOfLineWithinMaxMinLength", "L58EOLMxM"},  // UNREACH
+         {"Lef58SpacingEndOfLineWithinParallelEdge", "L58EOLPrl"},  // UNREACH
+         {"Lef58EolExtension", "L58EolExt"},  // PG,rule,test
+         {"Lef58EolKeepOut", "L58EolKO"}};    // PG,rule,test
   auto abbrev = [](const std::string& name) {
     auto it = kAbbrev.find(name);
     if (it != kAbbrev.end()) {
