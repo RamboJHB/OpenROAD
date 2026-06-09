@@ -10,8 +10,6 @@
 [INFO ODB-0132]     Created 2 special nets and 4 connections.
 [INFO ODB-0133]     Created 2 nets and 4 connections.
 [INFO ORD-0030] Using 1 thread(s).
-[INFO DRT-0620] setup_check_drc: created 6x6 gcell grid (step 4200).
-[INFO DRT-0623] setup_check_drc: added a dummy route guide on net1.
 [DEBUG DRT-checkPG] [check_drc] entry: mode=PG-ONLY (-check_pg), box=(0,0)-(0,0)
 [INFO DRT-0149] Reading tech and libs.
 
@@ -98,77 +96,12 @@ Number of nets:           2
 [INFO DRT-0033] via9 shape region query size = 0.
 [INFO DRT-0033] metal10 shape region query size = 0.
 
-Number of guides:     1
+Number of guides:     0
 
 [INFO DRT-0169] Post process guides.
-[INFO DRT-0176] GCELLGRID X 0 DO 6 STEP 4200 ;
-[INFO DRT-0177] GCELLGRID Y 0 DO 6 STEP 4200 ;
-[INFO DRT-0028]   Complete active.
-[INFO DRT-0028]   Complete Fr_VIA.
-[INFO DRT-0028]   Complete metal1.
-[INFO DRT-0028]   Complete via1.
-[INFO DRT-0028]   Complete metal2.
-[INFO DRT-0028]   Complete via2.
-[INFO DRT-0028]   Complete metal3.
-[INFO DRT-0028]   Complete via3.
-[INFO DRT-0028]   Complete metal4.
-[INFO DRT-0028]   Complete via4.
-[INFO DRT-0028]   Complete metal5.
-[INFO DRT-0028]   Complete via5.
-[INFO DRT-0028]   Complete metal6.
-[INFO DRT-0028]   Complete via6.
-[INFO DRT-0028]   Complete metal7.
-[INFO DRT-0028]   Complete via7.
-[INFO DRT-0028]   Complete metal8.
-[INFO DRT-0028]   Complete via8.
-[INFO DRT-0028]   Complete metal9.
-[INFO DRT-0028]   Complete via9.
-[INFO DRT-0028]   Complete metal10.
-[INFO DRT-0178] Init guide query.
-[INFO DRT-0035]   Complete active (guide).
-[INFO DRT-0035]   Complete Fr_VIA (guide).
-[INFO DRT-0035]   Complete metal1 (guide).
-[INFO DRT-0035]   Complete via1 (guide).
-[INFO DRT-0035]   Complete metal2 (guide).
-[INFO DRT-0035]   Complete via2 (guide).
-[INFO DRT-0035]   Complete metal3 (guide).
-[INFO DRT-0035]   Complete via3 (guide).
-[INFO DRT-0035]   Complete metal4 (guide).
-[INFO DRT-0035]   Complete via4 (guide).
-[INFO DRT-0035]   Complete metal5 (guide).
-[INFO DRT-0035]   Complete via5 (guide).
-[INFO DRT-0035]   Complete metal6 (guide).
-[INFO DRT-0035]   Complete via6 (guide).
-[INFO DRT-0035]   Complete metal7 (guide).
-[INFO DRT-0035]   Complete via7 (guide).
-[INFO DRT-0035]   Complete metal8 (guide).
-[INFO DRT-0035]   Complete via8 (guide).
-[INFO DRT-0035]   Complete metal9 (guide).
-[INFO DRT-0035]   Complete via9 (guide).
-[INFO DRT-0035]   Complete metal10 (guide).
-[INFO DRT-0036] active guide region query size = 0.
-[INFO DRT-0036] FR_VIA guide region query size = 0.
-[INFO DRT-0036] metal1 guide region query size = 1.
-[INFO DRT-0036] via1 guide region query size = 0.
-[INFO DRT-0036] metal2 guide region query size = 0.
-[INFO DRT-0036] via2 guide region query size = 0.
-[INFO DRT-0036] metal3 guide region query size = 0.
-[INFO DRT-0036] via3 guide region query size = 0.
-[INFO DRT-0036] metal4 guide region query size = 0.
-[INFO DRT-0036] via4 guide region query size = 0.
-[INFO DRT-0036] metal5 guide region query size = 0.
-[INFO DRT-0036] via5 guide region query size = 0.
-[INFO DRT-0036] metal6 guide region query size = 0.
-[INFO DRT-0036] via6 guide region query size = 0.
-[INFO DRT-0036] metal7 guide region query size = 0.
-[INFO DRT-0036] via7 guide region query size = 0.
-[INFO DRT-0036] metal8 guide region query size = 0.
-[INFO DRT-0036] via8 guide region query size = 0.
-[INFO DRT-0036] metal9 guide region query size = 0.
-[INFO DRT-0036] via9 guide region query size = 0.
-[INFO DRT-0036] metal10 guide region query size = 0.
-[INFO DRT-0179] Init gr pin query.
-[INFO DRT-0245] skipped writing guide updates to database.
+[WARNING DRT-0170] No GCELLGRID and no guides; synthesized gcell pitch 4200 for check_drc tiling.
+[INFO DRT-0176] GCELLGRID X 0 DO 4 STEP 4200 ;
+[INFO DRT-0177] GCELLGRID Y 0 DO 4 STEP 4200 ;
 [INFO DRT-0185] Post process initialize RPin region query.
 [DEBUG DRT-checkPG] [check_drc] effective drc box=(0,0)-(20000,20000)
 [DEBUG DRT-checkPG] [init] PG(non-fixed)=30, background-fixed(signal/obs)=6 (DR objs skipped)

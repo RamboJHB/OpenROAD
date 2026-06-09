@@ -572,10 +572,10 @@ void io::Parser::postProcessGuide()
     logger_->info(DRT, 169, "Post process guides.");
   }
   buildGCellPatterns(db_);
-  
+
   if (tmpGuides_.empty())
     return;
- 
+
   design_->getRegionQuery()->initOrigGuide(tmpGuides_);
   int cnt = 0;
   // for (auto &[netName, rects]:tmpGuides) {
@@ -650,7 +650,8 @@ void io::Parser::initRPin_rpin()
         frAccessPoint* prefAp = (instTerm->getAccessPoints())[pinIdx];
 
         // MACRO does not go through PA
-        //TODO: this means in drt: :check_drc call most of the RPins are not added to the net
+        // TODO: this means in drt: :check_drc call most of the RPins are not
+        // added to the net
         // as addRPin is not called before the quick return
         // this could be a problem
         if (prefAp == nullptr) {
@@ -687,19 +688,18 @@ void io::Parser::initRPin_rpin()
         auto rpin = make_unique<frRPin>();
         rpin->setFrTerm(term);
         rpin->addToNet(net.get());
-   //     frAccessPoint* prefAp
-  //          = (pin->getPinAccess(0)->getAccessPoints())[0].get();
-   //     rpin->setAccessPoint(prefAp);
+        //     frAccessPoint* prefAp
+        //          = (pin->getPinAccess(0)->getAccessPoints())[0].get();
+        //     rpin->setAccessPoint(prefAp);
 
         if (pin->getPinAccess(0)->getAccessPoints().size() > 0) {
-           frAccessPoint * prefAp =
-                  (pin->getPinAccess(0)->getAccessPoints() ) [0].get();
-             rpin->setAccessPoint(prefAp);
+          frAccessPoint* prefAp
+              = (pin->getPinAccess(0)->getAccessPoints())[0].get();
+          rpin->setAccessPoint(prefAp);
         } else {
           continue;
         }
 
-        
         net->addRPin(rpin);
       }
     }
@@ -766,16 +766,40 @@ void io::Parser::buildGCellPatterns_getWidth(frCoord& GCELLGRIDX,
       tmpGCELLGRIDY = mapIt->first;
     }
   }
-  if (tmpGCELLGRIDX != -1) {
-    GCELLGRIDX = tmpGCELLGRIDX;
-  } else {
-    logger_->error(DRT, 170, "No GCELLGRIDX.");
+  // Fallback for check_drc on a design with no GCELLGRID and no route guides
+  // (e.g. an odb-only / pre-global-route design): synthesize a gcell pitch from
+  // the routing track pitch (else from the die). The gcell grid is only GC
+  // worker-tiling scaffold (getDRCMarkers bloats tiles + dedups markers), so
+  // the exact pitch does not change DRC results.
+  if (tmpGCELLGRIDX == -1 || tmpGCELLGRIDY == -1) {
+    frCoord defPitch = -1;
+    for (auto tp : design_->getTopBlock()->getTrackPatterns()) {
+      const frCoord sp = tp->getTrackSpacing();
+      if (sp > 0 && (defPitch == -1 || sp < defPitch)) {
+        defPitch = sp;
+      }
+    }
+    if (defPitch == -1) {
+      const Rect dieBox = design_->getTopBlock()->getDieBox();
+      const frCoord dmax = std::max<frCoord>(dieBox.dx(), dieBox.dy());
+      defPitch = std::max<frCoord>(1, dmax / 64);
+    } else {
+      defPitch *= 15;  // ~15 routing tracks per gcell
+    }
+    if (tmpGCELLGRIDX == -1) {
+      tmpGCELLGRIDX = defPitch;
+    }
+    if (tmpGCELLGRIDY == -1) {
+      tmpGCELLGRIDY = defPitch;
+    }
+    logger_->warn(DRT,
+                  170,
+                  "No GCELLGRID and no guides; synthesized gcell pitch {} for "
+                  "check_drc tiling.",
+                  defPitch);
   }
-  if (tmpGCELLGRIDY != -1) {
-    GCELLGRIDY = tmpGCELLGRIDY;
-  } else {
-    logger_->error(DRT, 171, "No GCELLGRIDY.");
-  }
+  GCELLGRIDX = tmpGCELLGRIDX;
+  GCELLGRIDY = tmpGCELLGRIDY;
 }
 
 void io::Parser::buildGCellPatterns_getOffset(frCoord GCELLGRIDX,
@@ -825,16 +849,10 @@ void io::Parser::buildGCellPatterns_getOffset(frCoord GCELLGRIDX,
       tmpGCELLOFFSETY = mapIt->first;
     }
   }
-  if (tmpGCELLOFFSETX != -1) {
-    GCELLOFFSETX = tmpGCELLOFFSETX;
-  } else {
-    logger_->error(DRT, 172, "No GCELLGRIDX.");
-  }
-  if (tmpGCELLOFFSETY != -1) {
-    GCELLOFFSETY = tmpGCELLOFFSETY;
-  } else {
-    logger_->error(DRT, 173, "No GCELLGRIDY.");
-  }
+  // With no guides the offset cannot be inferred; align the grid to the die
+  // origin (see buildGCellPatterns_getWidth for the matching pitch fallback).
+  GCELLOFFSETX = (tmpGCELLOFFSETX != -1) ? tmpGCELLOFFSETX : 0;
+  GCELLOFFSETY = (tmpGCELLOFFSETY != -1) ? tmpGCELLOFFSETY : 0;
 }
 
 void io::Parser::buildGCellPatterns(odb::dbDatabase* db)
