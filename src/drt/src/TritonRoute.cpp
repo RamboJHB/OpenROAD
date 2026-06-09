@@ -1173,7 +1173,13 @@ void TritonRoute::checkDRC(const char* filename,
                  y2);
   initDesign();
   if (design_->getTopBlock()->getGCellPatterns().empty()) {
-    initGuide();
+    // Build just enough to run GC: read any guides and synthesize the gcell
+    // grid. RPins (frRPin) are routing-pin anchors used only by the router and
+    // are never read by the GC DRC engine, so check_drc skips initRPin() (which
+    // also avoids the null access-point path on a design with no pin access).
+    io::Parser parser(db_, getDesign(), logger_);
+    parser.readGuide();
+    parser.postProcessGuide();
   }
   Rect requiredDrcBox(x1, y1, x2, y2);
   if (requiredDrcBox.area() == 0) {
