@@ -268,3 +268,60 @@ Notable code facts:
   geometry, so the toy does not exercise it.
 * NDR / metal multi-patterning (SAMEMASK) is not a separate violation type here
   and is not surfaced by `-check_pg`.
+
+## 8. Gcell grid & route guides — required to run `check_drc`
+
+`check_drc` (with or without `-check_pg`) needs a **gcell grid**, and that need
+quietly pulls in a **route guide** too. This trips people up, so it is spelled
+out here.
+
+### 8.1 Why the gcell grid is needed
+The GC (geometry checker) does not scan the whole block at once: `getDRCMarkers`
+(`TritonRoute.cpp`) tiles the design into **GC worker boxes** (7×7 gcells each)
+and runs one worker per tile. So a gcell grid is the **spatial partition** that
+drives the workers. With no gcell pattern, `getDRCMarkers` dereferences
+`gCellPatterns.at(0)` on an empty vector and the run **crashes**. (The grid is
+just scaffolding for tiling — the DRC *rules* do not depend on its pitch.)
+
+`checkDRC` guards this:
+`if (design_->getTopBlock()->getGCellPatterns().empty()) initGuide();`
+so it tries to build the grid if it is missing.
+
+### 8.2 Where the grid comes from (and the guide coupling)
+`buildGCellPatterns` (`io/io_parser_helper.cpp`) builds it two ways:
+1. from a DEF **`GCELLGRID`** statement — used directly when there is exactly one
+   X pattern and one Y pattern;
+2. otherwise it **infers** the gcell pitch from the **route guides'** rectangle
+   widths (most common width per routing direction).
+
+Two couplings to the guide make a guide effectively mandatory:
+* `buildGCellPatterns` is called inside `io::Parser::postProcessGuide()`, which
+  **early-returns if there are no guides** (`if (tmpGuides_.empty()) return;`).
+  So with no guide read, the grid is never built → empty patterns → crash.
+* If the DEF has no `GCELLGRID`, the grid is inferred from the guides, and if the
+  guides have no **vertical-layer** rectangles the inference fails with
+  `[ERROR DRT-170] No GCELLGRIDX.` (and DRT-171 for Y).
+
+### 8.3 Practical rule
+For a `check_drc` toy/run, do **both**:
+* put a single `GCELLGRID X ... ; GCELLGRID Y ... ;` in the DEF covering the die
+  (robust source of the grid — avoids the `No GCELLGRIDX` inference path), and
+* read a **non-empty** route guide (even a dummy net over the die) so
+  `postProcessGuide` actually runs and calls `buildGCellPatterns`.
+
+This is exactly what the toys do: `drc_test_pg*.def` carry a `GCELLGRID`, and the
+`.tcl` does `read_guides drc_test_pg*.route_guide` where the guide is just one or
+two dummy nets spanning the die.
+
+### 8.4 Relationship to pin access (PA)
+Unlike the gcell grid, **pin access is not needed for `check_drc`** — `checkDRC`
+never calls `FlexPA` (PA only runs in `detailed_route` via `TritonRoute::main()`,
+gated by `DO_PA`, or the `pin_access` command). So a `check_drc`-only flow
+(`read_lef` → `read_def` *with GCELLGRID* → `read_guides` → `check_drc -check_pg`)
+runs no PA and avoids both the PA cost and the `No GCELLGRIDX` crash.
+
+| Needed by `check_drc`? | Why |
+| --- | --- |
+| Pin access (FlexPA) | ❌ no — routing-only; DRC checks geometry, not access points |
+| Gcell grid | ✅ yes — GC workers tile the design by gcell |
+| Route guide | ◐ structurally — DRC rules ignore it, but it gates `buildGCellPatterns` and is the fallback source of the grid |
