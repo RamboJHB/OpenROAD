@@ -5,6 +5,7 @@ record_tests {
   ta_pin_aligned
   drc_test_pg
   drc_test_pg_full
+  drc_test_pg_nogcell
 }
 record_pass_fail_tests {
   gc_test
