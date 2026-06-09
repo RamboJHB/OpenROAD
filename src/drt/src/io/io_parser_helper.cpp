@@ -567,14 +567,15 @@ void io::Parser::postProcess()
 
 void io::Parser::postProcessGuide()
 {
-  if (tmpGuides_.empty())
-    return;
   ProfileTask profile("IO:postProcessGuide");
   if (VERBOSE > 0) {
     logger_->info(DRT, 169, "Post process guides.");
   }
   buildGCellPatterns(db_);
-
+  
+  if (tmpGuides_.empty())
+    return;
+ 
   design_->getRegionQuery()->initOrigGuide(tmpGuides_);
   int cnt = 0;
   // for (auto &[netName, rects]:tmpGuides) {
@@ -649,6 +650,9 @@ void io::Parser::initRPin_rpin()
         frAccessPoint* prefAp = (instTerm->getAccessPoints())[pinIdx];
 
         // MACRO does not go through PA
+        //TODO: this means in drt: :check_drc call most of the RPins are not added to the net
+        // as addRPin is not called before the quick return
+        // this could be a problem
         if (prefAp == nullptr) {
           dbMasterType masterType = inst->getMaster()->getMasterType();
           if (masterType.isBlock() || masterType.isPad()
@@ -683,10 +687,19 @@ void io::Parser::initRPin_rpin()
         auto rpin = make_unique<frRPin>();
         rpin->setFrTerm(term);
         rpin->addToNet(net.get());
-        frAccessPoint* prefAp
-            = (pin->getPinAccess(0)->getAccessPoints())[0].get();
-        rpin->setAccessPoint(prefAp);
+   //     frAccessPoint* prefAp
+  //          = (pin->getPinAccess(0)->getAccessPoints())[0].get();
+   //     rpin->setAccessPoint(prefAp);
 
+        if (pin->getPinAccess(0)->getAccessPoints().size() > 0) {
+           frAccessPoint * prefAp =
+                  (pin->getPinAccess(0)->getAccessPoints() ) [0].get();
+             rpin->setAccessPoint(prefAp);
+        } else {
+          continue;
+        }
+
+        
         net->addRPin(rpin);
       }
     }
