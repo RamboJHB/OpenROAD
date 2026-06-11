@@ -1303,8 +1303,8 @@ void TritonRoute::reportDRC(const string& file_name,
                             Rect drcBox,
                             bool report_summary)
 {
-  double dbu = getDesign()->getTech()->getDBUPerUU();
   auto tech = getDesign()->getTech();
+  double dbu = tech->getDBUPerUU();
 
   // Single pass over the markers: (when an output file was requested) write the
   // per-marker detail AND, when report_summary is set (the check_drc path),
@@ -1414,61 +1414,39 @@ void TritonRoute::reportDRC(const string& file_name,
   }
 
   // Print the aggregated per-layer / per-type summary table on the check_drc
-  // path (even with no output file); router callers pass report_summary=
-  // false. Column headers use drcViolAbbrev() (top of file).
-  if (report_summary) {
+  // path (even with no output file); router callers pass report_summary=false.
+  // Rows are layers (the sorted keys of `counts`), columns are the union of
+  // violation types; headers use drcViolAbbrev() (top of file).
+  if (report_summary && !counts.empty()) {
+    // One pass over counts: collect the column set and the per-column,
+    // per-row and grand totals.
     std::set<std::string> typeSet;
-    std::set<frLayerNum> layerSet;
-    for (const auto& [layerNum, perType] : counts) {
-      layerSet.insert(layerNum);
-      for (const auto& [type, cnt] : perType) {
-        typeSet.insert(type);
-      }
-    }
-    if (typeSet.empty()) {
-      return;
-    }
-
-    const std::vector<std::string> cols(typeSet.begin(), typeSet.end());
-    // counts is sparse (a layer may not have a given type); look up with 0
-    // default since operator[] is unavailable on the const map.
-    auto cellCount
-        = [&counts](frLayerNum layer, const std::string& type) -> long {
-      auto li = counts.find(layer);
-      if (li == counts.end()) {
-        return 0;
-      }
-      auto ti = li->second.find(type);
-      return ti == li->second.end() ? 0 : ti->second;
-    };
-
     std::map<std::string, long> colTotal;
     std::map<frLayerNum, long> rowTotal;
     long grandTotal = 0;
     for (const auto& [layerNum, perType] : counts) {
       for (const auto& [type, cnt] : perType) {
+        typeSet.insert(type);
         colTotal[type] += cnt;
         rowTotal[layerNum] += cnt;
         grandTotal += cnt;
       }
     }
+    const std::vector<std::string> cols(typeSet.begin(), typeSet.end());
 
-    // Column widths: first column fits the layer names / "Totals" label; each
-    // type column fits its (abbreviated) header and the largest count in it; the
-    // totals column fits the grand total.
-    const std::string kTotals = "Totals";
-    size_t firstW = kTotals.size();
-    for (const auto layerNum : layerSet) {
-      firstW = std::max(firstW, tech->getLayer(layerNum)->getName().size());
-    }
+    // Column widths. A column's total is >= every cell in it, so the total's
+    // digit count already bounds the cell width -- no need to scan cells.
+    std::vector<std::string> hdr(cols.size());
     std::vector<size_t> colW(cols.size());
     for (size_t i = 0; i < cols.size(); i++) {
-      size_t w = std::max(drcViolAbbrev(cols[i]).size(),
-                          std::to_string(colTotal[cols[i]]).size());
-      for (const auto layerNum : layerSet) {
-        w = std::max(w, std::to_string(cellCount(layerNum, cols[i])).size());
-      }
-      colW[i] = w;
+      hdr[i] = drcViolAbbrev(cols[i]);
+      colW[i] = std::max(hdr[i].size(),
+                         std::to_string(colTotal[cols[i]]).size());
+    }
+    const std::string kTotals = "Totals";
+    size_t firstW = kTotals.size();
+    for (const auto& [layerNum, perType] : counts) {
+      firstW = std::max(firstW, tech->getLayer(layerNum)->getName().size());
     }
     const size_t totW
         = std::max(kTotals.size(), std::to_string(grandTotal).size());
@@ -1481,18 +1459,20 @@ void TritonRoute::reportDRC(const string& file_name,
     };
     const std::string gap = "  ";
 
-    // header
+    // header row
     std::string line = std::string(firstW, ' ');
     for (size_t i = 0; i < cols.size(); i++) {
-      line += gap + rjust(drcViolAbbrev(cols[i]), colW[i]);
+      line += gap + rjust(hdr[i], colW[i]);
     }
     line += gap + rjust(kTotals, totW);
     logger_->report(line);
-    // one row per layer
-    for (const auto layerNum : layerSet) {
+    // one row per layer; look the cell up in that layer's own type map
+    for (const auto& [layerNum, perType] : counts) {
       line = ljust(tech->getLayer(layerNum)->getName(), firstW);
       for (size_t i = 0; i < cols.size(); i++) {
-        line += gap + rjust(std::to_string(cellCount(layerNum, cols[i])), colW[i]);
+        auto it = perType.find(cols[i]);
+        const long c = (it == perType.end()) ? 0 : it->second;
+        line += gap + rjust(std::to_string(c), colW[i]);
       }
       line += gap + rjust(std::to_string(rowTotal[layerNum]), totW);
       logger_->report(line);
