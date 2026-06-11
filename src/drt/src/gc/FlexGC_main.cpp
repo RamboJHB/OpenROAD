@@ -1298,6 +1298,19 @@ void FlexGCWorker::Impl::checkMetalShape_minArea(gcPin* pin)
   // set) where it is auto-fixed with a patch. In PG-only check_drc (-check_pg)
   // we also want to *report* it on PG shapes, so allow it when DRC_CHECK_PG
   // even without a targetNet_.
+  //
+  // NOTE (structural quirk): the `!targetNet_` gate means min-area only runs in
+  // GC's "dynamic" / per-net mode (the per-net check the DR engine drives while
+  // routing) -- it does NOT run in the "static" whole-design mode that a plain
+  // check_drc uses (targetNet_ == nullptr). Unlike the spacing/short/EOL checks,
+  // which have a standalone (non-targetNet_) branch and so are reported by
+  // static check_drc, min-area is absent from static checking. This is odd by
+  // itself, and stems from min-area being tightly coupled to the *patching*
+  // path: a min-area shortfall is not normally surfaced as a marker but silently
+  // repaired by adding metal (a patch), and patching only exists per-net during
+  // DR. The DRC_CHECK_PG clause below is exactly what breaks that coupling --
+  // it opens the static path for PG shapes and emits a marker instead of a patch
+  // (there is no drWorker_ to patch into; see the DRC_CHECK_PG branch).
   if (ignoreMinArea_ || (!targetNet_ && !DRC_CHECK_PG)) {
     return;
   }
@@ -1694,6 +1707,11 @@ void FlexGCWorker::Impl::checkMetalShape_lef58Area(gcPin* pin)
 {
   // Like checkMetalShape_minArea: normally detailed-routing only (patches via
   // the DR worker), but under -check_pg we also *report* it on PG shapes.
+  // Same structural quirk as min-area: the `!targetNet_` gate confines this to
+  // GC's dynamic per-net mode (it is invisible to static whole-design
+  // check_drc), because LEF58 area, like min-area, is tied to the per-net
+  // patching path. The DRC_CHECK_PG clause opens the static path and emits a
+  // marker instead of a patch. See checkMetalShape_minArea for the full note.
   if (ignoreMinArea_ || (!targetNet_ && !DRC_CHECK_PG)) {
     return;
   }
