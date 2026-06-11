@@ -6,6 +6,7 @@ record_tests {
   drc_test_pg
   drc_test_pg_full
   drc_test_pg_nogcell
+  drc_test_pg_2nd
 }
 record_pass_fail_tests {
   gc_test
