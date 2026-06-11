@@ -80,37 +80,28 @@ namespace {
 // (per-type) plus the grand total in the bottom-right cell. Only layers/types
 // that actually have violations appear; columns and rows are sorted so the
 // table is deterministic. Counts are emitted with logger->report (plain lines).
-// `counts` is built in reportDRC's single pass over the markers (counts[layer]
-// [getViolName()]) so the markers are not walked a second time here.
-void reportDRCSummary(
-    const std::map<frLayerNum, std::map<std::string, long>>& counts,
-    frTechObject* tech,
-    utl::Logger* logger)
+void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
+                      frTechObject* tech,
+                      utl::Logger* logger)
 {
+  std::map<frLayerNum, std::map<std::string, long>> counts;
   std::set<std::string> typeSet;
   std::set<frLayerNum> layerSet;
-  for (const auto& [layerNum, perType] : counts) {
-    layerSet.insert(layerNum);
-    for (const auto& [type, cnt] : perType) {
-      typeSet.insert(type);
+  for (const auto& marker : markers) {
+    if (!marker->getConstraint()) {
+      continue;
     }
+    const std::string type = marker->getConstraint()->getViolName();
+    const frLayerNum layerNum = marker->getLayerNum();
+    counts[layerNum][type]++;
+    typeSet.insert(type);
+    layerSet.insert(layerNum);
   }
   if (typeSet.empty()) {
     return;
   }
 
   const std::vector<std::string> cols(typeSet.begin(), typeSet.end());
-  // counts is sparse (a layer may not have a given type); look up with 0
-  // default since operator[] is unavailable on the const map.
-  auto cellCount
-      = [&counts](frLayerNum layer, const std::string& type) -> long {
-    auto li = counts.find(layer);
-    if (li == counts.end()) {
-      return 0;
-    }
-    auto ti = li->second.find(type);
-    return ti == li->second.end() ? 0 : ti->second;
-  };
 
   // Short, image-style column headers so the table stays narrow. Covers every
   // frConstraint::getViolName() output; unmapped types (e.g. a future
@@ -214,7 +205,7 @@ void reportDRCSummary(
     size_t w = std::max(abbrev(cols[i]).size(),
                         std::to_string(colTotal[cols[i]]).size());
     for (const auto layerNum : layerSet) {
-      w = std::max(w, std::to_string(cellCount(layerNum, cols[i])).size());
+      w = std::max(w, std::to_string(counts[layerNum][cols[i]]).size());
     }
     colW[i] = w;
   }
@@ -240,7 +231,7 @@ void reportDRCSummary(
   for (const auto layerNum : layerSet) {
     line = ljust(tech->getLayer(layerNum)->getName(), firstW);
     for (size_t i = 0; i < cols.size(); i++) {
-      line += gap + rjust(std::to_string(cellCount(layerNum, cols[i])), colW[i]);
+      line += gap + rjust(std::to_string(counts[layerNum][cols[i]]), colW[i]);
     }
     line += gap + rjust(std::to_string(rowTotal[layerNum]), totW);
     logger->report(line);
@@ -1221,10 +1212,8 @@ void TritonRoute::checkDRC(const char* filename,
   // Always report the violation count (with or without -check_pg), followed by
   // a per-layer / per-type breakdown table.
   logger_->info(DRT, 618, "check_drc found {} violations.", markers.size());
-  // reportDRC walks the markers once: it writes the per-marker detail file and
-  // accumulates the per-layer/per-type counts, then emits the summary table
-  // (report_summary=true is unique to this check_drc path).
-  reportDRC(filename, markers, requiredDrcBox, /*report_summary=*/true);
+  reportDRCSummary(markers, getDesign()->getTech(), logger_);
+  reportDRC(filename, markers, requiredDrcBox);
   // Reset the switch so subsequent (non -check_pg) runs are unaffected.
   DRC_CHECK_PG = false;
 }
@@ -1400,51 +1389,31 @@ int TritonRoute::getWorkerResultsSize()
 
 void TritonRoute::reportDRC(const string& file_name,
                             const frList<std::unique_ptr<frMarker>>& markers,
-                            Rect drcBox,
-                            bool report_summary)
+                            Rect drcBox)
 {
   double dbu = getDesign()->getTech()->getDBUPerUU();
-  auto tech = getDesign()->getTech();
 
-  // Single pass over the markers: (when an output file was requested) write the
-  // per-marker detail AND, when report_summary is set (the check_drc path),
-  // accumulate the per-layer/per-type counts for the summary table. The router
-  // callers leave report_summary false, so their DRC reports are unaffected.
-  std::map<frLayerNum, std::map<std::string, long>> counts;
-  const bool write_file = !file_name.empty();
-  ofstream drcRpt;
-  if (write_file) {
-    drcRpt.open(file_name.c_str());
-    if (!drcRpt.is_open()) {
-      cout << "Error: Fail to open DRC report file\n";
+  if (file_name == string("")) {
+    if (VERBOSE > 0) {
+      logger_->warn(
+          DRT,
+          290,
+          "Warning: no DRC report specified, skipped writing DRC report");
     }
-  } else if (VERBOSE > 0) {
-    logger_->warn(
-        DRT,
-        290,
-        "Warning: no DRC report specified, skipped writing DRC report");
+    return;
   }
+  ofstream drcRpt(file_name.c_str());
+  if (drcRpt.is_open()) {
+    for (const auto& marker : markers) {
+      // get violation bbox
+      Rect bbox = marker->getBBox();
+      if (drcBox != Rect() && !drcBox.intersects(bbox))
+        continue;
+      auto tech = getDesign()->getTech();
+      auto layer = tech->getLayer(marker->getLayerNum());
+      auto layerType = layer->getType();
 
-  for (const auto& marker : markers) {
-    auto con = marker->getConstraint();
-    // Summary count: every marker with a constraint, keyed by the raw
-    // getViolName() (not the "Cut Short" detail adjustment) and independent of
-    // the drcBox region filter, so it matches the DRT-0618 total.
-    if (report_summary && con) {
-      counts[marker->getLayerNum()][con->getViolName()]++;
-    }
-    // Per-marker detail goes to the file only, region-filtered.
-    if (!write_file || !drcRpt.is_open()) {
-      continue;
-    }
-    // get violation bbox
-    Rect bbox = marker->getBBox();
-    if (drcBox != Rect() && !drcBox.intersects(bbox))
-      continue;
-    auto layer = tech->getLayer(marker->getLayerNum());
-    auto layerType = layer->getType();
-
-    {
+      auto con = marker->getConstraint();
       drcRpt << "  violation type: ";
       if (con) {
         std::string violName;
@@ -1511,11 +1480,7 @@ void TritonRoute::reportDRC(const string& file_name,
              << bbox.yMax() / dbu << " ) on Layer ";
       drcRpt << layer->getName() << "\n";
     }
-  }
-
-  // Emit the aggregated summary table on the check_drc path (even when no
-  // output file was written); router callers pass report_summary=false.
-  if (report_summary) {
-    reportDRCSummary(counts, tech, logger_);
+  } else {
+    cout << "Error: Fail to open DRC report file\n";
   }
 }
