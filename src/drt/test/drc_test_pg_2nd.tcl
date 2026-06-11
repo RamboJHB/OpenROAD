@@ -1,9 +1,10 @@
 # `check_drc -check_pg` with a "2nd PG connection".
 #
-# VDD is a POWER special net whose geometry is an L: a horizontal main rail plus
-# a vertical *secondary branch* dropping toward the cell area (a 2nd PG
-# connection, not the main mesh). The branch runs parallel to a regular signal
-# wire (sig1, metal2) at sub-spacing distance.
+# VDD/VSS form a real special PDN: metal4 vertical stripes + metal5 horizontal
+# rails (the main mesh, DRC-clean). VDD additionally has a metal2 *secondary
+# branch* dropping off a rail toward the cell area (a 2nd PG connection, not the
+# mesh). That branch runs parallel to a regular signal wire (sig1, metal2) at
+# sub-spacing distance.
 #
 # The PG classifier keys on the net sigType (frNet->getType().isSupply()), a
 # net-level property, so EVERY VDD shape -- including the secondary branch -- is
