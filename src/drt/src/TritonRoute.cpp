@@ -75,51 +75,25 @@ extern int Drt_Init(Tcl_Interp* interp);
 }
 
 namespace {
-// Print a violation-count summary table: rows are layers, columns are
-// violation types, with a Totals column (per-layer) and a Totals row
-// (per-type) plus the grand total in the bottom-right cell. Only layers/types
-// that actually have violations appear; columns and rows are sorted so the
-// table is deterministic. Counts are emitted with logger->report (plain lines).
-void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
-                      frTechObject* tech,
-                      utl::Logger* logger)
+// Short, image-style column headers so the table stays narrow. Covers every
+// frConstraint::getViolName() output; unmapped types (e.g. a future
+// constraint) fall back to a space-stripped, length-capped form.
+//
+// The trailing tag records PG support under `check_drc -check_pg`:
+//   PG       reported on PG shapes by standalone check_drc
+//   PG,test  additionally exercised by a drc_test_pg* toy
+//   PG,mark  specially enabled for -check_pg to emit a marker (not a DR
+//            patch): checkMetalShape_minArea / checkMetalShape_lef58Area
+//   PG,rule  PG-reportable, but only when the tech defines the LEF/LEF58 rule
+//            (absent in Nangate45)
+//   no PG    never user-reported (internal)
+//   UNREACH  getViolName exists in the enum but is never set on a marker, so
+//            check_drc can never output it -- only the *parent* constraint is
+//            reported (corner sub-variants -> "Corner Spacing", EOL Within-
+//            variants -> "Lef58SpacingEndOfLine", cut-table sub-variants ->
+//            "Lef58CutSpacingTable"). Verified: 0 setConstraint sites in gc/.
+std::string drcViolAbbrev(const std::string& name)
 {
-  std::map<frLayerNum, std::map<std::string, long>> counts;
-  std::set<std::string> typeSet;
-  std::set<frLayerNum> layerSet;
-  for (const auto& marker : markers) {
-    if (!marker->getConstraint()) {
-      continue;
-    }
-    const std::string type = marker->getConstraint()->getViolName();
-    const frLayerNum layerNum = marker->getLayerNum();
-    counts[layerNum][type]++;
-    typeSet.insert(type);
-    layerSet.insert(layerNum);
-  }
-  if (typeSet.empty()) {
-    return;
-  }
-
-  const std::vector<std::string> cols(typeSet.begin(), typeSet.end());
-
-  // Short, image-style column headers so the table stays narrow. Covers every
-  // frConstraint::getViolName() output; unmapped types (e.g. a future
-  // constraint) fall back to a space-stripped, length-capped form.
-  //
-  // The trailing tag records PG support under `check_drc -check_pg`:
-  //   PG       reported on PG shapes by standalone check_drc
-  //   PG,test  additionally exercised by a drc_test_pg* toy
-  //   PG,mark  specially enabled for -check_pg to emit a marker (not a DR
-  //            patch): checkMetalShape_minArea / checkMetalShape_lef58Area
-  //   PG,rule  PG-reportable, but only when the tech defines the LEF/LEF58 rule
-  //            (absent in Nangate45)
-  //   no PG    never user-reported (internal)
-  //   UNREACH  getViolName exists in the enum but is never set on a marker, so
-  //            check_drc can never output it -- only the *parent* constraint is
-  //            reported (corner sub-variants -> "Corner Spacing", EOL Within-
-  //            variants -> "Lef58SpacingEndOfLine", cut-table sub-variants ->
-  //            "Lef58CutSpacingTable"). Verified: 0 setConstraint sites in gc/.
   static const std::map<std::string, std::string> kAbbrev
       = {                                   // base / common
          {"Short", "Short"},                // PG,test
@@ -167,82 +141,17 @@ void reportDRCSummary(const frList<std::unique_ptr<frMarker>>& markers,
          {"Lef58SpacingEndOfLineWithinParallelEdge", "L58EOLPrl"},  // UNREACH
          {"Lef58EolExtension", "L58EolExt"},  // PG,rule,test
          {"Lef58EolKeepOut", "L58EolKO"}};    // PG,rule,test
-  auto abbrev = [](const std::string& name) {
-    auto it = kAbbrev.find(name);
-    if (it != kAbbrev.end()) {
-      return it->second;
-    }
-    std::string s;
-    for (const char c : name) {
-      if (c != ' ') {
-        s += c;
-      }
-    }
-    return s.size() > 9 ? s.substr(0, 9) : s;
-  };
-
-  std::map<std::string, long> colTotal;
-  std::map<frLayerNum, long> rowTotal;
-  long grandTotal = 0;
-  for (const auto& [layerNum, perType] : counts) {
-    for (const auto& [type, cnt] : perType) {
-      colTotal[type] += cnt;
-      rowTotal[layerNum] += cnt;
-      grandTotal += cnt;
+  auto it = kAbbrev.find(name);
+  if (it != kAbbrev.end()) {
+    return it->second;
+  }
+  std::string s;
+  for (const char c : name) {
+    if (c != ' ') {
+      s += c;
     }
   }
-
-  // Column widths: first column fits the layer names / "Totals" label; each
-  // type column fits its (abbreviated) header and the largest count in it; the
-  // totals column fits the grand total.
-  const std::string kTotals = "Totals";
-  size_t firstW = kTotals.size();
-  for (const auto layerNum : layerSet) {
-    firstW = std::max(firstW, tech->getLayer(layerNum)->getName().size());
-  }
-  std::vector<size_t> colW(cols.size());
-  for (size_t i = 0; i < cols.size(); i++) {
-    size_t w = std::max(abbrev(cols[i]).size(),
-                        std::to_string(colTotal[cols[i]]).size());
-    for (const auto layerNum : layerSet) {
-      w = std::max(w, std::to_string(counts[layerNum][cols[i]]).size());
-    }
-    colW[i] = w;
-  }
-  const size_t totW
-      = std::max(kTotals.size(), std::to_string(grandTotal).size());
-
-  auto rjust = [](const std::string& s, size_t width) {
-    return std::string(width - s.size(), ' ') + s;
-  };
-  auto ljust = [](const std::string& s, size_t width) {
-    return s + std::string(width - s.size(), ' ');
-  };
-  const std::string gap = "  ";
-
-  // header
-  std::string line = std::string(firstW, ' ');
-  for (size_t i = 0; i < cols.size(); i++) {
-    line += gap + rjust(abbrev(cols[i]), colW[i]);
-  }
-  line += gap + rjust(kTotals, totW);
-  logger->report(line);
-  // one row per layer
-  for (const auto layerNum : layerSet) {
-    line = ljust(tech->getLayer(layerNum)->getName(), firstW);
-    for (size_t i = 0; i < cols.size(); i++) {
-      line += gap + rjust(std::to_string(counts[layerNum][cols[i]]), colW[i]);
-    }
-    line += gap + rjust(std::to_string(rowTotal[layerNum]), totW);
-    logger->report(line);
-  }
-  // totals row
-  line = ljust(kTotals, firstW);
-  for (size_t i = 0; i < cols.size(); i++) {
-    line += gap + rjust(std::to_string(colTotal[cols[i]]), colW[i]);
-  }
-  line += gap + rjust(std::to_string(grandTotal), totW);
-  logger->report(line);
+  return s.size() > 9 ? s.substr(0, 9) : s;
 }
 }  // namespace
 
@@ -1212,8 +1121,10 @@ void TritonRoute::checkDRC(const char* filename,
   // Always report the violation count (with or without -check_pg), followed by
   // a per-layer / per-type breakdown table.
   logger_->info(DRT, 618, "check_drc found {} violations.", markers.size());
-  reportDRCSummary(markers, getDesign()->getTech(), logger_);
-  reportDRC(filename, markers, requiredDrcBox);
+  // reportDRC walks the markers once: it writes the per-marker detail file and
+  // accumulates the per-layer/per-type counts, then emits the summary table
+  // (report_summary=true is unique to this check_drc path).
+  reportDRC(filename, markers, requiredDrcBox, /*report_summary=*/true);
   // Reset the switch so subsequent (non -check_pg) runs are unaffected.
   DRC_CHECK_PG = false;
 }
@@ -1389,31 +1300,51 @@ int TritonRoute::getWorkerResultsSize()
 
 void TritonRoute::reportDRC(const string& file_name,
                             const frList<std::unique_ptr<frMarker>>& markers,
-                            Rect drcBox)
+                            Rect drcBox,
+                            bool report_summary)
 {
   double dbu = getDesign()->getTech()->getDBUPerUU();
+  auto tech = getDesign()->getTech();
 
-  if (file_name == string("")) {
-    if (VERBOSE > 0) {
-      logger_->warn(
-          DRT,
-          290,
-          "Warning: no DRC report specified, skipped writing DRC report");
+  // Single pass over the markers: (when an output file was requested) write the
+  // per-marker detail AND, when report_summary is set (the check_drc path),
+  // accumulate the per-layer/per-type counts for the summary table. The router
+  // callers leave report_summary false, so their DRC reports are unaffected.
+  std::map<frLayerNum, std::map<std::string, long>> counts;
+  const bool write_file = !file_name.empty();
+  ofstream drcRpt;
+  if (write_file) {
+    drcRpt.open(file_name.c_str());
+    if (!drcRpt.is_open()) {
+      cout << "Error: Fail to open DRC report file\n";
     }
-    return;
+  } else if (VERBOSE > 0) {
+    logger_->warn(
+        DRT,
+        290,
+        "Warning: no DRC report specified, skipped writing DRC report");
   }
-  ofstream drcRpt(file_name.c_str());
-  if (drcRpt.is_open()) {
-    for (const auto& marker : markers) {
-      // get violation bbox
-      Rect bbox = marker->getBBox();
-      if (drcBox != Rect() && !drcBox.intersects(bbox))
-        continue;
-      auto tech = getDesign()->getTech();
-      auto layer = tech->getLayer(marker->getLayerNum());
-      auto layerType = layer->getType();
 
-      auto con = marker->getConstraint();
+  for (const auto& marker : markers) {
+    auto con = marker->getConstraint();
+    // Summary count: every marker with a constraint, keyed by the raw
+    // getViolName() (not the "Cut Short" detail adjustment) and independent of
+    // the drcBox region filter, so it matches the DRT-0618 total.
+    if (report_summary && con) {
+      counts[marker->getLayerNum()][con->getViolName()]++;
+    }
+    // Per-marker detail goes to the file only, region-filtered.
+    if (!write_file || !drcRpt.is_open()) {
+      continue;
+    }
+    // get violation bbox
+    Rect bbox = marker->getBBox();
+    if (drcBox != Rect() && !drcBox.intersects(bbox))
+      continue;
+    auto layer = tech->getLayer(marker->getLayerNum());
+    auto layerType = layer->getType();
+
+    {
       drcRpt << "  violation type: ";
       if (con) {
         std::string violName;
@@ -1480,7 +1411,98 @@ void TritonRoute::reportDRC(const string& file_name,
              << bbox.yMax() / dbu << " ) on Layer ";
       drcRpt << layer->getName() << "\n";
     }
-  } else {
-    cout << "Error: Fail to open DRC report file\n";
+  }
+
+  // Print the aggregated per-layer / per-type summary table on the check_drc
+  // path (even with no output file); router callers pass report_summary=
+  // false. Column headers use drcViolAbbrev() (top of file).
+  if (report_summary) {
+    std::set<std::string> typeSet;
+    std::set<frLayerNum> layerSet;
+    for (const auto& [layerNum, perType] : counts) {
+      layerSet.insert(layerNum);
+      for (const auto& [type, cnt] : perType) {
+        typeSet.insert(type);
+      }
+    }
+    if (typeSet.empty()) {
+      return;
+    }
+
+    const std::vector<std::string> cols(typeSet.begin(), typeSet.end());
+    // counts is sparse (a layer may not have a given type); look up with 0
+    // default since operator[] is unavailable on the const map.
+    auto cellCount
+        = [&counts](frLayerNum layer, const std::string& type) -> long {
+      auto li = counts.find(layer);
+      if (li == counts.end()) {
+        return 0;
+      }
+      auto ti = li->second.find(type);
+      return ti == li->second.end() ? 0 : ti->second;
+    };
+
+    std::map<std::string, long> colTotal;
+    std::map<frLayerNum, long> rowTotal;
+    long grandTotal = 0;
+    for (const auto& [layerNum, perType] : counts) {
+      for (const auto& [type, cnt] : perType) {
+        colTotal[type] += cnt;
+        rowTotal[layerNum] += cnt;
+        grandTotal += cnt;
+      }
+    }
+
+    // Column widths: first column fits the layer names / "Totals" label; each
+    // type column fits its (abbreviated) header and the largest count in it; the
+    // totals column fits the grand total.
+    const std::string kTotals = "Totals";
+    size_t firstW = kTotals.size();
+    for (const auto layerNum : layerSet) {
+      firstW = std::max(firstW, tech->getLayer(layerNum)->getName().size());
+    }
+    std::vector<size_t> colW(cols.size());
+    for (size_t i = 0; i < cols.size(); i++) {
+      size_t w = std::max(drcViolAbbrev(cols[i]).size(),
+                          std::to_string(colTotal[cols[i]]).size());
+      for (const auto layerNum : layerSet) {
+        w = std::max(w, std::to_string(cellCount(layerNum, cols[i])).size());
+      }
+      colW[i] = w;
+    }
+    const size_t totW
+        = std::max(kTotals.size(), std::to_string(grandTotal).size());
+
+    auto rjust = [](const std::string& s, size_t width) {
+      return std::string(width - s.size(), ' ') + s;
+    };
+    auto ljust = [](const std::string& s, size_t width) {
+      return s + std::string(width - s.size(), ' ');
+    };
+    const std::string gap = "  ";
+
+    // header
+    std::string line = std::string(firstW, ' ');
+    for (size_t i = 0; i < cols.size(); i++) {
+      line += gap + rjust(drcViolAbbrev(cols[i]), colW[i]);
+    }
+    line += gap + rjust(kTotals, totW);
+    logger_->report(line);
+    // one row per layer
+    for (const auto layerNum : layerSet) {
+      line = ljust(tech->getLayer(layerNum)->getName(), firstW);
+      for (size_t i = 0; i < cols.size(); i++) {
+        line += gap + rjust(std::to_string(cellCount(layerNum, cols[i])), colW[i]);
+      }
+      line += gap + rjust(std::to_string(rowTotal[layerNum]), totW);
+      logger_->report(line);
+    }
+    // totals row
+    line = ljust(kTotals, firstW);
+    for (size_t i = 0; i < cols.size(); i++) {
+      line += gap + rjust(std::to_string(colTotal[cols[i]]), colW[i]);
+    }
+    line += gap + rjust(std::to_string(grandTotal), totW);
+    logger_->report(line);
   }
 }
