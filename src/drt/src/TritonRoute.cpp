@@ -1163,14 +1163,16 @@ void TritonRoute::checkDRC(const char* filename,
   // ===== check_drc logic chain (entry) =====
   // Step 1: announce the requested mode so the log clearly shows whether this
   // run is a normal DRC run or a PG-only run.
-  logger_->debug(DRT,
-                 "checkPG",
-                 "[check_drc] entry: mode={}, box=({},{})-({},{})",
-                 check_pg ? "PG-ONLY (-check_pg)" : "ALL-OBJECTS",
-                 x1,
-                 y1,
-                 x2,
-                 y2);
+  debugPrint(logger_,
+             DRT,
+             "checkPG",
+             1,
+             "[check_drc] entry: mode={}, box=({},{})-({},{})",
+             check_pg ? "PG-ONLY (-check_pg)" : "ALL-OBJECTS",
+             x1,
+             y1,
+             x2,
+             y2);
   initDesign();
   if (design_->getTopBlock()->getGCellPatterns().empty()) {
     // Build just enough to run GC: read any guides and synthesize the gcell
@@ -1186,23 +1188,27 @@ void TritonRoute::checkDRC(const char* filename,
     requiredDrcBox = design_->getTopBlock()->getBBox();
   }
   // Step 2: drcBox is finalized; log the actual region that will be checked.
-  logger_->debug(DRT,
-                 "checkPG",
-                 "[check_drc] effective drc box=({},{})-({},{})",
-                 requiredDrcBox.xMin(),
-                 requiredDrcBox.yMin(),
-                 requiredDrcBox.xMax(),
-                 requiredDrcBox.yMax());
+  debugPrint(logger_,
+             DRT,
+             "checkPG",
+             1,
+             "[check_drc] effective drc box=({},{})-({},{})",
+             requiredDrcBox.xMin(),
+             requiredDrcBox.yMin(),
+             requiredDrcBox.xMax(),
+             requiredDrcBox.yMax());
   frList<std::unique_ptr<frMarker>> markers;
   // Step 3: run the GC workers and collect markers. Object filtering for
   // -check_pg happens inside FlexGCWorker::Impl::initDesign.
   getDRCMarkers(markers, requiredDrcBox);
   // Step 4: summarize how many violations survived the (optional) PG filter.
-  logger_->debug(DRT,
-                 "checkPG",
-                 "[check_drc] done: {} marker(s) reported{}",
-                 markers.size(),
-                 DRC_CHECK_PG ? " (PG-only)" : "");
+  debugPrint(logger_,
+             DRT,
+             "checkPG",
+             1,
+             "[check_drc] done: {} marker(s) reported{}",
+             markers.size(),
+             DRC_CHECK_PG ? " (PG-only)" : "");
   // Always report the violation count (with or without -check_pg), followed by
   // a per-layer / per-type breakdown table.
   logger_->info(DRT, 618, "check_drc found {} violations.", markers.size());

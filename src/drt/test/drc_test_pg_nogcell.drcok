@@ -1,33 +1,60 @@
-  violation type: Metal Spacing
-    srcs: net:VDD net:net2 
-    bbox = ( 6.1, 3.5 ) - ( 6.15, 4.5 ) on Layer metal2
   violation type: Short
-    srcs: net:VDD net:net1 
-    bbox = ( 4.4, 3.965 ) - ( 4.6, 4.035 ) on Layer metal2
-  violation type: Short
-    srcs: net:VDD net:VSS 
-    bbox = ( 1.4, 3.9 ) - ( 1.6, 4.1 ) on Layer metal2
-  violation type: Metal Spacing
-    srcs: net:VDD net:VSS 
-    bbox = ( 3.1, 3.5 ) - ( 3.15, 4.5 ) on Layer metal2
-  violation type: Short
-    srcs: net:VDD obstruction: 
-    bbox = ( 7.4, 3.9 ) - ( 7.6, 4.1 ) on Layer metal2
+    srcs: net:SIG1 net:VDD 
+    bbox = ( 11.9, 33.9 ) - ( 12.1, 34.1 ) on Layer metal2
   violation type: Metal Spacing
     srcs: net:VDD obstruction: 
-    bbox = ( 9.1, 3.5 ) - ( 9.15, 4.5 ) on Layer metal2
-  violation type: Min Area
-    srcs: net:VDD 
-    bbox = ( 2.45, 2.5 ) - ( 2.55, 2.6 ) on Layer metal2
-  violation type: Off Grid
-    srcs: net:VDD 
-    bbox = ( 2.9025, 6 ) - ( 3.1025, 7 ) on Layer metal2
+    bbox = ( 9.1, 59 ) - ( 9.15, 61 ) on Layer metal2
+  violation type: Short
+    srcs: net:VDD net:VSS 
+    bbox = ( 11.9, 49.9 ) - ( 12.1, 50.1 ) on Layer metal2
+  violation type: Short
+    srcs: net:VDD obstruction: 
+    bbox = ( 7.4, 59.9 ) - ( 7.6, 60.1 ) on Layer metal2
+  violation type: Metal Spacing
+    srcs: net:VDD net:reg1 
+    bbox = ( 26.035, 59 ) - ( 26.09, 61.035 ) on Layer metal2
   violation type: Min Width
     srcs: net:VDD 
-    bbox = ( 0.475, 5.5 ) - ( 0.525, 9.6 ) on Layer metal2
+    bbox = ( 25.975, 47.95 ) - ( 26.025, 52.05 ) on Layer metal2
+  violation type: Metal Spacing
+    srcs: net:SIG1 net:VDD 
+    bbox = ( 39.96, 33 ) - ( 40.04, 35 ) on Layer metal2
+  violation type: Metal Spacing
+    srcs: net:VDD net:VSS 
+    bbox = ( 39.96, 49 ) - ( 40.04, 51 ) on Layer metal2
   violation type: Cut Spacing
     srcs: net:VDD 
-    bbox = ( 1.535, 8.465 ) - ( 1.61, 8.535 ) on Layer via1
+    bbox = ( 53.965, 49.965 ) - ( 54.035, 50.035 ) on Layer via1
+  violation type: Min Hole
+    srcs: net:VDD 
+    bbox = ( 67.75, 49.75 ) - ( 68.25, 50.25 ) on Layer metal4
+  violation type: Off Grid
+    srcs: net:VDD 
+    bbox = ( 81.9015, 49.5 ) - ( 82.1015, 50.5 ) on Layer metal2
+  violation type: Min Area
+    srcs: net:VDD 
+    bbox = ( 95.95, 50 ) - ( 96.05, 50.1 ) on Layer metal2
   violation type: Minimum Cut
     srcs: net:VDD 
-    bbox = ( 8.465, 5.965 ) - ( 8.535, 6.035 ) on Layer metal2
+    bbox = ( 109.965, 49.965 ) - ( 110.035, 50.035 ) on Layer metal2
+  violation type: Lef58Area
+    srcs: net:VDD 
+    bbox = ( 123.95, 50 ) - ( 124.05, 50.1 ) on Layer metal3
+  violation type: Lef58SpacingEndOfLine
+    srcs: net:VDD 
+    bbox = ( 138, 49.93 ) - ( 138.2, 50.07 ) on Layer metal6
+  violation type: Lef58EolExtension
+    srcs: net:VDD 
+    bbox = ( 152, 49.93 ) - ( 152.34, 50.07 ) on Layer metal5
+  violation type: Lef58EolExtension
+    srcs: net:VDD 
+    bbox = ( 152, 49.93 ) - ( 152.2, 50.07 ) on Layer metal5
+  violation type: Lef58EolKeepOut
+    srcs: net:VDD 
+    bbox = ( 165.93, 50 ) - ( 166.07, 50.2 ) on Layer metal4
+  violation type: Lef58EolKeepOut
+    srcs: net:VDD 
+    bbox = ( 166.07, 50 ) - ( 166.2, 50.2 ) on Layer metal4
+  violation type: Lef58EolKeepOut
+    srcs: net:VDD 
+    bbox = ( 165.8, 50 ) - ( 165.93, 50.2 ) on Layer metal4

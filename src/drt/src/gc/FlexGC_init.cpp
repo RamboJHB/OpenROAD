@@ -260,12 +260,14 @@ void FlexGCWorker::Impl::initDesign(const frDesign* design, bool skipDR)
   // init all dr objs from design
   if (getDRWorker() || skipDR) {
     if (DRC_CHECK_PG) {
-      logger_->debug(DRT,
-                     "checkPG",
-                     "[init] PG(non-fixed)={}, background-fixed(signal/obs)={} "
-                     "(DR objs skipped)",
-                     n_pg,
-                     n_bg);
+      debugPrint(logger_,
+                 DRT,
+                 "checkPG",
+                 1,
+                 "[init] PG(non-fixed)={}, background-fixed(signal/obs)={} "
+                 "(DR objs skipped)",
+                 n_pg,
+                 n_bg);
     }
     return;
   }
@@ -284,11 +286,13 @@ void FlexGCWorker::Impl::initDesign(const frDesign* design, bool skipDR)
   if (DRC_CHECK_PG) {
     // Final per-worker summary: bottom of the logic chain "check_drc ->
     // getDRCMarkers -> FlexGCWorker::init -> initDesign".
-    logger_->debug(DRT,
-                   "checkPG",
-                   "[init] PG(non-fixed)={}, background-fixed(signal/obs)={}",
-                   n_pg,
-                   n_bg);
+    debugPrint(logger_,
+               DRT,
+               "checkPG",
+               1,
+               "[init] PG(non-fixed)={}, background-fixed(signal/obs)={}",
+               n_pg,
+               n_bg);
   }
 }
 
@@ -499,10 +503,12 @@ void FlexGCWorker::Impl::initNetsFromDesign(const frDesign* design)
     // pure signal-vs-signal pairs (both fixed). In normal mode, fixed=false.
     const bool route_fixed = DRC_CHECK_PG ? !net->getType().isSupply() : false;
     if (DRC_CHECK_PG) {
-      logger_->debug(DRT,
-                     "checkPG",
-                     "[netinit] load non-PG net {} as fixed background",
-                     net->getName());
+      debugPrint(logger_,
+                 DRT,
+                 "checkPG",
+                 1,
+                 "[netinit] load non-PG net {} as fixed background",
+                 net->getName());
     }
     // always first generate gcnet in case owner does not have any object
     bool netExists = (owner2nets_.find(net.get()) != owner2nets_.end());

@@ -1,50 +1,112 @@
 VERSION 5.8 ;
 DIVIDERCHAR "/" ;
 BUSBITCHARS "[]" ;
-DESIGN drc_test_pg ;
+DESIGN drc_test_pg_nogcell ;
 UNITS DISTANCE MICRONS 2000 ;
-DIEAREA ( 0 0 ) ( 20000 20000 ) ;
-ROW ROW_0 FreePDK45_38x28_10R_NP_162NW_34O 2000 2800 N DO 40 BY 1 STEP 380 0 ;
-TRACKS X 190 DO 52 STEP 380 LAYER metal1 ;
-TRACKS Y 140 DO 70 STEP 280 LAYER metal1 ;
-TRACKS X 190 DO 52 STEP 380 LAYER metal2 ;
-TRACKS Y 140 DO 70 STEP 280 LAYER metal2 ;
-TRACKS X 190 DO 52 STEP 380 LAYER metal3 ;
-TRACKS Y 140 DO 70 STEP 280 LAYER metal3 ;
+DIEAREA ( 0 0 ) ( 372000 128000 ) ;
+ROW ROW_0 FreePDK45_38x28_10R_NP_162NW_34O 2000 2800 N DO 200 BY 1 STEP 380 0 ;
+TRACKS X 190 DO 978 STEP 380 LAYER metal1 ;
+TRACKS Y 140 DO 457 STEP 280 LAYER metal1 ;
+TRACKS X 190 DO 978 STEP 380 LAYER metal2 ;
+TRACKS Y 140 DO 457 STEP 280 LAYER metal2 ;
+TRACKS X 190 DO 978 STEP 380 LAYER metal3 ;
+TRACKS Y 140 DO 457 STEP 280 LAYER metal3 ;
 COMPONENTS 2 ;
     - inst1 INV_X1 + PLACED ( 2000 2800 ) N ;
-    - inst2 INV_X1 + PLACED ( 8000 2800 ) N ;
+    - inst2 INV_X1 + PLACED ( 10000 2800 ) N ;
 END COMPONENTS
-NETS 2 ;
-    - net1 ( inst1 ZN ) ( inst2 A )
-      + ROUTED metal1 ( 12000 14000 ) ( 16000 14000 )
-        NEW metal2 ( 8000 8000 ) ( 10000 8000 ) ;
-    - net2 ( inst2 ZN ) ( inst1 A )
-      + ROUTED metal1 ( 14000 12000 ) ( 14000 16000 )
-        NEW metal2 ( 12370 7000 ) ( 12370 9000 ) ;
+NETS 3 ;
+    - g1 ( inst1 ZN ) ;
+    - g2 ( inst2 ZN ) ;
+    - reg1
+      + ROUTED metal2 ( 52000 116000 ) ( 52000 122000 ) ;
 END NETS
-SPECIALNETS 2 ;
+SPECIALNETS 4 ;
     - VDD ( * VDD ) + USE POWER
-      + ROUTED metal2 400 + SHAPE STRIPE ( 3000 7000 ) ( 3000 9000 )
-      NEW metal2 400 + SHAPE STRIPE ( 6000 7000 ) ( 6000 9000 )
-      NEW metal2 400 + SHAPE STRIPE ( 9000 7000 ) ( 9000 9000 )
-      NEW metal2 400 + SHAPE STRIPE ( 12000 7000 ) ( 12000 9000 )
-      NEW metal2 400 + SHAPE STRIPE ( 15000 7000 ) ( 15000 9000 )
-      NEW metal2 400 + SHAPE STRIPE ( 18000 7000 ) ( 18000 9000 )
-      NEW metal2 100 + SHAPE STRIPE ( 1000 11000 ) ( 1000 19200 )
-      NEW metal2 400 + SHAPE STRIPE ( 6005 12000 ) ( 6005 14000 )
-      NEW metal2 280 + SHAPE STRIPE ( 2900 17000 ) ( 5900 17000 )
-      NEW metal1 0 + SHAPE STRIPE ( 3000 17000 ) via1_4
-      NEW metal1 0 + SHAPE STRIPE ( 3290 17000 ) via1_4
-      NEW metal2 200 + SHAPE STRIPE ( 5000 5000 ) ( 5000 5200 )
-      NEW metal2 400 + SHAPE STRIPE ( 17000 11000 ) ( 17000 13000 )
-      NEW metal1 0 + SHAPE STRIPE ( 17000 12000 ) via1_4 ;
+      # cluster A: Short (Short) -- VDD overlaps VSS (row1) and SIG1 (row2)
+      + ROUTED metal2 400 + SHAPE STRIPE ( 24000 98000 ) ( 24000 102000 )
+      NEW metal2 400 + SHAPE STRIPE ( 24000 66000 ) ( 24000 70000 )
+      # cluster B: Min Width (MinWid) -- 0.05um VDD strap (row1 only)
+      NEW metal2 100 + SHAPE STRIPE ( 52000 95900 ) ( 52000 104100 )
+      # cluster C: Metal Spacing (MetSpc) -- VDD near VSS (row1) and SIG1 (row2)
+      NEW metal2 400 + SHAPE STRIPE ( 79720 98000 ) ( 79720 102000 )
+      NEW metal2 400 + SHAPE STRIPE ( 79720 66000 ) ( 79720 70000 )
+      # cluster D: Cut Spacing (CutSpc) -- two VDD via1 cuts too close (row1)
+      NEW metal2 280 + SHAPE STRIPE ( 106500 100000 ) ( 109500 100000 )
+      # cluster E: Min Hole (MinHol) -- VDD metal4 ring encloses a small hole (row1)
+      NEW metal4 500 + SHAPE STRIPE ( 135250 99000 ) ( 135250 101000 )
+      NEW metal4 500 + SHAPE STRIPE ( 136750 99000 ) ( 136750 101000 )
+      NEW metal4 500 + SHAPE STRIPE ( 135000 99250 ) ( 137000 99250 )
+      NEW metal4 500 + SHAPE STRIPE ( 135000 100750 ) ( 137000 100750 )
+      # cluster F: Off Grid (OffGrd) -- VDD strap off the manufacturing grid (row1)
+      NEW metal2 400 + SHAPE STRIPE ( 164003 99000 ) ( 164003 101000 )
+      # cluster G: Min Area (MinAr) -- tiny VDD metal2 shape (row1)
+      NEW metal2 200 + SHAPE STRIPE ( 192000 100000 ) ( 192000 100200 )
+      # cluster H: Minimum Cut (MinCut) -- wide VDD strap, single via1 cut (row1)
+      NEW metal2 400 + SHAPE STRIPE ( 220000 98000 ) ( 220000 102000 )
+      # cluster I: Lef58Area (L58Area) -- tiny VDD metal3 shape, LEF58 AREA (row1)
+      NEW metal3 200 + SHAPE STRIPE ( 248000 100000 ) ( 248000 100200 )
+      # cluster J: Lef58SpacingEndOfLine (L58EOL) -- VDD metal6 EOL (row1)
+      NEW metal6 280 + SHAPE STRIPE ( 274000 100000 ) ( 276000 100000 )
+      NEW metal6 280 + SHAPE STRIPE ( 276540 99000 ) ( 276540 101000 )
+      # cluster K: Lef58EolExtension (L58EolExt) -- VDD metal5 EOL extension (row1)
+      NEW metal5 280 + SHAPE STRIPE ( 302000 100000 ) ( 304000 100000 )
+      NEW metal5 280 + SHAPE STRIPE ( 304540 99000 ) ( 304540 101000 )
+      # cluster L: Lef58EolKeepOut (L58EolKO) -- VDD metal4 EOL keepout (row1)
+      NEW metal4 280 + SHAPE STRIPE ( 332000 99000 ) ( 332000 100000 )
+      NEW metal4 280 + SHAPE STRIPE ( 331600 100540 ) ( 332400 100540 )
+      NEW metal1 0 + SHAPE STRIPE ( 107860 100000 ) via1_4
+      NEW metal1 0 + SHAPE STRIPE ( 108140 100000 ) via1_4
+      NEW metal1 0 + SHAPE STRIPE ( 220000 100000 ) via1_4
+      # cluster M: Short + Metal Spacing (Short/MetSpc) -- VDD vs metal2 blockage (top band)
+      NEW metal2 400 + SHAPE STRIPE ( 15000 118000 ) ( 15000 122000 )
+      NEW metal2 400 + SHAPE STRIPE ( 18000 118000 ) ( 18000 122000 )
+      # cluster N: Metal Spacing (MetSpc) -- VDD 2nd PG connection (secondary branch) vs regular signal reg1
+      NEW metal2 400 + SHAPE STRIPE ( 50000 122500 ) ( 52380 122500 )
+      NEW metal2 400 + SHAPE STRIPE ( 52380 118000 ) ( 52380 122500 )
+      # special PDN mesh (DRC-clean) -- VDD metal4 stripes + metal5 rails
+      NEW metal4 800 + SHAPE STRIPE ( 300000 110000 ) ( 300000 126000 )
+      NEW metal4 800 + SHAPE STRIPE ( 308000 110000 ) ( 308000 126000 )
+      NEW metal4 800 + SHAPE STRIPE ( 316000 110000 ) ( 316000 126000 )
+      NEW metal5 800 + SHAPE STRIPE ( 296000 113000 ) ( 360000 113000 )
+      NEW metal5 800 + SHAPE STRIPE ( 296000 123000 ) ( 360000 123000 ) ;
     - VSS ( * VSS ) + USE GROUND
-      + ROUTED metal2 400 + SHAPE STRIPE ( 2000 8000 ) ( 4000 8000 )
-      NEW metal2 400 + SHAPE STRIPE ( 6500 7000 ) ( 6500 9000 ) ;
+      + ROUTED metal2 400 + SHAPE STRIPE ( 22000 100000 ) ( 26000 100000 )
+      NEW metal2 400 + SHAPE STRIPE ( 80280 98000 ) ( 80280 102000 )
+      # special PDN mesh (DRC-clean) -- VSS metal4 stripes + metal5 rail
+      NEW metal4 800 + SHAPE STRIPE ( 304000 110000 ) ( 304000 126000 )
+      NEW metal4 800 + SHAPE STRIPE ( 312000 110000 ) ( 312000 126000 )
+      NEW metal5 800 + SHAPE STRIPE ( 296000 118000 ) ( 360000 118000 ) ;
+    - SIG1 ( * SIG1 ) + USE SIGNAL
+      + ROUTED metal2 400 + SHAPE STRIPE ( 22000 68000 ) ( 26000 68000 )
+      NEW metal2 400 + SHAPE STRIPE ( 24000 30000 ) ( 24000 34000 )
+      NEW metal2 100 + SHAPE STRIPE ( 52000 27900 ) ( 52000 36100 )
+      NEW metal2 400 + SHAPE STRIPE ( 80280 66000 ) ( 80280 70000 )
+      NEW metal2 400 + SHAPE STRIPE ( 79720 30000 ) ( 79720 34000 )
+      NEW metal2 280 + SHAPE STRIPE ( 106500 32000 ) ( 109500 32000 )
+      NEW metal4 500 + SHAPE STRIPE ( 135250 31000 ) ( 135250 33000 )
+      NEW metal4 500 + SHAPE STRIPE ( 136750 31000 ) ( 136750 33000 )
+      NEW metal4 500 + SHAPE STRIPE ( 135000 31250 ) ( 137000 31250 )
+      NEW metal4 500 + SHAPE STRIPE ( 135000 32750 ) ( 137000 32750 )
+      NEW metal2 400 + SHAPE STRIPE ( 164003 31000 ) ( 164003 33000 )
+      NEW metal2 200 + SHAPE STRIPE ( 192000 32000 ) ( 192000 32200 )
+      NEW metal2 400 + SHAPE STRIPE ( 220000 30000 ) ( 220000 34000 )
+      NEW metal3 200 + SHAPE STRIPE ( 248000 32000 ) ( 248000 32200 )
+      NEW metal6 280 + SHAPE STRIPE ( 274000 32000 ) ( 276000 32000 )
+      NEW metal6 280 + SHAPE STRIPE ( 276540 31000 ) ( 276540 33000 )
+      NEW metal5 280 + SHAPE STRIPE ( 302000 32000 ) ( 304000 32000 )
+      NEW metal5 280 + SHAPE STRIPE ( 304540 31000 ) ( 304540 33000 )
+      NEW metal4 280 + SHAPE STRIPE ( 332000 31000 ) ( 332000 32000 )
+      NEW metal4 280 + SHAPE STRIPE ( 331600 32540 ) ( 332400 32540 )
+      NEW metal1 0 + SHAPE STRIPE ( 107860 32000 ) via1_4
+      NEW metal1 0 + SHAPE STRIPE ( 108140 32000 ) via1_4
+      NEW metal1 0 + SHAPE STRIPE ( 220000 32000 ) via1_4 ;
+    - SIG2 ( * SIG2 ) + USE SIGNAL
+      + ROUTED metal2 400 + SHAPE STRIPE ( 22000 32000 ) ( 26000 32000 )
+      NEW metal2 400 + SHAPE STRIPE ( 80280 30000 ) ( 80280 34000 ) ;
 END SPECIALNETS
 BLOCKAGES 2 ;
-    - LAYER metal2 RECT ( 14000 7800 ) ( 16000 8200 ) ;
-    - LAYER metal2 RECT ( 18300 7000 ) ( 18600 9000 ) ;
+    - LAYER metal2 RECT ( 14000 119800 ) ( 16000 120200 ) ;
+    - LAYER metal2 RECT ( 18300 118000 ) ( 18600 122000 ) ;
 END BLOCKAGES
 END DESIGN
