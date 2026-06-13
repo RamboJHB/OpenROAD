@@ -162,8 +162,8 @@ MIA 管"够不够大",**spacing 管"离得够不够远"**,两者缺一不可(论
 - **填充推论**:补 filler 要么**完全贴合(abut)**邻居,要么与异 Vt 注入区**留 ≥ `Smin`**;**绝不能留 `< Smin` 的细缝**(`fig5(C)` 标注的就是这条)。
 - **对 filler 选型的牵制**:放错 Vt / 放错宽度的 filler,会把**另一种 Vt** 的注入区挤出过窄段(犯 MIA)或距离 `< Smin`(犯 spacing)——所以 spacing 反过来约束"放不放 / 哪种 Vt / 多宽"。
 - **well / 放置层间距**:filler 自带阱区,受**阱最小宽度/间距**约束;还须避让 **placement blockage、macro halo、固定对象**(dpl `is_valid` 网格覆盖大部分,macro 周边间距需留意)。
-- **Spacing 是 2D 的(横向 + 纵向)**:`Smin` 不只管**同行横向**(`fig7`),也管**上下行之间的纵向**(`fig8`)——两行注入区夹一条 `< Smin` 的横向细缝就是跨行 spacing 违例。**填 filler 既要查同行左右邻居,也要查正上/正下那一行的注入区**:同样"abut 或 ≥ Smin"。
-- ⚠️ 现有 `gapFillers` 只有**宽度**层面的"最小 filler 宽度",**无注入间距感知(横向更无纵向)** —— 这是 implant-aware 要补的另一半。
+- **Spacing 实际触发以横向(同行)为主**:`Smin` 形式上是 2D DRC 规则(任意方向、含对角),但**标准单元在电源轨处上下对接(abut)、注入相邻无缝**——共享 VDD 轨两侧同为 PMOS、共享 VSS 轨两侧同为 NMOS,同 Vt 直接连片、异 Vt 干净对接。所以 **row-to-row 的纵向 `Smin` 缝隙一般不出现**;**跨行真正的约束是 MIA 连片(§7.4 / `fig5`),不是纵向 spacing**。spacing 的实际触发集中在**横向**(`fig7`,placement gap 处)。
+- ⚠️ 现有 `gapFillers` 只有**宽度**层面的"最小 filler 宽度",**无注入间距感知** —— 这是 implant-aware 要补的另一半。
 
 ---
 

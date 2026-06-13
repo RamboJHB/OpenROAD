@@ -48,8 +48,8 @@
 ### 2.8 Spacing 与 MIA 是**并列**的注入层约束(co-constraint)
 filler 不只要"够大"(MIA),还要满足**间距**:
 - **注入层最小间距 `Smin`**:两块**同层(同 Vt)**注入区太近(`< Smin`)→ spacing 违例;异 Vt 注入边界、以及狭窄的 **notch/凹口/细缝**同样受约束。
-- **Spacing 是 2D 的**:`Smin` 既管**同行横向**(`fig7`)也管**上下行纵向**(`fig8`)——两行注入区之间夹 `< Smin` 的横向细缝即跨行 spacing 违例。
-- **实战推论**:补 filler 时要么**完全贴合(abut)**邻居,要么**留 ≥ `Smin`**;**绝不能留 `< Smin` 的细缝**;**且要同时查同行左右 + 正上/正下行**的注入区。→ `fig7`(横向)、`fig8`(纵向)。
+- **Spacing 实际以横向(同行)为主**:`Smin` 形式上是 2D DRC 规则,但单元在电源轨处上下对接、注入无缝,**纵向 row-to-row 的 `Smin` 缝隙一般不出现**;**跨行真正的约束是 MIA 连片(§2.5 / `fig5`),不是纵向 spacing**。
+- **实战推论**:补 filler 时要么**完全贴合(abut)**邻居,要么与异 Vt 注入区**留 ≥ `Smin`**;**绝不能留 `< Smin` 的细缝**。→ `fig7`。
 - **反过来限制 filler**:放错 Vt 的 filler 会把**另一种 Vt** 注入区挤出过窄段(犯 MIA)或距离 `< Smin`(犯 spacing)→ "放不放 / 放哪种 Vt / 放多宽"都被 spacing 牵制。
 - **well / 放置层间距**:filler 自带阱区,受**阱最小宽度/间距**约束;还要避让 **placement blockage、macro halo、固定对象**(dpl 的 `is_valid` 网格覆盖大部分,macro 周边间距要留意)。
 - 现有 `gapFillers` 只有**宽度**层面的"最小 filler 宽度",**无注入间距感知**——论文二 "complex implant layer constraints" = 最小面积 + 最小宽度 + **最小间距**,三者缺一不可。
@@ -86,8 +86,8 @@ filler 不只要"够大"(MIA),还要满足**间距**:
 扫描逻辑(对应 §2 的结论,**MIA 与 spacing 一起查**):
 1. 枚举单元行空隙与占用 —— **复用 dpl 的 Pixel 网格**(`initGrid`/`gridPixel`/`row_site_count_`)。
 2. **MIA**:对每个 **Vt 注入层**、**分上/下带**求连续区,标出宽度 `< Wmin` / 面积 `< Amin` 的段。
-3. **Spacing(2D)**:标相邻注入区间距 `< Smin` —— **横向**(同行左右)与**纵向**(正上/正下行)都要查,含 `< Smin` 的 notch/细缝。
-4. 把**相邻镜像行的上带视为同一片**(跨行合并),对 MIA + spacing **再判一次**。
+3. **Spacing**:标相邻注入区**横向**间距 `< Smin`(同行左右、placement gap 处)及 `< Smin` 的 notch/细缝。(纵向 row-to-row 一般因对接无缝而不触发,跨行交给下一步的 MIA。)
+4. 把**相邻镜像行的上带视为同一片**(跨行合并),对 **MIA** 再判一次(此即跨行的主约束)。
 5. 输出违例区 + **候选 filler 位置**;候选位置须满足 **abut 或 ≥ `Smin`**,且**补完不新生** MIA/spacing 违例(并避让 blockage/macro)。
 
 ### 5.2 数据结构草案
