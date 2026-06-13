@@ -48,7 +48,7 @@
 ### 2.8 Spacing 与 MIA 是**并列**的注入层约束(co-constraint)
 filler 不只要"够大"(MIA),还要满足**间距**:
 - **注入层最小间距 `Smin`**:两块**同层(同 Vt)**注入区太近(`< Smin`)→ spacing 违例;异 Vt 注入边界、以及狭窄的 **notch/凹口/细缝**同样受约束。
-- **实战推论**:补 filler 时要么**完全贴合(abut)**邻居,要么与异 Vt 注入区**留 ≥ `Smin`**;**绝不能留 `< Smin` 的细缝**——即 `fig5(C)` 标注的 implant spacing。
+- **实战推论**:补 filler 时要么**完全贴合(abut)**邻居,要么与异 Vt 注入区**留 ≥ `Smin`**;**绝不能留 `< Smin` 的细缝**——即 `fig5(C)`/`fig7(B)` 标注的 implant spacing。→ `fig7`。
 - **反过来限制 filler**:放错 Vt 的 filler 会把**另一种 Vt** 注入区挤出过窄段(犯 MIA)或距离 `< Smin`(犯 spacing)→ "放不放 / 放哪种 Vt / 放多宽"都被 spacing 牵制。
 - **well / 放置层间距**:filler 自带阱区,受**阱最小宽度/间距**约束;还要避让 **placement blockage、macro halo、固定对象**(dpl 的 `is_valid` 网格覆盖大部分,macro 周边间距要留意)。
 - 现有 `gapFillers` 只有**宽度**层面的"最小 filler 宽度",**无注入间距感知**——论文二 "complex implant layer constraints" = 最小面积 + 最小宽度 + **最小间距**,三者缺一不可。

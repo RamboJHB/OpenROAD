@@ -157,7 +157,7 @@ MIA 作用在**连续注入区**上:相邻同 Vt 单元的注入区连成一片,
 - 这正是现有 `gapFillers`(纯宽度贪心,§4.1)缺失的部分,也对应论文一(跨行 MIA)与论文二(implant-aware filler)的着力点。
 
 ### 7.7 Spacing(注入层最小间距):与 MIA **并列**的约束
-MIA 管"够不够大",**spacing 管"离得够不够远"**,两者缺一不可(论文二的 "complex implant layer constraints" = 最小面积 + 最小宽度 + **最小间距**):
+MIA 管"够不够大",**spacing 管"离得够不够远"**,两者缺一不可(论文二的 "complex implant layer constraints" = 最小面积 + 最小宽度 + **最小间距**)。→ `fig7`(三态:abut / ≥Smin / sub-Smin 细缝违例;及 MIA+spacing 同时违例):
 - **注入层 `Smin`**:同层(同 Vt)两块注入区间距 `< Smin` → 违例;异 Vt 注入边界、`< Smin` 的 notch/凹口/细缝同样受限。
 - **填充推论**:补 filler 要么**完全贴合(abut)**邻居,要么与异 Vt 注入区**留 ≥ `Smin`**;**绝不能留 `< Smin` 的细缝**(`fig5(C)` 标注的就是这条)。
 - **对 filler 选型的牵制**:放错 Vt / 放错宽度的 filler,会把**另一种 Vt** 的注入区挤出过窄段(犯 MIA)或距离 `< Smin`(犯 spacing)——所以 spacing 反过来约束"放不放 / 哪种 Vt / 多宽"。
