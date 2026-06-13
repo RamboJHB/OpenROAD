@@ -26,7 +26,7 @@
 `src/dpl/src/FillerPlacement.cpp`:`placeRowFillers` 逐行找空隙 + `gapFillers` 按宽度贪心装箱。**不看 Vt / implant** —— 正是论文所说的"朴素基线"。
 
 ### 2.2 MIA 是核心约束,作用在"连续注入区"上,不是按单元算
-相邻同 Vt 单元的注入区连成一片,**整片**要满足最小面积/最小宽度(`Wmin`)。孤立的窄 Vt 区即违例。→ `fig1/2/3`。
+相邻同 Vt 单元的注入区连成一片,**整片**要满足最小面积/最小宽度(`Wmin`)。孤立的窄 Vt 区即违例。→ `fig1/2/3`。(注入层还有**最小间距 `Smin`** 约束,与 MIA 并列,见 §2.8。)
 
 ### 2.3 注入其实是"上下两条带":PMOS 上 / NMOS 下,MIA 分带各算
 标准单元 PMOS 在上(N-well,近 VDD)、NMOS 在下(近 VSS),各有独立 Vt 注入 → 每个单元天生有**上带 + 下带**,MIA 对两带分别评估。→ `fig6`。
@@ -44,6 +44,14 @@
 
 ### 2.7 DRC marker 不持久化(drt)
 `check_drc` 的 marker 跑完即销毁,此版本 odb 无 `dbMarker`。C++ 想拿违例,只能:(A) 改 `checkDRC` 暴露;(B) 写文件再解析;(C) 自跑检测并保活。另注:`check_drc` 的 min-width 在**金属层**,filler 改不了;filler 能修的是**注入/放置层**。
+
+### 2.8 Spacing 与 MIA 是**并列**的注入层约束(co-constraint)
+filler 不只要"够大"(MIA),还要满足**间距**:
+- **注入层最小间距 `Smin`**:两块**同层(同 Vt)**注入区太近(`< Smin`)→ spacing 违例;异 Vt 注入边界、以及狭窄的 **notch/凹口/细缝**同样受约束。
+- **实战推论**:补 filler 时要么**完全贴合(abut)**邻居,要么与异 Vt 注入区**留 ≥ `Smin`**;**绝不能留 `< Smin` 的细缝**——即 `fig5(C)` 标注的 implant spacing。
+- **反过来限制 filler**:放错 Vt 的 filler 会把**另一种 Vt** 注入区挤出过窄段(犯 MIA)或距离 `< Smin`(犯 spacing)→ "放不放 / 放哪种 Vt / 放多宽"都被 spacing 牵制。
+- **well / 放置层间距**:filler 自带阱区,受**阱最小宽度/间距**约束;还要避让 **placement blockage、macro halo、固定对象**(dpl 的 `is_valid` 网格覆盖大部分,macro 周边间距要留意)。
+- 现有 `gapFillers` 只有**宽度**层面的"最小 filler 宽度",**无注入间距感知**——论文二 "complex implant layer constraints" = 最小面积 + 最小宽度 + **最小间距**,三者缺一不可。
 
 ---
 
@@ -74,11 +82,12 @@
 ## 5. 写 code 的准备(下一步落地建议)
 
 ### 5.1 推荐先做:只读"违例/缺口检测原型"(两条路都用得上、与最终目的解耦)
-扫描逻辑(对应 §2 的结论):
+扫描逻辑(对应 §2 的结论,**MIA 与 spacing 一起查**):
 1. 枚举单元行空隙与占用 —— **复用 dpl 的 Pixel 网格**(`initGrid`/`gridPixel`/`row_site_count_`)。
-2. 对每个 **Vt 注入层**,**分上/下带**求连续区宽度,标出 `< Wmin` 的段。
-3. 把**相邻镜像行的上带视为同一片**(跨行合并)再判一次。
-4. 输出违例区 + 候选 filler 位置清单。
+2. **MIA**:对每个 **Vt 注入层**、**分上/下带**求连续区,标出宽度 `< Wmin` / 面积 `< Amin` 的段。
+3. **Spacing**:标相邻注入区(同层分离 / 异 Vt 边界)间距 `< Smin`,以及 `< Smin` 的 notch/细缝。
+4. 把**相邻镜像行的上带视为同一片**(跨行合并),对 MIA + spacing **再判一次**。
+5. 输出违例区 + **候选 filler 位置**;候选位置须满足 **abut 或 ≥ `Smin`**,且**补完不新生** MIA/spacing 违例(并避让 blockage/macro)。
 
 ### 5.2 数据结构草案
 ```cpp
@@ -90,9 +99,10 @@ struct FillerSpot {            // 输出:该放什么、放哪
 };
 struct ImplantViol {           // 检测原型的中间产物
   odb::dbTechLayer* implant;   // 注入层
-  odb::Rect region;            // 连续注入区
-  int width;                   // 实测宽度
-  int min_width;               // 该层 Wmin
+  odb::Rect region;            // 连续注入区(spacing 类则为相邻两区/缝隙)
+  enum Kind { MinWidth, MinArea, MinSpacing } kind;  // MIA(宽/面积) 或 间距
+  int value;                   // 实测宽度 / 面积 / 间距
+  int limit;                   // 对应的 Wmin / Amin / Smin
   bool inter_row;              // 是否跨行
 };
 ```

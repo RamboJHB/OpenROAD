@@ -28,6 +28,7 @@
 | **Implant layer(注入层)** | 决定掺杂区域的掩膜层;按"区域多边形"制造,相邻同型单元的注入区会连成一片。 |
 | **MIA(Min Implant Area)** | 工艺规则:每片连续注入区必须满足**最小面积/最小宽度**,否则 DRC 违例、做不出来。**机制图解(行内 / 跨行 / 上下分 Vt)见 §7。** |
 | **Min-width** | 某层形状宽度低于该层最小宽度规则 → min-width 违例。 |
+| **Implant spacing(注入最小间距 `Smin`)** | 与 MIA **并列**的注入层规则:两块注入区(或细缝/notch)间距 `< Smin` → spacing 违例。填充须"**abut 或 ≥ `Smin`**",不留细缝。见 §7.7。 |
 | **Mixed-cell-height(多行高)** | 单元高度不统一(1×/2×/3× 行高);高单元同时占据多个基础行,使行间耦合。 |
 | **Detailed Placement (DP)** | 详细布局:把全局布局后的单元挪到完全合法的位置。 |
 | **DP constraint vs objective** | **约束**=必须满足的硬规则(on-site、不重叠、朝向对齐、MIA/min-width…);**目标**=尽量优化的软指标(线长、面积)。filler/MIA 是一种约束。 |
@@ -154,6 +155,14 @@ MIA 作用在**连续注入区**上:相邻同 Vt 单元的注入区连成一片,
 - **检测原型**至少要:按 **Vt 注入层、分上/下带**扫描连续区宽度 `< Wmin`;并把**相邻镜像行的上带视为同一片**(跨行)。
 - **filler 选型**不只是"宽度装箱",还要**匹配带的 Vt(含上下分 Vt)**与**跨行对齐**、避免 sub-`Smin` 缝隙。
 - 这正是现有 `gapFillers`(纯宽度贪心,§4.1)缺失的部分,也对应论文一(跨行 MIA)与论文二(implant-aware filler)的着力点。
+
+### 7.7 Spacing(注入层最小间距):与 MIA **并列**的约束
+MIA 管"够不够大",**spacing 管"离得够不够远"**,两者缺一不可(论文二的 "complex implant layer constraints" = 最小面积 + 最小宽度 + **最小间距**):
+- **注入层 `Smin`**:同层(同 Vt)两块注入区间距 `< Smin` → 违例;异 Vt 注入边界、`< Smin` 的 notch/凹口/细缝同样受限。
+- **填充推论**:补 filler 要么**完全贴合(abut)**邻居,要么与异 Vt 注入区**留 ≥ `Smin`**;**绝不能留 `< Smin` 的细缝**(`fig5(C)` 标注的就是这条)。
+- **对 filler 选型的牵制**:放错 Vt / 放错宽度的 filler,会把**另一种 Vt** 的注入区挤出过窄段(犯 MIA)或距离 `< Smin`(犯 spacing)——所以 spacing 反过来约束"放不放 / 哪种 Vt / 多宽"。
+- **well / 放置层间距**:filler 自带阱区,受**阱最小宽度/间距**约束;还须避让 **placement blockage、macro halo、固定对象**(dpl `is_valid` 网格覆盖大部分,macro 周边间距需留意)。
+- ⚠️ 现有 `gapFillers` 只有**宽度**层面的"最小 filler 宽度",**无注入间距感知** —— 这是 implant-aware 要补的另一半。
 
 ---
 
