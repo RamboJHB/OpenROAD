@@ -20,7 +20,8 @@ Vt cells**.
 | `fig3_case2_two_same.png` | **Case 2** — two same-Vt fillers needed to bridge a gap and reach `Wmin`. |
 | `fig5_interrow.png` | **Inter-row MIA** — adjacent mirrored rows share a power rail, so a 2-row-tall narrow implant violates; filling only one row *creates* an inter-row violation; the fix is to fill **both rows aligned**, also satisfying implant **spacing**. |
 | `fig6_case3_vertical.png` | **Vertically split Vt cell** — a cell with **top = LVT (PMOS) / bottom = HVT (NMOS)**. Implants are really two horizontal bands; MIA is evaluated per band; a single matching top-LVT/bottom-HVT filler fixes both bands. |
-| `fig7_spacing.png` | **Implant spacing (`Smin`)** — co-constraint with MIA. (A) the min-spacing rule; (B) filling a gap must **abut OR leave ≥ Smin**, never a sub-Smin sliver; (C) a too-narrow filler can break **MIA and spacing at once**. Spacing bites **horizontally** at placement gaps; the inter-row coupling is **MIA merging** (`fig5`), not a vertical Smin gap (standard cells abut at the shared rail, so no vertical implant gap forms). |
+| `fig7_spacing.png` | **Implant spacing (`Smin`)** — co-constraint with MIA. (A) the min-spacing rule; (B) filling a gap must **abut OR leave ≥ Smin**, never a sub-Smin sliver; (C) a too-narrow filler can break **MIA and spacing at once**. |
+| `fig7b_horizontal_spacing.png` | **Spacing is checked LEFT/RIGHT** — between the inserted filler and its **in-row** cells (abut or `≥ Smin`). Adjacent rows are **different Vt** (Row1 HVT / Row0 LVT), so up/down is **not** a spacing check. (Inter-row coupling is MIA from 2-row-tall cells, `fig5`.) |
 
 ## Note on the implant geometry (why `fig6` is the "correct Case 3")
 
@@ -47,10 +48,12 @@ edit the `OUT` path at the top of each script.
 | `scripts/make_interrow_fig.py` | `fig5` |
 | `scripts/make_vsplit_fig.py` | `fig6` |
 | `scripts/make_spacing_fig.py` | `fig7` |
+| `scripts/make_horiz_spacing_fig.py` | `fig7b` |
 
 ```bash
 python3 scripts/make_mia_figs.py
 python3 scripts/make_interrow_fig.py
 python3 scripts/make_vsplit_fig.py
 python3 scripts/make_spacing_fig.py
+python3 scripts/make_horiz_spacing_fig.py
 ```

@@ -34,10 +34,11 @@
 ### 2.4 存在"上 LVT / 下 HVT"的非对称 Vt 单元,要用上下分 Vt 的 filler 匹配
 只给瓶颈一侧提速、另一侧省漏电。补这种单元要用**同样上下分 Vt 的 filler**,一个 filler 一次补好两带。→ `fig6`。
 
-### 2.5 跨行耦合(inter-row):镜像行共享电源轨 → PMOS 上带跨 2 行
-- 2 行高的窄 Vt 区会**横跨两行**一起违例。
+### 2.5 跨行耦合(inter-row,**MIA**):2 行高单元 / 同 Vt 跨轨相接 → 注入区跨 2 行
+- 来自**2 行高单元**(同一单元单 Vt 跨两行)或恰好同 Vt 的上下相邻区:其注入区**跨两行**,MIA 按 2 行高的连续区算;窄则两行一起违例。
 - **只修一行反而引发新的跨行违例**(论文一的核心难点)。
-- 正确做法:**两行对齐一起补**(或 2 行高 filler),并避免留 `< Smin` 的注入缝隙(**implant spacing** 同时满足)。→ `fig5`。
+- 正确做法:**两行对齐一起补**(或 2 行高 filler)。→ `fig5`。
+- (注:这是 **MIA** 的跨行耦合;**spacing 不跨行**,见 §2.8。)
 
 ### 2.6 "一个位置需要两种不同 filler"真正发生在跨行,不是单行
 单行里上下分 Vt 单元用**一个**上下分 Vt filler 即可;**两种不同 filler** 出现在跨行——相邻行补一个完成 PMOS 上带、本行补另一个延展 NMOS 下带。
@@ -45,11 +46,13 @@
 ### 2.7 DRC marker 不持久化(drt)
 `check_drc` 的 marker 跑完即销毁,此版本 odb 无 `dbMarker`。C++ 想拿违例,只能:(A) 改 `checkDRC` 暴露;(B) 写文件再解析;(C) 自跑检测并保活。另注:`check_drc` 的 min-width 在**金属层**,filler 改不了;filler 能修的是**注入/放置层**。
 
-### 2.8 Spacing 与 MIA 是**并列**的注入层约束(co-constraint)
-filler 不只要"够大"(MIA),还要满足**间距**:
-- **注入层最小间距 `Smin`**:两块**同层(同 Vt)**注入区太近(`< Smin`)→ spacing 违例;异 Vt 注入边界、以及狭窄的 **notch/凹口/细缝**同样受约束。
-- **Spacing 实际以横向(同行)为主**:`Smin` 形式上是 2D DRC 规则,但单元在电源轨处上下对接、注入无缝,**纵向 row-to-row 的 `Smin` 缝隙一般不出现**;**跨行真正的约束是 MIA 连片(§2.5 / `fig5`),不是纵向 spacing**。
-- **实战推论**:补 filler 时要么**完全贴合(abut)**邻居,要么与异 Vt 注入区**留 ≥ `Smin`**;**绝不能留 `< Smin` 的细缝**。→ `fig7`。
+### 2.8 Spacing 与 MIA 并列,但**只查横向(同一行)**
+filler 不只要"够大"(MIA),还要满足**间距 `Smin`**;关键在**方向**:
+- **只在横向(同行)查**:检查**插入的 filler 与它同行左/右的 cell** 之间的注入间距 —— **abut 或 ≥ `Smin`,不留 sub-Smin 细缝**。→ `fig7`(规则+三态)、`fig7b`(横向检查示意)。
+- **上下行不查**:相邻 row 一般**不同 Vt**(如 Row1=HVT / Row0=LVT),跨电源轨两侧是**不同注入**——既不合并、也不构成同层 spacing 对,**纵向不参与 spacing**。
+- **反过来限制 filler**:filler 的 Vt/宽度若不当,会与同行邻居留 `< Smin` 细缝(spacing),或把某 Vt 注入挤出过窄段(MIA)。
+- **well/blockage**:filler 仍受阱最小宽度/间距约束,并须避让 placement blockage / macro。
+- 现有 `gapFillers` 只有**宽度**层面的"最小 filler 宽度",**无注入间距感知** —— 这是 implant-aware 要补的另一半。
 - **反过来限制 filler**:放错 Vt 的 filler 会把**另一种 Vt** 注入区挤出过窄段(犯 MIA)或距离 `< Smin`(犯 spacing)→ "放不放 / 放哪种 Vt / 放多宽"都被 spacing 牵制。
 - **well / 放置层间距**:filler 自带阱区,受**阱最小宽度/间距**约束;还要避让 **placement blockage、macro halo、固定对象**(dpl 的 `is_valid` 网格覆盖大部分,macro 周边间距要留意)。
 - 现有 `gapFillers` 只有**宽度**层面的"最小 filler 宽度",**无注入间距感知**——论文二 "complex implant layer constraints" = 最小面积 + 最小宽度 + **最小间距**,三者缺一不可。
@@ -86,8 +89,8 @@ filler 不只要"够大"(MIA),还要满足**间距**:
 扫描逻辑(对应 §2 的结论,**MIA 与 spacing 一起查**):
 1. 枚举单元行空隙与占用 —— **复用 dpl 的 Pixel 网格**(`initGrid`/`gridPixel`/`row_site_count_`)。
 2. **MIA**:对每个 **Vt 注入层**、**分上/下带**求连续区,标出宽度 `< Wmin` / 面积 `< Amin` 的段。
-3. **Spacing**:标相邻注入区**横向**间距 `< Smin`(同行左右、placement gap 处)及 `< Smin` 的 notch/细缝。(纵向 row-to-row 一般因对接无缝而不触发,跨行交给下一步的 MIA。)
-4. 把**相邻镜像行的上带视为同一片**(跨行合并),对 **MIA** 再判一次(此即跨行的主约束)。
+3. **Spacing(只横向、同一行)**:检查**插入 filler 与同行左/右 cell** 的注入间距 `< Smin`(及 `< Smin` 的 notch/细缝)。**上下行不查**(相邻 row 不同 Vt)。
+4. **跨行 MIA**(非 spacing):对**2 行高单元 / 同 Vt 跨轨相接**的注入区,按 2 行高连续区重判 MIA(§2.5 / `fig5`)。
 5. 输出违例区 + **候选 filler 位置**;候选位置须满足 **abut 或 ≥ `Smin`**,且**补完不新生** MIA/spacing 违例(并避让 blockage/macro)。
 
 ### 5.2 数据结构草案
