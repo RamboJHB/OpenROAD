@@ -1,92 +1,127 @@
-# Filler Insertion —— 结论 + API 接口提案
+# Filler Insertion —— DRC 修复目标 + API 接口提案
 
-> **任务**:在 OpenROAD(C++)做一个**只读**分析 API。输入一个跑完 P&R、DRC 干净的 design,输出「在哪插哪种 filler」+「哪些违例必须动单元」。**不创建实例、不动单元、不动布线。** 需支持 mixed-cell-height。
+> **任务**: 在 OpenROAD(C++) 做一个**只读** filler insertion repair-planning API。输入一个完成 placement/routing 后的 design、implant DRC 规则/报告、VT cell/filler 信息，输出「在哪插哪种 VT filler 来修 implant DRC」+「哪些 min-area/min-width 违例必须移动单元或改 implant 才能修」。**API 本身不创建实例、不移动单元、不改布线**；它输出可执行的修复方案与不可修复原因。需支持 mixed-cell-height。
 >
-> 依据论文:Chen 2021 (TCAD, *Mixed-Cell-Height Detailed Placement Considering Complex MIA*);**Zou 2023 (DAC'23, *Toward Optimal Filler Cell Insertion with Complex Implant Layer Constraints* —— 本任务的技术蓝本)**。
+> **目标已确认**: filler insertion 的目的不是普通填白，也不是假设 design 已经 implant DRC clean；目标是修复 implant 相关 DRC，尤其是 **minimum implant area / minimum width** 类问题。spacing/MS 规则仍必须一起检查，因为错误的 filler VT 选择可能引入新的 spacing violation。
+>
+> 依据资料: LEF/DEF 5.8 `Layer (Implant)` 对 implant `WIDTH`、`SPACING`、`LEF58_AREA`、`LEF58_WIDTH` 的定义；Chen 2021 (TCAD, *Mixed-Cell-Height Detailed Placement Considering Complex Minimum-Implant-Area Constraints*); **Zou 2023 (DAC'23, *Toward Optimal Filler Cell Insertion with Complex Implant Layer Constraints* —— 本任务的技术蓝本)**。
 
 ---
 
-## 1. 已核实的模型
+## 1. 核心结论
 
-- **一个 cell = 一个 VT;一个 filler = 一个 VT;filler type 就是按 VT 分**(LVT / SVT / HVT,可扩展 ULVT)。一行内可有多种 VT。
-- **没有 PMOS/NMOS 上下分带** —— 注入按 cell/site 的单一 VT 处理(两篇论文均无分带模型)。
+- DAC'23 的 filler insertion problem 是: 在**不移动 placed cells** 的前提下，把不同 VT 的 fillers 插入 whitespace，使 implant layer violations 最小。
+- 这对应到本任务就是 **implant DRC repair planning**: 用同 VT filler 把过窄/过小的 implant island 或 staircase 区域补宽、补面积，优先修 minimum implant area / minimum width 相关违例。
+- LEF/DEF implant 规则也支持这个理解: implant layer 的 width/spacing/area 规则会影响合法 placement；某些 min-width/min-spacing 形态可通过插入合适 implant type 的 filler 修复，另一些则必须由 placer 避免，或通过移动单元/修改 implant 几何修复。
+- **只读 API 的含义**是“不直接改 DB”，不是“不修 DRC”。它应该输出一个 filler repair plan；真正创建 filler instance 可以由后续 command 使用这些 suggestions 完成。
+
+---
+
+## 2. 已核实的模型
+
+- **一个 cell = 一个 VT; 一个 filler = 一个 VT; filler type 按 VT 分**(LVT / SVT / HVT, 可扩展 ULVT)。一行内可有多种 VT。
+- **没有 PMOS/NMOS 上下分带** —— 注入按 cell/site 的单一 VT 处理。
 - **implant 约束 = 5 条**(Zou 的约束集 Ω):
 
-  | 约束 | 含义 |
-  |---|---|
-  | **intra-row MW** | 同一行里某段注入宽度 < 阈值 |
-  | **inter-row MW** | 相邻两行**同 VT** 的水平搭接宽度 < 阈值(staircase) |
-  | **intra-row MS** | 同一行里两块注入区的间距 < 阈值 |
-  | **inter-row MS** | 相邻两行 cell 的间距 < 阈值 |
-  | **MF** | filler 不能比最小 filler 宽度窄 → 有些空隙**填不了** |
+  | 约束 | DRC 含义 | filler repair 直觉 |
+  |---|---|---|
+  | **intra-row MW** | 同一行里某段 same-VT implant width 太窄 | 在相邻 whitespace 插同 VT filler，合并成更宽 implant 区 |
+  | **inter-row MW** | 相邻行 same-VT overlap 太窄，形成 staircase min-width 问题 | 选择相邻行/当前行 filler VT，增加垂直/水平 overlap |
+  | **intra-row MS** | 同一行不同 implant 区间距太小 | 避免插入会制造过小间距的 VT；必要时标成不可修 |
+  | **inter-row MS** | 相邻行 implant 关系导致 spacing 太小 | 插入方案必须同时检查上下行 window |
+  | **MF** | 可用 filler 不能小于最小 filler 宽度 | 太小 gap 可能物理上不可填，需标注不可修 |
 
-  - **MW = 最小注入宽度,MS = 最小间距;两者都分 intra-row(同行)和 inter-row(相邻行)。即 spacing 是二维的,同行和上下行都查。**
-- **违例分两类**:**可解**(插 filler 即可修)/ **不可解**(必须移动单元,filler 阶段修不了)。本任务只读 → 修可解、**标注**不可解。
+  - **MW = minimum width / MIA repair 的主要约束；MS = minimum spacing co-constraint。** 两者都分 intra-row 和 inter-row。
+  - DRC deck/tech LEF 可能用 `WIDTH`、`LEF58_WIDTH`、`LEF58_AREA`、`SPACING` 等形式表达规则；实现时需要把这些规则统一转换成 site/DBU 级别的 Ω。
+- **违例分两类**:
+  - **fillable / repairable**: 只靠插合适 VT filler 可修。
+  - **unfillable / unrepairable by filler**: 没有足够 whitespace、受 MF 限制、或需要移动单元/改 implant 几何。只读 API 要明确报告这类情况。
 
-配图(`filler_mia_figures/`):`fig1` MIA 概念、`fig2`/`fig3` 同 VT filler 补足注入宽度、`fig7` intra-row MS(abut / ≥间距 / 细缝违例)。
-
----
-
-## 2. OpenROAD 现状(基线)
-
-- 现有 filler 插入 `src/dpl/src/FillerPlacement.cpp`(`placeRowFillers` / `gapFillers`):**纯按宽度贪心装箱,完全不懂 VT / implant** —— 即论文所说的朴素基线。
-- dpl 的 **Pixel 网格**(`initGrid` / `gridPixel` / `row_site_count_`)可复用来枚举 whitespace 与占用;mixed-cell-height 已有几何占位支持。
-- drt 的 `check_drc` marker 不持久化(此版本 odb 无 `dbMarker`)。
+配图(`filler_mia_figures/`): `fig1` MIA 概念、`fig2`/`fig3` 同 VT filler 补足注入宽度、`fig7` intra-row MS(abut / >=间距 / 细缝违例)。
 
 ---
 
-## 3. Insertion API 接口提案
+## 3. OpenROAD 现状(2023-base 基线)
+
+- 现有 filler 插入 `src/dpl/src/FillerPlacement.cpp`(`placeRowFillers` / `gapFillers`): **纯按宽度贪心装箱，完全不懂 VT / implant / DRC repair**。
+- dpl 的 **Pixel 网格**可复用来枚举 whitespace 与占用:
+  - `initGrid`、`gridPixel` 在 `src/dpl/src/Grid.cpp` / `src/dpl/include/dpl/Opendp.h`。
+  - `row_site_count_` 在 `Opendp.h`，可作为 row/site 扫描的基础。
+  - mixed-cell-height 已有几何占位支持，可作为相邻 row window 检查的入口。
+- drt 的 `check_drc` marker 在 2023-base 中不是可从 ODB 持久读取的 `dbMarker`；如果要用 DRC 结果作为 ground truth，需要外部 DRC report/marker 输入，或另做 marker import。
+
+---
+
+## 4. Repair API 接口提案
 
 ### 输入
 | 输入 | 说明 |
 |---|---|
-| `odb::dbBlock* block` | 已布局布线的 design:rows/sites、placed insts、orient/flip、blockage/macro |
-| `FillerLibrary fillers` | 可用 filler 集合,每个含 `{VT, width_sites}` |
-| `ImplantRules Ω` | 5 个阈值 `{intraMW, interMW, intraMS, interMS, MF}`(来自 tech/DRC) |
-| `cell → VT` 映射 | 每个 placed master 属于哪个 VT / implant 类型 |
-| implant 层标识 | tech 里哪些层是 VT implant 层 |
+| `odb::dbBlock* block` | 已 placement/routing 的 design: rows/sites、placed insts、orient/flip、blockage/macro/fixed cells |
+| `FillerLibrary fillers` | 可用 filler 集合，每个含 `{VT, width_sites, dbMaster}` |
+| `ImplantRules Ω` | 规则阈值 `{intraMW, intraMS, interMW, interMS, MF}`，单位需明确为 DBU 或 site |
+| `cell -> VT` 映射 | 每个 placed master 属于哪个 VT / implant 类型 |
+| implant layer/rule mapping | tech 里 VT implant 层名、implant group、WIDTH/AREA/SPACING rule 来源 |
+| `DrcViolationReport`(可选但推荐) | DRC 已报出的 min-area/min-width/min-spacing implant violations，作为 repair target 与校验 ground truth |
 
 ### 输出
 ```cpp
-struct FillerSpot {                 // 建议插入的 filler
-  odb::dbMaster* filler;            // 选定 filler(含 VT + 宽度)
-  int x, y, row, width_sites;
+struct FillerSpot {                 // 建议插入的 filler repair
+  odb::dbMaster* filler;            // 选定 filler master(含 VT + 宽度)
+  VtType vt;
+  int x_dbu, y_dbu;
+  int row;
+  int width_sites;
+  std::vector<int> repairs;         // 修复/缓解的 violation id
 };
-struct ImplantViol {                // 检测到的违例
-  enum Type { IntraMW, InterMW, IntraMS, InterMS, MF } type;
-  odb::Rect region; int row; VtType vt;
-  bool solvable;                   // true = 可插 filler 解决;false = 须动单元
+
+struct ImplantViolation {           // 检测到或由 DRC report 输入的违例
+  enum Type { IntraMW, InterMW, IntraMS, InterMS, MinArea, MF } type;
+  odb::Rect region;
+  int row;
+  VtType vt;
+  bool repairable_by_filler;
+  std::string reason;               // 例如 no whitespace / below MF / needs cell movement
 };
-struct Result {
-  std::vector<FillerSpot> suggestions;   // 针对可解违例的 filler 建议(位置 + VT)
-  std::vector<ImplantViol> violations;   // 全部违例(含可解 / 不可解标记)
+
+struct FillerRepairPlan {
+  std::vector<FillerSpot> suggestions;       // 可执行的 filler 插入建议
+  std::vector<ImplantViolation> repaired;    // 被 suggestions 覆盖的违例
+  std::vector<ImplantViolation> remaining;   // filler 无法修的违例
 };
 ```
 
 ### 形态
-- dpl 内只读方法,例如 `Result planFillerInsertion(const FillerLibrary&, const ImplantRules&)`,Tcl/Python 暴露查询。
-- **只读:不 `create` 实例、不动单元、不动布线。**
+- dpl 内只读方法，例如 `FillerRepairPlan planFillerInsertion(const FillerLibrary&, const ImplantRules&, const DrcViolationReport*)`，Tcl/Python 暴露查询。
+- **只读**: 不 `create` filler instance、不动单元、不动布线；只返回 repair plan 和 remaining violations。
 
 ---
 
-## 4. 需要跟「做 DRC 的人」要的 data
+## 5. 建议的 repair flow
 
-设计虽然「DRC 干净 + PR 跑完」,但 DEF/DB 本身**不一定带全**做 implant 检测所需的信息。需要:
-
-1. **implant / VT 层的规则值(最关键)**:`intra-row MW、inter-row MW、intra-row MS、inter-row MS、minimum filler width MF`,要确切数字(site / DBU)。在 tech LEF / DRC deck 里。
-2. **cell → VT 映射**:每个 cell master 属于哪个 VT,或它在 LEF/lib 的哪个属性 / 哪个 implant 层上。
-3. **filler / decap 库清单**:有哪些 filler master,各自的 **VT + 宽度**(决定我能插什么)。
-4. **implant 层的层名 / 定义**:tech 里 VT implant 是哪几层、叫什么(用于定位注入几何)。
-5. **(若有)implant 相关的 DRC 违例报告**:本次 DRC 跑出的 implant MW/MS 违例(位置 + 类型),可当 ground truth 校验检测器。
-6. **placement blockage / macro / fixed cells**:避让区域(通常在 DEF,确认一下)。
+1. 从 `dbBlock` 和 Pixel grid 建 site table: placed cell / empty / blockage / fixed / row validity。
+2. 用 `cell -> VT` 与 filler library 把 placed cells 和 fillable sites 标成 Zou 论文里的 `L_P` / `L_F` 标签。
+3. 从 tech/DRC deck 读取或外部传入 Ω，并把 LEF/DRC rule 单位转成 site/DBU。
+4. 对 DRC report 中的 violation window 做优先 repair；没有 report 时，用 Ω 扫描全局 window 识别 intra/inter-row MW/MS/MIA 风险。
+5. 对每一行结合 adjacent rows 做 DP/near-optimal filler assignment，目标函数是最小化 remaining implant violations，同时满足 MF。
+6. 对填不了的 violation 输出 `remaining` 和 reason，交给 placer/legalizer/post-process 做 cell movement 或 implant edit。
 
 ---
 
-## 5. 一个必须先对齐的边界问题
+## 6. 需要跟「做 DRC 的人」要的数据
 
-设计是「**DRC 干净**」的,所以要先确认 **DRC deck 是否已包含 implant MW/MS 规则**:
+1. **implant / VT 层的规则值(最关键)**: minimum implant area、minimum width、intra-row/inter-row MW、intra-row/inter-row MS、minimum filler width MF；要确切数字和单位(site / DBU / micron)。
+2. **DRC 违例报告/marker**: min-area/min-width/min-spacing implant violations 的位置、layer、rule name、severity；这是 repair target 和验收基准。
+3. **implant 层的层名 / group / rule mapping**: tech 里 VT implant 是哪几层，是否有 implant group、`LEF58_WIDTH`、`LEF58_AREA`、`SPACING`、`CHECKIMPLANTGROUP` 等特殊规则。
+4. **cell -> VT 映射**: 每个 cell master 属于哪个 VT，或它在 LEF/lib 的哪个属性 / 哪个 implant 层上。
+5. **filler / decap 库清单**: 有哪些 filler master，各自的 **VT + 宽度**，以及最小可用 filler 宽度。
+6. **placement blockage / macro / fixed cells**: 避让区域和不可移动对象，通常在 DEF/DB 中，但需要确认是否完整。
+7. **验收口径**: repair plan 应该使哪些 DRC count 归零，哪些不可修情况允许上报给 placement/legalization。
 
-- **若已包含、且已干净** → 当前没有残留 implant 违例 → 这个 API 的目标是「**在不引入违例的前提下合法填充 whitespace**」。
-- **若不包含** → implant 检测就由这个 API 来做 → 目标是「**检测 + 修可解违例**」。
+---
 
-这直接决定 API 是「修违例」还是「合法填充」,需与 DRC / leader 确认。第 4 节第 1、5 项的回答基本能判定这一点。
+## 7. 已对齐的边界
+
+- 本任务目标是 **修 implant DRC min-area/min-width**，不是“DRC clean 后安全填白”。
+- 如果输入 design 在目标 implant deck 下已经没有相关 violations，API 可以返回空 repair plan 或仅报告 safe filler choices；但主要使用场景是 DRC 已发现 implant violations，需要规划 filler-based repair。
+- 如果某个 violation 类似 LEF/DEF 示例中的不可由 filler 修复形态，或受 whitespace/MF 限制，API 不应假装能修；应输出 `remaining`，要求移动单元、调整 placement，或由后处理修改 implant 几何。
