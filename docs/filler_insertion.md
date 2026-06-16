@@ -41,14 +41,39 @@
 
 ---
 
-## 3. OpenROAD 现状(2023-base 基线)
+## 3. OpenROAD 现状(最新 master）
 
-- 现有 filler 插入 `src/dpl/src/FillerPlacement.cpp`(`placeRowFillers` / `gapFillers`): **纯按宽度贪心装箱，完全不懂 VT / implant / DRC repair**。
-- dpl 的 **Pixel 网格**可复用来枚举 whitespace 与占用:
-  - `initGrid`、`gridPixel` 在 `src/dpl/src/Grid.cpp` / `src/dpl/include/dpl/Opendp.h`。
-  - `row_site_count_` 在 `Opendp.h`，可作为 row/site 扫描的基础。
-  - mixed-cell-height 已有几何占位支持，可作为相邻 row window 检查的入口。
-- drt 的 `check_drc` marker 在 2023-base 中不是可从 ODB 持久读取的 `dbMarker`；如果要用 DRC 结果作为 ground truth，需要外部 DRC report/marker 输入，或另做 marker import。
+> 本分支已 rebase 到最新 `master`。最新 `src/dpl/src/FillerPlacement.cpp` 与旧基线不同——**filler 插入已经是 implant-aware**，dpl 也重构（`grid_` / `network_` / typed coords `GridX/GridY/DbuX/DbuY` / `Node` / `Pixel`）。
+
+**调用链**：`filler_placement`(Tcl）→ `Opendp::fillerPlacement(filler_masters, prefix, verbose)`：
+
+1. `filterFillerMasters()` —— 去掉 PAD / BLOCK 类 master。
+2. `splitByImplant()` —— 按 implant 层把 filler 分组成 `MasterByImplant = map<dbTechLayer*, dbMasterSeq>`；implant 由 `getImplant(master)` 决定（取 master obstruction 里类型为 `IMPLANT` 的 tech layer）。
+3. 每个 implant 组按宽度降序排序。
+4. `initGrid()` + `setGridCells()`（把 cell 占的 pixel 标记占用）。
+5. 逐行 `placeRowFillers(row, prefix, by_implant)`，最后统计/打印 filler 数。
+
+**`placeRowFillers`（核心）**：沿一行扫 site，找连续空隙 `[j, k)`；**这段用哪种 implant 取左邻 cell（`j==0` 时取右邻），都没有则用任意一组** → 即「按邻居 cell 的 implant 选 filler」；`gapFillers(implant, gap, row_height, …)` 返回填充用的 master 序列，空 → `error`，否则用 `makeUniqueDbInst(..., physical_only=true)` **创建** filler 实例（设 orient/location/`PLACED`/`DIST`）。
+
+**`gapFillers`**：按 `implant → row_height → gap` 三级缓存（`gap_fillers_`）；在**同 implant 且同 `row_height`** 的 filler 里 widest-first 贪心装箱；用 `have_filler1` / 避免 `gap-1` 规避「留下一个填不掉的 1-site」（最小 filler 宽度雏形）；height-matched（多行高只用匹配高度的 filler）。
+
+**其它**：`removeFillers()`、`isFiller()`（`CORE_SPACER` 且非 `LOCKED`）、`isOneSiteCell()`。
+
+**对本任务的意义**：
+
+| | 最新 master 已有 | 本任务还要做 |
+|---|---|---|
+| implant 匹配 | ✅ 按邻居 cell 的 implant 选 filler（`getImplant` / `splitByImplant`） | **直接复用** |
+| 多行高 | ✅ height-matched 装箱 | 复用 |
+| 最小 filler 宽 | ⚠️ 雏形（`have_filler1` / `gap-1`） | 升级成完整 **MF** |
+| **违例检测** | ❌ 不检测 MW/MS/MIA | **新增**（repair target） |
+| **inter-row 协调** | ❌ 只逐行独立填 | **新增** |
+| **只读 / repair-plan** | ❌ 直接 `create` 实例、填满所有 gap | **改成只读返回 `FillerRepairPlan`** |
+| 可解/不可解 | ❌ 填不上就 `error` | **改成标 `remaining` + reason** |
+
+一句话：master 已把「按 implant 选 filler + 多行高装箱」做好（正是要复用的底座）；本任务要加的是 **违例检测 + inter-row 协调 + 只读 repair-plan 输出 + 可解/不可解分类**。
+
+- drt 的 `check_drc` marker：若要用 DRC 结果作为 repair target / ground truth，需外部 DRC report/marker 输入或 marker import（实现时确认当前 ODB `dbMarker` 的可用性）。
 
 ---
 
