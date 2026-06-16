@@ -18,7 +18,6 @@ jobs:
           submodules: 'recursive'
       - name: Install C++20-compatible LEMON
         run: |
-          set -euo pipefail
           git clone --depth=1 -b 1.3.1 \
             https://github.com/The-OpenROAD-Project/lemon-graph.git /tmp/lemon-graph
           cmake -DCMAKE_INSTALL_PREFIX=/usr/local -B /tmp/lemon-graph/build /tmp/lemon-graph
