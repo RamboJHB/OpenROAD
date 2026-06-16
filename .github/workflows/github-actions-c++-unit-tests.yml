@@ -20,6 +20,11 @@ jobs:
         uses: seanmiddleditch/gha-setup-ninja@master
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1.2.8
+      - name: Patch LEMON for C++20 compatibility
+        run: |
+          if ! grep -q "AllocatorTraits" /usr/local/include/lemon/bits/array_map.h; then
+            patch -p1 -d /usr/local/include < third-party/lemon/patches/allocator-patch.patch
+          fi
       - name: Build OpenROAD
         run: |
           cmake -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -GNinja -B build .
