@@ -357,7 +357,7 @@ bool Blif::inspectBlif(const char* file_name, int& num_instances)
   }
 
   std::string file_string((std::istreambuf_iterator<char>(f)),
-                         std::istreambuf_iterator<char>());
+                          std::istreambuf_iterator<char>());
 
   // Remove Comment Lines from Blif
   preprocessString(file_string);
@@ -381,7 +381,7 @@ bool Blif::readBlif(const char* file_name, odb::dbBlock* block)
   }
 
   std::string file_string((std::istreambuf_iterator<char>(f)),
-                         std::istreambuf_iterator<char>());
+                          std::istreambuf_iterator<char>());
 
   // Remove Comment Lines from Blif
   preprocessString(file_string);
@@ -468,7 +468,7 @@ bool Blif::readBlif(const char* file_name, odb::dbBlock* block)
       inst_ids[const_master]
           = (inst_ids[const_master]) ? inst_ids[const_master] + 1 : 1;
       std::string inst_name = const_master + "_" + std::to_string(call_id_)
-                             + std::to_string(inst_ids[const_master]);
+                              + std::to_string(inst_ids[const_master]);
       for (auto&& lib : block->getDb()->getLibs()) {
         master = lib->findMaster(const_master.c_str());
         if (master != nullptr) {
@@ -480,7 +480,7 @@ bool Blif::readBlif(const char* file_name, odb::dbBlock* block)
         while (block->findInst(inst_name.c_str())) {
           inst_ids[const_master]++;
           inst_name = const_master + "_" + std::to_string(call_id_)
-                     + std::to_string(inst_ids[const_master]);
+                      + std::to_string(inst_ids[const_master]);
         }
         auto new_inst = odb::dbInst::create(block, master, inst_name.c_str());
         new_inst->findITerm(const_port.c_str())->connect(net);
@@ -501,11 +501,11 @@ bool Blif::readBlif(const char* file_name, odb::dbBlock* block)
     inst_ids[master_name]
         = (inst_ids[master_name]) ? inst_ids[master_name] + 1 : 1;
     std::string inst_name = master_name + "_" + std::to_string(call_id_) + "_"
-                           + std::to_string(inst_ids[master_name]);
+                            + std::to_string(inst_ids[master_name]);
     while (block->findInst(inst_name.c_str())) {
       inst_ids[master_name]++;
       inst_name = master_name + "_" + std::to_string(call_id_) + "_"
-                 + std::to_string(inst_ids[master_name]);
+                  + std::to_string(inst_ids[master_name]);
     }
 
     auto new_inst = odb::dbInst::create(block, master, inst_name.c_str());
