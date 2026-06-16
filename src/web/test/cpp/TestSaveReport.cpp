@@ -3,14 +3,15 @@
 
 #include <unistd.h>
 
-#include <boost/json/serialize.hpp>
 #include <cstddef>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <utility>
 #include <vector>
 
+#include "boost/json/serialize.hpp"
 #include "gtest/gtest.h"
 #include "odb/db.h"
 #include "odb/dbTypes.h"
@@ -84,8 +85,7 @@ class SaveReportTest : public tst::Nangate45Fixture
     WebServer server(getDb(),
                      /*sta=*/nullptr,
                      getLogger(),
-                     /*interp=*/nullptr,
-                     /*num_threads=*/1);
+                     /*interp=*/nullptr);
     server.saveReport(path, max_setup, max_hold);
   }
 
