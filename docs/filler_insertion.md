@@ -150,3 +150,37 @@ struct FillerRepairPlan {
 - 本任务目标是 **修 implant DRC min-area/min-width**，不是“DRC clean 后安全填白”。
 - 如果输入 design 在目标 implant deck 下已经没有相关 violations，API 可以返回空 repair plan 或仅报告 safe filler choices；但主要使用场景是 DRC 已发现 implant violations，需要规划 filler-based repair。
 - 如果某个 violation 类似 LEF/DEF 示例中的不可由 filler 修复形态，或受 whitespace/MF 限制，API 不应假装能修；应输出 `remaining`，要求移动单元、调整 placement，或由后处理修改 implant 几何。
+
+---
+
+## 8. 实现与测试（本分支已落地）
+
+### 文件
+- **核心（零依赖、已测）**：`src/dpl/src/ImplantRepairPlanner.h` / `.cpp` —— 5 类违例检测 + 只读 repair 规划 + 可解/不可解分类。不依赖 ODB/dpl，可独立编译与单测。
+- **toy 测试（覆盖所有情况）**：`src/dpl/test/implant_repair_planner_test.cpp` —— 用 implant-layer 的 site-grid（ASCII）造出每一类违例与每种结局。
+
+### 逻辑链（详见头文件注释）
+1. `detect(layout)`：扫描「painted」site-grid，列出 6 类违例（intra/inter MW、intra/inter MS、MinArea、MF），各带 implant + 行/列窗口。
+2. 对每个违例在工作副本上尝试**纯 filler 修复**：窄/小区域 → 用同 implant filler 向相邻空 site 扩展；两同 implant 区太近 → 填空隙合并；staircase overlap 太窄 → 在较短那行填空 site 加宽。修复须满足：有足够空白、扩展宽度可被 filler 平铺（每片 ≥ MF）、重检后该违例消失且不引入新违例。
+3. 成功 → `suggestions` + `repaired`；否则 → `remaining` + 原因（no whitespace / below MF / needs cell movement）。**全程不改 DB。**
+
+### 覆盖与测试结果
+toy case 覆盖：干净；intra-row MW（可修 / 无空白 / blockage / 低于 MF 四种）；MinArea（可修）；intra-row MS（合并可修 / 间隙被占→remaining / 低于 MF→remaining）；inter-row MW（加宽可修）；inter-row MS（needs movement→remaining）。
+
+独立编译运行（本沙箱已验证）：
+```
+g++ -std=c++17 -I src/dpl/src \
+  src/dpl/src/ImplantRepairPlanner.cpp \
+  src/dpl/test/implant_repair_planner_test.cpp -o /tmp/irp_test && /tmp/irp_test
+# => ImplantRepairPlanner test: 23 checks passed, 0 failed.
+```
+
+### 接进 OpenROAD/dpl（集成层，需完整构建环境）
+把核心接成与 `filler_placement` 同款的 Tcl 命令（如 `plan_filler_repair`），adapter 做三件事：
+1. **Layout**：遍历 `grid_` 的 row×site（`getRowCount`/`getRowSiteCount`/`gridPixel`），`Pixel::cell` 有无 → Cell/Empty，blockage → Blocked；cell 的 implant **复用 dpl 现成的 `getImplant(master)`**（取 obstruction 里 IMPLANT 层）映射成 `ImplantId`。
+2. **Rules Ω**：从 implant `dbTechLayer` 读 min width / spacing / area（`getWidth`/`getSpacing`/LEF58 area），intra/inter 拆分与 MF 由 DRC deck/配置给出（单位转 site）。
+3. **Filler**：对 `filler_masters` 复用 `splitByImplant`，每个 `{getImplant, getWidth/site}` → `Filler`。
+
+调用 `ImplantRepairPlanner::plan()`，把 `FillerRepairPlan` 经 Tcl/Python 返回（只读，不 `makeUniqueDbInst`）。
+
+> ⚠️ **构建说明**：本沙箱**无法构建完整 OpenROAD**（缺 `swig`/`bazel`、无预构建二进制、依赖过重），所以上面的 dpl/Tcl 集成层与 LEF/DEF 回归**未在此环境编译运行**；**算法核心已用独立 toy 测试（23/23）在本沙箱验证**，覆盖全部违例与结局。集成层与 ODB 签名请在能构建的环境里接入校验。
