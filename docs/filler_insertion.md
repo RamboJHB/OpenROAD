@@ -184,3 +184,32 @@ g++ -std=c++17 -I src/dpl/src \
 调用 `ImplantRepairPlanner::plan()`，把 `FillerRepairPlan` 经 Tcl/Python 返回（只读，不 `makeUniqueDbInst`）。
 
 > ⚠️ **构建说明**：本沙箱**无法构建完整 OpenROAD**（缺 `swig`/`bazel`、无预构建二进制、依赖过重），所以上面的 dpl/Tcl 集成层与 LEF/DEF 回归**未在此环境编译运行**；**算法核心已用独立 toy 测试（23/23）在本沙箱验证**，覆盖全部违例与结局。集成层与 ODB 签名请在能构建的环境里接入校验。
+
+---
+
+## 9. 算法精修路线图（下一步 = 升级到论文二的近最优修复）
+
+当前核心是「逐违例 + 贪心」修复；论文二（Zou 2023）是「**推断式检测 + DP 近最优插入 + 轮廓精修**」。按风险/收益排优先级：
+
+### R1 —— 补齐修复能力（近期、低风险、沙箱可单测）
+- **InterMS 跨行合并**：现在 InterMS 一律 `remaining`。精修：当两相邻行同 implant 区可由**填空 site 形成竖直 overlap**（两行分别朝对方列扩展直到共列）而合并时判为可修；桥接 site 须 EMPTY 且可平铺，否则仍 `remaining(needs movement)`。
+- **MinArea 最优扩展方向**：现在只扩代表 run；改为在区域所有 run 的相邻空白里选「代价最小（占空白最少 / 不诱发新违例）」的方向扩。
+- **修复顺序 / 回溯**：贪心顺序可能错失（修 A 用掉了 B 需要的空白）。加按「窗口重叠度 / 可解性」排序 + 小范围回溯；已有的「重检不引入新违例」保留为护栏。
+- 验收：扩 toy 测试 —— InterMS 可修例 + 抢空白冲突例通过。
+
+### R2 —— 对齐论文二（核心、收益最大、工作量最大）
+- **推断式检测（prime rule set / window）**：用矩形窗口模式 + 规则推断一次性定位违例，替代逐行多遍扫描（可前移到 legalization 阶段提前预判）。
+- **DP 近最优插入**：对每行结合相邻行上下文做 DP（状态 = 区间标签分布，目标 = 最小化 remaining 违例，约束 MF），论文二把复杂度优化到线性；替换当前逐违例贪心。
+- **轮廓驱动精修（contour-driven）**：在 filler interval 间建依赖链，把违例「传递 / 转移」到可解处，减少人工修补。
+- 验收：多 VT + mixed-height 合成大例上 remaining 数 ≤ 贪心版；复现论文二「几乎全解」趋势。
+
+### R3 —— 目标函数 / 取舍
+- cost = Σ(违例权重) + λ·filler 面积；支持 **filler type 优先级** 与 **VT 重指派**（论文二列的可扩展点）；支持 >3 VT（ULVT…）。
+
+### R4 —— 集成与验证（落到 OpenROAD）
+- 按 §8 把核心接成 `plan_filler_repair` 只读 Tcl 命令（adapter：`grid_`/`getImplant`→Layout，`dbTechLayer`→Rules）。
+- 加**真实 LEF/DEF 回归**（含 IMPLANT 层 + 多 VT 库），用 `add-test` 在 CMake+Bazel 双注册；与 master `fillerPlacement` 结果对照。
+- 性能：大设计下检测 / DP 的复杂度与运行时间基线。
+
+### 取舍建议
+先做 **R1**（直接提升修复率、风险低、沙箱可验证）→ 再做 **R4 集成**（让它在真 design 上可跑）→ 最后上 **R2** 的 DP/推断（收益最大但最重）。
