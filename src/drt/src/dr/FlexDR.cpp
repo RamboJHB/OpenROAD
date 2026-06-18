@@ -708,43 +708,7 @@ void FlexDR::searchRepair(const SearchRepairArgs& args)
                   199,
                   "  Number of violations = {}.",
                   getDesign()->getTopBlock()->getNumMarkers());
-    if (getDesign()->getTopBlock()->getNumMarkers() > 0) {
-      // report violations
-      std::map<std::string, std::map<frLayerNum, uint>> violations;
-      std::set<frLayerNum> layers;
-      const std::map<std::string, std::string> relabel
-          = {{"Lef58SpacingEndOfLine", "EOL"},
-             {"Lef58CutSpacingTable", "CutSpcTbl"},
-             {"Lef58EolKeepOut", "eolKeepOut"}};
-      for (const auto& marker : getDesign()->getTopBlock()->getMarkers()) {
-        if (!marker->getConstraint())
-          continue;
-        auto type = marker->getConstraint()->getViolName();
-        if (relabel.find(type) != relabel.end())
-          type = relabel.at(type);
-        violations[type][marker->getLayerNum()]++;
-        layers.insert(marker->getLayerNum());
-      }
-      std::string line = fmt::format("{:<15}", "Viol/Layer");
-      for (auto lNum : layers) {
-        std::string lName = getTech()->getLayer(lNum)->getName();
-        if (lName.size() >= 7) {
-          lName = lName.substr(0, 2) + ".." + lName.substr(lName.size() - 2, 2);
-        }
-        line += fmt::format("{:>7}", lName);
-      }
-      logger_->report(line);
-      for (auto [type, typeViolations] : violations) {
-        std::string typeName = type;
-        if (typeName.size() >= 15)
-          typeName = typeName.substr(0, 12) + "..";
-        line = fmt::format("{:<15}", typeName);
-        for (auto lNum : layers) {
-          line += fmt::format("{:>7}", typeViolations[lNum]);
-        }
-        logger_->report(line);
-      }
-    }
+    router_->reportDRCViolationTable(getDesign()->getTopBlock()->getMarkers());
     t.print(logger_);
     cout << flush;
   }

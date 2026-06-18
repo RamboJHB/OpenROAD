@@ -101,12 +101,17 @@ Number of guides:     0
 [INFO DRT-0176] GCELLGRID X 0 DO 187 STEP 2000 ;
 [INFO DRT-0177] GCELLGRID Y 0 DO 65 STEP 2000 ;
 [INFO DRT-0618] check_drc found 20 violations.
-        CutSpc  L58Area  L58EolExt  L58EolKO  L58EOL  MetSpc  MinAr  MinHol  MinWid  MinCut  OffGrd  Short  Totals
-via1         1        0          0         0       0       0      0       0       0       0       0      0       1
-metal2       0        0          0         0       0       4      1       0       1       1       1      3      11
-metal3       0        1          0         0       0       0      0       0       0       0       0      0       1
-metal4       0        0          0         3       0       0      0       1       0       0       0      0       4
-metal5       0        0          2         0       0       0      0       0       0       0       0      0       2
-metal6       0        0          0         0       1       0      0       0       0       0       0      0       1
-Totals       1        1          2         3       1       4      1       1       1       1       1      3      20
+Viol/Layer        via1 metal2 metal3 metal4 metal5 metal6
+Cut Spacing          1      0      0      0      0      0
+EOL                  0      0      0      0      0      1
+Lef58Area            0      0      1      0      0      0
+Lef58EolExte..       0      0      0      0      2      0
+Metal Spacing        0      4      0      0      0      0
+Min Area             0      1      0      0      0      0
+Min Hole             0      0      0      1      0      0
+Min Width            0      1      0      0      0      0
+Minimum Cut          0      1      0      0      0      0
+Off Grid             0      1      0      0      0      0
+Short                0      3      0      0      0      0
+eolKeepOut           0      0      0      3      0      0
 No differences found.
