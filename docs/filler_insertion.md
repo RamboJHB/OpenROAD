@@ -13,6 +13,7 @@
 > **删除这些 dirty filler,在其原 footprint 上重填正确的 filler,修复 `spacing` 与 `min-width` 两类 implant/base-layer 违例。**
 
 这是一个**真改 DB** 的步骤(删实例 + 建实例),不是只读规划,也不是普通填白。
+输入除了 design 与 DRC marker/dirty 标记,还包含**用户给定的 filler 库及其顺序**(`setFillerMode -core`),重填即从该库按 `preserveUserOrder` 选用。
 
 白板流水线中的位置:
 ```
@@ -30,9 +31,8 @@ Solver(可解性判定)与 mark-dirty 是**上游/别人负责**,不在本步。
 | `odb::dbBlock* block` | 已完成 placement/routing 的 design:rows/sites、placed insts、orient/flip、blockage/macro/fixed |
 | **DRC markers** | 上游 filler DRC check 产出的 `spacing` / `min-width` 违例(位置、layer、rule) |
 | **dirty 标记** | 触发违例的 filler 已被标 dirty(本步据此定位要删/要重填的对象) |
-| filler 库 | 可用 filler master,各含 `{VT/implant, width(site), dbMaster}`;含 1-site filler |
-| filler 集合 + 顺序 | `setFillerMode -core` 给的 master 列表;`preserveUserOrder` 决定是否按此顺序优先 |
-| 选项 | `avoid_abutment_patterns {1:1}`、`fitGap false`、`check_signal_drc false` |
+| **filler 库 + 顺序** | **(确认输入)** 可用 filler master 集合,每个含 `{VT/implant, width(site), dbMaster}`,**含 1-site filler**;并带**用户给定的顺序**(`setFillerMode -core {…}` 的列表序),`preserveUserOrder` 决定装箱是否按此序优先选用 |
+| 选项 | `avoid_abutment_patterns {1:1}`、`fitGap false`、`check_signal_drc false`、`preserveUserOrder true` |
 
 ### 输出 / 副作用
 - **删除** 被标 dirty 的 filler 实例。
