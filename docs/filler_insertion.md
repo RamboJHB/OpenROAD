@@ -23,6 +23,27 @@ Solver(可解性判定)与 mark-dirty 是**上游/别人负责**,不在本步。
 
 ---
 
+## 1.5 背景:上游链(为什么会有 dirty filler)
+
+dirty filler 与 implant 违例**不是凭空出现**,而是布线后两步**扰动**的产物:
+
+```
+… route → [opto] → [ECO legalization] → filler DRC check → mark dirty → [filler insertion ← 我们]
+            └────── 扰动源 ──────┘        └─── 上游检测/标记 ───┘
+```
+
+| 步骤 | 做什么 | 对 filler 的影响 / 产物 |
+|---|---|---|
+| **opto(优化)** | postRoute/ECO 收 timing/DRV:gate sizing、buffer 插删、clone、pin swap(OpenROAD ≈ `rsz`) | 删受扰区 filler;**改变 cell 的 VT/implant 邻接** → 埋下新违例 |
+| **ECO legalization** | 增量合法化:最小位移把 cell snap 回合法 site/row(OpenROAD ≈ `dpl` 增量 legalize) | 再次挪 cell、占位变化、原 filler 处留新空隙 → **制造/挪动** implant 违例 |
+| **filler DRC check** | 扫 implant 的 `spacing` / `min-width` 规则 | 产出 **DRC markers** |
+| **mark dirty filler** | 把惹事的 filler 标 dirty(需连带的也一并标 — §4 上游契约) | 产出 **dirty filler 集合** |
+| **★ filler insertion(我们)** | 删 dirty + 按正确 VT 重填(只动 dirty) | 修掉 `spacing` / `min-width`;无解→回报上游 |
+
+一句话:**opto 与 ECO legalization 是「扰动源」,本步是在其之后做 implant-aware 的 filler 收尾修复**。所以输入才是「带 DRC marker、dirty 已标」的 design——marker 与 dirty 正是这两步扰动的产物。
+
+---
+
 ## 2. 输入 / 输出
 
 ### 输入
