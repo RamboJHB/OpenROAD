@@ -139,6 +139,18 @@ solver 可解性判定 · dirty 标记 · decap / M2 · trim-spacing 感知 · s
 
 ---
 
+## 9.5 实现与移植(已落地)
+
+零依赖核心 + 可移植 grid 接口已实现:
+- `src/dpl/src/FillerRepair.{h,cpp}` —— 算法核心(窗口、exact-fill、VT 连续、**真多行高**)。
+- `FillerGrid`(接口)—— 算法唯一的 DB 接缝;另接一个 database 只需实现它。
+- `src/dpl/src/FakeFillerGrid.h` —— 测试用内存实现(移植时替换)。
+- `src/dpl/src/FillerGridAdapter.example.h` —— 适配器模板(照抄填空)。
+- `src/dpl/test/filler_repair_test.cpp` —— 独立测试(g++ 可跑,**39/39**)。
+- **移植指南**:`docs/filler_repair_porting.md`(接口契约、SiteKind 映射、几何/master 职责、构建接入片段、检查清单)。
+
+> DRC 部分按需求略过:测试直接喂「已标 dirty 的 grid」。
+
 ## 10. OpenROAD 落点与可复用底座
 
 落点:`src/dpl/src/FillerPlacement.cpp` + `src/dpl/src/Opendp.tcl`(命令 `filler_placement`)。

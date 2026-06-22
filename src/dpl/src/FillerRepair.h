@@ -77,10 +77,29 @@ struct RepairResult
 };
 
 // ---------------------------------------------------------------------------
-// Portable grid abstraction.  Implement this against any database.
+// Portable grid abstraction.  Implement this against any database to port the
+// repair (see docs/filler_repair_porting.md).  The FillerRepair algorithm only
+// ever touches the grid through this interface.
 //
-// Model: uniform single-row pitch.  A height-h filler / cell spans the h
-// consecutive rows [row, row+h).  Coordinates are (row, col=site).
+// Coordinate model:
+//   - Uniform single-row pitch.  Rows are indexed 0..numRows()-1 bottom logic
+//     order is irrelevant; only adjacency (row, row+1) matters for stacking.
+//   - A column is one site.  All distances here are in *sites / rows*, never
+//     DBU -- the adapter owns the DBU<->site geometry and master mapping.
+//   - A height-h filler / cell occupies the block
+//     rows [row, row+h) x cols [col, col+w).
+//
+// Contract the implementation must satisfy:
+//   - kindAt/vtAt are valid for 0<=col<numCols(row); the algorithm only queries
+//     in range (plus one site to each side of a window, guarded internally).
+//   - vtAt is meaningful for Cell / CleanFiller sites; ignored otherwise.
+//   - clearSite(r,c) must leave (r,c) as Empty (it deletes the dirty filler
+//     instance occupying that site in a real DB).
+//   - placeFiller(f) must create exactly one instance covering f's block and
+//     mark those sites occupied (CleanFiller); the algorithm never overlaps
+//     placements and never writes outside a just-cleared dirty window.
+//   - The algorithm is "only-dirty": it never clears or places over Cell /
+//     CleanFiller / Blocked sites, so those stay fixed.
 // ---------------------------------------------------------------------------
 class FillerGrid
 {
