@@ -5,15 +5,15 @@
 //     (the DRC step is upstream and intentionally NOT modeled here).
 //   - Action: delete dirty fillers and refill their footprint with correct
 //     fillers, fixing spacing / min-width by restoring implant (VT) continuity.
-//   - Strict "only-dirty": clean fillers / cells are fixed boundaries, never
-//     moved.  A window that cannot be exact-filled is reported as unsolved.
-//   - Packing is exact-fill ("fitGap" behavior, fixed on): the library has no
-//     1-site filler, so a residue gap cannot be cleaned up and is forbidden.
-//   - preserveUserOrder, VT continuity and multi-height (height-matched
-//     fillers) are honored.  avoid_abutment_patterns is out of scope for now.
+//   - Strict "only-dirty": clean fillers / cells are fixed boundaries.
+//   - Exact-fill ("fitGap", fixed on): no 1-site filler, so a residue gap is
+//     forbidden (gap 9 -> 4+3+2, never 8).
+//   - preserveUserOrder, VT continuity, and true multi-height fillers.
 //
-// This core is deliberately free of ODB/dpl so it can be unit-tested stand
-// alone; the dpl/Tcl adapter maps grid_/getImplant() onto these types.
+// The algorithm runs against the abstract FillerGrid interface so it is
+// portable: the fake in-memory FakeFillerGrid (see FakeFillerGrid.h) backs the
+// unit tests, and a real database (OpenROAD dpl grid_, or another DB) plugs in
+// by implementing the same interface.
 #pragma once
 
 #include <string>
@@ -27,8 +27,8 @@ inline const Vt VT_NONE = "";
 
 struct Filler
 {
-  int width = 1;   // in sites
-  int height = 1;  // in row-height units
+  int width = 1;   // in sites (columns)
+  int height = 1;  // in rows (single-row pitch units)
   Vt vt;
   std::string name;
 };
@@ -42,53 +42,62 @@ enum class SiteKind
   Blocked
 };
 
-struct Site
+struct Rules
 {
-  SiteKind kind = SiteKind::Empty;
-  Vt vt = VT_NONE;
+  // Minimum width (sites) of a stand-alone same-VT implant strip (one that
+  // does not merge into a same-VT neighbor).  1 == effectively off.
+  int min_implant_width = 1;
 };
 
-struct Row
-{
-  int height = 1;
-  std::vector<Site> sites;
-};
-
-struct Layout
-{
-  std::vector<Row> rows;
-};
-
+// A placed filler instance covering rows [row, row+height) x cols
+// [col, col+width).
 struct PlacedFiller
 {
   int row = 0;
   int col = 0;
   int width = 0;
+  int height = 1;
   Vt vt;
   std::string name;
 };
 
-struct Window
+struct UnsolvedWindow
 {
   int row = 0;
-  int col0 = 0;
+  int col = 0;
   int width = 0;
-  Vt left_vt = VT_NONE;   // fixed left neighbor VT (cell / clean filler)
-  Vt right_vt = VT_NONE;  // fixed right neighbor VT
-  std::string reason;     // filled when unsolved
-};
-
-struct Rules
-{
-  // Minimum width (in sites) of a stand-alone same-VT implant strip, i.e. one
-  // that does not merge into a same-VT neighbor.  1 == effectively off.
-  int min_implant_width = 1;
+  int height = 1;
+  std::string reason;
 };
 
 struct RepairResult
 {
-  std::vector<PlacedFiller> placed;  // newly created fillers
-  std::vector<Window> unsolved;      // windows filler cannot repair
+  std::vector<PlacedFiller> placed;
+  std::vector<UnsolvedWindow> unsolved;
+};
+
+// ---------------------------------------------------------------------------
+// Portable grid abstraction.  Implement this against any database.
+//
+// Model: uniform single-row pitch.  A height-h filler / cell spans the h
+// consecutive rows [row, row+h).  Coordinates are (row, col=site).
+// ---------------------------------------------------------------------------
+class FillerGrid
+{
+ public:
+  virtual ~FillerGrid() = default;
+
+  // ---- read ----
+  virtual int numRows() const = 0;
+  virtual int numCols(int row) const = 0;
+  virtual SiteKind kindAt(int row, int col) const = 0;
+  virtual Vt vtAt(int row, int col) const = 0;
+
+  // ---- mutate ----
+  // Delete the dirty filler covering this site (the site becomes Empty).
+  virtual void clearSite(int row, int col) = 0;
+  // Create one filler instance covering f's row/col/width/height block.
+  virtual void placeFiller(const PlacedFiller& f) = 0;
 };
 
 class FillerRepair
@@ -96,21 +105,42 @@ class FillerRepair
  public:
   FillerRepair(std::vector<Filler> lib, bool preserve_user_order, Rules rules);
 
-  // Mutates `layout`: deletes DIRTY fillers and refills solvable windows.
-  RepairResult repair(Layout& layout) const;
+  // Deletes DIRTY fillers and refills solvable windows, mutating `grid`.
+  RepairResult repair(FillerGrid& grid) const;
 
  private:
+  // A rectangular block of dirty sites to refill.
+  struct MultiWindow
+  {
+    int row0 = 0;
+    int height = 1;
+    int col0 = 0;
+    int width = 0;
+    Vt left_vt = VT_NONE;
+    Vt right_vt = VT_NONE;
+  };
+  // One horizontal VT segment within a window.
+  struct Seg
+  {
+    Vt vt;
+    int col = 0;
+    int width = 0;
+  };
+
   std::vector<Filler> candidates(const Vt& vt, int height) const;
-  std::vector<Vt> vtsInLib(int height) const;
+  std::vector<Vt> vtsInLib() const;
+  std::vector<int> heightsInLib() const;
+  // Exact-fill `width` columns with `vt`/`height` fillers (backtracking).
   bool packExact(int width,
                  const Vt& vt,
                  int height,
                  std::vector<Filler>& out) const;
-  // Resolve a window into left-to-right filler segments (single VT or a
-  // 2-VT split honoring implant continuity).  Returns false if impossible.
-  bool solveWindow(const Window& w,
-                   int height,
-                   std::vector<PlacedFiller>& out) const;
+  // Exact integer partition of H into stripe heights drawn from `allowed`.
+  bool partitionHeight(int H,
+                       const std::vector<int>& allowed,
+                       std::vector<int>& out) const;
+  // Resolve a rectangular window into placed (multi-height) fillers.
+  bool solveWindow(const MultiWindow& w, std::vector<PlacedFiller>& out) const;
 
   std::vector<Filler> lib_;
   bool preserve_user_order_;

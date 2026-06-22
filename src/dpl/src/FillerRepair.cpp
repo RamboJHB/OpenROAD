@@ -1,6 +1,8 @@
 #include "FillerRepair.h"
 
 #include <algorithm>
+#include <map>
+#include <tuple>
 
 namespace dpl_fr {
 
@@ -31,24 +33,33 @@ std::vector<Filler> FillerRepair::candidates(const Vt& vt, int height) const
   return out;
 }
 
-std::vector<Vt> FillerRepair::vtsInLib(int height) const
+std::vector<Vt> FillerRepair::vtsInLib() const
 {
   std::vector<Vt> out;
   for (const Filler& f : lib_) {
-    if (f.height != height || f.vt == VT_NONE) {
-      continue;
-    }
-    if (std::find(out.begin(), out.end(), f.vt) == out.end()) {
+    if (f.vt != VT_NONE
+        && std::find(out.begin(), out.end(), f.vt) == out.end()) {
       out.push_back(f.vt);
     }
   }
   return out;
 }
 
-// Exact-fill `width` sites using `vt`/`height` fillers (backtracking).  This is
-// the "fitGap" behavior: it only succeeds on an exact fit, so e.g. a gap of 9
-// with fillers {8,4,3,2} yields 4+3+2 and rejects 8 (which would orphan 1
-// site).
+std::vector<int> FillerRepair::heightsInLib() const
+{
+  std::vector<int> out;
+  for (const Filler& f : lib_) {
+    if (std::find(out.begin(), out.end(), f.height) == out.end()) {
+      out.push_back(f.height);
+    }
+  }
+  std::sort(out.begin(), out.end(), std::greater<int>());  // tallest first
+  return out;
+}
+
+// Exact-fill `width` columns using `vt`/`height` fillers (backtracking).  This
+// is the "fitGap" behavior: it only succeeds on an exact fit, so a gap of 9
+// with fillers {8,4,3,2} yields 4+3+2 and rejects 8 (which would orphan 1).
 bool FillerRepair::packExact(int width,
                              const Vt& vt,
                              int height,
@@ -56,7 +67,6 @@ bool FillerRepair::packExact(int width,
 {
   const std::vector<Filler> cand = candidates(vt, height);
 
-  // Recursive DFS preserving left-to-right order in `out`.
   struct Dfs
   {
     const std::vector<Filler>& cand;
@@ -86,137 +96,188 @@ bool FillerRepair::packExact(int width,
   return dfs.go(width);
 }
 
-bool FillerRepair::solveWindow(const Window& w,
-                               int height,
-                               std::vector<PlacedFiller>& out) const
+// Exact integer partition of H into stripe heights from `allowed` (DFS).
+bool FillerRepair::partitionHeight(int H,
+                                   const std::vector<int>& allowed,
+                                   std::vector<int>& out) const
 {
-  const int W = w.width;
-  const Vt& L = w.left_vt;
-  const Vt& R = w.right_vt;
-
-  auto emit = [&](int col, const std::vector<Filler>& fillers) {
-    int c = col;
-    for (const Filler& f : fillers) {
-      out.push_back(PlacedFiller{w.row, c, f.width, f.vt, f.name});
-      c += f.width;
-    }
-  };
-
-  // Fill the whole window with a single VT.  Valid when that VT merges into a
-  // same-VT fixed neighbor (no narrow stand-alone strip); otherwise the strip
-  // is stand-alone and must itself satisfy min_implant_width.
-  auto trySingle = [&](const Vt& vt) -> bool {
-    if (vt == VT_NONE) {
-      return false;
-    }
-    const bool merges = (L == vt) || (R == vt);
-    if (!merges && W < rules_.min_implant_width) {
-      return false;
-    }
-    std::vector<Filler> fl;
-    if (!packExact(W, vt, height, fl)) {
-      return false;
-    }
-    out.clear();
-    emit(w.col0, fl);
-    return true;
-  };
-
-  // 1) Extend the left neighbor's VT across the window.
-  if (L != VT_NONE && trySingle(L)) {
+  if (H == 0) {
     return true;
   }
-  // 2) Extend the right neighbor's VT across the window.
-  if (R != VT_NONE && R != L && trySingle(R)) {
-    return true;
-  }
-  // 3) Neighbors differ: split into L-segment then R-segment.  Each segment
-  //    merges into its own same-VT neighbor, so only exact-fill must hold.
-  if (L != VT_NONE && R != VT_NONE && L != R) {
-    for (int s = 1; s < W; ++s) {
-      std::vector<Filler> fl_l, fl_r;
-      if (packExact(s, L, height, fl_l) && packExact(W - s, R, height, fl_r)) {
-        out.clear();
-        emit(w.col0, fl_l);
-        emit(w.col0 + s, fl_r);
+  for (int h : allowed) {
+    if (h <= H) {
+      out.push_back(h);
+      if (partitionHeight(H - h, allowed, out)) {
         return true;
       }
-    }
-  }
-  // 4) Both neighbors unknown (window isolated): stand-alone strip, try any VT.
-  if (L == VT_NONE && R == VT_NONE) {
-    for (const Vt& vt : vtsInLib(height)) {
-      if (W >= rules_.min_implant_width) {
-        std::vector<Filler> fl;
-        if (packExact(W, vt, height, fl)) {
-          out.clear();
-          emit(w.col0, fl);
-          return true;
-        }
-      }
+      out.pop_back();
     }
   }
   return false;
 }
 
-RepairResult FillerRepair::repair(Layout& layout) const
+bool FillerRepair::solveWindow(const MultiWindow& w,
+                               std::vector<PlacedFiller>& out) const
+{
+  const int W = w.width;
+  const int H = w.height;
+  const Vt& L = w.left_vt;
+  const Vt& R = w.right_vt;
+
+  // Candidate horizontal VT layouts (segment lists), in priority order.
+  std::vector<std::vector<Seg>> plans;
+  auto addSingle = [&](const Vt& vt) {
+    if (vt == VT_NONE) {
+      return;
+    }
+    const bool merges = (L == vt) || (R == vt);
+    if (!merges && W < rules_.min_implant_width) {
+      return;  // stand-alone narrow strip violates min-width
+    }
+    plans.push_back({Seg{vt, w.col0, W}});
+  };
+  // 1) extend left VT, 2) extend right VT.
+  addSingle(L);
+  if (R != L) {
+    addSingle(R);
+  }
+  // 3) neighbors differ: split L | R at every column.
+  if (L != VT_NONE && R != VT_NONE && L != R) {
+    for (int s = 1; s < W; ++s) {
+      plans.push_back({Seg{L, w.col0, s}, Seg{R, w.col0 + s, W - s}});
+    }
+  }
+  // 4) isolated window: try any VT (stand-alone, needs min-width).
+  if (L == VT_NONE && R == VT_NONE) {
+    for (const Vt& vt : vtsInLib()) {
+      if (W >= rules_.min_implant_width) {
+        plans.push_back({Seg{vt, w.col0, W}});
+      }
+    }
+  }
+
+  const std::vector<int> all_heights = heightsInLib();
+
+  for (const std::vector<Seg>& plan : plans) {
+    // A stripe height h is usable only if EVERY segment is exact-fillable with
+    // height-h fillers of its VT.
+    std::vector<int> allowed;
+    for (int h : all_heights) {
+      bool ok = true;
+      for (const Seg& seg : plan) {
+        std::vector<Filler> tmp;
+        if (!packExact(seg.width, seg.vt, h, tmp)) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        allowed.push_back(h);
+      }
+    }
+    std::vector<int> stripes;
+    if (!partitionHeight(H, allowed, stripes)) {
+      continue;
+    }
+
+    // Emit: place each stripe (top to bottom); a height-h filler covers h rows.
+    out.clear();
+    int rr = w.row0;
+    for (int h : stripes) {
+      for (const Seg& seg : plan) {
+        std::vector<Filler> fl;
+        packExact(seg.width, seg.vt, h, fl);
+        int c = seg.col;
+        for (const Filler& f : fl) {
+          out.push_back(PlacedFiller{rr, c, f.width, h, seg.vt, f.name});
+          c += f.width;
+        }
+      }
+      rr += h;
+    }
+    return true;
+  }
+  return false;
+}
+
+RepairResult FillerRepair::repair(FillerGrid& grid) const
 {
   RepairResult result;
 
-  for (int ri = 0; ri < static_cast<int>(layout.rows.size()); ++ri) {
-    Row& row = layout.rows[ri];
-    const int n = static_cast<int>(row.sites.size());
+  auto fixedVt = [&](int row, int col) -> Vt {
+    if (col < 0 || col >= grid.numCols(row)) {
+      return VT_NONE;
+    }
+    const SiteKind k = grid.kindAt(row, col);
+    if (k == SiteKind::Cell || k == SiteKind::CleanFiller) {
+      return grid.vtAt(row, col);
+    }
+    return VT_NONE;
+  };
 
-    // Collect maximal runs of DIRTY sites (windows) first, using the original
-    // fixed neighbors (clean filler / cell) to determine boundary VT.
-    std::vector<Window> windows;
+  // 1) Per-row maximal dirty runs, keyed by (col0,width,left_vt,right_vt).
+  using Key = std::tuple<int, int, Vt, Vt>;
+  std::map<Key, std::vector<int>> by_key;  // -> sorted row indices
+  for (int r = 0; r < grid.numRows(); ++r) {
+    const int nc = grid.numCols(r);
     int c = 0;
-    while (c < n) {
-      if (row.sites[c].kind != SiteKind::DirtyFiller) {
+    while (c < nc) {
+      if (grid.kindAt(r, c) != SiteKind::DirtyFiller) {
         ++c;
         continue;
       }
-      int start = c;
-      while (c < n && row.sites[c].kind == SiteKind::DirtyFiller) {
+      const int start = c;
+      while (c < nc && grid.kindAt(r, c) == SiteKind::DirtyFiller) {
         ++c;
       }
-      Window w;
-      w.row = ri;
-      w.col0 = start;
-      w.width = c - start;
-      auto fixedVt = [&](int idx) -> Vt {
-        if (idx < 0 || idx >= n) {
-          return VT_NONE;
-        }
-        const Site& s = row.sites[idx];
-        if (s.kind == SiteKind::Cell || s.kind == SiteKind::CleanFiller) {
-          return s.vt;
-        }
-        return VT_NONE;
-      };
-      w.left_vt = fixedVt(start - 1);
-      w.right_vt = fixedVt(c);
-      windows.push_back(w);
+      Key key{start, c - start, fixedVt(r, start - 1), fixedVt(r, c)};
+      by_key[key].push_back(r);
     }
+  }
 
-    for (Window& w : windows) {
-      // Delete dirty fillers in this window.
-      for (int i = w.col0; i < w.col0 + w.width; ++i) {
-        row.sites[i] = Site{SiteKind::Empty, VT_NONE};
+  // 2) Merge identical per-row windows in consecutive rows into rectangular
+  //    multi-height windows (each maximal run of stacked rows).
+  std::vector<MultiWindow> windows;
+  for (auto& [key, rows] : by_key) {
+    std::sort(rows.begin(), rows.end());
+    size_t i = 0;
+    while (i < rows.size()) {
+      size_t j = i;
+      while (j + 1 < rows.size() && rows[j + 1] == rows[j] + 1) {
+        ++j;
       }
+      MultiWindow w;
+      w.row0 = rows[i];
+      w.height = static_cast<int>(j - i + 1);
+      w.col0 = std::get<0>(key);
+      w.width = std::get<1>(key);
+      w.left_vt = std::get<2>(key);
+      w.right_vt = std::get<3>(key);
+      windows.push_back(w);
+      i = j + 1;
+    }
+  }
 
-      std::vector<PlacedFiller> segs;
-      if (solveWindow(w, row.height, segs)) {
-        for (const PlacedFiller& p : segs) {
-          for (int i = p.col; i < p.col + p.width; ++i) {
-            row.sites[i] = Site{SiteKind::CleanFiller, p.vt};
-          }
-          result.placed.push_back(p);
-        }
-      } else {
-        w.reason = "cannot exact-fill window with available fillers";
-        result.unsolved.push_back(w);
+  // 3) Delete dirty + refill each window.
+  for (const MultiWindow& w : windows) {
+    for (int rr = w.row0; rr < w.row0 + w.height; ++rr) {
+      for (int cc = w.col0; cc < w.col0 + w.width; ++cc) {
+        grid.clearSite(rr, cc);
       }
+    }
+    std::vector<PlacedFiller> segs;
+    if (solveWindow(w, segs)) {
+      for (const PlacedFiller& p : segs) {
+        grid.placeFiller(p);
+        result.placed.push_back(p);
+      }
+    } else {
+      result.unsolved.push_back(
+          UnsolvedWindow{w.row0,
+                         w.col0,
+                         w.width,
+                         w.height,
+                         "cannot exact-fill window with available fillers"});
     }
   }
 

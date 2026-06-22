@@ -1,18 +1,20 @@
-// Stand-alone unit test for FillerRepair (no ODB/dpl needed).
+// Stand-alone unit test for FillerRepair, driven through the FakeFillerGrid
+// implementation of the portable FillerGrid interface.
 //
 // Build & run (sandbox-friendly):
 //   g++ -std=c++17 -I src/dpl/src
 //       src/dpl/src/FillerRepair.cpp src/dpl/test/filler_repair_test.cpp
 //       -o /tmp/fr_test && /tmp/fr_test
 //
-// DRC is intentionally skipped: each test feeds a site-grid whose violating
-// fillers are already marked DIRTY.
+// DRC is intentionally skipped: each test feeds a grid whose violating fillers
+// are already marked DIRTY.
 #include <algorithm>
 #include <iostream>
 #include <map>
 #include <string>
 #include <vector>
 
+#include "FakeFillerGrid.h"
 #include "FillerRepair.h"
 
 using namespace dpl_fr;
@@ -30,15 +32,14 @@ static void check(bool cond, const std::string& msg)
   }
 }
 
-// ---- tiny grid builder ------------------------------------------------------
+// ---- tiny row builder ------------------------------------------------------
 struct RB
 {
-  Row row;
-  explicit RB(int h = 1) { row.height = h; }
+  std::vector<FakeSite> sites;
   RB& add(SiteKind k, const Vt& vt, int w)
   {
     for (int i = 0; i < w; ++i) {
-      row.sites.push_back(Site{k, vt});
+      sites.push_back(FakeSite{k, vt});
     }
     return *this;
   }
@@ -46,34 +47,31 @@ struct RB
   RB& clean(const Vt& vt, int w) { return add(SiteKind::CleanFiller, vt, w); }
   RB& dirty(const Vt& vt, int w) { return add(SiteKind::DirtyFiller, vt, w); }
   RB& empty(int w) { return add(SiteKind::Empty, VT_NONE, w); }
-  RB& blocked(int w) { return add(SiteKind::Blocked, VT_NONE, w); }
 };
 
 static Filler F(int width, const Vt& vt, int height = 1)
 {
-  return Filler{width,
-                height,
-                vt,
-                vt + std::to_string(width) + "h" + std::to_string(height)};
+  return Filler{
+      width,
+      height,
+      vt,
+      vt + "w" + std::to_string(width) + "h" + std::to_string(height)};
 }
 
-// counts of filler widths placed, by vt
-static std::map<Vt, std::vector<int>> widthsByVt(const RepairResult& r)
+static std::vector<int> placedWidths(const RepairResult& r)
 {
-  std::map<Vt, std::vector<int>> m;
+  std::vector<int> w;
   for (const auto& p : r.placed) {
-    m[p.vt].push_back(p.width);
+    w.push_back(p.width);
   }
-  for (auto& kv : m) {
-    std::sort(kv.second.begin(), kv.second.end());
-  }
-  return m;
+  std::sort(w.begin(), w.end());
+  return w;
 }
 
-static bool noDirty(const Layout& l)
+static bool noDirty(const FakeFillerGrid& g)
 {
-  for (const auto& row : l.rows) {
-    for (const auto& s : row.sites) {
+  for (const auto& row : g.rows) {
+    for (const auto& s : row) {
       if (s.kind == SiteKind::DirtyFiller) {
         return false;
       }
@@ -82,10 +80,10 @@ static bool noDirty(const Layout& l)
   return true;
 }
 
-static bool noEmptyInRange(const Row& row, int c0, int c1)
+static bool noEmptyInRange(const FakeFillerGrid& g, int row, int c0, int c1)
 {
   for (int i = c0; i < c1; ++i) {
-    if (row.sites[i].kind == SiteKind::Empty) {
+    if (g.rows[row][i].kind == SiteKind::Empty) {
       return false;
     }
   }
@@ -97,144 +95,197 @@ int main()
 {
   // --- T1: exact-fill 9 -> 4+3+2, must NOT pick 8 (orphans 1, no 1-filler) ---
   {
-    Layout lay;
-    lay.rows.push_back(RB().cell("L", 2).dirty("X", 9).cell("L", 2).row);
-    FillerRepair fr({F(8, "L"), F(4, "L"), F(3, "L"), F(2, "L")},
-                    /*preserve=*/false,
-                    Rules{});
-    RepairResult r = fr.repair(lay);
-    check(r.unsolved.empty(), "T1 should be solvable");
-    check(noDirty(lay), "T1 dirty removed");
-    check(noEmptyInRange(lay.rows[0], 2, 11), "T1 window fully filled");
-    auto w = widthsByVt(r)["L"];
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2).dirty("X", 9).cell("L", 2).sites);
+    FillerRepair fr(
+        {F(8, "L"), F(4, "L"), F(3, "L"), F(2, "L")}, false, Rules{});
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.empty(), "T1 solvable");
+    check(noDirty(g), "T1 dirty removed");
+    check(noEmptyInRange(g, 0, 2, 11), "T1 window fully filled");
     int sum = 0;
     bool any8 = false;
-    for (int x : w) {
-      sum += x;
-      if (x == 8) {
-        any8 = true;
-      }
+    for (const auto& p : r.placed) {
+      sum += p.width;
+      any8 |= (p.width == 8);
     }
     check(sum == 9, "T1 widths sum to 9");
-    check(!any8, "T1 must not use the 8-site filler (would orphan 1 site)");
+    check(!any8, "T1 must not use the 8-site filler");
   }
 
   // --- T2: unsolvable 1-site window, no 1-site filler ---
   {
-    Layout lay;
-    lay.rows.push_back(RB().cell("L", 3).dirty("L", 1).cell("L", 3).row);
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 3).dirty("L", 1).cell("L", 3).sites);
     FillerRepair fr({F(2, "L"), F(3, "L"), F(4, "L")}, false, Rules{});
-    RepairResult r = fr.repair(lay);
+    RepairResult r = fr.repair(g);
     check(r.unsolved.size() == 1, "T2 one unsolved window");
     check(r.placed.empty(), "T2 nothing placed");
-    check(noDirty(lay), "T2 dirty still removed");
+    check(noDirty(g), "T2 dirty still removed");
   }
 
   // --- T3: preserveUserOrder changes the chosen combination ---
   {
-    // width-6 window, fillers {2,3,4}
     auto run = [](bool preserve) {
-      Layout lay;
-      lay.rows.push_back(RB().cell("L", 2).dirty("X", 6).cell("L", 2).row);
+      FakeFillerGrid g;
+      g.addRow(RB().cell("L", 2).dirty("X", 6).cell("L", 2).sites);
       FillerRepair fr({F(2, "L"), F(3, "L"), F(4, "L")}, preserve, Rules{});
-      RepairResult r = fr.repair(lay);
-      return widthsByVt(r)["L"];
+      RepairResult r = fr.repair(g);
+      return placedWidths(r);
     };
-    auto pres = run(true);   // tries 2 first -> 2+2+2
-    auto desc = run(false);  // widest-first -> 4+2
-    check((pres == std::vector<int>{2, 2, 2}), "T3 preserveUserOrder -> 2+2+2");
-    check((desc == std::vector<int>{2, 4}), "T3 default widest-first -> 4+2");
+    check((run(true) == std::vector<int>{2, 2, 2}),
+          "T3 preserveUserOrder -> 2+2+2");
+    check((run(false) == std::vector<int>{2, 4}),
+          "T3 default widest-first -> 4+2");
   }
 
-  // --- T4: VT continuity split (L | H) is FORCED ---
+  // --- T4: VT continuity split (L | H) forced ---
   {
-    // width-5 window; L lib={2}, H lib={3} -> neither VT alone fits 5, so the
-    // solver must split: L(2) | H(3), each merging into its own neighbor.
-    Layout lay;
-    lay.rows.push_back(RB().cell("L", 2).dirty("X", 5).cell("H", 2).row);
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2).dirty("X", 5).cell("H", 2).sites);
     FillerRepair fr({F(2, "L"), F(3, "H")}, false, Rules{/*min_w=*/1});
-    RepairResult r = fr.repair(lay);
+    RepairResult r = fr.repair(g);
     check(r.unsolved.empty(), "T4 forced split solvable");
-    check(lay.rows[0].sites[2].vt == "L" && lay.rows[0].sites[3].vt == "L",
-          "T4 left 2 sites are L");
-    check(lay.rows[0].sites[4].vt == "H" && lay.rows[0].sites[5].vt == "H"
-              && lay.rows[0].sites[6].vt == "H",
-          "T4 right 3 sites are H");
+    check(g.rows[0][2].vt == "L" && g.rows[0][3].vt == "L", "T4 left is L");
+    check(g.rows[0][4].vt == "H" && g.rows[0][5].vt == "H"
+              && g.rows[0][6].vt == "H",
+          "T4 right is H");
   }
 
-  // --- T4b: min-width binds on an isolated (no same-VT neighbor) window ---
+  // --- T4b: min-width binds on an isolated narrow window ---
   {
-    // window between two EMPTY sides -> stand-alone strip; width 2 < min 3.
-    Layout lay;
-    lay.rows.push_back(RB().empty(1).dirty("L", 2).empty(1).row);
+    FakeFillerGrid g;
+    g.addRow(RB().empty(1).dirty("L", 2).empty(1).sites);
     FillerRepair fr({F(2, "L")}, false, Rules{/*min_w=*/3});
-    RepairResult r = fr.repair(lay);
-    check(r.unsolved.size() == 1,
-          "T4b min-width makes isolated narrow window unsolved");
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.size() == 1, "T4b min-width makes narrow window unsolved");
   }
 
-  // --- T5: multi-height, fillers must be height-matched ---
+  // --- T6: don't touch clean filler; it is a fixed boundary ---
   {
-    Layout lay;
-    lay.rows.push_back(RB(1).cell("L", 2).dirty("X", 4).cell("L", 2).row);
-    lay.rows.push_back(RB(2).cell("L", 2).dirty("X", 4).cell("L", 2).row);
-    // h1 lib: a 4; h2 lib: 2+2.  Cross-height use must be impossible.
-    FillerRepair fr({F(4, "L", 1), F(2, "L", 2)}, false, Rules{});
-    RepairResult r = fr.repair(lay);
-    check(r.unsolved.empty(), "T5 both rows solvable");
-    // row0 (h1) filled by one width-4; row1 (h2) by two width-2
-    std::vector<int> r0, r1;
-    for (const auto& p : r.placed) {
-      (p.row == 0 ? r0 : r1).push_back(p.width);
-    }
-    std::sort(r0.begin(), r0.end());
-    std::sort(r1.begin(), r1.end());
-    check((r0 == std::vector<int>{4}), "T5 h1 row uses height-1 filler (4)");
-    check((r1 == std::vector<int>{2, 2}), "T5 h2 row uses height-2 fillers");
-  }
-
-  // --- T6: don't touch clean filler; it acts as a fixed boundary ---
-  {
-    Layout lay;
-    // L cell | clean L (2) | dirty (4) | L cell
-    lay.rows.push_back(
-        RB().cell("L", 2).clean("L", 2).dirty("X", 4).cell("L", 2).row);
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2).clean("L", 2).dirty("X", 4).cell("L", 2).sites);
     FillerRepair fr({F(2, "L"), F(4, "L")}, false, Rules{});
-    RepairResult r = fr.repair(lay);
+    RepairResult r = fr.repair(g);
     check(r.unsolved.empty(), "T6 solvable");
-    // clean sites [2,4) stay CleanFiller and were not re-placed
-    check(lay.rows[0].sites[2].kind == SiteKind::CleanFiller
-              && lay.rows[0].sites[3].kind == SiteKind::CleanFiller,
+    check(g.rows[0][2].kind == SiteKind::CleanFiller
+              && g.rows[0][3].kind == SiteKind::CleanFiller,
           "T6 clean filler untouched");
     for (const auto& p : r.placed) {
-      check(p.col >= 4, "T6 placements only inside dirty window (col>=4)");
+      check(p.col >= 4, "T6 placements only inside dirty window");
     }
   }
 
   // --- T7: two independent dirty windows in one row ---
   {
-    Layout lay;
-    lay.rows.push_back(RB().cell("L", 2)
-                           .dirty("X", 4)
-                           .cell("L", 2)
-                           .dirty("X", 6)
-                           .cell("L", 2)
-                           .row);
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2)
+                 .dirty("X", 4)
+                 .cell("L", 2)
+                 .dirty("X", 6)
+                 .cell("L", 2)
+                 .sites);
     FillerRepair fr({F(2, "L"), F(4, "L"), F(6, "L")}, false, Rules{});
-    RepairResult r = fr.repair(lay);
+    RepairResult r = fr.repair(g);
     check(r.unsolved.empty(), "T7 both windows solvable");
-    check(noDirty(lay), "T7 all dirty removed");
-    check(noEmptyInRange(lay.rows[0], 2, 6), "T7 window-1 filled");
-    check(noEmptyInRange(lay.rows[0], 8, 14), "T7 window-2 filled");
+    check(noDirty(g), "T7 all dirty removed");
   }
 
   // --- T8: clean design (no dirty) is a no-op ---
   {
-    Layout lay;
-    lay.rows.push_back(RB().cell("L", 2).clean("L", 4).cell("L", 2).row);
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2).clean("L", 4).cell("L", 2).sites);
     FillerRepair fr({F(2, "L"), F(4, "L")}, false, Rules{});
-    RepairResult r = fr.repair(lay);
+    RepairResult r = fr.repair(g);
     check(r.placed.empty() && r.unsolved.empty(), "T8 no-op on clean design");
+  }
+
+  // ===========================  MULTI-HEIGHT  ================================
+
+  // --- MH1: a 2-row x 4-col dirty rectangle filled by ONE height-2 filler ---
+  {
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2).dirty("X", 4).cell("L", 2).sites);
+    g.addRow(RB().cell("L", 2).dirty("X", 4).cell("L", 2).sites);
+    FillerRepair fr({F(4, "L", 2), F(2, "L", 2)}, false, Rules{});
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.empty(), "MH1 solvable");
+    // exactly one placed filler, height 2, width 4, covering both rows
+    check(r.placed.size() == 1, "MH1 single multi-height filler");
+    check(r.placed[0].height == 2 && r.placed[0].width == 4,
+          "MH1 filler is 4x2");
+    check(g.rows[0][2].kind == SiteKind::CleanFiller
+              && g.rows[1][2].kind == SiteKind::CleanFiller,
+          "MH1 both rows filled");
+  }
+
+  // --- MH2: window height 3 partitions into stripes 2 + 1 ---
+  {
+    FakeFillerGrid g;  // 3 stacked identical dirty windows, width 2
+    for (int i = 0; i < 3; ++i) {
+      g.addRow(RB().cell("L", 2).dirty("X", 2).cell("L", 2).sites);
+    }
+    // height-2 and height-1 fillers (both width 2) -> 3 = 2 + 1
+    FillerRepair fr({F(2, "L", 2), F(2, "L", 1)}, false, Rules{});
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.empty(), "MH2 solvable");
+    std::vector<int> heights;
+    for (const auto& p : r.placed) {
+      heights.push_back(p.height);
+    }
+    std::sort(heights.begin(), heights.end());
+    check((heights == std::vector<int>{1, 2}),
+          "MH2 stripes are one h2 + one h1");
+    // all 3 rows fully filled
+    bool filled = true;
+    for (int i = 0; i < 3; ++i) {
+      filled &= noEmptyInRange(g, i, 2, 4);
+    }
+    check(filled, "MH2 all 3 rows filled");
+  }
+
+  // --- MH3: non-rectangular dirty -> NOT merged; falls back to per-row ---
+  {
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2).dirty("X", 4).cell("L", 2).sites);  // [2,6)
+    g.addRow(RB().cell("L", 2).dirty("X", 6).cell("L", 2).sites);  // [2,8)
+    // only height-1 fillers -> each row solved independently
+    FillerRepair fr({F(2, "L", 1), F(4, "L", 1)}, false, Rules{});
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.empty(), "MH3 per-row fallback solvable");
+    for (const auto& p : r.placed) {
+      check(p.height == 1, "MH3 only height-1 fillers used");
+    }
+    check(noDirty(g), "MH3 all dirty removed");
+  }
+
+  // --- MH4: height-3 window but only height-2 fillers -> unsolvable ---
+  {
+    FakeFillerGrid g;
+    for (int i = 0; i < 3; ++i) {
+      g.addRow(RB().cell("L", 2).dirty("X", 2).cell("L", 2).sites);
+    }
+    FillerRepair fr({F(2, "L", 2)}, false, Rules{});  // no height-1
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.size() == 1, "MH4 height-3 unfillable by only height-2");
+    check(r.unsolved[0].height == 3, "MH4 reports the 3-row window");
+  }
+
+  // --- MH5: multi-height + VT split (L | H) over 2 rows ---
+  {
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2).dirty("X", 5).cell("H", 2).sites);
+    g.addRow(RB().cell("L", 2).dirty("X", 5).cell("H", 2).sites);
+    FillerRepair fr({F(2, "L", 2), F(3, "H", 2)}, false, Rules{/*min_w=*/1});
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.empty(), "MH5 multi-height split solvable");
+    // both rows: cols 2-3 = L, cols 4-6 = H
+    for (int row = 0; row < 2; ++row) {
+      check(g.rows[row][2].vt == "L" && g.rows[row][3].vt == "L",
+            "MH5 left L both rows");
+      check(g.rows[row][4].vt == "H" && g.rows[row][6].vt == "H",
+            "MH5 right H both rows");
+    }
   }
 
   std::cout << "FillerRepair test: " << g_pass << " checks passed, " << g_fail
