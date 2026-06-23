@@ -2,8 +2,8 @@
 // implementation of the portable FillerGrid interface.
 //
 // Build & run (sandbox-friendly):
-//   g++ -std=c++17 -I src/dpl/src
-//       src/dpl/src/FillerRepair.cpp src/dpl/test/filler_repair_test.cpp
+//   g++ -std=c++17 -I dpl2/src
+//       dpl2/src/FillerRepair.cpp dpl2/test/filler_repair_test.cpp
 //       -o /tmp/fr_test && /tmp/fr_test
 //
 // DRC is intentionally skipped: each test feeds a grid whose violating fillers

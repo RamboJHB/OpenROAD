@@ -158,7 +158,7 @@ solver 可解性判定 · dirty 标记 · decap / M2 · trim-spacing 感知 · s
 **共享核心(多行高,已验证)**
 - `src/dpl/src/FillerRepair.{h,cpp}` —— 算法核心(窗口合并、高度分条、exact-fill、VT 连续、真多行高)。
 - `FillerGrid`(接口)—— 算法唯一的 DB 接缝。
-- `src/dpl/test/filler_repair_test.cpp` —— 独立测试(g++ 可跑,**39/39**,含多行高 MH1–MH5)。
+- `dpl2/test/filler_repair_test.cpp` —— 独立测试(g++ 可跑,**39/39**,含多行高 MH1–MH5)。
 
 **① dpl 封装**(真 odb 适配器,见 `docs/filler_repair_dpl.md`)
 - `src/dpl/src/DplFillerGrid.{h,cpp}` —— 实现 `FillerGrid`(rows/insts/`getImplant`/`makeInst`),+ `repairDirtyFillers()` 驱动。
@@ -166,7 +166,7 @@ solver 可解性判定 · dirty 标记 · decap / M2 · trim-spacing 感知 · s
 - ⚠️ 依赖 odb,**需在可构建环境编译验证**(本沙箱无 swig/bazel)。
 
 **② 便携封装**(移植目标,见 `docs/filler_repair_porting.md`)
-- `src/dpl/src/FakeFillerGrid.h` —— 内存实现;`FillerGridAdapter.example.h` —— 适配器模板。
+- `dpl2/src/FakeFillerGrid.h` —— 内存实现;`FillerGridAdapter.example.h` —— 适配器模板。
 
 > DRC 部分按需求略过:测试直接喂「已标 dirty 的 grid」。**inter-row 见 §7(Phase II)**。
 

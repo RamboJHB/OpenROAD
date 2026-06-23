@@ -2,7 +2,7 @@
 
 > This is the **portable package**. The same shared algorithm also has a
 > ready dpl/odb integration — see `docs/filler_repair_dpl.md`. Both packages
-> reuse `src/dpl/src/FillerRepair.{h,cpp}` unchanged; only the `FillerGrid`
+> reuse `dpl2/src/FillerRepair.{h,cpp}` unchanged; only the `FillerGrid`
 > implementation differs.
 
 This is everything needed to move the DRC-driven dirty-filler repair onto a
@@ -18,11 +18,11 @@ See also `docs/filler_insertion.md` for the requirement/spec.
 
 | Layer | File | Port effort |
 |---|---|---|
-| Repair algorithm (windows, exact-fill, VT continuity, multi-height) | `src/dpl/src/FillerRepair.{h,cpp}` | **none** — reuse as-is |
+| Repair algorithm (windows, exact-fill, VT continuity, multi-height) | `dpl2/src/FillerRepair.{h,cpp}` | **none** — reuse as-is |
 | Grid interface (the seam) | `FillerGrid` in `FillerRepair.h` | **implement** against your DB |
-| In-memory reference backend (tests) | `src/dpl/src/FakeFillerGrid.h` | replace with your adapter |
-| Adapter template (copy & fill) | `src/dpl/src/FillerGridAdapter.example.h` | **your starting point** |
-| Stand-alone tests | `src/dpl/test/filler_repair_test.cpp` | keep / extend |
+| In-memory reference backend (tests) | `dpl2/src/FakeFillerGrid.h` | replace with your adapter |
+| Adapter template (copy & fill) | `dpl2/src/FillerGridAdapter.example.h` | **your starting point** |
+| Stand-alone tests | `dpl2/test/filler_repair_test.cpp` | keep / extend |
 
 Everything in the core is in **sites / rows**, never DBU. Two things the core
 deliberately does NOT model — the **adapter owns** them:
@@ -67,7 +67,7 @@ RepairResult r = repair.repair(grid);   // mutates the DB via the grid
 ```
 
 A copy-paste skeleton with all of this is in
-`src/dpl/src/FillerGridAdapter.example.h`.
+`dpl2/src/FillerGridAdapter.example.h`.
 
 ---
 
@@ -141,8 +141,8 @@ min-width binds only on isolated windows.
 
 ### Now (sandbox / standalone, no OpenROAD build)
 ```sh
-g++ -std=c++17 -I src/dpl/src \
-  src/dpl/src/FillerRepair.cpp src/dpl/test/filler_repair_test.cpp \
+g++ -std=c++17 -I dpl2/src \
+  dpl2/src/FillerRepair.cpp dpl2/test/filler_repair_test.cpp \
   -o /tmp/fr_test && /tmp/fr_test
 # => FillerRepair test: 39 checks passed, 0 failed.
 ```

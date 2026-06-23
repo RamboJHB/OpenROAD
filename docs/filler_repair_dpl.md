@@ -37,7 +37,9 @@ implementation and the build/command wiring differ.
 |---|---|
 | `src/dpl/src/FillerRepair.{h,cpp}` | shared algorithm (multi-height) |
 | `src/dpl/src/DplFillerGrid.{h,cpp}` | odb adapter: implements `FillerGrid`, builds the library, `repairDirtyFillers()` driver |
+| `src/dpl/src/RepairDirtyFillers.cpp` | Tcl-command glue: resolve dirty inst names → `dbInst*`, call the driver |
 | `src/dpl/test/repair_dirty_fillers.tcl` | integration test |
+| `src/dpl/test/repair_dirty_fillers_data/{impl.lef,design.def}` | minimal implant LEF/DEF for the test |
 
 The driver entry point:
 ```cpp
@@ -74,52 +76,77 @@ Add to the `add_library(dpl_lib ...)` source list:
 ```cmake
   src/FillerRepair.cpp
   src/DplFillerGrid.cpp
+  src/RepairDirtyFillers.cpp
 ```
 
 ### Bazel — `src/dpl/BUILD.bazel`
 Add to the dpl library `srcs`/`hdrs`:
 ```python
-    "src/FillerRepair.cpp",
-    "src/FillerRepair.h",
-    "src/DplFillerGrid.cpp",
-    "src/DplFillerGrid.h",
+    "src/FillerRepair.cpp", "src/FillerRepair.h",
+    "src/DplFillerGrid.cpp", "src/DplFillerGrid.h",
+    "src/RepairDirtyFillers.cpp",
 ```
 
 ### SWIG — `src/dpl/src/Opendp.i`
-Expose the driver (or a thin Opendp method that calls it):
 ```swig
 %{
 #include "DplFillerGrid.h"
+namespace dpl_fr {
+dpl_fr::RepairResult repairDirtyFillersByName(
+    odb::dbBlock*, const std::vector<odb::dbMaster*>&,
+    const std::vector<std::string>&, bool, int, utl::Logger*);
+}
 %}
-// ... wrap a helper that collects -masters and the dirty set, then calls
-// dpl_fr::repairDirtyFillers(...).
+%inline %{
+void repair_dirty_fillers_cmd(const std::vector<odb::dbMaster*>& masters,
+                              const std::vector<std::string>& dirty,
+                              bool preserve, int min_w) {
+  auto* block = ord::getDb()->getChip()->getBlock();
+  dpl_fr::repairDirtyFillersByName(block, masters, dirty, preserve, min_w,
+                                   ord::OpenRoad::openRoad()->getLogger());
+}
+%}
 ```
 
 ### Tcl — `src/dpl/src/Opendp.tcl`
 ```tcl
 sta::define_cmd_args "repair_dirty_fillers" {
-  -masters filler_masters [-preserve_user_order] [-min_implant_width n] }
+  -masters filler_masters -dirty inst_names
+  [-preserve_user_order] [-min_implant_width n] }
 proc repair_dirty_fillers { args } {
   sta::parse_key_args "repair_dirty_fillers" args \
-    keys {-masters -min_implant_width} flags {-preserve_user_order}
+    keys {-masters -dirty -min_implant_width} flags {-preserve_user_order}
   set masters [dpl::get_masters_arg "-masters" $keys(-masters)]
+  set dirty {}
+  if { [info exists keys(-dirty)] } { set dirty $keys(-dirty) }
   set minw 1
   if { [info exists keys(-min_implant_width)] } { set minw $keys(-min_implant_width) }
   set preserve [info exists flags(-preserve_user_order)]
-  # dirty set comes from the upstream DRC marking (property/category)
-  dpl::repair_dirty_fillers_cmd $masters $preserve $minw
+  dpl::repair_dirty_fillers_cmd $masters $dirty $preserve $minw
 }
 ```
+`-dirty` is the list of upstream-flagged dirty filler instance names. In a real
+flow these come from the DRC step (property/category); the command just consumes
+them.
 
 ## 4. Test — `src/dpl/test/repair_dirty_fillers.tcl`
-A small LEF/DEF with multi-VT implant fillers; mark a few as dirty; run the
-command; check the placed/unsolved counts and that no dirty filler remains.
-Register in `src/dpl/test/CMakeLists.txt` `or_integration_tests` list (and the
-Bazel test list) like the existing `fillers*` tests, with a golden `.ok`.
+Concrete, minimal integration test (this commit):
+- `repair_dirty_fillers_data/impl.lef` — implant LEF: `core` site, `LVT`/`HVT`
+  IMPLANT layers, a `CELL_L` cell and `FILL_L2/L4/L6` LVT fillers.
+- `repair_dirty_fillers_data/design.def` — one 10-site row: `CELL_L | FILL_L6
+  (dirty) | CELL_L`.
+- `repair_dirty_fillers.tcl` — marks `dirtyF` dirty, runs
+  `repair_dirty_fillers -masters {FILL_L6 FILL_L4 FILL_L2} -dirty {dirtyF}`,
+  `check_placement`, writes/diffs the DEF.
 
-The **algorithm** itself is already covered by the stand-alone unit test
-(`src/dpl/test/filler_repair_test.cpp`, 39/39, incl. multi-height MH1–MH5);
-the dpl integration test only needs to exercise the odb adapter wiring.
+Register in `src/dpl/test/CMakeLists.txt` `or_integration_tests` (and the Bazel
+test list) like the existing `fillers*` tests; generate the golden `.defok` on
+the first successful run.
+
+> Not run in the sandbox: the command must be wired (§3) and OpenROAD built
+> first. The **algorithm** is already covered stand-alone in `dpl2`
+> (39/39, incl. multi-height), and the **adapter logic** by the odb-mock test
+> (§4.1, 11/11); this test only exercises the real-odb command path.
 
 ### 4.1 Adapter logic-test against an odb mock (sandbox-runnable)
 `DplFillerGrid` is also compiled and logic-tested without a full OpenROAD build,
