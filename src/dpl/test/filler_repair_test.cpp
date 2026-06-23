@@ -1,6 +1,5 @@
-// Stand-alone unit test for FillerRepair (PHASE I, single-row), driven through
-// the FakeFillerGrid implementation of the portable FillerGrid interface.
-// Multi-row (multi-height + inter-row) is Phase II; see docs/filler_insertion.md.
+// Stand-alone unit test for FillerRepair, driven through the FakeFillerGrid
+// implementation of the portable FillerGrid interface.
 //
 // Build & run (sandbox-friendly):
 //   g++ -std=c++17 -I src/dpl/src
@@ -199,6 +198,94 @@ int main()
     FillerRepair fr({F(2, "L"), F(4, "L")}, false, Rules{});
     RepairResult r = fr.repair(g);
     check(r.placed.empty() && r.unsolved.empty(), "T8 no-op on clean design");
+  }
+
+  // ===========================  MULTI-HEIGHT  ================================
+
+  // --- MH1: a 2-row x 4-col dirty rectangle filled by ONE height-2 filler ---
+  {
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2).dirty("X", 4).cell("L", 2).sites);
+    g.addRow(RB().cell("L", 2).dirty("X", 4).cell("L", 2).sites);
+    FillerRepair fr({F(4, "L", 2), F(2, "L", 2)}, false, Rules{});
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.empty(), "MH1 solvable");
+    // exactly one placed filler, height 2, width 4, covering both rows
+    check(r.placed.size() == 1, "MH1 single multi-height filler");
+    check(r.placed[0].height == 2 && r.placed[0].width == 4,
+          "MH1 filler is 4x2");
+    check(g.rows[0][2].kind == SiteKind::CleanFiller
+              && g.rows[1][2].kind == SiteKind::CleanFiller,
+          "MH1 both rows filled");
+  }
+
+  // --- MH2: window height 3 partitions into stripes 2 + 1 ---
+  {
+    FakeFillerGrid g;  // 3 stacked identical dirty windows, width 2
+    for (int i = 0; i < 3; ++i) {
+      g.addRow(RB().cell("L", 2).dirty("X", 2).cell("L", 2).sites);
+    }
+    // height-2 and height-1 fillers (both width 2) -> 3 = 2 + 1
+    FillerRepair fr({F(2, "L", 2), F(2, "L", 1)}, false, Rules{});
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.empty(), "MH2 solvable");
+    std::vector<int> heights;
+    for (const auto& p : r.placed) {
+      heights.push_back(p.height);
+    }
+    std::sort(heights.begin(), heights.end());
+    check((heights == std::vector<int>{1, 2}),
+          "MH2 stripes are one h2 + one h1");
+    // all 3 rows fully filled
+    bool filled = true;
+    for (int i = 0; i < 3; ++i) {
+      filled &= noEmptyInRange(g, i, 2, 4);
+    }
+    check(filled, "MH2 all 3 rows filled");
+  }
+
+  // --- MH3: non-rectangular dirty -> NOT merged; falls back to per-row ---
+  {
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2).dirty("X", 4).cell("L", 2).sites);  // [2,6)
+    g.addRow(RB().cell("L", 2).dirty("X", 6).cell("L", 2).sites);  // [2,8)
+    // only height-1 fillers -> each row solved independently
+    FillerRepair fr({F(2, "L", 1), F(4, "L", 1)}, false, Rules{});
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.empty(), "MH3 per-row fallback solvable");
+    for (const auto& p : r.placed) {
+      check(p.height == 1, "MH3 only height-1 fillers used");
+    }
+    check(noDirty(g), "MH3 all dirty removed");
+  }
+
+  // --- MH4: height-3 window but only height-2 fillers -> unsolvable ---
+  {
+    FakeFillerGrid g;
+    for (int i = 0; i < 3; ++i) {
+      g.addRow(RB().cell("L", 2).dirty("X", 2).cell("L", 2).sites);
+    }
+    FillerRepair fr({F(2, "L", 2)}, false, Rules{});  // no height-1
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.size() == 1, "MH4 height-3 unfillable by only height-2");
+    check(r.unsolved[0].height == 3, "MH4 reports the 3-row window");
+  }
+
+  // --- MH5: multi-height + VT split (L | H) over 2 rows ---
+  {
+    FakeFillerGrid g;
+    g.addRow(RB().cell("L", 2).dirty("X", 5).cell("H", 2).sites);
+    g.addRow(RB().cell("L", 2).dirty("X", 5).cell("H", 2).sites);
+    FillerRepair fr({F(2, "L", 2), F(3, "H", 2)}, false, Rules{/*min_w=*/1});
+    RepairResult r = fr.repair(g);
+    check(r.unsolved.empty(), "MH5 multi-height split solvable");
+    // both rows: cols 2-3 = L, cols 4-6 = H
+    for (int row = 0; row < 2; ++row) {
+      check(g.rows[row][2].vt == "L" && g.rows[row][3].vt == "L",
+            "MH5 left L both rows");
+      check(g.rows[row][4].vt == "H" && g.rows[row][6].vt == "H",
+            "MH5 right H both rows");
+    }
   }
 
   std::cout << "FillerRepair test: " << g_pass << " checks passed, " << g_fail

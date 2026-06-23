@@ -1,5 +1,10 @@
 # Porting `FillerRepair` to another database
 
+> This is the **portable package**. The same shared algorithm also has a
+> ready dpl/odb integration — see `docs/filler_repair_dpl.md`. Both packages
+> reuse `src/dpl/src/FillerRepair.{h,cpp}` unchanged; only the `FillerGrid`
+> implementation differs.
+
 This is everything needed to move the DRC-driven dirty-filler repair onto a
 different database (OpenROAD `dpl`, or any other DB). The algorithm is written
 against an abstract grid interface, so **porting = implement one interface +

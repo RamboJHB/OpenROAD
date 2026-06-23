@@ -96,44 +96,37 @@ dirty filler 与 implant 违例**不是凭空出现**,而是布线后两步**扰
 
 ---
 
-## 6. 分阶段(Phase I 单行 / Phase II 多行)⭐
+## 6. 分阶段(Phase I 已实现 / Phase II inter-row)⭐
 
 | | **Phase I(已实现)** | **Phase II(后续)** |
 |---|---|---|
-| 范围 | **逐行独立**修 dirty 窗口 | 跨行:真·多行高 + inter-row |
+| 范围 | 单行 + **真·多行高** dirty 修复 | 再加 **inter-row** |
 | 违例 | intra-row spacing / min-width | 再加 inter-row MW / MS |
-| 上下文 | 仅窗口**左右**(同行)邻居 VT | 再加**上/下行**邻居 VT |
-| filler | 仅 height-1 | 多高 filler 跨行 |
+| 上下文 | 窗口**左右**(同行)邻居 VT | 再加**上/下行**邻居 VT |
+| filler | height-1 **及多高跨行** | (同) |
 
-**先把 Phase I 做扎实,多行内容全部归 Phase II。**
+> **两套封装、同一算法**:`FillerRepair`(多行高)为共享核心;dpl 适配器见 `docs/filler_repair_dpl.md`,便携适配器见 `docs/filler_repair_porting.md`。
 
-### 6.1 Phase I 功能流程(单行)
+### 6.1 Phase I 功能流程
 | # | 阶段 | 动作 |
 |---|---|---|
-| 1 | 扫描 | 逐行找极大 dirty 连续段 → 单行窗口{row,col0,width};取左右固定邻 VT |
+| 1 | 扫描 | 逐行找极大 dirty 段;**相邻行同列同宽的窗口竖直合并成矩形**(多行高) |
 | 2 | 删 dirty | 清空窗口内 dirty 站点 |
 | 3 | 选 VT 方案 | 延左 VT / 延右 VT / `L\|R` 拆分 / 孤立任意 VT(查 min-width) |
-| 4 | 精确填 | 每段 `packExact` 回溯凑满(fitGap,见 §5);选序=preserveUserOrder |
-| 5 | 落子 / 回报 | 解出→建 height-1 filler;无解→标记回报上游 |
+| 4 | 高度分条 + 精确填 | `partitionHeight` 把窗口高拆成 filler 高度条带;每段 `packExact` 回溯凑满;选序=preserveUserOrder |
+| 5 | 落子 / 回报 | 解出→建 filler(多高=跨行一实例);无解→回报上游 |
 
 ---
 
-## 7. Phase II:多行(multi-height + inter-row)—— 后续
+## 7. Phase II:inter-row MW / MS —— 后续
 
-> 当前 `FillerRepair` 是 **Phase I 单行**。以下为 Phase II 扩展计划,数据模型(`Filler.height`、`FillerGrid`)已为此预留,Phase II 是扩展而非重写。
+> Phase I 已含**真多行高**(矩形窗口合并 + 高度分条),但仍**只看左右**邻居。inter-row 是剩下的 Phase II。
 
-### 7.1 真·多行高 filler
-- 把相邻行**同列同宽**的 dirty 窗口竖直合并成矩形;
-- 窗口高 H 用 `partitionHeight` 拆成 filler 高度条带,放跨行 filler;
-- 决策点:D1 粒度、D2 跨行 VT band 连续、D3 R0/MX flip 配对、D4 各行精确填可行性。
-- (这套逻辑此前实现过,见 git 历史 commit `f8ac28861`,因 Phase 划分回退到单行。)
-
-### 7.2 inter-row MW / MS(对齐论文 Algorithm 4 的 cost-table 思想)
-implant 是 2D:同 VT 在上下行拼成跨行区域。Phase I 只看左右,会漏:
+implant 是 2D:同 VT 在上下行拼成跨行区域。当前会漏:
 - **inter-row MW**:同 VT 在相邻两行竖直重叠太窄(楼梯)< ωw2;
 - **inter-row MS**:不同 VT 在上下行靠太近 < ωs2。
 
-**要补**:
+**要补**(对齐论文 Algorithm 4 的 cost-table 思想):
 - 数据:窗口加 `top_vt[col]` / `bot_vt[col]`(查上/下行;`FillerGrid::vtAt` 已够,无需改接口);
 - 规则:`Rules` 加 `ωw2`(inter-row MW)、`ωs2`(inter-row MS);
 - 逻辑:选 VT 方案时按**端点**检查上下行(论文 cost-table 的硬约束版),撞了就排除该方案,全排除→无解。
@@ -160,18 +153,22 @@ solver 可解性判定 · dirty 标记 · decap / M2 · trim-spacing 感知 · s
 
 ---
 
-## 9.5 实现与移植(Phase I 已落地)
+## 9.5 实现与移植(已落地)—— 两套封装,同一算法
 
-零依赖核心 + 可移植 grid 接口已实现(**Phase I 单行**):
-- `src/dpl/src/FillerRepair.{h,cpp}` —— 算法核心(单行窗口、exact-fill、同行 VT 连续)。
-- `FillerGrid`(接口)—— 算法唯一的 DB 接缝;另接一个 database 只需实现它。
-- `src/dpl/src/FakeFillerGrid.h` —— 测试用内存实现(移植时替换)。
-- `src/dpl/src/FillerGridAdapter.example.h` —— 适配器模板(照抄填空)。
-- `src/dpl/test/filler_repair_test.cpp` —— 独立测试(g++ 可跑,**20/20**,均为单行情形)。
-- **移植指南**:`docs/filler_repair_porting.md`(接口契约、SiteKind 映射、几何/master 职责、构建接入片段、检查清单)。
+**共享核心(多行高,已验证)**
+- `src/dpl/src/FillerRepair.{h,cpp}` —— 算法核心(窗口合并、高度分条、exact-fill、VT 连续、真多行高)。
+- `FillerGrid`(接口)—— 算法唯一的 DB 接缝。
+- `src/dpl/test/filler_repair_test.cpp` —— 独立测试(g++ 可跑,**39/39**,含多行高 MH1–MH5)。
 
-> DRC 部分按需求略过:测试直接喂「已标 dirty 的 grid」。
-> **多行高 + inter-row 见 §7(Phase II)**;数据模型已预留 `height`,届时扩展。
+**① dpl 封装**(真 odb 适配器,见 `docs/filler_repair_dpl.md`)
+- `src/dpl/src/DplFillerGrid.{h,cpp}` —— 实现 `FillerGrid`(rows/insts/`getImplant`/`makeInst`),+ `repairDirtyFillers()` 驱动。
+- Tcl 命令 `repair_dirty_fillers` + CMake/Bazel/SWIG 接入片段 + 集成测试(指南内)。
+- ⚠️ 依赖 odb,**需在可构建环境编译验证**(本沙箱无 swig/bazel)。
+
+**② 便携封装**(移植目标,见 `docs/filler_repair_porting.md`)
+- `src/dpl/src/FakeFillerGrid.h` —— 内存实现;`FillerGridAdapter.example.h` —— 适配器模板。
+
+> DRC 部分按需求略过:测试直接喂「已标 dirty 的 grid」。**inter-row 见 §7(Phase II)**。
 
 ## 10. OpenROAD 落点与可复用底座
 

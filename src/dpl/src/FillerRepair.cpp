@@ -1,6 +1,8 @@
 #include "FillerRepair.h"
 
 #include <algorithm>
+#include <map>
+#include <tuple>
 
 namespace dpl_fr {
 
@@ -43,14 +45,27 @@ std::vector<Vt> FillerRepair::vtsInLib() const
   return out;
 }
 
-// Exact-fill `width` columns using height-1 `vt` fillers (backtracking).  This
+std::vector<int> FillerRepair::heightsInLib() const
+{
+  std::vector<int> out;
+  for (const Filler& f : lib_) {
+    if (std::find(out.begin(), out.end(), f.height) == out.end()) {
+      out.push_back(f.height);
+    }
+  }
+  std::sort(out.begin(), out.end(), std::greater<int>());  // tallest first
+  return out;
+}
+
+// Exact-fill `width` columns using `vt`/`height` fillers (backtracking).  This
 // is the "fitGap" behavior: it only succeeds on an exact fit, so a gap of 9
 // with fillers {8,4,3,2} yields 4+3+2 and rejects 8 (which would orphan 1).
 bool FillerRepair::packExact(int width,
                              const Vt& vt,
+                             int height,
                              std::vector<Filler>& out) const
 {
-  const std::vector<Filler> cand = candidates(vt, /*height=*/1);
+  const std::vector<Filler> cand = candidates(vt, height);
 
   struct Dfs
   {
@@ -81,10 +96,31 @@ bool FillerRepair::packExact(int width,
   return dfs.go(width);
 }
 
-bool FillerRepair::solveWindow(const Window& w,
+// Exact integer partition of H into stripe heights from `allowed` (DFS).
+bool FillerRepair::partitionHeight(int H,
+                                   const std::vector<int>& allowed,
+                                   std::vector<int>& out) const
+{
+  if (H == 0) {
+    return true;
+  }
+  for (int h : allowed) {
+    if (h <= H) {
+      out.push_back(h);
+      if (partitionHeight(H - h, allowed, out)) {
+        return true;
+      }
+      out.pop_back();
+    }
+  }
+  return false;
+}
+
+bool FillerRepair::solveWindow(const MultiWindow& w,
                                std::vector<PlacedFiller>& out) const
 {
   const int W = w.width;
+  const int H = w.height;
   const Vt& L = w.left_vt;
   const Vt& R = w.right_vt;
 
@@ -120,27 +156,44 @@ bool FillerRepair::solveWindow(const Window& w,
     }
   }
 
-  // First plan whose every segment exact-fills with height-1 fillers wins.
+  const std::vector<int> all_heights = heightsInLib();
+
   for (const std::vector<Seg>& plan : plans) {
-    std::vector<std::vector<Filler>> fills(plan.size());
-    bool ok = true;
-    for (size_t i = 0; i < plan.size(); ++i) {
-      if (!packExact(plan[i].width, plan[i].vt, fills[i])) {
-        ok = false;
-        break;
+    // A stripe height h is usable only if EVERY segment is exact-fillable with
+    // height-h fillers of its VT.
+    std::vector<int> allowed;
+    for (int h : all_heights) {
+      bool ok = true;
+      for (const Seg& seg : plan) {
+        std::vector<Filler> tmp;
+        if (!packExact(seg.width, seg.vt, h, tmp)) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) {
+        allowed.push_back(h);
       }
     }
-    if (!ok) {
+    std::vector<int> stripes;
+    if (!partitionHeight(H, allowed, stripes)) {
       continue;
     }
+
+    // Emit: place each stripe (top to bottom); a height-h filler covers h rows.
     out.clear();
-    for (size_t i = 0; i < plan.size(); ++i) {
-      int c = plan[i].col;
-      for (const Filler& f : fills[i]) {
-        out.push_back(
-            PlacedFiller{w.row, c, f.width, /*height=*/1, plan[i].vt, f.name});
-        c += f.width;
+    int rr = w.row0;
+    for (int h : stripes) {
+      for (const Seg& seg : plan) {
+        std::vector<Filler> fl;
+        packExact(seg.width, seg.vt, h, fl);
+        int c = seg.col;
+        for (const Filler& f : fl) {
+          out.push_back(PlacedFiller{rr, c, f.width, h, seg.vt, f.name});
+          c += f.width;
+        }
       }
+      rr += h;
     }
     return true;
   }
@@ -162,7 +215,9 @@ RepairResult FillerRepair::repair(FillerGrid& grid) const
     return VT_NONE;
   };
 
-  // Per-row maximal dirty runs -> independent single-row windows.
+  // 1) Per-row maximal dirty runs, keyed by (col0,width,left_vt,right_vt).
+  using Key = std::tuple<int, int, Vt, Vt>;
+  std::map<Key, std::vector<int>> by_key;  // -> sorted row indices
   for (int r = 0; r < grid.numRows(); ++r) {
     const int nc = grid.numCols(r);
     int c = 0;
@@ -175,31 +230,54 @@ RepairResult FillerRepair::repair(FillerGrid& grid) const
       while (c < nc && grid.kindAt(r, c) == SiteKind::DirtyFiller) {
         ++c;
       }
-      Window w;
-      w.row = r;
-      w.col0 = start;
-      w.width = c - start;
-      w.left_vt = fixedVt(r, start - 1);
-      w.right_vt = fixedVt(r, c);
+      Key key{start, c - start, fixedVt(r, start - 1), fixedVt(r, c)};
+      by_key[key].push_back(r);
+    }
+  }
 
-      // Delete dirty, then refill.
+  // 2) Merge identical per-row windows in consecutive rows into rectangular
+  //    multi-height windows (each maximal run of stacked rows).
+  std::vector<MultiWindow> windows;
+  for (auto& [key, rows] : by_key) {
+    std::sort(rows.begin(), rows.end());
+    size_t i = 0;
+    while (i < rows.size()) {
+      size_t j = i;
+      while (j + 1 < rows.size() && rows[j + 1] == rows[j] + 1) {
+        ++j;
+      }
+      MultiWindow w;
+      w.row0 = rows[i];
+      w.height = static_cast<int>(j - i + 1);
+      w.col0 = std::get<0>(key);
+      w.width = std::get<1>(key);
+      w.left_vt = std::get<2>(key);
+      w.right_vt = std::get<3>(key);
+      windows.push_back(w);
+      i = j + 1;
+    }
+  }
+
+  // 3) Delete dirty + refill each window.
+  for (const MultiWindow& w : windows) {
+    for (int rr = w.row0; rr < w.row0 + w.height; ++rr) {
       for (int cc = w.col0; cc < w.col0 + w.width; ++cc) {
-        grid.clearSite(r, cc);
+        grid.clearSite(rr, cc);
       }
-      std::vector<PlacedFiller> segs;
-      if (solveWindow(w, segs)) {
-        for (const PlacedFiller& p : segs) {
-          grid.placeFiller(p);
-          result.placed.push_back(p);
-        }
-      } else {
-        result.unsolved.push_back(
-            UnsolvedWindow{w.row,
-                           w.col0,
-                           w.width,
-                           1,
-                           "cannot exact-fill window with available fillers"});
+    }
+    std::vector<PlacedFiller> segs;
+    if (solveWindow(w, segs)) {
+      for (const PlacedFiller& p : segs) {
+        grid.placeFiller(p);
+        result.placed.push_back(p);
       }
+    } else {
+      result.unsolved.push_back(
+          UnsolvedWindow{w.row0,
+                         w.col0,
+                         w.width,
+                         w.height,
+                         "cannot exact-fill window with available fillers"});
     }
   }
 
