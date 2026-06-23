@@ -48,8 +48,8 @@ DplFillerGrid::DplFillerGrid(odb::dbBlock* block,
     if (site == nullptr) {
       continue;
     }
-    site_w_ = site->getWidth();
-    row_h_ = site->getHeight();
+    site_w_ = static_cast<int>(site->getWidth());
+    row_h_ = static_cast<int>(site->getHeight());
     break;
   }
   if (site_w_ <= 0 || row_h_ <= 0) {
@@ -62,8 +62,8 @@ DplFillerGrid::DplFillerGrid(odb::dbBlock* block,
   // --- (vt,w,h) -> master map for placement ---
   for (dbMaster* m : filler_masters_) {
     const Vt vt = implantVt(m);
-    const int w = m->getWidth() / site_w_;
-    const int h = m->getHeight() / row_h_;
+    const int w = static_cast<int>(m->getWidth()) / site_w_;
+    const int h = static_cast<int>(m->getHeight()) / row_h_;
     master_map_.emplace(std::make_tuple(vt, w, h), m);
   }
 
@@ -166,9 +166,8 @@ void DplFillerGrid::placeFiller(const PlacedFiller& f)
   // Orientation: match the row the filler sits in (rails/implant alignment).
   odb::dbOrientType orient = odb::dbOrientType::R0;
   for (dbRow* row : block_->getRows()) {
-    int rx, ry;
-    row->getOrigin(rx, ry);
-    if (rowOf(ry) == f.row) {
+    const odb::Point o = row->getOrigin();
+    if (rowOf(o.y()) == f.row) {
       orient = row->getOrient();
       break;
     }
@@ -195,8 +194,8 @@ std::vector<Filler> DplFillerGrid::buildLibrary() const
 {
   std::vector<Filler> lib;
   for (dbMaster* m : filler_masters_) {  // user order preserved
-    lib.push_back(Filler{m->getWidth() / site_w_,
-                         static_cast<int>(m->getHeight() / row_h_),
+    lib.push_back(Filler{static_cast<int>(m->getWidth()) / site_w_,
+                         static_cast<int>(m->getHeight()) / row_h_,
                          implantVt(m),
                          m->getName()});
   }

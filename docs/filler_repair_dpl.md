@@ -24,10 +24,17 @@ The algorithm (`FillerRepair`) is identical for both; only the `FillerGrid`
 implementation and the build/command wiring differ.
 
 > Build note: the shared core + portable package are unit-tested stand-alone
-> (`g++`, 39/39). The dpl adapter below depends on odb/utl and is compiled
-> **inside the OpenROAD build** — the snippets here are written against the dpl
-> APIs used by `FillerPlacement.cpp` but must be compiled/verified in a full
-> build environment.
+> (`g++`, 39/39). The dpl adapter (`DplFillerGrid.cpp`, `RepairDirtyFillers.cpp`)
+> has been **compiled clean against the real odb headers** (`-std=c++20 -Wall`,
+> to object files):
+> ```sh
+> g++ -std=c++20 -Wall -c -I src/dpl/src -I src/odb/include -I src/utl/include \
+>     src/dpl/src/DplFillerGrid.cpp src/dpl/src/RepairDirtyFillers.cpp \
+>     src/dpl/src/FillerRepair.cpp
+> ```
+> Note: odb headers require **C++20** (use `<=>`), so the dpl build is C++20
+> (OpenROAD already builds C++20). The full `openroad` link still needs the
+> rest of the build (swig/bazel/or-tools) — not available in this sandbox.
 
 ---
 

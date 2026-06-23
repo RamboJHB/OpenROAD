@@ -17,6 +17,12 @@ struct Rect {
   int xMax() const {return xhi;} int yMax() const {return yhi;}
 };
 
+struct Point {
+  int x_=0, y_=0;
+  int x() const { return x_; }
+  int y() const { return y_; }
+};
+
 enum class dbMasterType { CORE, CORE_SPACER, BLOCK };
 enum class dbTechLayerType { ROUTING, IMPLANT, CUT };
 enum class dbOrientType { R0, MX, MY, R180 };
@@ -86,7 +92,7 @@ class dbRow {
  public:
   dbSite* site_=nullptr; int ox_=0, oy_=0; dbOrientType orient_=dbOrientType::R0;
   dbSite* getSite() const { return site_; }
-  void getOrigin(int& x,int& y) const { x=ox_; y=oy_; }
+  Point getOrigin() const { return Point{ox_, oy_}; }
   dbOrientType getOrient() const { return orient_; }
 };
 
