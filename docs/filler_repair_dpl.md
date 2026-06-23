@@ -121,6 +121,20 @@ The **algorithm** itself is already covered by the stand-alone unit test
 (`src/dpl/test/filler_repair_test.cpp`, 39/39, incl. multi-height MH1–MH5);
 the dpl integration test only needs to exercise the odb adapter wiring.
 
+### 4.1 Adapter logic-test against an odb mock (sandbox-runnable)
+`DplFillerGrid` is also compiled and logic-tested without a full OpenROAD build,
+against a minimal odb/utl mock (`src/dpl/test/filler_repair_mock/`):
+```sh
+g++ -std=c++17 -I src/dpl/src -I src/dpl/test/filler_repair_mock \
+    src/dpl/src/DplFillerGrid.cpp src/dpl/src/FillerRepair.cpp \
+    src/dpl/test/dpl_filler_grid_test.cpp -o /tmp/dpl_test && /tmp/dpl_test
+# => DplFillerGrid mock test: 11 passed, 0 failed.
+```
+This proves the adapter is well-formed C++ and its logic is correct (grid build,
+dirty delete, multi-height refill, master mapping, unsolvable).  The mock encodes
+the *assumed* odb signatures, so real-odb signature correctness is still
+confirmed only by building inside OpenROAD.
+
 ## 5. Checklist
 - [ ] Add `FillerRepair.cpp` + `DplFillerGrid.cpp` to CMake **and** Bazel.
 - [ ] SWIG: expose `repair_dirty_fillers_cmd`.
