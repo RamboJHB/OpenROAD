@@ -1,19 +1,26 @@
 // Filler insertion: DRC-driven dirty-filler repair (core, zero-dependency).
 //
-// Scope (see docs/filler_insertion.md):
+// PHASE I (this file): SINGLE-ROW repair only.
 //   - Input: a site-grid whose violating fillers are already marked DIRTY
 //     (the DRC step is upstream and intentionally NOT modeled here).
-//   - Action: delete dirty fillers and refill their footprint with correct
-//     fillers, fixing spacing / min-width by restoring implant (VT) continuity.
+//   - Action: per row, delete dirty fillers and refill their footprint with
+//     correct (height-1) fillers, fixing intra-row spacing / min-width by
+//     restoring same-row implant (VT) continuity.
 //   - Strict "only-dirty": clean fillers / cells are fixed boundaries.
 //   - Exact-fill ("fitGap", fixed on): no 1-site filler, so a residue gap is
 //     forbidden (gap 9 -> 4+3+2, never 8).
-//   - preserveUserOrder, VT continuity, and true multi-height fillers.
+//   - preserveUserOrder honored.  Each dirty window is solved independently.
+//
+// PHASE II (later, see docs/filler_insertion.md): multi-row.
+//   - true multi-height fillers spanning rows;
+//   - inter-row MW/MS constraints (the paper's cost-table idea: take the
+//     up/down neighbor rows as fixed context and reject VT choices that
+//     create cross-row violations).
+//   The Filler/PlacedFiller `height` field and the FillerGrid interface are
+//   kept multi-row-ready so Phase II is an extension, not a rewrite.
 //
 // The algorithm runs against the abstract FillerGrid interface so it is
-// portable: the fake in-memory FakeFillerGrid (see FakeFillerGrid.h) backs the
-// unit tests, and a real database (OpenROAD dpl grid_, or another DB) plugs in
-// by implementing the same interface.
+// portable (see FakeFillerGrid.h / docs/filler_repair_porting.md).
 #pragma once
 
 #include <string>
@@ -28,7 +35,7 @@ inline const Vt VT_NONE = "";
 struct Filler
 {
   int width = 1;   // in sites (columns)
-  int height = 1;  // in rows (single-row pitch units)
+  int height = 1;  // in rows; PHASE I uses only height-1 fillers
   Vt vt;
   std::string name;
 };
@@ -50,7 +57,7 @@ struct Rules
 };
 
 // A placed filler instance covering rows [row, row+height) x cols
-// [col, col+width).
+// [col, col+width).  PHASE I always emits height == 1.
 struct PlacedFiller
 {
   int row = 0;
@@ -81,25 +88,17 @@ struct RepairResult
 // repair (see docs/filler_repair_porting.md).  The FillerRepair algorithm only
 // ever touches the grid through this interface.
 //
-// Coordinate model:
-//   - Uniform single-row pitch.  Rows are indexed 0..numRows()-1 bottom logic
-//     order is irrelevant; only adjacency (row, row+1) matters for stacking.
-//   - A column is one site.  All distances here are in *sites / rows*, never
-//     DBU -- the adapter owns the DBU<->site geometry and master mapping.
-//   - A height-h filler / cell occupies the block
-//     rows [row, row+h) x cols [col, col+w).
+// Coordinate model: uniform single-row pitch; a column is one site; a
+// height-h filler / cell occupies rows [row, row+h) x cols [col, col+w).
+// Distances are in sites / rows, never DBU (the adapter owns DBU geometry).
 //
-// Contract the implementation must satisfy:
-//   - kindAt/vtAt are valid for 0<=col<numCols(row); the algorithm only queries
-//     in range (plus one site to each side of a window, guarded internally).
-//   - vtAt is meaningful for Cell / CleanFiller sites; ignored otherwise.
-//   - clearSite(r,c) must leave (r,c) as Empty (it deletes the dirty filler
-//     instance occupying that site in a real DB).
-//   - placeFiller(f) must create exactly one instance covering f's block and
-//     mark those sites occupied (CleanFiller); the algorithm never overlaps
-//     placements and never writes outside a just-cleared dirty window.
-//   - The algorithm is "only-dirty": it never clears or places over Cell /
-//     CleanFiller / Blocked sites, so those stay fixed.
+// Contract:
+//   - kindAt/vtAt valid for 0<=col<numCols(row); vtAt meaningful for Cell /
+//     CleanFiller.
+//   - clearSite(r,c) leaves (r,c) Empty (deletes the dirty filler there).
+//   - placeFiller(f) creates one instance over f's block (CleanFiller).
+//   - "only-dirty": the algorithm never clears/places over Cell / CleanFiller /
+//     Blocked sites.
 // ---------------------------------------------------------------------------
 class FillerGrid
 {
@@ -113,9 +112,7 @@ class FillerGrid
   virtual Vt vtAt(int row, int col) const = 0;
 
   // ---- mutate ----
-  // Delete the dirty filler covering this site (the site becomes Empty).
   virtual void clearSite(int row, int col) = 0;
-  // Create one filler instance covering f's row/col/width/height block.
   virtual void placeFiller(const PlacedFiller& f) = 0;
 };
 
@@ -124,15 +121,15 @@ class FillerRepair
  public:
   FillerRepair(std::vector<Filler> lib, bool preserve_user_order, Rules rules);
 
-  // Deletes DIRTY fillers and refills solvable windows, mutating `grid`.
+  // Deletes DIRTY fillers and refills solvable windows (per row), mutating
+  // `grid`.
   RepairResult repair(FillerGrid& grid) const;
 
  private:
-  // A rectangular block of dirty sites to refill.
-  struct MultiWindow
+  // A single-row run of dirty sites to refill.
+  struct Window
   {
-    int row0 = 0;
-    int height = 1;
+    int row = 0;
     int col0 = 0;
     int width = 0;
     Vt left_vt = VT_NONE;
@@ -148,18 +145,10 @@ class FillerRepair
 
   std::vector<Filler> candidates(const Vt& vt, int height) const;
   std::vector<Vt> vtsInLib() const;
-  std::vector<int> heightsInLib() const;
-  // Exact-fill `width` columns with `vt`/`height` fillers (backtracking).
-  bool packExact(int width,
-                 const Vt& vt,
-                 int height,
-                 std::vector<Filler>& out) const;
-  // Exact integer partition of H into stripe heights drawn from `allowed`.
-  bool partitionHeight(int H,
-                       const std::vector<int>& allowed,
-                       std::vector<int>& out) const;
-  // Resolve a rectangular window into placed (multi-height) fillers.
-  bool solveWindow(const MultiWindow& w, std::vector<PlacedFiller>& out) const;
+  // Exact-fill `width` columns with height-1 `vt` fillers (backtracking).
+  bool packExact(int width, const Vt& vt, std::vector<Filler>& out) const;
+  // Resolve one single-row window into placed (height-1) fillers.
+  bool solveWindow(const Window& w, std::vector<PlacedFiller>& out) const;
 
   std::vector<Filler> lib_;
   bool preserve_user_order_;

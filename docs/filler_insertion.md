@@ -96,28 +96,49 @@ dirty filler 与 implant 违例**不是凭空出现**,而是布线后两步**扰
 
 ---
 
-## 6. 功能流程(multi-height 感知)
+## 6. 分阶段(Phase I 单行 / Phase II 多行)⭐
 
-| # | 阶段 | 动作 | multi-height 考量 |
-|---|---|---|---|
-| 0 | 输入 | design + DRC markers + dirty 标记 + filler 库/顺序 + flags | filler 库须覆盖区域内每种行高的 VT |
-| 1 | 建上下文 | 枚举受影响行;每行 site 列/行高/orient(R0,MX)/N-P band;标 fixed/macro/cell/clean-filler 占位 | multi-height cell 跨行占位;区域内行高可不一致 |
-| 2 | 定窗口 | 由 dirty 标记取 footprint,相邻 dirty 合并成段;边界 clean/cell 记为固定 | 窗口可能跨多行(若 dirty 跨行) |
-| 3 | 定 VT 上下文 | 由窗口左右/上下固定邻的 VT 决定目标 VT,保 implant 连续;对齐该行 N/P band | 跨行窗口须各行 VT 连续 |
-| 4 | 删 dirty | 删除窗口内 dirty filler 实例 | — |
-| 5 | 重填装箱 | 在窗口内**精确填满**(回溯凑满,见 §5 fitGap):选序=preserveUserOrder?用户序:宽度降序;约束=正好等于窗口宽 + VT 连续 | 单高逐行 vs 多高跨行 = 决策 D1 |
-| 6 | 校验 | 重检该窗口:目标违例消失、不引入新 spacing/min-width;`check_signal_drc=false`→跳过 signal DRC | 跨行 filler 上下边界连续性一并检 |
-| 7 | 落子 / 回报 | 解出 → 建 filler 实例(orient 跟行,physical-only);无解 → 标记回报上游 | 多高 filler 跨行落一个实例 |
+| | **Phase I(已实现)** | **Phase II(后续)** |
+|---|---|---|
+| 范围 | **逐行独立**修 dirty 窗口 | 跨行:真·多行高 + inter-row |
+| 违例 | intra-row spacing / min-width | 再加 inter-row MW / MS |
+| 上下文 | 仅窗口**左右**(同行)邻居 VT | 再加**上/下行**邻居 VT |
+| filler | 仅 height-1 | 多高 filler 跨行 |
+
+**先把 Phase I 做扎实,多行内容全部归 Phase II。**
+
+### 6.1 Phase I 功能流程(单行)
+| # | 阶段 | 动作 |
+|---|---|---|
+| 1 | 扫描 | 逐行找极大 dirty 连续段 → 单行窗口{row,col0,width};取左右固定邻 VT |
+| 2 | 删 dirty | 清空窗口内 dirty 站点 |
+| 3 | 选 VT 方案 | 延左 VT / 延右 VT / `L\|R` 拆分 / 孤立任意 VT(查 min-width) |
+| 4 | 精确填 | 每段 `packExact` 回溯凑满(fitGap,见 §5);选序=preserveUserOrder |
+| 5 | 落子 / 回报 | 解出→建 height-1 filler;无解→标记回报上游 |
 
 ---
 
-## 7. multi-height 处理(开放,待会上 D1–D5)
+## 7. Phase II:多行(multi-height + inter-row)—— 后续
 
-- **D1 粒度**:只做单高逐行填(简单稳)还是加多高跨行 filler(QoR 更好、PG/implant 更连续,但 2D 装箱)。
-- **D2 VT 连续**:多高 filler 跨行各行 VT band 全连续是硬约束还是允许 fallback。
-- **D3 orientation**:R0/MX 逐行交替下多高 filler 的 flip/配对规则。
-- **D4 精确填可行性**:多高跨行填时各行都要能精确凑满(库无 1-site filler,残缝不可接受);某行凑不满 → 该窗口判无解。
-- ~~**D5 `{1:1}` 维度**~~:avoid_abutment 本期暂忽略,暂不涉及。
+> 当前 `FillerRepair` 是 **Phase I 单行**。以下为 Phase II 扩展计划,数据模型(`Filler.height`、`FillerGrid`)已为此预留,Phase II 是扩展而非重写。
+
+### 7.1 真·多行高 filler
+- 把相邻行**同列同宽**的 dirty 窗口竖直合并成矩形;
+- 窗口高 H 用 `partitionHeight` 拆成 filler 高度条带,放跨行 filler;
+- 决策点:D1 粒度、D2 跨行 VT band 连续、D3 R0/MX flip 配对、D4 各行精确填可行性。
+- (这套逻辑此前实现过,见 git 历史 commit `f8ac28861`,因 Phase 划分回退到单行。)
+
+### 7.2 inter-row MW / MS(对齐论文 Algorithm 4 的 cost-table 思想)
+implant 是 2D:同 VT 在上下行拼成跨行区域。Phase I 只看左右,会漏:
+- **inter-row MW**:同 VT 在相邻两行竖直重叠太窄(楼梯)< ωw2;
+- **inter-row MS**:不同 VT 在上下行靠太近 < ωs2。
+
+**要补**:
+- 数据:窗口加 `top_vt[col]` / `bot_vt[col]`(查上/下行;`FillerGrid::vtAt` 已够,无需改接口);
+- 规则:`Rules` 加 `ωw2`(inter-row MW)、`ωs2`(inter-row MS);
+- 逻辑:选 VT 方案时按**端点**检查上下行(论文 cost-table 的硬约束版),撞了就排除该方案,全排除→无解。
+
+论文按端点查表加**代价**(可留违例、最小化);我们按端点查**硬约束**(撞了就换/无解)。端点检查是论文把复杂度降到线性的关键,照搬即可。
 
 ---
 
@@ -139,17 +160,18 @@ solver 可解性判定 · dirty 标记 · decap / M2 · trim-spacing 感知 · s
 
 ---
 
-## 9.5 实现与移植(已落地)
+## 9.5 实现与移植(Phase I 已落地)
 
-零依赖核心 + 可移植 grid 接口已实现:
-- `src/dpl/src/FillerRepair.{h,cpp}` —— 算法核心(窗口、exact-fill、VT 连续、**真多行高**)。
+零依赖核心 + 可移植 grid 接口已实现(**Phase I 单行**):
+- `src/dpl/src/FillerRepair.{h,cpp}` —— 算法核心(单行窗口、exact-fill、同行 VT 连续)。
 - `FillerGrid`(接口)—— 算法唯一的 DB 接缝;另接一个 database 只需实现它。
 - `src/dpl/src/FakeFillerGrid.h` —— 测试用内存实现(移植时替换)。
 - `src/dpl/src/FillerGridAdapter.example.h` —— 适配器模板(照抄填空)。
-- `src/dpl/test/filler_repair_test.cpp` —— 独立测试(g++ 可跑,**39/39**)。
+- `src/dpl/test/filler_repair_test.cpp` —— 独立测试(g++ 可跑,**20/20**,均为单行情形)。
 - **移植指南**:`docs/filler_repair_porting.md`(接口契约、SiteKind 映射、几何/master 职责、构建接入片段、检查清单)。
 
 > DRC 部分按需求略过:测试直接喂「已标 dirty 的 grid」。
+> **多行高 + inter-row 见 §7(Phase II)**;数据模型已预留 `height`,届时扩展。
 
 ## 10. OpenROAD 落点与可复用底座
 
