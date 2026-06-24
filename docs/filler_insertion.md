@@ -118,9 +118,22 @@ dirty filler 与 implant 违例**不是凭空出现**,而是布线后两步**扰
 
 ---
 
-## 7. Phase II:inter-row MW / MS —— 后续
+## 7. Phase II:inter-row MW / MS —— 已原型实现(filler-VT 替换)
 
-> Phase I 已含**真多行高**(矩形窗口合并 + 高度分条),但仍**只看左右**邻居。inter-row 是剩下的 Phase II。
+> **状态**:已实现并测试(`FillerVtRepair`,独立 g++ **13/13**)。做法 = **只替换 filler 的 VT、不 move**,在 2D 上把 MW/MS 违例降到最少。
+>
+> 文件:`dpl2/src/FillerVtRepair.{h,cpp}`(便携包,已测)+ 镜像 `src/dpl/src/FillerVtRepair.{h,cpp}`(随 dpl 编译)。
+>
+> 算法(对应「替换 filler type」的方案):
+> 1. 把违例邻域当 2D patch:**filler 站点 = VT 变量,cell 站点 = 固定边界**。
+> 2. **2D MW/MS 评估器** `countViolations`(site-grid 模型:同 VT 横/竖 run < ωMW 的窄颈记 MW;异 VT 正交相邻记 MS)。
+> 3. **贪心坐标下降**选 filler VT 使违例最少;复合代价 = `违例×1000 − 同VT合并数`(次级目标用"合并"打破平台,因为单站点改往往要搭档才划算)。
+> 4. **落地 = 替换**:VT 变了的 filler run 用库 master 精确拼出 → 删旧、原位建新;拼不出 → 回退、计入残留。
+> 5. **最大化** = 最小化残留(不是全清或无解);库缺该 VT / cell 卡住 → 留残留回报上游。
+>
+> 后续可加 Tier-2 列向 DP(论文 Algorithm 4 多行推广)做 patch 内最优,贪心已覆盖楼梯 MW、跨行 MS 等典型例。
+
+以下为概念背景:Phase I 仍**只看左右**邻居,inter-row 是 2D。
 
 implant 是 2D:同 VT 在上下行拼成跨行区域。当前会漏:
 - **inter-row MW**:同 VT 在相邻两行竖直重叠太窄(楼梯)< ωw2;

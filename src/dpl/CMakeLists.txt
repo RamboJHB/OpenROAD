@@ -24,6 +24,7 @@ add_library(dpl_lib
   src/Place.cpp
   src/FillerPlacement.cpp
   src/FillerRepair.cpp
+  src/FillerVtRepair.cpp
   src/DplFillerGrid.cpp
   src/RepairDirtyFillers.cpp
   src/DecapPlacement.cpp
