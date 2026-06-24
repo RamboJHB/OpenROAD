@@ -23,18 +23,21 @@ Two packages, **one shared algorithm**:
 The algorithm (`FillerRepair`) is identical for both; only the `FillerGrid`
 implementation and the build/command wiring differ.
 
-> Build note: the shared core + portable package are unit-tested stand-alone
-> (`g++`, 39/39). The dpl adapter (`DplFillerGrid.cpp`, `RepairDirtyFillers.cpp`)
-> has been **compiled clean against the real odb headers** (`-std=c++20 -Wall`,
-> to object files):
-> ```sh
-> g++ -std=c++20 -Wall -c -I src/dpl/src -I src/odb/include -I src/utl/include \
->     src/dpl/src/DplFillerGrid.cpp src/dpl/src/RepairDirtyFillers.cpp \
->     src/dpl/src/FillerRepair.cpp
-> ```
-> Note: odb headers require **C++20** (use `<=>`), so the dpl build is C++20
-> (OpenROAD already builds C++20). The full `openroad` link still needs the
-> rest of the build (swig/bazel/or-tools) — not available in this sandbox.
+> Build status: **VERIFIED in a full OpenROAD build.** `openroad` was built
+> from source and `repair_dirty_fillers` runs end-to-end on the test LEF/DEF:
+> the dirty filler `dirtyF` is deleted and `FILLER_REPAIR_0_2_0` is created in
+> its place, logging `[INFO DPL-0206] Filler repair: placed 1, unsolved 0.`
+>
+> Building OpenROAD in a network-restricted sandbox (git-clone of third-party
+> deps is blocked, but direct `curl` of release tarballs works):
+> - CUDD / Lemon / spdlog-1.15.0: `curl` the GitHub tarballs and build (the
+>   stock `DependencyInstaller.sh` uses `git clone`, which is blocked).
+> - or-tools: download the **prebuilt** release tarball (no source build).
+> - GTest / yaml-cpp / OpenGL / readline / pcre2: `apt`.
+> - Configure with `-DBUILD_GUI=OFF -DENABLE_TESTS=OFF` and the dep ROOTs.
+> Gotcha: the apt `libfmt-dev` (fmt 9) is incompatible with `utl` — use the
+> spdlog-1.15.0 bundled fmt (install spdlog 1.15.0 to /usr/local). odb headers
+> need **C++20** (OpenROAD already builds C++20).
 
 ---
 
