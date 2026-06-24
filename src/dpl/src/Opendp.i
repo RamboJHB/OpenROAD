@@ -11,6 +11,9 @@
 #include "graphics/DplObserver.h"
 #include "dpl/Opendp.h"
 #include "utl/Logger.h"
+#include "DplFillerGrid.h"
+#include <string>
+#include <vector>
 
 %}
 
@@ -84,6 +87,29 @@ filler_placement_cmd(const std::vector<odb::dbMaster*>& filler_masters,
 {
   dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();
   opendp->fillerPlacement(filler_masters, prefix, verbose);
+}
+
+void
+repair_dirty_fillers_cmd(const std::vector<odb::dbMaster*>& filler_masters,
+                         const char* dirty_names,
+                         bool preserve_user_order,
+                         int min_implant_width)
+{
+  ord::OpenRoad* openroad = ord::OpenRoad::openRoad();
+  odb::dbBlock* block = openroad->getDb()->getChip()->getBlock();
+  utl::Logger* logger = openroad->getLogger();
+  std::vector<std::string> names;
+  std::stringstream ss(dirty_names);
+  std::string n;
+  while (ss >> n) {
+    names.push_back(n);
+  }
+  dpl_fr::repairDirtyFillersByName(block,
+                                   filler_masters,
+                                   names,
+                                   preserve_user_order,
+                                   min_implant_width,
+                                   logger);
 }
 
 void

@@ -94,4 +94,13 @@ RepairResult repairDirtyFillers(odb::dbBlock* block,
                                 int min_implant_width,
                                 utl::Logger* logger);
 
+// Same, but the dirty fillers are given by instance name (resolved here).
+RepairResult repairDirtyFillersByName(
+    odb::dbBlock* block,
+    const std::vector<odb::dbMaster*>& filler_masters,
+    const std::vector<std::string>& dirty_names,
+    bool preserve_user_order,
+    int min_implant_width,
+    utl::Logger* logger);
+
 }  // namespace dpl_fr

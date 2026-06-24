@@ -115,6 +115,30 @@ proc filler_placement { args } {
   dpl::filler_placement_cmd $filler_masters $prefix [info exists flags(-verbose)]
 }
 
+sta::define_cmd_args "repair_dirty_fillers" {
+  -masters filler_masters -dirty inst_names\
+    [-preserve_user_order] [-min_implant_width n]}
+
+proc repair_dirty_fillers { args } {
+  sta::parse_key_args "repair_dirty_fillers" args \
+    keys {-masters -dirty -min_implant_width} flags {-preserve_user_order}
+
+  if { ![info exists keys(-masters)] } {
+    utl::error DPL 208 "-masters is required."
+  }
+  set masters [dpl::get_masters_arg "-masters" $keys(-masters)]
+  set dirty ""
+  if { [info exists keys(-dirty)] } {
+    set dirty $keys(-dirty)
+  }
+  set minw 1
+  if { [info exists keys(-min_implant_width)] } {
+    set minw $keys(-min_implant_width)
+  }
+  set preserve [info exists flags(-preserve_user_order)]
+  dpl::repair_dirty_fillers_cmd $masters $dirty $preserve $minw
+}
+
 sta::define_cmd_args "remove_fillers" {}
 
 proc remove_fillers { args } {

@@ -23,6 +23,9 @@ add_library(dpl_lib
   src/infrastructure/Padding.cpp
   src/Place.cpp
   src/FillerPlacement.cpp
+  src/FillerRepair.cpp
+  src/DplFillerGrid.cpp
+  src/RepairDirtyFillers.cpp
   src/DecapPlacement.cpp
   src/OptMirror.cpp
   src/PlacementDRC.cpp
