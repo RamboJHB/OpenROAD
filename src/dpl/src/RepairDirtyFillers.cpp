@@ -29,7 +29,7 @@ RepairResult repairDirtyFillersByName(
     odb::dbInst* inst = block->findInst(name.c_str());
     if (inst == nullptr) {
       logger->warn(
-          utl::DPL, 203, "repair_dirty_fillers: instance {} not found.", name);
+          utl::DPL, 207, "repair_dirty_fillers: instance {} not found.", name);
       continue;
     }
     dirty.insert(inst);

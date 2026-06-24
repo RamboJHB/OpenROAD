@@ -53,7 +53,7 @@ DplFillerGrid::DplFillerGrid(odb::dbBlock* block,
     break;
   }
   if (site_w_ <= 0 || row_h_ <= 0) {
-    logger_->error(utl::DPL, 200, "DplFillerGrid: bad site/row size.");
+    logger_->error(utl::DPL, 204, "DplFillerGrid: bad site/row size.");
   }
   n_rows_ = (y_max - core_y_) / row_h_;
   n_cols_ = (x_max - core_x_) / site_w_;
@@ -148,8 +148,7 @@ void DplFillerGrid::placeFiller(const PlacedFiller& f)
 {
   dbMaster* master = masterFor(f.vt, f.width, f.height);
   if (master == nullptr) {
-    logger_->error(utl::DPL,
-                   201,
+    logger_->error(utl::DPL, 205,
                    "DplFillerGrid: no master for vt={} {}x{}.",
                    f.vt,
                    f.width,
@@ -214,8 +213,7 @@ RepairResult repairDirtyFillers(odb::dbBlock* block,
   rules.min_implant_width = min_implant_width;
   FillerRepair repair(grid.buildLibrary(), preserve_user_order, rules);
   RepairResult result = repair.repair(grid);
-  logger->info(utl::DPL,
-               202,
+  logger->info(utl::DPL, 206,
                "Filler repair: placed {}, unsolved {}.",
                result.placed.size(),
                result.unsolved.size());
