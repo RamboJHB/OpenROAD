@@ -97,21 +97,25 @@ flowchart TD
   S --> VW["量同VT 垂直 run 长度"]
   HW --> MW{"水平 run 与垂直 run 都 短于 ωMW?"}
   VW --> MW
-  MW -- 是 --> MWv["MW +1 窄颈 例如 1 宽跨行台阶"]
-  MW -- 否 --> OK1["MW 通过 有一向够宽即可"]
+  MW -- 是 --> MWv["MW +1 (a) 行内/对角窄条"]
+  MW -- 否 --> OK1["MW(a) 通过 有一向够宽"]
+  S --> OV{"相邻行同VT交叠列段 短于 ωMW?"}
+  OV -- 是 --> OVv["MW +1 (b) 跨行交叠颈 case B 代码待补"]
+  OV -- 否 --> OK3["交叠够宽"]
   S --> MS{"右邻 或 下邻 是 异VT present?"}
   MS -- 是 --> MSv["MS +1 异 implant 区相邻 当 ωMS≥1"]
   MS -- 否 --> OK2["MS 通过"]
   MWv --> SUM["总违例 = MW + MS"]
+  OVv --> SUM
   MSv --> SUM
   classDef y fill:#fef3c7,stroke:#d97706;
   classDef r fill:#fee2e2,stroke:#dc2626;
   classDef g fill:#dcfce7,stroke:#16a34a;
   class HW,VW,SUM y
-  class MWv,MSv r
-  class OK1,OK2 g
+  class MWv,OVv,MSv r
+  class OK1,OK2,OK3 g
     </pre>
-    <div class="legend">MW=同VT 水平或垂直 run 短于 ωMW 记窄颈;MS=正交相邻的异VT 占用 site。</div>
+    <div class="legend">MW 两类窄颈:(a) 行内/对角 run 短于 ωMW;(b) 上下行同VT交叠列段短于 ωMW(case B,代码待补)。MS=正交相邻的异VT 占用 site。</div>
   </div>
 
   <div class="card">
