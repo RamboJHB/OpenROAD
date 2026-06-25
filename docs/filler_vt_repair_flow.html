@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Filler VT Repair — 代码流程图</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  :root { --bg:#f8fafc; --card:#fff; --ink:#1e293b; --muted:#64748b; --line:#e2e8f0; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font-family:-apple-system,Segoe UI,Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+  header { padding:28px 24px 8px; }
+  h1 { margin:0 0 4px; font-size:24px; }
+  .sub { color:var(--muted); font-size:14px; }
+  .wrap { max-width:1100px; margin:0 auto; padding:0 16px 60px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+          padding:18px 18px 10px; margin:18px 0; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+  .card h2 { margin:2px 0 2px; font-size:18px; }
+  .card p { color:var(--muted); font-size:13px; margin:4px 0 10px; }
+  .mermaid { overflow-x:auto; text-align:center; }
+  .legend { font-size:12px; color:var(--muted); margin-top:8px; }
+  code { background:#f1f5f9; padding:1px 5px; border-radius:5px; font-size:12px; }
+  footer { text-align:center; color:var(--muted); font-size:12px; padding:20px; }
+</style>
+</head>
+<body>
+<header class="wrap">
+  <h1>Filler VT Repair — 代码流程图</h1>
+  <div class="sub">替换 filler 的 VT(implant 类型)修跨行 MW/MS,只动 filler、不 move cell。
+  算法只通过抽象接口 <code>FillerGrid</code> 碰数据库,可移植。
+  分支 <code>claude/filler-vt-repair</code></div>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+    <h2>① 总架构(算法 · 接口 · 数据库)</h2>
+    <p>算法零依赖,只通过 6 个方法的抽象接口 <code>FillerGrid</code> 读写数据库;换数据库 = 实现这一个接口。</p>
+    <pre class="mermaid">
+flowchart TD
+  CORE["FillerVtRepair 算法核心 零依赖"]
+  subgraph SEAM["FillerGrid 抽象接口 唯一 DB 接缝"]
+    M1["numRows / numCols / kindAt / vtAt 读"]
+    M2["clearSite / placeFiller 写"]
+  end
+  CORE --> SEAM
+  SEAM --> FAKE["FakeFillerGrid 内存 测试/移植参考"]
+  SEAM --> NEW["新数据库适配器 移植目标 实现 6 方法"]
+  classDef k fill:#fef3c7,stroke:#d97706;
+  classDef s fill:#dbeafe,stroke:#2563eb;
+  classDef g fill:#dcfce7,stroke:#16a34a;
+  class CORE k
+  class M1,M2 s
+  class FAKE,NEW g
+    </pre>
+    <div class="legend">黄=算法核心 · 蓝=接口方法 · 绿=接口实现(测试 / 新 DB)</div>
+  </div>
+
+  <div class="card">
+    <h2>② 主流程 FillerVtRepair::repair(grid)</h2>
+    <p>filler 站点=可变 VT、cell 站点=固定边界;贪心选 VT 使 2D 的 MW/MS 违例最少,再替换落地。</p>
+    <pre class="mermaid">
+flowchart TD
+  A["repair(grid)"] --> B["读 grid 到 vt / present / filler 三层网格 记 orig"]
+  B --> C["countViolations 2D 评估当前违例 记 violations_before"]
+  C --> D["贪心坐标下降 每个 filler 站点试遍库 VT"]
+  D --> E["复合代价 = 违例×1000 减 同VT合并数 合并打破单站点平台"]
+  E --> F{"还能降?"}
+  F -- 是 --> D
+  F -- 否 --> G["落地 VT 变了的 filler run"]
+  subgraph AP["落地 每个改了VT的同VT run"]
+    G --> H["exactFill 用库 master 精确平铺该宽度"]
+    H --> I{"铺得出?"}
+    I -- 是 --> J["clearSite 旧 filler 再 placeFiller 新 VT"]
+    I -- 否 --> K["回退该 run 到 orig 计入残留"]
+  end
+  J --> L["countViolations 再评估 记 violations_after = 残留"]
+  K --> L
+  L --> M["回报 replaced 列表 + unresolved 残留 给上游"]
+  classDef y fill:#fef3c7,stroke:#d97706;
+  classDef r fill:#fee2e2,stroke:#dc2626;
+  classDef g fill:#dcfce7,stroke:#16a34a;
+  class C,D,E,H y
+  class K,M r
+  class J g
+    </pre>
+    <div class="legend">目标=最小化残留(最大修复),非全清或无解。已测 13/13。</div>
+  </div>
+
+  <div class="card">
+    <h2>③ MW/MS 评估器 countViolations(站点网格模型)</h2>
+    <p>每个被占用 site 带一个 VT;只看 site 网格,不是多边形 DRC。</p>
+    <pre class="mermaid">
+flowchart TD
+  S["对每个 present 站点 (r,c)"] --> HW["量同VT 水平 run 长度"]
+  S --> VW["量同VT 垂直 run 长度"]
+  HW --> MW{"水平 run 与垂直 run 都 短于 ωMW?"}
+  VW --> MW
+  MW -- 是 --> MWv["MW +1 窄颈 例如 1 宽跨行台阶"]
+  MW -- 否 --> OK1["MW 通过 有一向够宽即可"]
+  S --> MS{"右邻 或 下邻 是 异VT present?"}
+  MS -- 是 --> MSv["MS +1 异 implant 区相邻 当 ωMS≥1"]
+  MS -- 否 --> OK2["MS 通过"]
+  MWv --> SUM["总违例 = MW + MS"]
+  MSv --> SUM
+  classDef y fill:#fef3c7,stroke:#d97706;
+  classDef r fill:#fee2e2,stroke:#dc2626;
+  classDef g fill:#dcfce7,stroke:#16a34a;
+  class HW,VW,SUM y
+  class MWv,MSv r
+  class OK1,OK2 g
+    </pre>
+    <div class="legend">MW=同VT 水平或垂直 run 短于 ωMW 记窄颈;MS=正交相邻的异VT 占用站点。</div>
+  </div>
+
+  <div class="card">
+    <h2>④ 上游链(为什么会有这些违例)</h2>
+    <pre class="mermaid">
+flowchart LR
+  R["route"] --> O["opto (rsz)"] --> EL["ECO legalize (dpl)"] --> DC["filler DRC check"] --> MD["mark 违例"] --> ME["★ 本模块 VT 替换修 MW/MS"]
+  classDef d fill:#fef3c7,stroke:#d97706;
+  classDef u fill:#e0e7ff,stroke:#4f46e5;
+  classDef m fill:#dcfce7,stroke:#16a34a;
+  class O,EL d
+  class DC,MD u
+  class ME m
+    </pre>
+    <div class="legend">opto/ECO=扰动源 · DRC/mark=上游检测 · 本模块=implant-aware filler 收尾。</div>
+  </div>
+
+  <div class="card">
+    <h2>⑤ 文件 / 测试一览</h2>
+    <pre class="mermaid">
+flowchart TD
+  subgraph CORE2["算法核心(零依赖,随移植带走)"]
+    S3["FillerGrid.h 接口 + 共享类型"]
+    S2["FillerVtRepair.h / .cpp 算法"]
+  end
+  subgraph PORT["测试 / 移植参考(g++ 可测)"]
+    PA["FakeFillerGrid.h 内存实现"]
+    T2["filler_vt_repair_test.cpp 13/13"]
+  end
+  subgraph DOC["文档"]
+    D1["filler_vt_repair_spec.md 功能规格 + 接口清单"]
+    D2["filler_vt_repair_flow.html 本页"]
+  end
+  S3 --> S2
+  CORE2 --> PORT
+  CORE2 --> DOC
+  classDef a fill:#fef3c7,stroke:#d97706;
+  classDef c fill:#dcfce7,stroke:#16a34a;
+  classDef b fill:#dbeafe,stroke:#2563eb;
+  class S2,S3 a
+  class PA,T2 c
+  class D1,D2 b
+    </pre>
+    <div class="legend">移植只需带走 4 个源文件 + 实现 FillerGrid 接口;验证 Phase II 13/13。</div>
+  </div>
+
+</div>
+<footer>Generated for RamboJHB/OpenROAD · filler VT repair · open in any browser</footer>
+<script>
+  mermaid.initialize({ startOnLoad:true, theme:"default", securityLevel:"loose",
+                       flowchart:{ curve:"basis", useMaxWidth:true } });
+</script>
+</body>
+</html>
