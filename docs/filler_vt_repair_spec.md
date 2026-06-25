@@ -81,16 +81,30 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
    - 这些值本质来自 tech LEF / rule deck,DRC checker 已在使用;本模块需要拿到
      **换算成站点数**后的值(或拿到原始 DBU 值 + 由适配器换算)。
 
-2. **违例 marker 列表(可选,启用「定向修复」模式时需要)** — 每条违例给:
-   - `type`:`MW` 还是 `MS`。
-   - `layer` / `vt`:违例所在的 implant 层(→ VT id);若是 `MS`,再给相邻的
-     **两个** VT。
-   - `rule_value`:被违反的阈值(对应 ωMW 或 ωMS)。
-   - `region`:违例覆盖的区域。由于跨行几何可能不规则,**最好给「逐行的列
-     区间」**(每行一组 `[col_start, col_end)`),而不是一个笼统的 bbox。
-   - `participants`:构成这条违例的每块 implant 区的 **owner 实例 + 类别**
-     (filler / cell)。用途有二:① 保证「只动 filler」(知道哪块是 filler);
-     ② 在站点网格上**定位**要改的 filler。
+2. **违例 marker 列表(可选,启用「定向修复」模式时需要)** — 每条违例一行:
+
+   | 字段 | 内容 | 为什么需要 |
+   |---|---|---|
+   | `type` | `MW` \| `MS` | 分流处理 |
+   | `rule_value` | ωMW(最小宽)或 ωMS(最小间距),单位 site / DBU | 求解的硬阈值 |
+   | `vts` | MW = 1 个 VT;MS = 2 个 VT | 知道改成 / 避开哪个 VT |
+   | `region` | **逐行**的列区间:`[(row, col_lo, col_hi), …]`(不是单个 bbox) | 跨行形状不规则,必须逐行给列范围 |
+   | `participants` | 形成违例**每一侧**的 owner 实例 id + 类型(`filler` / `cell` / `blockage`) | ① 判断是否 filler-filler ② 定位要替换的 filler |
+   | `fixable_by_filler` | bool(可选但强烈建议) | checker 先粗筛 A/C/D/E vs B,省我们重算 |
+
+   字段说明:
+   - `vts` 用计数语义把两类违例分清:**MW 给 1 个 VT**(哪条同 VT 区太窄,要把
+     它加宽);**MS 给 2 个 VT**(哪两个 implant 区贴在一起,要把其中一侧改成
+     另一个、或都改成同一个来消除边界)。
+   - `region` 必须是**逐行列区间**而不是一个 bbox:跨行违例(台阶 / 不规则块)
+     的形状不是矩形,只有逐行 `[col_lo, col_hi)` 才能精确圈出要动的 filler 站点。
+   - `participants` 给出违例**两侧**各自的 owner 实例 + 类型,用来 ① 确认这是
+     「filler 对 filler / filler 对 cell」(从而知道哪侧可动),② 在站点网格上
+     **定位**要替换的 filler 实例。
+   - `fixable_by_filler` 是 checker 的**粗筛**:它先判断「这条违例靠只动 filler
+     能不能修」——可修的(对应行为 A/C/D/E,即本规格 §8 的行为 1–3 之类)交给
+     本模块;只能靠**动 cell**才能修的(对应 case B,LEF Fig 3-1 的 "B" 情形)
+     直接标 false,本模块跳过、不必重算,直接当残留转交需要动 cell 的上游。
 
 3. **隐含契约**:违例已由 DRC checker 圈定。当前 Tier-1 实现是**整图扫描**,
    严格说只依赖第 (1) 项阈值;第 (2) 项违例列表是给**未来的定向修复模式 /
