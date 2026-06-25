@@ -14,13 +14,13 @@
 它**绝不**移动/缩放/删除标准 cell,也**绝不**移动 filler;只是把某个 filler
 就地换成另一种 implant 类型的 filler。
 
-核心直觉:**filler 站点 = 可自由改的 implant 变量,cell 站点 = 固定的
-implant 边界**。在「cell 固定」的前提下,给每个 filler 站点选一个 implant
+核心直觉:**filler site = 可自由改的 implant 变量,cell site = 固定的
+implant 边界**。在「cell 固定」的前提下,给每个 filler site 选一个 implant
 类型,使整张图的 MW/MS 违例数最少,然后用「删旧 filler + 在原位建新 VT 的
 filler」把这个选择落地。
 
-非目标:这**不是**foundry 级的多边形 DRC。它工作在 **站点网格(site-grid)
-implant 模型** 上(每个被占用的站点带一个 VT);精确 DRC 在上游。
+非目标:这**不是**foundry 级的多边形 DRC。它工作在 **site 网格(site-grid)
+implant 模型** 上(每个被占用的 site 带一个 VT);精确 DRC 在上游。
 
 ---
 
@@ -41,13 +41,13 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
 
 做(in scope):
 - 违例类型:implant 层的 **最小宽度(MW)** 与 **最小间距(MS)**,
-  含**跨行**情形,用站点网格建模。
-- 修复动作:**替换 filler 的 VT**(删旧 filler,在相同站点建一个目标 implant
+  含**跨行**情形,用 site 网格建模。
+- 修复动作:**替换 filler 的 VT**(删旧 filler,在相同 site 建一个目标 implant
   类型的新 filler)。cell / macro / blockage 是固定边界。
 
 不做(out of scope,→ 作为残留回报上游):
 - 移动 / 缩放 / 删除标准 cell;
-- 移动 filler 或改变「哪些站点被占用」这件事;
+- 移动 filler 或改变「哪些 site 被占用」这件事;
 - min-area 等其它 implant 规则;
 - DRC 检查与违例标记本身。
 
@@ -59,14 +59,14 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
 规则**、**适配器(几何)**。下面 §4.1–§4.4 逐一说明;§4.5 是输出。
 
 ### 4.1 来自数据库(通过 `FillerGrid` 接口,见 §7)
-- 行 / 站点结构:`numRows()`、`numCols(row)`。
-- 每个站点的**类别** `kindAt`:`Cell` / `CleanFiller` / `Empty` / `Blocked`。
-- 每个被占用站点的 **VT** `vtAt`:该站点 master 携带的 implant 层身份。
+- 行 / site 结构:`numRows()`、`numCols(row)`。
+- 每个 site 的**类别** `kindAt`:`Cell` / `CleanFiller` / `Empty` / `Blocked`。
+- 每个被占用 site 的 **VT** `vtAt`:该 site master 携带的 implant 层身份。
 
 ### 4.2 来自 filler 库
-- 每个可用 filler master:`{vt, width(站点数), height(行数), name}`。
+- 每个可用 filler master:`{vt, width(site 数), height(行数), name}`。
 - 关键约束:某个 VT 在某段宽度上「可实现」,当且仅当库里能用该 VT 的 master
-  **精确平铺**这段宽度。生产库通常**没有 1 站点宽的 filler**,所以必须精确
+  **精确平铺**这段宽度。生产库通常**没有 1 site 宽的 filler**,所以必须精确
   填满,不能留残缝(原型用 height-1 的 filler 重铺改动的 run)。
 
 ### 4.3 来自 DRC checker / tech 规则(**本节是要和 DRC 团队对齐的接口**)
@@ -74,12 +74,12 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
 本模块是 filler DRC 检查的**下游**,需要从那边拿到下面这些数据:
 
 1. **规则阈值(必需)** — 直接决定评估器判违例的标准:
-   - `min_width`(ωMW):同一 implant 层允许的最小宽度(单位:**站点数**)。
-   - `min_spacing`(ωMS):不同 implant 区之间的最小间距(单位:**站点数**;
+   - `min_width`(ωMW):同一 implant 层允许的最小宽度(单位:**site 数**)。
+   - `min_spacing`(ωMS):不同 implant 区之间的最小间距(单位:**site 数**;
      `≥1` 表示不同 VT 不得相邻接触)。
    - 若**每个 implant 层规则不同**,给一张表:`层名 → (ωMW, ωMS)`。
    - 这些值本质来自 tech LEF / rule deck,DRC checker 已在使用;本模块需要拿到
-     **换算成站点数**后的值(或拿到原始 DBU 值 + 由适配器换算)。
+     **换算成 site 数**后的值(或拿到原始 DBU 值 + 由适配器换算)。
 
 2. **违例 marker 列表(可选,启用「定向修复」模式时需要)** — 每条违例一行:
 
@@ -97,9 +97,9 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
      它加宽);**MS 给 2 个 VT**(哪两个 implant 区贴在一起,要把其中一侧改成
      另一个、或都改成同一个来消除边界)。
    - `region` 必须是**逐行列区间**而不是一个 bbox:跨行违例(台阶 / 不规则块)
-     的形状不是矩形,只有逐行 `[col_lo, col_hi)` 才能精确圈出要动的 filler 站点。
+     的形状不是矩形,只有逐行 `[col_lo, col_hi)` 才能精确圈出要动的 filler site 。
    - `participants` 给出违例**两侧**各自的 owner 实例 + 类型,用来 ① 确认这是
-     「filler 对 filler / filler 对 cell」(从而知道哪侧可动),② 在站点网格上
+     「filler 对 filler / filler 对 cell」(从而知道哪侧可动),② 在 site 网格上
      **定位**要替换的 filler 实例。
    - `fixable_by_filler` 是 checker 的**粗筛**:它先判断「这条违例靠只动 filler
      能不能修」——可修的(对应行为 A/C/D/E,即本规格 §8 的行为 1–3 之类)交给
@@ -114,7 +114,7 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
 > 第 (2) 项违例列表让本模块能「只在违例附近动 filler」,规模大时更快、更可控。
 
 ### 4.4 来自适配器(几何,算法本身不碰)
-- core 区原点、site 宽、行高(DBU ↔ 站点/行 的换算)。
+- core 区原点、 site 宽、行高(DBU ↔ site/行 的换算)。
 - 每行 orientation(R0 / MX …),使新建 filler 的 rail / implant 对齐。
 - `(vt, width, height) → master` 映射,供 `placeFiller` 建实例用。
 - **VT ↔ implant 层映射**:把 implant 层名映射成 VT id,`vtAt` 和建库都用它。
@@ -131,8 +131,8 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
 ## 5. 功能需求
 
 - **FR-1 只动 filler**:绝不移动/缩放/删除 cell、macro、blockage,也绝不移动
-  filler。cell 是固定的 VT 边界;只有 filler 站点的 implant 类型可以改。
-- **FR-2 MW/MS 目标**:选 filler 的 VT,使整张站点网格的 MW + MS 违例总数
+  filler。cell 是固定的 VT 边界;只有 filler site 的 implant 类型可以改。
+- **FR-2 MW/MS 目标**:选 filler 的 VT,使整张 site 网格的 MW + MS 违例总数
   **最小**。
 - **FR-3 最大化修复,而非要么全清要么失败**:目标是**最小化残留**违例,不是
   「必须清零否则报错」。残留(库里没有所需 VT、被 cell 卡住、或改了会制造新
@@ -144,17 +144,17 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
 
 ## 6. 算法 — `FillerVtRepair`
 
-1. **读网格** 到三层站点网格:`vt[r][c]`、`present[r][c]`(`Cell | CleanFiller`)、
+1. **读网格** 到三层 site 网格:`vt[r][c]`、`present[r][c]`(`Cell | CleanFiller`)、
    `filler[r][c]`(可改 == `CleanFiller`)。另存 `orig` = 原始 VT。
 2. **2D MW/MS 评估器** `countViolations(vt, present, rules)`:
-   - **MW**:一个被占用站点「合格」当且仅当它所在的同 VT **水平 run 或
+   - **MW**:一个被占用 site 「合格」当且仅当它所在的同 VT **水平 run 或
      垂直 run** ≥ ωMW;否则它是一个**窄颈** → +1(这能抓到「单行看都没事、
      实际是 1 宽跨行台阶」的情形)。
-   - **MS**:两个正交相邻(右 / 下)的被占用站点若 **VT 不同** → +1(当
+   - **MS**:两个正交相邻(右 / 下)的被占用 site 若 **VT 不同** → +1(当
      ωMS ≥ 1,不同 implant 区不得接触)。只看右邻和下邻,避免重复计数。
-3. **贪心坐标下降** 遍历 filler 站点:对每个 filler 站点,试遍库里所有 VT,
+3. **贪心坐标下降** 遍历 filler site:对每个 filler site,试遍库里所有 VT,
    保留使复合代价 `违例数*1000 − 同VT相邻数` 最小的那个。第二项(合并项)用来
-   打破「单站点平台」——有些改动只有和邻居一起改才划算,合并项给它一个方向。
+   打破「单 site 平台」——有些改动只有和邻居一起改才划算,合并项给它一个方向。
    迭代到不动点(有轮数上限)。
 4. **落地**:对每段「VT 变了的」极大同 VT filler run,用该 VT 的库 master
    `exactFill` 精确平铺该宽度 → `clearSite` 删旧 filler、`placeFiller` 建新的。
@@ -169,7 +169,7 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
 ## 7. 接口与数据模型(可移植)— 新数据库要提供什么
 
 算法只通过抽象接口 `FillerGrid`(`dpl2/src/FillerGrid.h`)碰数据库。移植 =
-针对新数据库实现这**一个类**。坐标全是**站点 / 行**,从不是 DBU;适配器掌管
+针对新数据库实现这**一个类**。坐标全是**site / 行**,从不是 DBU;适配器掌管
 DBU 几何和 `(vt, width, height) → master` 映射。
 
 ### 7.1 `FillerGrid` 接口(6 个方法)
@@ -180,9 +180,9 @@ class FillerGrid {
   virtual ~FillerGrid() = default;
   // ---- 读 ----
   virtual int      numRows() const = 0;                  // 行数
-  virtual int      numCols(int row) const = 0;           // 该行的站点数
+  virtual int      numCols(int row) const = 0;           // 该行的 site 数
   virtual SiteKind kindAt(int row, int col) const = 0;   // Empty/Cell/CleanFiller/Blocked
-  virtual Vt       vtAt(int row, int col) const = 0;     // 被占用站点的 implant id
+  virtual Vt       vtAt(int row, int col) const = 0;     // 被占用 site 的 implant id
   // ---- 写 ----
   virtual void clearSite(int row, int col) = 0;          // 删这里的 filler -> 变 Empty
   virtual void placeFiller(const PlacedFiller& f) = 0;   // 建一个 filler 实例
@@ -194,23 +194,23 @@ class FillerGrid {
 | 方法 | 返回 / 行为 | 实现它需要新 DB 暴露的数据 |
 |---|---|---|
 | `numRows()` | 行数 | core 区的 placement 行 |
-| `numCols(row)` | 该行站点数 | 行宽 / site 宽 |
-| `kindAt(r,c)` | 站点分类 | 覆盖该站点的实例:是 **filler**(等价 CORE SPACER)、**cell**、**macro/blockage**,还是站点**空**着 |
-| `vtAt(r,c)` | 被占用站点的 implant id | 该实例 master 携带的 **IMPLANT 类型层** → 映射成 VT id(字符串) |
+| `numCols(row)` | 该行 site 数 | 行宽 / site 宽 |
+| `kindAt(r,c)` | site 分类 | 覆盖该 site 的实例:是 **filler**(等价 CORE SPACER)、**cell**、**macro/blockage**,还是 site**空**着 |
+| `vtAt(r,c)` | 被占用 site 的 implant id | 该实例 master 携带的 **IMPLANT 类型层** → 映射成 VT id(字符串) |
 | `clearSite(r,c)` | 删 `(r,c)` 处的 filler,变空 | **删(filler)实例**的能力 |
 | `placeFiller(f)` | 在 `f.row/col/width/height` 建一个 VT 为 `f.vt` 的 filler | `(vt,宽,高) → master` 查表,加 **建实例 + 设坐标 + 设朝向**(朝向跟随行);以 physical-only 放置 |
 
 ### 7.2 调用方还要给的其它输入
-- **filler 库**:`std::vector<Filler>`,每个 `{vt, width(站点), height(行),
+- **filler 库**:`std::vector<Filler>`,每个 `{vt, width(site), height(行),
   name}`,覆盖所有可用 filler master(就是 `placeFiller` 能实例化的那些)。
-  宽度种类要够把 run 精确平铺(没有 1 站点 filler ⇒ 必须精确填满)。
-- **`VtRules`**:`min_width`(ωMW)、`min_spacing`(ωMS),单位**站点**
+  宽度种类要够把 run 精确平铺(没有 1 site filler ⇒ 必须精确填满)。
+- **`VtRules`**:`min_width`(ωMW)、`min_spacing`(ωMS),单位**site**
   (来自 §4.3 DRC checker / tech 规则)。
 - **VT ↔ implant 层映射**:见 §4.4,`vtAt` 和建库都用。
 - (可选,定向模式)逐违例 DRC 数据:见 §4.3 第 (2) 项。
 
 ### 7.3 适配器掌管的几何(算法不碰)
-- core 区原点、site 宽、行高(DBU ↔ 站点/行);
+- core 区原点、 site 宽、行高(DBU ↔ site/行);
 - 每行 orientation(R0 / MX …),使新建 filler 对齐 rail / implant;
 - `placeFiller` 用的 `(vt, width, height) → master` 映射。
 
@@ -219,13 +219,13 @@ class FillerGrid {
 
 ---
 
-## 8. 基础行为详解(站点网格图示)
+## 8. 基础行为详解(site 网格图示)
 
-下面用站点网格说明前 4 种典型行为。图例:
+下面用 site 网格说明前 4 种典型行为。图例:
 - `C:L` = 一个 **cell**,VT 为 L(**固定**,算法不能改)。
 - `f:H` = 一个 **filler**,VT 为 H(**可改**,算法可换它的 VT)。
-- `.` = 空站点(没有 implant)。
-- 设 ωMW = 2(同 VT 区至少 2 站点宽)、ωMS = 1(不同 VT 不得相邻接触)。
+- `.` = 空 site(没有 implant)。
+- 设 ωMW = 2(同 VT 区至少 2 site 宽)、ωMS = 1(不同 VT 不得相邻接触)。
 
 ---
 
@@ -244,7 +244,7 @@ class FillerGrid {
 - 它的**垂直**同 VT(H)run:上下都不是 H(行1 列1 是 `C:L`)→ run 长度 = 1。
 - 水平和垂直 run 都 `< ωMW(2)` → 这是个**窄颈**,MW +1。`行1 列0` 的 `f:H`
   同理,再 +1。另外两个 H 还和相邻的 L cell 接触 → 同时有 MS。
-- 直观理解:两块 H implant 各自只有 1 个站点大,像对角线上两个孤立小点,
+- 直观理解:两块 H implant 各自只有 1 个 site 大,像对角线上两个孤立小点,
   既不够宽(MW),又贴着 L(MS)。
 
 **算法怎么修**:把两个 `f:H` 都改成 `f:L`。
@@ -301,7 +301,7 @@ class FillerGrid {
 行0:   C:L     f:H     C:L
 ```
 
-**为什么是违例**:中间这块 H 只有 1 站点宽(水平 run = 1 `< ωMW`)→ MW 窄颈;
+**为什么是违例**:中间这块 H 只有 1 site 宽(水平 run = 1 `< ωMW`)→ MW 窄颈;
 而且它左右各贴着一个 L cell(VT 不同、相邻)→ 两个 MS。一块「夹在 L 中间的
 孤立 H」同时犯 MW 和 MS。
 
@@ -331,7 +331,7 @@ filler 也消不掉这道 cell-cell 边界):
 **为什么是违例**:`C:L` 和 `C:H` 水平相邻、VT 不同 → MS +1。
 
 **算法怎么做**:这道违例的两边**都是 cell**(固定边界),按 FR-1 算法**不能动
-cell**,而它**没有 filler 站点**可改 → 无能为力。于是它**不修**,把这条违例
+cell**,而它**没有 filler site**可改 → 无能为力。于是它**不修**,把这条违例
 计入 `unresolved` **回报上游**(由上游决定是否移动 cell / 改 implant)。
 
 - 这就是「最大化修复、而非强行清零」(FR-3):能用换 filler VT 修的就修
@@ -342,7 +342,7 @@ cell**,而它**没有 filler 站点**可改 → 无能为力。于是它**不修
 
 ---
 
-### 其余情形一览(站点网格)
+### 其余情形一览(site 网格)
 
 | # | 情形 | 动作 |
 |---|---|---|
@@ -355,10 +355,10 @@ cell**,而它**没有 filler 站点**可改 → 无能为力。于是它**不修
 
 ## 9. 约束与假设
 
-- implant 模型是**站点网格**,不是多边形 DRC。
-- 重铺改动的 run 时必须精确填满(没有 1 站点 filler ⇒ 不留残缝);铺不出来的
+- implant 模型是**site 网格**,不是多边形 DRC。
+- 重铺改动的 run 时必须精确填满(没有 1 site filler ⇒ 不留残缝);铺不出来的
   run 回退,而不是留一半。
-- 单一全局 `min_width` / `min_spacing`(逐 VT 的 ωMW/ωMS、以及 ωMS > 1 跨空站点
+- 单一全局 `min_width` / `min_spacing`(逐 VT 的 ωMW/ωMS、以及 ωMS > 1 跨空 site
   的情形是未来工作)。
 - 原型用 **height-1** 的 filler 重铺改动的 run。
 
@@ -383,6 +383,6 @@ g++ -std=c++17 -I dpl2/src dpl2/src/FillerVtRepair.cpp \
 
 - 在新数据库上写适配器(实现 §7.1)+ 一个端到端测试。
 - Tier-2 列 DP 做局部最优 MW/MS。
-- 评估器支持逐 VT 的 ωMW/ωMS,以及 ωMS > 1(跨空站点的间距)。
+- 评估器支持逐 VT 的 ωMW/ωMS,以及 ωMS > 1(跨空 site 的间距)。
 - 定向修复模式(消费 §4.3 第 (2) 项 DRC 数据),取代整图扫描。
 - 落地时支持多行高 filler 重铺(当前是 height-1)。

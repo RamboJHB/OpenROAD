@@ -59,13 +59,13 @@ flowchart TD
 
   <div class="card">
     <h2>② 主流程 FillerVtRepair::repair(grid)</h2>
-    <p>filler 站点=可变 VT、cell 站点=固定边界;贪心选 VT 使 2D 的 MW/MS 违例最少,再替换落地。</p>
+    <p>filler site = 可变 VT、cell site = 固定边界;贪心选 VT 使 2D 的 MW/MS 违例最少,再替换落地。</p>
     <pre class="mermaid">
 flowchart TD
   A["repair(grid)"] --> B["读 grid 到 vt / present / filler 三层网格 记 orig"]
   B --> C["countViolations 2D 评估当前违例 记 violations_before"]
-  C --> D["贪心坐标下降 每个 filler 站点试遍库 VT"]
-  D --> E["复合代价 = 违例×1000 减 同VT合并数 合并打破单站点平台"]
+  C --> D["贪心坐标下降 每个 filler site 试遍库 VT"]
+  D --> E["复合代价 = 违例×1000 减 同VT合并数 合并打破单 site 平台"]
   E --> F{"还能降?"}
   F -- 是 --> D
   F -- 否 --> G["落地 VT 变了的 filler run"]
@@ -89,11 +89,11 @@ flowchart TD
   </div>
 
   <div class="card">
-    <h2>③ MW/MS 评估器 countViolations(站点网格模型)</h2>
+    <h2>③ MW/MS 评估器 countViolations(site 网格模型)</h2>
     <p>每个被占用 site 带一个 VT;只看 site 网格,不是多边形 DRC。</p>
     <pre class="mermaid">
 flowchart TD
-  S["对每个 present 站点 (r,c)"] --> HW["量同VT 水平 run 长度"]
+  S["对每个 present site (r,c)"] --> HW["量同VT 水平 run 长度"]
   S --> VW["量同VT 垂直 run 长度"]
   HW --> MW{"水平 run 与垂直 run 都 短于 ωMW?"}
   VW --> MW
@@ -111,7 +111,7 @@ flowchart TD
   class MWv,MSv r
   class OK1,OK2 g
     </pre>
-    <div class="legend">MW=同VT 水平或垂直 run 短于 ωMW 记窄颈;MS=正交相邻的异VT 占用站点。</div>
+    <div class="legend">MW=同VT 水平或垂直 run 短于 ωMW 记窄颈;MS=正交相邻的异VT 占用 site。</div>
   </div>
 
   <div class="card">
