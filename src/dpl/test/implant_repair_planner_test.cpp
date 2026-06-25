@@ -32,14 +32,14 @@ using namespace dpl;
 static int g_pass = 0;
 static int g_fail = 0;
 
-#define CHECK(cond, msg)                                  \
-  do {                                                    \
-    if (cond) {                                           \
-      ++g_pass;                                           \
-    } else {                                              \
-      ++g_fail;                                           \
-      std::cout << "  FAIL: " << (msg) << "\n";           \
-    }                                                     \
+#define CHECK(cond, msg)                        \
+  do {                                          \
+    if (cond) {                                 \
+      ++g_pass;                                 \
+    } else {                                    \
+      ++g_fail;                                 \
+      std::cout << "  FAIL: " << (msg) << "\n"; \
+    }                                           \
   } while (0)
 
 // Build a Layout from ASCII rows. row 0 == first string.
@@ -96,8 +96,12 @@ int main()
   // ---- 1. clean layout: no violations -------------------------------------
   {
     Rules r;
-    r.intra_mw = 3; r.inter_mw = 2; r.intra_ms = 2; r.inter_ms = 2;
-    r.min_area = 4; r.min_filler = 1;
+    r.intra_mw = 3;
+    r.inter_mw = 2;
+    r.intra_ms = 2;
+    r.inter_ms = 2;
+    r.min_area = 4;
+    r.min_filler = 1;
     ImplantRepairPlanner p(r, fillers(0, {1, 2}));
     auto v = p.detect(make({"AAAA", "AAAA"}));
     CHECK(v.empty(), "clean layout should have no violations");
@@ -105,9 +109,11 @@ int main()
 
   // ---- 2. intra-row min-width: REPAIRABLE ---------------------------------
   {
-    Rules r; r.intra_mw = 3; r.min_area = 1;
+    Rules r;
+    r.intra_mw = 3;
+    r.min_area = 1;
     ImplantRepairPlanner p(r, fillers(0, {1, 2}));
-    Layout l = make({"AA..."});                 // run width 2 < 3, empties right
+    Layout l = make({"AA..."});  // run width 2 < 3, empties right
     auto v = p.detect(l);
     CHECK(countType(v, ViolType::IntraMW) == 1, "case2 detect 1 IntraMW");
     auto plan = p.plan(l);
@@ -118,9 +124,11 @@ int main()
 
   // ---- 2b. intra-row min-width: UNREPAIRABLE (no whitespace) ---------------
   {
-    Rules r; r.intra_mw = 3; r.min_area = 1;
+    Rules r;
+    r.intra_mw = 3;
+    r.min_area = 1;
     ImplantRepairPlanner p(r, fillers(0, {1, 2}));
-    Layout l = make({"AA"});                    // width 2 < 3, no empty sites
+    Layout l = make({"AA"});  // width 2 < 3, no empty sites
     auto plan = p.plan(l);
     CHECK(plan.repaired.empty() && plan.remaining.size() == 1,
           "case2b IntraMW unrepairable (no whitespace)");
@@ -130,16 +138,21 @@ int main()
 
   // ---- 2c. intra-row min-width: UNREPAIRABLE (blockage) --------------------
   {
-    Rules r; r.intra_mw = 3; r.min_area = 1;
+    Rules r;
+    r.intra_mw = 3;
+    r.min_area = 1;
     ImplantRepairPlanner p(r, fillers(0, {1, 2}));
-    Layout l = make({"AA#"});                   // gap blocked, not empty
+    Layout l = make({"AA#"});  // gap blocked, not empty
     auto plan = p.plan(l);
     CHECK(plan.remaining.size() == 1, "case2c IntraMW blocked -> remaining");
   }
 
   // ---- 2d. intra-row min-width: UNREPAIRABLE (below min filler) ------------
   {
-    Rules r; r.intra_mw = 3; r.min_area = 1; r.min_filler = 2;
+    Rules r;
+    r.intra_mw = 3;
+    r.min_area = 1;
+    r.min_filler = 2;
     ImplantRepairPlanner p(r, fillers(0, {2}));  // no width-1 filler
     Layout l = make({"AA."});                    // need 1 site, but MF = 2
     auto plan = p.plan(l);
@@ -150,9 +163,11 @@ int main()
 
   // ---- 3. min implant area: REPAIRABLE ------------------------------------
   {
-    Rules r; r.intra_mw = 1; r.min_area = 4;
+    Rules r;
+    r.intra_mw = 1;
+    r.min_area = 4;
     ImplantRepairPlanner p(r, fillers(0, {1, 2}));
-    Layout l = make({"A...."});                 // area 1 < 4, grow by 3
+    Layout l = make({"A...."});  // area 1 < 4, grow by 3
     auto v = p.detect(l);
     CHECK(countType(v, ViolType::MinArea) == 1, "case3 detect 1 MinArea");
     auto plan = p.plan(l);
@@ -163,9 +178,12 @@ int main()
 
   // ---- 4. intra-row min-spacing: REPAIRABLE by merge ----------------------
   {
-    Rules r; r.intra_mw = 1; r.intra_ms = 3; r.min_area = 1;
+    Rules r;
+    r.intra_mw = 1;
+    r.intra_ms = 3;
+    r.min_area = 1;
     ImplantRepairPlanner p(r, fillers(0, {1, 2}));
-    Layout l = make({"A..A"});                  // gap 2 < 3, empty -> merge
+    Layout l = make({"A..A"});  // gap 2 < 3, empty -> merge
     auto v = p.detect(l);
     CHECK(countType(v, ViolType::IntraMS) == 1, "case4 detect 1 IntraMS");
     auto plan = p.plan(l);
@@ -176,9 +194,12 @@ int main()
 
   // ---- 4b. intra-row min-spacing: gap occupied -> REMAINING ----------------
   {
-    Rules r; r.intra_mw = 1; r.intra_ms = 2; r.min_area = 1;
+    Rules r;
+    r.intra_mw = 1;
+    r.intra_ms = 2;
+    r.min_area = 1;
     ImplantRepairPlanner p(r, fillers(0, {1}));
-    Layout l = make({"ABA"});                   // A..A separated by a B cell
+    Layout l = make({"ABA"});  // A..A separated by a B cell
     auto v = p.detect(l);
     CHECK(countType(v, ViolType::IntraMS) == 1, "case4b detect 1 IntraMS (A)");
     auto plan = p.plan(l);
@@ -189,18 +210,25 @@ int main()
 
   // ---- 4c. intra-row min-spacing: gap below MF -> REMAINING ----------------
   {
-    Rules r; r.intra_mw = 1; r.intra_ms = 2; r.min_area = 1; r.min_filler = 2;
+    Rules r;
+    r.intra_mw = 1;
+    r.intra_ms = 2;
+    r.min_area = 1;
+    r.min_filler = 2;
     ImplantRepairPlanner p(r, fillers(0, {2, 3}));  // no width-1 filler
-    Layout l = make({"A.A"});                   // gap 1 < 2, but MF = 2
+    Layout l = make({"A.A"});                       // gap 1 < 2, but MF = 2
     auto plan = p.plan(l);
     CHECK(plan.remaining.size() == 1, "case4c gap below MF -> remaining");
   }
 
   // ---- 5. inter-row min-width: REPAIRABLE (widen staircase) ---------------
   {
-    Rules r; r.intra_mw = 1; r.inter_mw = 2; r.min_area = 1;
+    Rules r;
+    r.intra_mw = 1;
+    r.inter_mw = 2;
+    r.min_area = 1;
     ImplantRepairPlanner p(r, fillers(0, {1}));
-    Layout l = make({"AAA", "A.."});            // overlap 1 < 2, widen by 1
+    Layout l = make({"AAA", "A.."});  // overlap 1 < 2, widen by 1
     auto v = p.detect(l);
     CHECK(countType(v, ViolType::InterMW) == 1, "case5 detect 1 InterMW");
     auto plan = p.plan(l);
@@ -211,9 +239,12 @@ int main()
 
   // ---- 6. inter-row min-spacing: REMAINING (needs movement) ---------------
   {
-    Rules r; r.intra_mw = 1; r.inter_ms = 2; r.min_area = 1;
+    Rules r;
+    r.intra_mw = 1;
+    r.inter_ms = 2;
+    r.min_area = 1;
     ImplantRepairPlanner p(r, fillers(0, {1}));
-    Layout l = make({"A..", "..A"});            // adjacent-row A's, dist 1 < 2
+    Layout l = make({"A..", "..A"});  // adjacent-row A's, dist 1 < 2
     auto v = p.detect(l);
     CHECK(countType(v, ViolType::InterMS) == 1, "case6 detect 1 InterMS");
     auto plan = p.plan(l);

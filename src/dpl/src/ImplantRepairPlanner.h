@@ -59,9 +59,15 @@ namespace dpl {
 
 // Implant / VT identifier. Distinct non-negative ids are distinct VTs.
 using ImplantId = int;
-inline constexpr ImplantId kNoImplant = -1;  // empty / blockage carry no implant
+inline constexpr ImplantId kNoImplant
+    = -1;  // empty / blockage carry no implant
 
-enum class SiteKind { Empty, Blocked, Cell };
+enum class SiteKind
+{
+  Empty,
+  Blocked,
+  Cell
+};
 
 struct Site
 {
@@ -94,13 +100,12 @@ struct Layout
 {
   int num_rows = 0;
   int num_sites = 0;
-  std::vector<std::vector<Site>> sites;  // [row][col], size num_rows x num_sites
+  std::vector<std::vector<Site>>
+      sites;  // [row][col], size num_rows x num_sites
 
   Layout() = default;
   Layout(int rows, int cols)
-      : num_rows(rows),
-        num_sites(cols),
-        sites(rows, std::vector<Site>(cols))
+      : num_rows(rows), num_sites(cols), sites(rows, std::vector<Site>(cols))
   {
   }
 
@@ -108,13 +113,14 @@ struct Layout
   Site& at(int row, int col) { return sites[row][col]; }
 };
 
-enum class ViolType {
-  IntraMW,     // intra-row min width
-  InterMW,     // inter-row min abutting width (staircase)
-  IntraMS,     // intra-row min spacing
-  InterMS,     // inter-row min spacing
-  MinArea,     // min implant area
-  MinFiller    // a required fill is impossible because of MF
+enum class ViolType
+{
+  IntraMW,   // intra-row min width
+  InterMW,   // inter-row min abutting width (staircase)
+  IntraMS,   // intra-row min spacing
+  InterMS,   // inter-row min spacing
+  MinArea,   // min implant area
+  MinFiller  // a required fill is impossible because of MF
 };
 
 const char* toString(ViolType t);
@@ -123,8 +129,8 @@ struct Violation
 {
   ViolType type;
   ImplantId implant;
-  int row = 0;       // primary row of the violation
-  int col_lo = 0;    // window [col_lo, col_hi) the violation refers to
+  int row = 0;     // primary row of the violation
+  int col_lo = 0;  // window [col_lo, col_hi) the violation refers to
   int col_hi = 0;
   bool repairable_by_filler = false;
   std::string reason;  // filled for remaining (unrepairable) violations
@@ -135,15 +141,15 @@ struct FillerSpot
 {
   ImplantId implant;
   int row;
-  int col;     // left-most site
-  int width;   // sites
+  int col;    // left-most site
+  int width;  // sites
 };
 
 struct RepairPlan
 {
-  std::vector<FillerSpot> suggestions;   // fillers to insert for the repairs
-  std::vector<Violation> repaired;       // violations the suggestions resolve
-  std::vector<Violation> remaining;      // violations filler cannot fix
+  std::vector<FillerSpot> suggestions;  // fillers to insert for the repairs
+  std::vector<Violation> repaired;      // violations the suggestions resolve
+  std::vector<Violation> remaining;     // violations filler cannot fix
 };
 
 class ImplantRepairPlanner

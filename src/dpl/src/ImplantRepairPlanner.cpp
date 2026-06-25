@@ -20,12 +20,18 @@ namespace dpl {
 const char* toString(ViolType t)
 {
   switch (t) {
-    case ViolType::IntraMW:   return "intra-row-min-width";
-    case ViolType::InterMW:   return "inter-row-min-width";
-    case ViolType::IntraMS:   return "intra-row-min-spacing";
-    case ViolType::InterMS:   return "inter-row-min-spacing";
-    case ViolType::MinArea:   return "min-implant-area";
-    case ViolType::MinFiller: return "min-filler-width";
+    case ViolType::IntraMW:
+      return "intra-row-min-width";
+    case ViolType::InterMW:
+      return "inter-row-min-width";
+    case ViolType::IntraMS:
+      return "intra-row-min-spacing";
+    case ViolType::InterMS:
+      return "inter-row-min-spacing";
+    case ViolType::MinArea:
+      return "min-implant-area";
+    case ViolType::MinFiller:
+      return "min-filler-width";
   }
   return "?";
 }
@@ -117,8 +123,9 @@ ImplantRepairPlanner::ImplantRepairPlanner(Rules rules,
 // ===========================================================================
 
 // intra-row min width: a same-implant run narrower than intra_mw.
-void ImplantRepairPlanner::detectIntraRowWidth(const Layout& l,
-                                               std::vector<Violation>& out) const
+void ImplantRepairPlanner::detectIntraRowWidth(
+    const Layout& l,
+    std::vector<Violation>& out) const
 {
   for (int r = 0; r < l.num_rows; ++r) {
     for (const Run& run : rowRuns(l, r)) {
@@ -146,8 +153,8 @@ void ImplantRepairPlanner::detectIntraRowSpacing(
       for (size_t i = 1; i < runs.size(); ++i) {
         const int gap = runs[i].lo - runs[i - 1].hi;
         if (gap > 0 && gap < rules_.intra_ms) {
-          out.push_back(makeViol(
-              ViolType::IntraMS, imp, r, runs[i - 1].hi, runs[i].lo));
+          out.push_back(
+              makeViol(ViolType::IntraMS, imp, r, runs[i - 1].hi, runs[i].lo));
         }
       }
     }
@@ -174,8 +181,7 @@ void ImplantRepairPlanner::detectInterRow(const Layout& l,
         const int ohi = std::min(ra.hi, rb.hi);
         if (ohi > olo) {  // vertically abutting -> check staircase width
           if (ohi - olo < rules_.inter_mw) {
-            out.push_back(
-                makeViol(ViolType::InterMW, ra.implant, r, olo, ohi));
+            out.push_back(makeViol(ViolType::InterMW, ra.implant, r, olo, ohi));
           }
         } else {  // disjoint columns -> check inter-row spacing
           int dist = 0;
@@ -190,8 +196,7 @@ void ImplantRepairPlanner::detectInterRow(const Layout& l,
             ghi = ra.lo;
           }
           if (dist > 0 && dist < rules_.inter_ms) {
-            out.push_back(
-                makeViol(ViolType::InterMS, ra.implant, r, glo, ghi));
+            out.push_back(makeViol(ViolType::InterMS, ra.implant, r, glo, ghi));
           }
         }
       }
@@ -206,7 +211,11 @@ void ImplantRepairPlanner::detectMinArea(const Layout& l,
                                          std::vector<Violation>& out) const
 {
   // collect all runs with their row.
-  struct RRun { int row; Run run; };
+  struct RRun
+  {
+    int row;
+    Run run;
+  };
   std::vector<RRun> runs;
   std::vector<std::vector<int>> by_row(l.num_rows);  // indices per row
   for (int r = 0; r < l.num_rows; ++r) {
@@ -518,17 +527,20 @@ bool ImplantRepairPlanner::repairOne(Layout& work,
           // column just outside the current overlap on this side
           const int oloN = std::max(a.lo, b.lo);
           const int ohiN = std::min(a.hi, b.hi);
-          (void)oloN;
-          (void)ohiN;
-          const int c = right ? ohi + (rules_.inter_mw - (ohi - olo) - need)
-                              : olo - 1 - ((rules_.inter_mw - (ohi - olo)) - need);
+          (void) oloN;
+          (void) ohiN;
+          const int c
+              = right ? ohi + (rules_.inter_mw - (ohi - olo) - need)
+                      : olo - 1 - ((rules_.inter_mw - (ohi - olo)) - need);
           if (c < 0 || c >= work.num_sites) {
             break;
           }
           const Site& s0 = work.at(r0, c);
           const Site& s1 = work.at(r1, c);
-          const bool c0_imp = s0.kind == SiteKind::Cell && s0.implant == v.implant;
-          const bool c1_imp = s1.kind == SiteKind::Cell && s1.implant == v.implant;
+          const bool c0_imp
+              = s0.kind == SiteKind::Cell && s0.implant == v.implant;
+          const bool c1_imp
+              = s1.kind == SiteKind::Cell && s1.implant == v.implant;
           if (c0_imp && c1_imp) {  // already overlapping here
             --need;
             continue;
@@ -561,8 +573,9 @@ bool ImplantRepairPlanner::repairOne(Layout& work,
     case ViolType::InterMS: {
       // Two same-implant cells in adjacent rows that are too close: filler
       // cannot increase spacing, so this needs placement/legalization.
-      reason = "inter-row spacing too small: needs cell movement (not "
-               "filler-repairable)";
+      reason
+          = "inter-row spacing too small: needs cell movement (not "
+            "filler-repairable)";
       return false;
     }
     case ViolType::MinFiller:
@@ -607,9 +620,8 @@ RepairPlan ImplantRepairPlanner::plan(const Layout& layout) const
     } else {
       rec.repairable_by_filler = false;
       auto it = reasons.find(key(v));
-      rec.reason = (it != reasons.end())
-                       ? it->second
-                       : "still violated after filler repair";
+      rec.reason = (it != reasons.end()) ? it->second
+                                         : "still violated after filler repair";
       out.remaining.push_back(rec);
     }
   }
