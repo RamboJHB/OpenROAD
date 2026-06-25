@@ -148,7 +148,8 @@ void DplFillerGrid::placeFiller(const PlacedFiller& f)
 {
   dbMaster* master = masterFor(f.vt, f.width, f.height);
   if (master == nullptr) {
-    logger_->error(utl::DPL, 205,
+    logger_->error(utl::DPL,
+                   205,
                    "DplFillerGrid: no master for vt={} {}x{}.",
                    f.vt,
                    f.width,
@@ -213,7 +214,8 @@ RepairResult repairDirtyFillers(odb::dbBlock* block,
   rules.min_implant_width = min_implant_width;
   FillerRepair repair(grid.buildLibrary(), preserve_user_order, rules);
   RepairResult result = repair.repair(grid);
-  logger->info(utl::DPL, 206,
+  logger->info(utl::DPL,
+               206,
                "Filler repair: placed {}, unsolved {}.",
                result.placed.size(),
                result.unsolved.size());
