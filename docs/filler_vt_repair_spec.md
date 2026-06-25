@@ -98,6 +98,11 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
    - `min_spacing`(ωMS):不同 implant 区之间的最小间距(单位:**site 数**;
      `≥1` 表示不同 VT 不得相邻接触)。
    - 若**每个 implant 层规则不同**,给一张表:`层名 → (ωMW, ωMS)`。
+   - **P/N band 可能不同(待考虑)**:同一 VT 的 implant 在一行的 **P band**(PMOS
+     侧)和 **N band**(NMOS 侧)上,**ωMS / ωMW 可能不一样**。所以更完备的形式是
+     `(层名, band∈{P,N}) → (ωMW, ωMS)`;评估器要知道每个 site 落在 P 还是 N band
+     (由行的 N/P 划分或 row orientation 推出,适配器提供)。当前模型按**单一**
+     ωMW/ωMS 处理,P/N 区分留作后续(见 §9、§11)。
    - 这些值本质来自 tech LEF / rule deck,DRC checker 已在使用;本模块需要拿到
      **换算成 site 数**后的值(或拿到原始 DBU 值 + 由适配器换算)。
 
@@ -417,10 +422,20 @@ cell**,而它**没有 filler site**可改 → 无能为力。于是它**不修**
 ## 9. 约束与假设
 
 - implant 模型是**site 网格**,不是多边形 DRC。
+- **只改 VT、不改占用(occupancy-preserving)**:本方案保持「哪些 site 是 filler」
+  不变(始终 100% 填满),只换 filler 的 VT。落地时虽然在实例层 `clearSite`+
+  `placeFiller`(删旧建新),但**不留空 site、不动 cell**。
+  - 为什么不靠「删 filler 留空隙」来修:① 留空破坏 §3.1 的 100% utility,且会引入
+    别的 DRC(base/OD min-area、PG/rail 连续、density);② 单纯**重新切分宽度**
+    (同 VT、仍填满)对 MW/MS **毫无影响**——违例只看**逐 site 的 VT**,不看 filler
+    实例边界。所以"删+重插"唯一能多修的,是**用空隙间距(spacing)当工具**
+    分开两个异 VT 区,这能多修一部分 VT 换不动的 MS/交叠,但前提是 flow 允许留空
+    且额外 DRC 被建模——属于**可选的、更强但更冒险的升级层**,不是免费收益
+    (见 §11)。
 - 重铺改动的 run 时必须精确填满(没有 1 site filler ⇒ 不留残缝);铺不出来的
   run 回退,而不是留一半。
-- 单一全局 `min_width` / `min_spacing`(逐 VT 的 ωMW/ωMS、以及 ωMS > 1 跨空 site
-  的情形是未来工作)。
+- 单一全局 `min_width` / `min_spacing`(逐 VT 的 ωMW/ωMS、**同一 VT 的 P band 与
+  N band 可能不同的 ωMS/ωMW**、以及 ωMS > 1 跨空 site 的情形,都是未来工作)。
 - **MW 评估器目前只实现了行内/对角窄条 (a),尚未实现跨行交叠颈 (b / case B)**
   (见 §6 第 2 点、行为 1B)。模型层面已定义,代码评估器待补;在补上之前,
   交叠太小这类 min-width 会被漏判。
@@ -451,6 +466,11 @@ g++ -std=c++17 -I dpl2/src dpl2/src/FillerVtRepair.cpp \
 - 在新数据库上写适配器(实现 §7.1)+ 一个端到端测试。
 - Tier-2 列 DP 做局部最优 MW/MS。
 - 评估器支持逐 VT 的 ωMW/ωMS,以及 ωMS > 1(跨空 site 的间距)。
+- **P/N band 各异的 ωMS/ωMW**:规则改成 `(层, band) → (ωMW, ωMS)`,评估器按每个
+  site 所属的 P/N band 取阈值(需要行的 N/P 划分,见 §4.3)。
+- **可选「删+重插」升级层**:对 VT 换不动的残留 MS/交叠,尝试用空隙间距分开异 VT
+  区(carve 一个 ≥ ωMS 的空 gap)。仅在 flow 允许留空、且额外 DRC(min-area/PG/
+  density)被建模时启用;否则保持 occupancy-preserving(见 §9)。
 - 定向修复模式(消费 §4.3 第 (2) 项 DRC 数据),取代整图扫描。
 - 落地时支持多行高 filler 重铺(当前是 height-1)。
 
