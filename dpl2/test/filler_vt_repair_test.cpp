@@ -115,6 +115,28 @@ int main()
     check(v2 == 0, "T5 evaluator clean on solid L block");
   }
 
+  // ---- T6: case-B inter-row overlap neck (single VT, no MW(a)/MS) ----
+  // Two wide L rows offset so they overlap in only 1 column -> narrow vertical
+  // bridge.  Each row is >= min_width wide, so case (a) and MS are both 0; only
+  // the overlap-neck check (b) should fire.
+  {
+    // row0 L = col0-3, row1 L = col3-6 ; overlap = col3 (width 1) < min_width 3
+    std::vector<std::vector<Vt>> vt
+        = {{"L", "L", "L", "L", "", "", ""}, {"", "", "", "L", "L", "L", "L"}};
+    std::vector<std::vector<char>> pr
+        = {{1, 1, 1, 1, 0, 0, 0}, {0, 0, 0, 1, 1, 1, 1}};
+    int v
+        = FillerVtRepair::countViolations(vt, pr, VtRules{/*mw=*/3, /*ms=*/1});
+    check(v == 1, "T6 case-B overlap neck flagged (==1)");
+    // Aligned (not offset) -> wide overlap -> no neck.
+    std::vector<std::vector<Vt>> vta
+        = {{"L", "L", "L", "L", "", "", ""}, {"L", "L", "L", "L", "", "", ""}};
+    std::vector<std::vector<char>> pra
+        = {{1, 1, 1, 1, 0, 0, 0}, {1, 1, 1, 1, 0, 0, 0}};
+    int va = FillerVtRepair::countViolations(vta, pra, VtRules{3, 1});
+    check(va == 0, "T6 aligned wide overlap -> no neck");
+  }
+
   std::cout << "FillerVtRepair test: " << g_pass << " passed, " << g_fail
             << " failed.\n";
   return g_fail == 0 ? 0 : 1;

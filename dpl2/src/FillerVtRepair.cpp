@@ -115,7 +115,56 @@ int FillerVtRepair::countViolations(
       }
     }
   }
-  return mw + ms;
+
+  // MW case (b): inter-row overlap neck.  Two adjacent rows whose same-VT
+  // regions are each wider than min_width but offset, overlapping in too few
+  // columns -> the vertical bridge between them is a narrow neck that case (a)
+  // misses (the overlap columns have a long in-row horizontal run, so (a)
+  // passes them).  Count one neck per such bridge.
+  int neck = 0;
+  for (int r = 0; r + 1 < R; ++r) {
+    const int C = static_cast<int>(vt[r].size());
+    auto overlap = [&](int cc) {
+      return pres(r, cc) && pres(r + 1, cc) && vt[r][cc] == vt[r + 1][cc];
+    };
+    int c = 0;
+    while (c < C) {
+      if (!overlap(c)) {
+        ++c;
+        continue;
+      }
+      const Vt& v = vt[r][c];
+      int e = c;
+      while (e < C && overlap(e) && vt[r][e] == v) {
+        ++e;
+      }
+      const int w = e - c;  // bridge (overlap) width
+      if (w < rules.min_width) {
+        // horizontal same-VT run width spanning the overlap in each row
+        int l0 = c, r0 = e - 1;
+        while (pres(r, l0 - 1) && vt[r][l0 - 1] == v) {
+          --l0;
+        }
+        while (pres(r, r0 + 1) && vt[r][r0 + 1] == v) {
+          ++r0;
+        }
+        int l1 = c, r1 = e - 1;
+        while (pres(r + 1, l1 - 1) && vt[r + 1][l1 - 1] == v) {
+          --l1;
+        }
+        while (pres(r + 1, r1 + 1) && vt[r + 1][r1 + 1] == v) {
+          ++r1;
+        }
+        // Only a real neck if BOTH rows extend beyond the bridge (else the
+        // narrow region is already a case-(a) violation in one row).
+        if ((r0 - l0 + 1) > w && (r1 - l1 + 1) > w) {
+          ++neck;
+        }
+      }
+      c = e;
+    }
+  }
+  return mw + ms + neck;
 }
 
 // Same-VT orthogonal adjacencies (used as a tie-breaker: merging same VT never
