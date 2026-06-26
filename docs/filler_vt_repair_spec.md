@@ -1,14 +1,37 @@
 # 功能规格 — Filler VT 修复(跨行 MW/MS,只替换 VT)
 
-状态:原型已实现并测试通过(13/13)。最后更新 2026-06。
-本文档范围:**只替换 filler VT** 这一套修复方案。它与数据库无关,移植时
-只需实现一个接口(见 §7)。**§13 已按上游 `ImplantLayerChecker` 真实类对接**——
-生产集成把违例评估交给该 checker 当 oracle(见 §13),§4–§6 的自造评估器降为
-原型 / 单测桩。
+状态:两条路径均已实现并测试通过(Part A 标准库 15/15 · Part B oracle 12/12)。
+最后更新 2026-06。
+
+核心一句话:布线/ECO 扰动后产生的 **implant 层 MW/MS 违例**,本模块**只通过替换
+filler 的 VT(implant 类型)**来修——不移动/删除 cell,不移动 filler,不改占用。
 
 ---
 
-## 1. 目的
+## 0. 文档导航 —— 两套实现路径
+
+本模块的**算法(决定换哪些 filler 的 VT)**是一套;**违例评估(判 MW/MS)**有两种
+后端,因此有两条实现路径。共享部分(§1–§5)先读,再按需读 Part A 或 Part B。
+
+| | **Part A — 自带 site-grid 评估器** | **Part B — 接 ImplantLayerChecker oracle** |
+|---|---|---|
+| 定位 | 原型 / 可移植 / 无依赖单测 | **生产路径(推荐)** |
+| 违例评估 | 自己的 `countViolations`(site 网格,MW/MS,含 case-B) | 上游 checker 的 `checkPlace/checkDirect` |
+| 覆盖 | MW/MS 的粗略子集 | P/N、PRL、abutment、containment… 全覆盖 |
+| 代码 | `FillerVtRepair.{h,cpp}` + `FillerGrid.h` + `FakeFillerGrid.h` | `FillerVtRepairOracle.{h,cpp}` + `ImplantChecker.h` + `FakeImplantChecker.h` |
+| 测试 | `filler_vt_repair_test.cpp`(15/15) | `filler_vt_repair_oracle_test.cpp`(12/12) |
+| 章节 | §6 算法 · §7 `FillerGrid` 接口 · §8 行为详解 · §12 DP 附录 | §13 全节(13.1 架构 · 13.3 数据对照 · 13.7 接口绑定 · 13.8 RD 问题) |
+
+> 两条路径**共用同一套决策思路**(贪心 / 未来 DP),只是「问谁违例多少」不同。
+> 生产上线走 Part B;Part A 是没有 checker 时的可移植后备,也是 case-B 等模型的
+> 参考实现与单测桩。
+>
+> **章节归属**:§1–§5 共享;**Part A** = §6 §7 §8 §12;**Part B** = §13;
+> §9 约束 / §10 验证 / §11 待办 为两者**共用**。
+
+---
+
+## 1. 目的(共享)
 
 布线后,优化(`opto`)和 ECO 合法化会扰动版图、破坏 filler,在相邻行之间
 产生 **implant 层 DRC 违例**。本模块修复其中的 **跨行最小宽度(MW)** 和
@@ -178,7 +201,9 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
 
 ---
 
-## 6. 算法 — `FillerVtRepair`
+> ━━━ **Part A — 自带 site-grid 评估器(原型 / 可移植)** ━━━ (§6 §7 §8 §12)
+
+## 6. 算法 — `FillerVtRepair`(Part A)
 
 1. **读网格** 到三层 site 网格:`vt[r][c]`、`present[r][c]`(`Cell | CleanFiller`)、
    `filler[r][c]`(可改 == `CleanFiller`)。另存 `orig` = 原始 VT。
@@ -198,9 +223,9 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
        ——两行各自很宽,但错开,连接处(交叠列)太细。判法:对每条相邻行边界
        `(r, r+1)`,取「两行同 VT 且都 present」的极大连续列段;若该列段宽度
        < ωMW(且它是连接两侧更大区域的**颈**,而非整块本就小)→ +1。
-       **注意**:(b) 是当前代码**尚未实现**的已知缺口(现有代码只做了
-       「水平 run 或垂直 run ≥ ωMW」,会漏判 (b),因为交叠颈那几列在自己行里
-       水平 run 很长被误判通过)。见 §11 待办。
+       **已实现**:`countViolations` 现已包含 (b)(单测 T6:错开 vs 对齐)。判定
+       要求「桥窄于 ωMW **且**两行的同 VT 水平 run 都比桥宽」,从而只抓 (a) 漏掉的
+       真颈、不与 (a) 重复计。
    - **MS**:两个正交相邻(右 / 下)的被占用 site 若 **VT 不同** → +1(当
      ωMS ≥ 1,不同 implant 区不得接触)。只看右邻和下邻,避免重复计数。
 3. **贪心坐标下降** 遍历 filler site:对每个 filler site,试遍库里所有 VT,
@@ -448,41 +473,48 @@ cell**,而它**没有 filler site**可改 → 无能为力。于是它**不修**
   N band 可能不同的 ωMS/ωMW**、以及 ωMS > 1 跨空 site 的情形,都是未来工作)。
   注:这些**在 oracle 模式下由上游 checker 处理**(P/N 经 `ImplantLayer.polarity`
   + `bandSlot`,见 §13.4);此条只针对我们 standalone 的 site 网格评估器。
-- **MW 评估器目前只实现了行内/对角窄条 (a),尚未实现跨行交叠颈 (b / case B)**
-  (见 §6 第 2 点、行为 1B)。模型层面已定义,代码评估器待补;在补上之前,
-  交叠太小这类 min-width 会被漏判。
+- MW 评估器**已实现**行内/对角窄条 (a) **和**跨行交叠颈 (b / case B)
+  (见 §6 第 2 点、行为 1B、单测 T6)。
 - 原型用 **height-1** 的 filler 重铺改动的 run。
 
 ---
 
-## 10. 验证
+## 10. 验证(两路径)
 
-- `dpl2/test/filler_vt_repair_test.cpp`:**13/13** —
-  T1 台阶 MW+MS 全修(filler H→L、cell 不动),
-  T2 跨行 MS 合并,T3 库缺 VT → 残留(零替换),
-  T4 干净空操作,T5 评估器自检(标出 L 叠 H、纯 L 块判干净)。
+**Part A** — `dpl2/test/filler_vt_repair_test.cpp`:**15/15** —
+T1 台阶 MW+MS 全修(filler H→L、cell 不动),T2 跨行 MS 合并,T3 库缺 VT → 残留
+(零替换),T4 干净空操作,T5 评估器自检,**T6 case-B 交叠颈(错开 vs 对齐)**。
 
-构建 / 运行(无数据库、无 Phase I 依赖):
+**Part B** — `dpl2/test/filler_vt_repair_oracle_test.cpp`:**12/12** —
+O1 台阶 MW+MS 经 oracle 全修,O2 跨行 MS 合并,O3 库缺 VT → 残留(零替换),
+O4 干净空操作。用 `FakeImplantChecker` 作内存 oracle。
+
+构建 / 运行(无数据库、无依赖):
 ```
+# Part A
 g++ -std=c++17 -I dpl2/src dpl2/src/FillerVtRepair.cpp \
     dpl2/test/filler_vt_repair_test.cpp -o /tmp/vt && /tmp/vt
+# Part B
+g++ -std=c++17 -I dpl2/src dpl2/src/FillerVtRepair.cpp \
+    dpl2/src/FillerVtRepairOracle.cpp \
+    dpl2/test/filler_vt_repair_oracle_test.cpp -o /tmp/orc && /tmp/orc
 ```
 
 ---
 
-## 11. 待办
+## 11. 待办(两路径共用)
 
-- **【首要】对接 `ImplantLayerChecker` oracle**(§13):用 `checkPlace` 作代价、
-  `commitPlace` 落地,取代自造评估器。先和 RD 敲定 §13.8 的 7 个问题(尤其
-  **如何删除/替换已提交 filler 实例**——阻塞项)。
-- 一旦走 oracle 模式,下面三条**由 checker 覆盖**,我们 standalone 评估器才需自己补:
-  - **MW 评估器补 case B(跨行交叠颈)**:对每条相邻行边界,检查两行同 VT 的
-    极大连续交叠列段宽度 ≥ ωMW,否则记 MW(见 §6 (b)、行为 1B);加对应单测。
+已完成(本轮):**case-B 评估器**(§6 (b),单测 T6)· **oracle 路径骨架**
+(`ImplantChecker` + `FillerVtRepairOracle` + `FakeImplantChecker`,12/12)。
+
+- **【首要】把 `ImplantChecker` 接到真实 `ImplantLayerChecker`**:实现一个适配器
+  把 §13.7 的方法绑到 `checkDirect/checkPlace/commitPlace`。先和 RD 敲定 §13.8 的
+  7 个问题(尤其**如何删除/替换已提交 filler 实例**——阻塞项)。
+- standalone(Part A)评估器仍缺、但 oracle 模式由 checker 覆盖的:
   - **P/N band 各异的 ωMS/ωMW**:规则改成 `(层, band) → (ωMW, ωMS)`,按 site 的
     P/N band 取阈值。
   - 逐 VT 的 ωMW/ωMS、ωMS > 1(跨空 site)。
-- 在新数据库上写适配器(实现 §7.1,或按 §13.7 绑定到 checker)+ 一个端到端测试。
-- Tier-2 列 DP 做局部最优 MW/MS。
+- Tier-2 列 DP 做局部最优 MW/MS(替换 §6 / §13.2 的贪心,不动 oracle 接缝)。
 - **可选「删+重插」升级层**:对 VT 换不动的残留 MS/交叠,尝试用空隙间距分开异 VT
   区(carve 一个 ≥ ωMS 的空 gap)。仅在 flow 允许留空、且额外 DRC(min-area/PG/
   density)被建模时启用;否则保持 occupancy-preserving(见 §9)。
@@ -578,11 +610,18 @@ checker)最好给齐下面这些——这是「最完备」清单:
 
 ---
 
-## 13. 对接上游 checker(ecoPlace Implant Layer Checker)
+> ━━━ **Part B — 生产集成(接 ImplantLayerChecker oracle,推荐路径)** ━━━
+
+## 13. 对接上游 checker(ecoPlace Implant Layer Checker)(Part B)
 
 > 依据 checker RD 给的类图(`ImplantLayerCheckerHelper.h` + `ImplantLayerChecker.h`)。
 > 它**不只是给数据**——本身是一个**增量 check / commit 引擎**,这改变了我们的
 > 集成方式:不必自造 MW/MS 评估器,把它当**代价 oracle**用。
+>
+> **本节已落代码(骨架)**:抽象接口 `dpl2/src/ImplantChecker.h`(把下面的 API
+> 抽象成 portable seam)+ 决策层 `dpl2/src/FillerVtRepairOracle.{h,cpp}`(贪心搜索)
+> + 内存桩 `dpl2/src/FakeImplantChecker.h` + 测试 `filler_vt_repair_oracle_test.cpp`
+> (12/12)。接真实 checker = 实现 `ImplantChecker` 的一个适配器(§13.7)。
 
 ### 13.1 它是什么 —— 增量放置合法性 oracle
 
@@ -654,14 +693,22 @@ cur = checkDirect(region) / initDiagnostics()   // 当前违例(含 xWindow)
   区间」字段:直接用 `xWindow + 涉及 rows`(再按 §"开窗"扩到最近 cell + 上下 1 行)。
 - 所有 `DbCoord` = DBU;`measuredValue/requiredValue/minValue` 都是 DBU。
 
-### 13.7 接口绑定:我们的 `FillerGrid` ↔ checker API
+### 13.7 接口绑定:我们的 `ImplantChecker` ↔ checker API
 
-| 我们的 `FillerGrid` | 绑定到 checker |
+我们已把 oracle 抽象成 `dpl2/src/ImplantChecker.h` 的 5 个方法;接真实 checker =
+实现一个适配器把这 5 个方法绑到 `ImplantLayerChecker`:
+
+| `ImplantChecker`(我们的接口) | 绑定到真实 checker |
 |---|---|
-| `placeFiller(f)` | `commitPlace(CommitRequest{place: CheckRequest{masterId,rowId,x,orientation}})` |
-| `clearSite(r,c)` | 删除 / 替换该实例 —— **需公开接口**(类图里 `removeInstance` 是 private) |
-| `kindAt / vtAt` | 从 `placedInsts()` + `masters` 推 |
-| `countViolations` | `checkPlace`(候选)/ `checkDirect`(真值) |
+| `violations()` | `checkDirect(...)` 在管辖区域上的违例计数 |
+| `changeableRuns()` | 从 `placedInsts()`(`isFiller`)+ `masters` 推出可改 filler run |
+| `candidateVts()` | 从 `ImplantInput.masters`(`isFiller`)的 implant 层推出 |
+| `evalReplaceRun(run, vt)` | `checkPlace(CheckRequest{...})` 评估「该 run 改 vt」(不提交) |
+| `commitReplaceRun(run, vt)` | `removeInstance(...)` + `commitPlace(CommitRequest{...})` |
+
+> 决策层 `FillerVtRepairOracle` 只依赖上面 5 个方法,完全不碰 DB / 真实 checker;
+> 换后端只换一个 `ImplantChecker` 实现(测试用 `FakeImplantChecker`,生产用真实
+> 适配器)。`commitReplaceRun` 依赖**公开的 remove**——见 §13.8 第 1 条(阻塞项)。
 
 ### 13.8 要和 checker RD 确认的点
 
