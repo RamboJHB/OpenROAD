@@ -156,10 +156,11 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
    - `participants` 给出违例**两侧**各自的 owner 实例 + 类型,用来 ① 确认这是
      「filler 对 filler / filler 对 cell」(从而知道哪侧可动),② 在 site 网格上
      **定位**要替换的 filler 实例。
-   - `fixable_by_filler` 是 checker 的**粗筛**:它先判断「这条违例靠只动 filler
-     能不能修」——可修的(对应行为 A/C/D/E,即本规格 §8 的行为 1–3 之类)交给
-     本模块;只能靠**动 cell**才能修的(对应 case B,LEF Fig 3-1 的 "B" 情形)
-     直接标 false,本模块跳过、不必重算,直接当残留转交需要动 cell 的上游。
+   - `fixable_by_filler` 是 checker 的**粗筛**,但**必须理解为必要非充分**(详见
+     §13.10):它只可靠判断「违例**有没有可改 filler 参与**」——`false`(两侧都是
+     cell,case B / LEF Fig 3-1 "B")可放心跳过转上游;`true` 只表示**可能**可修,
+     真正能不能修好仍由我们用 `checkPlace` 搜索验证(checker 不知道我们的库可实现
+     性,也没做候选搜索)。
 
 3. **隐含契约**:违例已由 DRC checker 圈定。当前 Tier-1 实现是**整图扫描**,
    严格说只依赖第 (1) 项阈值;第 (2) 项违例列表是给**未来的定向修复模式 /
@@ -750,3 +751,29 @@ cur = checkDirect(region) / initDiagnostics()   // 当前违例(含 xWindow)
 
 - 结论:**请 RD 提供「改动后可重新评估」的调用**(最好是非提交的 `checkPlace`),
   而不是一次性导出违例;落地仍需 commit + remove / replace(§13.8 第 1 条)。
+
+### 13.10 能否让 checker 判「一条违例能否靠替换 filler VT 修」?
+
+把「filler-VT 可修」拆成必要 / 充分两层:
+
+- **必要条件 —— checker 能直接给**:违例里**需要改动的那一侧,至少有一个 filler**
+  (可改),而非两侧全是 cell/blockage。这从 `Violation.instances` + 每个
+  `PlacedInst.isFiller` 一步得到;checker 已有全部信息,能**可靠排除**「两侧都是
+  cell → 必须动 cell(case B / LEF Fig 3-1 "B")」那类我们修不了的。
+  - MS:两个相碰 implant 区,至少一侧 owner 是 filler → 可能可修;两侧都 cell →
+    不可修。
+  - MW / case-B 交叠颈:要加宽的窄区 / 要补的交叠列里**含可改 filler** → 可能可修;
+    全是某 cell 的 implant → 不可修。
+- **充分条件 —— checker 单独给不了**:保证「**存在**一个 VT 赋值清掉违例、**且不造
+  新违例、且库可精确平铺**」做不到,因为 ① checker 不知道我们的 filler 库可实现性
+  (exact-tiling、无 1-site filler);② 「清掉且不造新违例」是对候选的**搜索**,
+  不是当前违例的静态属性。只能靠**逐候选 `checkPlace` 重评估 + 我们的库检查**来定。
+- **结论 / 分工**:
+  - 让 checker 给一个 sound+complete 的「可修」布尔**不现实**;它能给的是**必要
+    条件粗筛**。
+  - **checker**:给 `fixable_by_filler`(**定义为必要非充分**:有可改 filler 参与),
+    或直接暴露每个 participant 的 `isFiller`,我们自己算 —— 便宜地砍掉 case B。
+  - **我们**:用 `checkPlace` 搜索**证明并达成**真正可修(找一个合法且库可实现的
+    VT 赋值)。
+- **给 RD**:别要万能「可修」标志;要 ① 每个 participant 的 `isFiller` ② 非提交的
+  `checkPlace`。
