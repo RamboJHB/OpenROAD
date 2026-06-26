@@ -2,7 +2,9 @@
 
 状态:原型已实现并测试通过(13/13)。最后更新 2026-06。
 本文档范围:**只替换 filler VT** 这一套修复方案。它与数据库无关,移植时
-只需实现一个接口(见 §7)。
+只需实现一个接口(见 §7)。**§13 已按上游 `ImplantLayerChecker` 真实类对接**——
+生产集成把违例评估交给该 checker 当 oracle(见 §13),§4–§6 的自造评估器降为
+原型 / 单测桩。
 
 ---
 
@@ -91,6 +93,11 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
 
 ### 4.3 来自 DRC checker / tech 规则(**本节是要和 DRC 团队对齐的接口**)
 
+> **更新**:上游 checker 的真实类(`ImplantLayerChecker`)已给出,接口比本节
+> 当初设想的更丰富,且它本身是个**增量 check/commit oracle**。请以 **§13** 为准;
+> 本节(§4.3)保留作「最小概念需求」的说明。`type/rule_value/vts/region/
+> participants` 这些字段在真实接口里对应 `Rule` 与 `Violation`(见 §13.3)。
+
 本模块是 filler DRC 检查的**下游**,需要从那边拿到下面这些数据:
 
 1. **规则阈值(必需)** — 直接决定评估器判违例的标准:
@@ -176,6 +183,9 @@ DRC 检查和违例标记都在**上游**。本模块消费「网格 + 规则值
 1. **读网格** 到三层 site 网格:`vt[r][c]`、`present[r][c]`(`Cell | CleanFiller`)、
    `filler[r][c]`(可改 == `CleanFiller`)。另存 `orig` = 原始 VT。
 2. **2D MW/MS 评估器** `countViolations(vt, present, rules)`:
+   > **生产中由 checker 取代**:真实集成把违例评估交给上游 `ImplantLayerChecker`
+   > 的 `checkPlace / checkDirect`(见 §13),本函数只留作无依赖单测的桩。因此
+   > case-B、P/N、PRL 等由 checker 处理;下面的 site 网格模型是其**粗略子集**。
    > **run = 某个方向上「连续、同一 VT、且都被占用」的一段 site**(以及它的长度)。
    > 例如某行 `… L L L …` 里这 3 个 L 是一条**水平 run**,长度 3;`run = 1` 就是
    > 这个方向上孤零零一个 site,旁边不是同 VT。MW 就是在量「同 VT 区有多窄」,
@@ -436,6 +446,8 @@ cell**,而它**没有 filler site**可改 → 无能为力。于是它**不修**
   run 回退,而不是留一半。
 - 单一全局 `min_width` / `min_spacing`(逐 VT 的 ωMW/ωMS、**同一 VT 的 P band 与
   N band 可能不同的 ωMS/ωMW**、以及 ωMS > 1 跨空 site 的情形,都是未来工作)。
+  注:这些**在 oracle 模式下由上游 checker 处理**(P/N 经 `ImplantLayer.polarity`
+  + `bandSlot`,见 §13.4);此条只针对我们 standalone 的 site 网格评估器。
 - **MW 评估器目前只实现了行内/对角窄条 (a),尚未实现跨行交叠颈 (b / case B)**
   (见 §6 第 2 点、行为 1B)。模型层面已定义,代码评估器待补;在补上之前,
   交叠太小这类 min-width 会被漏判。
@@ -460,14 +472,17 @@ g++ -std=c++17 -I dpl2/src dpl2/src/FillerVtRepair.cpp \
 
 ## 11. 待办
 
-- **MW 评估器补 case B(跨行交叠颈)**:对每条相邻行边界,检查两行同 VT 的
-  极大连续交叠列段宽度 ≥ ωMW,否则记 MW(见 §6 (b)、行为 1B)。当前代码缺这条,
-  并加一个对应单测(上下行宽但错开、交叠 < ωMW)。
-- 在新数据库上写适配器(实现 §7.1)+ 一个端到端测试。
+- **【首要】对接 `ImplantLayerChecker` oracle**(§13):用 `checkPlace` 作代价、
+  `commitPlace` 落地,取代自造评估器。先和 RD 敲定 §13.8 的 7 个问题(尤其
+  **如何删除/替换已提交 filler 实例**——阻塞项)。
+- 一旦走 oracle 模式,下面三条**由 checker 覆盖**,我们 standalone 评估器才需自己补:
+  - **MW 评估器补 case B(跨行交叠颈)**:对每条相邻行边界,检查两行同 VT 的
+    极大连续交叠列段宽度 ≥ ωMW,否则记 MW(见 §6 (b)、行为 1B);加对应单测。
+  - **P/N band 各异的 ωMS/ωMW**:规则改成 `(层, band) → (ωMW, ωMS)`,按 site 的
+    P/N band 取阈值。
+  - 逐 VT 的 ωMW/ωMS、ωMS > 1(跨空 site)。
+- 在新数据库上写适配器(实现 §7.1,或按 §13.7 绑定到 checker)+ 一个端到端测试。
 - Tier-2 列 DP 做局部最优 MW/MS。
-- 评估器支持逐 VT 的 ωMW/ωMS,以及 ωMS > 1(跨空 site 的间距)。
-- **P/N band 各异的 ωMS/ωMW**:规则改成 `(层, band) → (ωMW, ωMS)`,评估器按每个
-  site 所属的 P/N band 取阈值(需要行的 N/P 划分,见 §4.3)。
 - **可选「删+重插」升级层**:对 VT 换不动的残留 MS/交叠,尝试用空隙间距分开异 VT
   区(carve 一个 ≥ ωMS 的空 gap)。仅在 flow 允许留空、且额外 DRC(min-area/PG/
   density)被建模时启用;否则保持 occupancy-preserving(见 §9)。
@@ -560,3 +575,105 @@ checker)最好给齐下面这些——这是「最完备」清单:
 
 > 一句话:**1D 最优现在就能做;2D 最优能做、但必须靠 DRC 给的逐行 region 开小窗,
 > 并把「库可平铺宽度 + 逐层规则 + 窗口边界」都喂齐**,否则只能退回 §6 的贪心近似。
+
+---
+
+## 13. 对接上游 checker(ecoPlace Implant Layer Checker)
+
+> 依据 checker RD 给的类图(`ImplantLayerCheckerHelper.h` + `ImplantLayerChecker.h`)。
+> 它**不只是给数据**——本身是一个**增量 check / commit 引擎**,这改变了我们的
+> 集成方式:不必自造 MW/MS 评估器,把它当**代价 oracle**用。
+
+### 13.1 它是什么 —— 增量放置合法性 oracle
+
+`ImplantLayerChecker` 的公开 API:
+- `initialize(ImplantInput): bool` —— 从 `rules / layers / groups / masters /
+  placedInsts / rows / tracks / rowHeight / siteWidth` 建内部索引。
+- `checkPlace(CheckRequest): CheckResult` —— **假设**把某 `masterId` 放到
+  `(rowId, x, orientation)`,返回 `{isLegal, violations[], diagnostics[]}`,**不提交**。
+- `checkDirect(CheckRequest): CheckResult` —— 直接扫描版(ground truth,较慢)。
+- `commitPlace(CommitRequest): UpdateResult` —— **真正提交**放置,更新内部状态。
+- 辅助:`dump/load(filePath)`(序列化)、`placedInsts()`、`siteWidth()`、
+  `mergedShapeCount()`、`initDiagnostics()`。
+- 内部流程(类图标注):`initialize → checkPlace / checkDirect → commitPlace`。
+
+### 13.2 集成架构 —— checker 当 oracle,我们当 decision / search 层
+
+```
+initialize(input)                          // 一次
+cur = checkDirect(region) / initDiagnostics()   // 当前违例(含 xWindow)
+对每个违例窗口(xWindow × 涉及 rows):
+  对窗口内每个候选 filler-master 替换:
+     res = checkPlace(candidate)           // 合法? 违例多少?(oracle)
+  以 res.violations 作代价,用贪心 / DP 选最优组合
+  commitPlace(best)                        // 落地;并镜像到真实 DB
+```
+
+- 我们的 `countViolations`(site 网格启发式)在**生产中由 `checkPlace` /
+  `checkDirect` 取代**,只保留作无依赖单测的桩。
+- 我们的核心价值从「评估违例」变成「**决定换哪些 VT/master、怎么搜、怎么开窗**」。
+
+### 13.3 数据模型对照(他们的结构 → 我们怎么用)
+
+| checker 结构 | 关键字段 | 我们怎么用 |
+|---|---|---|
+| `ImplantInput` | layers/rules/groups/masters/placedInsts/rows/tracks/rowHeight/siteWidth | `initialize` 的全部输入;我们建窗口/库都从这里取 |
+| `Rule` | ruleId, source, primaryLayer, **secondaryLayer**, **minValue**, **direction**, prl, zeroPrl, exceptAbutted, exceptCornerTouch, checkGroup, intersectLayers, containment… | MW = 单层(只有 primaryLayer)宽度;MS = primaryLayer↔secondaryLayer 间距;`minValue` = 阈值(DBU);其余(prl/abut/containment)是我们 site 模型没有的更细规则 → **交给 oracle** |
+| `ImplantLayer` | id, name, family, **polarity** | VT = LayerId;`polarity` 即 P/N → 解决我们的 P/N spacing 顾虑(§13.4) |
+| `MasterInput` | masterId, width, height, **shapes**, **isFiller** | filler 库 = `isFiller==true` 的 master;宽度 = width/siteWidth;implant 几何 = shapes |
+| `MasterShape` | masterId, shapeId, layer, **rect** | 一个 master 可在多层有多块 implant rect(比"每 filler 一个 VT"更细) |
+| `PlacedInst` | instanceId, masterId, rowId, columnId, orientation, isFiller | 当前布局;我们的 `kindAt/vtAt` 从它 + masters 推 |
+| `TrackPattern` | layerBySlot, **activeKindByBoundary**, layerForSlot, **adjacentSlots**, **activeInterRowKind** | band/slot 模型 + 跨行相邻种类 → P/N band 与跨行邻接都在这 |
+| `Violation` | ruleId, primaryLayer, secondaryLayer, **instances**, shapeIds, mergedShapeIds, **measuredValue**, **requiredValue**, **xWindow**, relationship, status | 每条违例:`xWindow`(XInterval)+ `instances`(涉及实例/行)就是**开窗依据**;measured/required 给代价 |
+| `CheckResult` / `UpdateResult` | isLegal, violations, diagnostics / success, diagnostics | checkPlace 的返回 = 我们的代价 oracle |
+
+### 13.4 这些"待办"现在由 checker 解决(oracle 模式下)
+
+- **P/N spacing 不同**(我们 §4.3/§9 的顾虑):`ImplantLayer.polarity` + interval 的
+  `bandSlot` + `TrackPattern.activeInterRowKind / adjacentSlots`。规则按 layer
+  (带 polarity)定,P/N 自动区分 → **不必我们自己建模**。
+- **case-B 跨行交叠颈**(我们 §6(b) 的代码缺口):checker 用真实 shape 合并
+  (`MergedShape`)+ `Rule.direction/minValue` 判 min-width,**天然含跨行交叠** →
+  oracle 模式下不再是问题(仅我们 standalone 启发式评估器仍缺这条)。
+- **PRL / exceptAbutted / exceptCornerTouch / containment / intersectLayers**:都是
+  `Rule` 字段,oracle 内部处理;我们的 site 网格模型只是其粗略子集。
+
+### 13.5 我们仍然拥有的(checker 不替我们做)
+
+- **搜索 / 决策**:试哪些 VT/master、贪心还是 DP、怎么开窗——核心价值。
+- **filler master 选择 + exact-fill**:在 `isFiller` master 里选,凑满宽度。
+- **DB ↔ checker 状态同步**:`commitPlace` 后同步真实 DB(反之亦然)。
+- **100% utility 前置门**(§3.1)与可选"删+重插"升级层(§9/§11)。
+
+### 13.6 坐标 / 单位映射(他们 DBU·x → 我们 site·row)
+
+- `siteWidth` / `rowHeight` 已在 `ImplantInput`;site 列 `c` ↔ `x = 行原点 +
+  c*siteWidth`;`rowId` ↔ 我们的行号。
+- **窗口**:`Violation.xWindow`(XInterval, DBU)→ 列范围 = `xWindow / siteWidth`;
+  涉及行从 `Violation.instances` 的 `rowId` 得到。→ **取代**我之前建议的「逐行列
+  区间」字段:直接用 `xWindow + 涉及 rows`(再按 §"开窗"扩到最近 cell + 上下 1 行)。
+- 所有 `DbCoord` = DBU;`measuredValue/requiredValue/minValue` 都是 DBU。
+
+### 13.7 接口绑定:我们的 `FillerGrid` ↔ checker API
+
+| 我们的 `FillerGrid` | 绑定到 checker |
+|---|---|
+| `placeFiller(f)` | `commitPlace(CommitRequest{place: CheckRequest{masterId,rowId,x,orientation}})` |
+| `clearSite(r,c)` | 删除 / 替换该实例 —— **需公开接口**(类图里 `removeInstance` 是 private) |
+| `kindAt / vtAt` | 从 `placedInsts()` + `masters` 推 |
+| `countViolations` | `checkPlace`(候选)/ `checkDirect`(真值) |
+
+### 13.8 要和 checker RD 确认的点
+
+1. **如何删除 / 替换已提交的 filler 实例**?VT 替换 = 删旧 master + 放新 master;
+   `removeInstance` 在类图里是 private——需要公开 remove,或 `commitPlace` 支持
+   同 `instanceId` 覆盖。**这是阻塞我们落地的第一问题。**
+2. `checkPlace` 返回的 `violations` 是「放置后该实例牵涉的**全部**违例」还是仅
+   「**新增**违例」?我们要按**净违例变化**做代价,需明确语义。
+3. `checkDirect` 能否对**任意区域**做全量真值扫描(我们初始拿全图/窗口违例用)?
+4. `Violation.relationship` / `status` 的取值集合;`xWindow` 是否已含 PRL 投影。
+5. `PhysOrientation` 与我们行 R0/MX 的对应;filler master 在某行的合法 orientation。
+6. **占用 / 100% utility**:checker 是否假设满填?留空 site 它如何判(回应我们
+   §3.1 与"删+重插"升级层)。
+7. `dump/load` 是否够我们做"试多个候选→回滚"的快照,还是必须靠 `checkPlace`
+   的非提交语义(更可取)。
