@@ -1,0 +1,17 @@
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN fillers13 ;
+UNITS DISTANCE MICRONS 2000 ;
+DIEAREA ( 0 0 ) ( 4560 5600 ) ;
+
+# Left half (sites 0-5): two 1x-height rows stacked vertically
+ROW ROW_0_L StdSite 0    0    N  DO 6 BY 1 STEP 380 0 ;
+ROW ROW_1_L StdSite 0    2800 FS DO 6 BY 1 STEP 380 0 ;
+# Right half (sites 6-11): one 2x-height row covering the full height
+ROW ROW_0_R DblSite 2280 0    N  DO 6 BY 1 STEP 380 0 ;
+
+COMPONENTS 0 ;
+END COMPONENTS
+
+END DESIGN

@@ -34,6 +34,7 @@ or_integration_tests(
     fillers10
     fillers11
     fillers12
+    fillers13
     fragmented_row01
     fragmented_row02
     fragmented_row03

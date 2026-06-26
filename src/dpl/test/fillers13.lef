@@ -1,0 +1,195 @@
+# Minimal LEF for testing filler placement in multi-height row designs.
+# Contains a standard (1x) site and a double-height (2x) site, plus
+# corresponding filler cells for each height.
+
+VERSION 5.6 ;
+BUSBITCHARS "[]" ;
+DIVIDERCHAR "/" ;
+
+UNITS
+  DATABASE MICRONS 2000 ;
+END UNITS
+
+MANUFACTURINGGRID 0.0050 ;
+
+LAYER metal1
+  TYPE ROUTING ;
+  SPACING 0.065 ;
+  WIDTH 0.07 ;
+  PITCH 0.14 ;
+  DIRECTION HORIZONTAL ;
+END metal1
+
+# Standard 1x site: 0.19 um wide, 1.4 um tall
+SITE StdSite
+  SYMMETRY X Y ;
+  CLASS core ;
+  SIZE 0.19 BY 1.4 ;
+END StdSite
+
+# Double-height 2x site: 0.19 um wide, 2.8 um tall
+SITE DblSite
+  SYMMETRY X Y ;
+  CLASS core ;
+  SIZE 0.19 BY 2.8 ;
+END DblSite
+
+# 1x filler cells (height = 1.4 um)
+MACRO FILL_X1
+  CLASS CORE SPACER ;
+  ORIGIN 0 0 ;
+  SIZE 0.19 BY 1.4 ;
+  SYMMETRY X Y ;
+  SITE StdSite ;
+  PIN VDD
+    DIRECTION INOUT ;
+    USE POWER ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 1.315 0.19 1.485 ;
+    END
+  END VDD
+  PIN VSS
+    DIRECTION INOUT ;
+    USE GROUND ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 -0.085 0.19 0.085 ;
+    END
+  END VSS
+END FILL_X1
+
+MACRO FILL_X2
+  CLASS CORE SPACER ;
+  ORIGIN 0 0 ;
+  SIZE 0.38 BY 1.4 ;
+  SYMMETRY X Y ;
+  SITE StdSite ;
+  PIN VDD
+    DIRECTION INOUT ;
+    USE POWER ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 1.315 0.38 1.485 ;
+    END
+  END VDD
+  PIN VSS
+    DIRECTION INOUT ;
+    USE GROUND ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 -0.085 0.38 0.085 ;
+    END
+  END VSS
+END FILL_X2
+
+MACRO FILL_X4
+  CLASS CORE SPACER ;
+  ORIGIN 0 0 ;
+  SIZE 0.76 BY 1.4 ;
+  SYMMETRY X Y ;
+  SITE StdSite ;
+  PIN VDD
+    DIRECTION INOUT ;
+    USE POWER ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 1.315 0.76 1.485 ;
+    END
+  END VDD
+  PIN VSS
+    DIRECTION INOUT ;
+    USE GROUND ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 -0.085 0.76 0.085 ;
+    END
+  END VSS
+END FILL_X4
+
+# 2x filler cells (height = 2.8 um)
+MACRO FILL2_X1
+  CLASS CORE SPACER ;
+  ORIGIN 0 0 ;
+  SIZE 0.19 BY 2.8 ;
+  SYMMETRY X Y ;
+  SITE DblSite ;
+  PIN VDD
+    DIRECTION INOUT ;
+    USE POWER ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 2.715 0.19 2.885 ;
+    END
+  END VDD
+  PIN VSS
+    DIRECTION INOUT ;
+    USE GROUND ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 -0.085 0.19 0.085 ;
+    END
+  END VSS
+END FILL2_X1
+
+MACRO FILL2_X2
+  CLASS CORE SPACER ;
+  ORIGIN 0 0 ;
+  SIZE 0.38 BY 2.8 ;
+  SYMMETRY X Y ;
+  SITE DblSite ;
+  PIN VDD
+    DIRECTION INOUT ;
+    USE POWER ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 2.715 0.38 2.885 ;
+    END
+  END VDD
+  PIN VSS
+    DIRECTION INOUT ;
+    USE GROUND ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 -0.085 0.38 0.085 ;
+    END
+  END VSS
+END FILL2_X2
+
+MACRO FILL2_X4
+  CLASS CORE SPACER ;
+  ORIGIN 0 0 ;
+  SIZE 0.76 BY 2.8 ;
+  SYMMETRY X Y ;
+  SITE DblSite ;
+  PIN VDD
+    DIRECTION INOUT ;
+    USE POWER ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 2.715 0.76 2.885 ;
+    END
+  END VDD
+  PIN VSS
+    DIRECTION INOUT ;
+    USE GROUND ;
+    SHAPE ABUTMENT ;
+    PORT
+      LAYER metal1 ;
+        RECT 0 -0.085 0.76 0.085 ;
+    END
+  END VSS
+END FILL2_X4
+
+END LIBRARY

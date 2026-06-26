@@ -156,7 +156,6 @@ void Opendp::placeRowFillers(GridY row,
                              const std::string& prefix,
                              const MasterByImplant& filler_masters_by_implant)
 {
-  // DbuY row_height;
   GridX j{0};
 
   const DbuX site_width = grid_->getSiteWidth();
@@ -167,12 +166,25 @@ void Opendp::placeRowFillers(GridY row,
       ++j;
       continue;
     }
-    // Select the site and orientation to fill this row with.  Use the shortest
-    // site.
+    // Select the site and orientation for this gap position.
     auto [site, orient] = grid_->getShortestSite(j, row);
+    if (!site) {
+      ++j;
+      continue;
+    }
+    // Row height is determined by the shortest site at the gap start.
+    // Multi-height row designs may have different row heights in different
+    // x-regions; stop the gap at any height boundary so each sub-gap is
+    // filled with fillers of the correct height.
+    const DbuY row_height{static_cast<int>(site->getHeight())};
     GridX k = j;
     while (k < row_site_count && grid_->gridPixel(k, row)->cell == nullptr
            && grid_->gridPixel(k, row)->is_valid) {
+      auto [k_site, k_orient] = grid_->getShortestSite(k, row);
+      if (!k_site
+          || DbuY{static_cast<int>(k_site->getHeight())} != row_height) {
+        break;
+      }
       k++;
     }
 
@@ -194,7 +206,6 @@ void Opendp::placeRowFillers(GridY row,
     }
 
     GridX gap = k - j;
-    const DbuY row_height{site->getHeight()};
     dbMasterSeq& fillers
         = gapFillers(implant, gap, row_height, filler_masters_by_implant);
     if (fillers.empty()) {
@@ -273,9 +284,20 @@ dbMasterSeq& Opendp::gapFillers(
   dbMasterSeq& fillers = gap_fillers[gap.v];
   if (fillers.empty()) {
     int width = 0;
-    dbMaster* smallest_filler = filler_masters[filler_masters.size() - 1];
     const DbuX site_width = grid_->getSiteWidth();
-    bool have_filler1 = smallest_filler->getWidth() == site_width;
+    // Find the narrowest filler matching this row height to determine whether
+    // a single-site filler exists.  Using a filler of a different height would
+    // give the wrong answer in mixed-height designs.
+    dbMaster* smallest_height_filler = nullptr;
+    for (int i = static_cast<int>(filler_masters.size()) - 1; i >= 0; i--) {
+      if (DbuY{static_cast<int>(filler_masters[i]->getHeight())}
+          == row_height) {
+        smallest_height_filler = filler_masters[i];
+        break;
+      }
+    }
+    bool have_filler1 = smallest_height_filler != nullptr
+                        && smallest_height_filler->getWidth() == site_width.v;
     for (dbMaster* filler_master : filler_masters) {
       if (DbuY{static_cast<int>(filler_master->getHeight())} != row_height) {
         continue;
