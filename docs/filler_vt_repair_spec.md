@@ -777,3 +777,19 @@ cur = checkDirect(region) / initDiagnostics()   // 当前违例(含 xWindow)
     VT 赋值)。
 - **给 RD**:别要万能「可修」标志;要 ① 每个 participant 的 `isFiller` ② 非提交的
   `checkPlace`。
+
+#### 13.10.1 接口确认(本轮结论)
+
+「在 `Violation` 加 `bool fixable_by_filler` + 全量违例传给我们」——方向正确,
+落实时收紧三点:
+
+1. **判据按「窗口」而非「直接 participant」**:`fixable_by_filler` 应判「违例窗口
+   (`xWindow` + 上下相邻行那一圈)内**有没有可改 filler**」,不能只看 participant
+   列表——否则要靠**邻近** filler 才能修的会被误判 `false`(漏修)。最典型是 case-B
+   交叠颈:要改的中间 filler 常不在 participant 里,却在窗口里。
+   - 退一步最稳:checker 把**每个 participant 的 `isFiller`** 都给我们(它本就有),
+     这个 bool 可给可不给,我们能自己按窗口算。
+2. **必要非充分**:`true` = 「值得试」,不是「一定修得好」;`false` 才是可靠的
+   「跳过(case B)」。真正可修性由我们 `checkPlace` 验证。
+3. **全量 violation 是起点、不是全部**:全量传用于定位 / 开窗;但快照一改就过期
+   (§13.9),接口还必须有**非提交的 `checkPlace`** 供搜索时重评估。两者缺一不可。
