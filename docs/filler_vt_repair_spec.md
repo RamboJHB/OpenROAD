@@ -724,3 +724,29 @@ cur = checkDirect(region) / initDiagnostics()   // 当前违例(含 xWindow)
    §3.1 与"删+重插"升级层)。
 7. `dump/load` 是否够我们做"试多个候选→回滚"的快照,还是必须靠 `checkPlace`
    的非提交语义(更可取)。
+
+### 13.9 「只拿一次违例数据」够不够?要哪种调用能力?
+
+这是和 RD 对齐时最该说清的一点:**一次性的全部 violation 数据,不足以驱动修复。**
+
+- violation 快照(`xWindow + instances + layer + measured/required`)够**定位 /
+  开窗**(哪里坏、动哪些 filler、窗口多大),但它只描述**当前**状态。我们每改一个
+  filler 的 VT,违例就变,快照立刻**过期**。修复是搜索:每个候选改动都要问「改完
+  还剩几个违例、会不会造新违例」——静态快照答不了。
+- 「改后重评估」只有两条路:
+  1. **再调用他们的 checker**(本节推荐):`checkPlace`(假设放置→违例,**不提交**,
+     增量、快)最理想;只有全量 `checkDirect`(重扫整图)也能用,但每个候选都要
+     重扫一遍,慢。
+  2. 自己重写评估器(Part A)——MW/MS 的**粗略子集**,漏 P/N、PRL、abutment、
+     containment。
+- 因此**「我们就调用他们的 checker」正是 Part B 的做法,且比自评估准**。能否「只
+  调用」取决于 checker 提供哪种能力:
+
+  | checker 能提供 | 够不够 | 说明 |
+  |---|---|---|
+  | `checkPlace` 增量假设评估(放一下→违例,不提交) | ✅ 最佳 | 每候选 O(局部);我们 oracle 直接用 |
+  | 仅全量 `checkDirect` 重扫整图 | ⚠️ 能用但慢 | 每候选重扫一次 → 必须控候选数 / 开小窗 |
+  | 仅一次性违例 dump、之后不能再调 | ❌ 不够搜索 | 只能退回 Part A 自评估 |
+
+- 结论:**请 RD 提供「改动后可重新评估」的调用**(最好是非提交的 `checkPlace`),
+  而不是一次性导出违例;落地仍需 commit + remove / replace(§13.8 第 1 条)。
