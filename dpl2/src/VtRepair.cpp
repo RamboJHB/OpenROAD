@@ -50,6 +50,7 @@ CandidateWeight VtRepair::weighCandidate(DesignIO& io, FillerId id)
   CandidateWeight cw;
   cw.filler = id;
   const FillerBox box = io.fillerBox(id);
+  cw.width = box.width;
   const Vt self = box.vt;
 
   std::map<Vt, long> tally;  // tally[t] = adjacency count to VT t
@@ -84,6 +85,7 @@ CandidateWeight VtRepair::weighCandidate(DesignIO& io, FillerId id)
   }
 
   const long same = tally.count(self) ? tally[self] : 0;
+  cw.same_vt = same;  // y: same-VT neighbour count (tie-break #2)
   long diff = 0;
   for (const auto& kv : tally) {
     if (kv.first != self) {
@@ -107,6 +109,40 @@ CandidateWeight VtRepair::weighCandidate(DesignIO& io, FillerId id)
     }
   }
   return cw;
+}
+
+int VtRepair::chooseCandidate(const std::vector<CandidateWeight>& c)
+{
+  if (c.empty()) {
+    return -1;
+  }
+  // Tie-break order: weight desc -> width asc -> same_vt (y) asc.
+  long best_w = c[0].weight;
+  for (const auto& x : c) {
+    best_w = std::max(best_w, x.weight);
+  }
+  int min_width = -1;
+  for (const auto& x : c) {
+    if (x.weight == best_w && (min_width < 0 || x.width < min_width)) {
+      min_width = x.width;
+    }
+  }
+  long min_y = -1;
+  for (const auto& x : c) {
+    if (x.weight == best_w && x.width == min_width
+        && (min_y < 0 || x.same_vt < min_y)) {
+      min_y = x.same_vt;
+    }
+  }
+  int chosen = -1, count = 0;
+  for (int i = 0; i < static_cast<int>(c.size()); ++i) {
+    if (c[i].weight == best_w && c[i].width == min_width
+        && c[i].same_vt == min_y) {
+      chosen = i;
+      ++count;
+    }
+  }
+  return count == 1 ? chosen : -1;  // -1 == undecided tie -> unfixable
 }
 
 RunResult VtRepair::run(DesignIO& io, bool verbose) const
@@ -142,8 +178,8 @@ RunResult VtRepair::run(DesignIO& io, bool verbose) const
     }
     dbg("  candidate fillers: " + std::to_string(cands.size()));
 
-    // Weigh candidates and pick the best usable one.
-    CandidateWeight best;
+    // Weigh candidates; collect the usable ones.
+    std::vector<CandidateWeight> usable;
     bool any_cell = false, any_target_missing = false;
     for (FillerId id : cands) {
       CandidateWeight cw = weighCandidate(io, id);
@@ -151,6 +187,7 @@ RunResult VtRepair::run(DesignIO& io, bool verbose) const
       dbg("    filler " + std::to_string(id) + " vt=" + b.vt
           + " size=" + std::to_string(b.width) + "x" + std::to_string(b.height)
           + " weight=" + std::to_string(cw.weight)
+          + " y(same)=" + std::to_string(cw.same_vt)
           + (cw.touches_cell ? " [touches cell -> 0]" : "")
           + (cw.has_target ? (" -> target " + cw.target)
                            : " [no realizable target]"));
@@ -160,38 +197,22 @@ RunResult VtRepair::run(DesignIO& io, bool verbose) const
       if (!cw.touches_cell && !cw.has_target) {
         any_target_missing = true;
       }
-      const bool usable = !cw.touches_cell && cw.has_target && cw.weight > 0;
-      if (usable) {
-        bool take;
-        if (best.filler == NO_FILLER) {
-          take = true;
-        } else if (cw.weight != best.weight) {
-          take = cw.weight > best.weight;
-        } else {
-          // Tie on weight: prefer the NARROWER filler (more island-like, and a
-          // smaller change).
-          const int bw = io.fillerBox(best.filler).width;
-          if (b.width != bw) {
-            take = b.width < bw;
-          } else {
-            // OPEN QUESTION (see spec): equal weight AND equal width -- which
-            // to pick is undecided.  Deterministic lowest-id fallback for now.
-            take = id < best.filler;
-          }
-        }
-        if (take) {
-          best = cw;
-        }
+      if (!cw.touches_cell && cw.has_target && cw.weight > 0) {
+        usable.push_back(cw);
       }
     }
 
+    const int pick = chooseCandidate(usable);
+
     Action act;
     act.violation_id = v.id;
-    if (best.filler != NO_FILLER) {
+    if (pick >= 0) {
+      const CandidateWeight& best = usable[pick];
       const FillerBox b = io.fillerBox(best.filler);
       dbg("  => relabel filler " + std::to_string(best.filler) + " " + b.vt
           + " -> " + best.target + " (weight " + std::to_string(best.weight)
-          + ")");
+          + ", width " + std::to_string(best.width) + ", y "
+          + std::to_string(best.same_vt) + ")");
       io.replaceFillerVt(best.filler, best.target);
       act.fixed = true;
       act.filler = best.filler;
@@ -199,7 +220,11 @@ RunResult VtRepair::run(DesignIO& io, bool verbose) const
       ++res.fixed;
     } else {
       std::string reason;
-      if (cands.empty()) {
+      if (!usable.empty()) {
+        // chooseCandidate returned -1 with usable candidates -> a tie that the
+        // weight/width/y order could not break.
+        reason = "undecided tie (equal weight, width and same-VT neighbours)";
+      } else if (cands.empty()) {
         reason = "no filler neighbour (cells/boundary only)";
       } else if (any_target_missing && !any_cell) {
         reason = "no same-size master for the needed VT";

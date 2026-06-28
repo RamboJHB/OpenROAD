@@ -160,6 +160,52 @@ int main()
     check(d.filler(wide).vt == "H", "T6 wide island untouched (tie->narrow)");
   }
 
+  // ---- T7: chooseCandidate tie-break order (weight > narrow > smaller y) ----
+  {
+    auto C = [](long w, int width, long y) {
+      CandidateWeight c;
+      c.filler = width * 100 + (int) y;  // just a non-NO_FILLER id
+      c.weight = w;
+      c.width = width;
+      c.same_vt = y;
+      c.has_target = true;
+      return c;
+    };
+    // higher weight wins
+    check(VtRepair::chooseCandidate({C(5, 2, 9), C(9, 4, 0)}) == 1,
+          "T7 weight wins");
+    // equal weight -> narrower
+    check(VtRepair::chooseCandidate({C(9, 2, 5), C(9, 1, 5)}) == 1,
+          "T7 narrower wins");
+    // equal weight & width -> smaller y
+    check(VtRepair::chooseCandidate({C(3, 2, 4), C(3, 2, 1)}) == 1,
+          "T7 smaller y wins");
+    // equal weight, width AND y -> undecided tie -> -1 (unfixable)
+    check(VtRepair::chooseCandidate({C(3, 2, 1), C(3, 2, 1)}) == -1,
+          "T7 full tie -> -1");
+  }
+
+  // ---- T8: full-tie run -> UNFIXABLE (two identical w1 H islands) ----
+  {
+    FakeDesign d;
+    d.resize(3, 5);
+    for (int r = 0; r < 3; ++r) {
+      for (int c = 0; c < 5; ++c) {
+        const bool isl = (r == 1 && (c == 1 || c == 3));
+        d.addFiller(r, c, 1, 1, isl ? "H" : "L");
+      }
+    }
+    d.addMaster("L", 1, 1);
+    d.addMaster("H", 1, 1);
+    d.addViolation(8, 1, 2, "MW");  // anchor between the two identical islands
+    RunResult res = VtRepair().run(d, false);
+    check(res.unfixable == 1 && res.fixed == 0,
+          "T8 symmetric tie -> unfixable");
+    check(!d.unfixable().empty()
+              && d.unfixable()[0].second.find("tie") != std::string::npos,
+          "T8 reason mentions tie");
+  }
+
   std::cout << "VtRepair test: " << g_pass << " passed, " << g_fail
             << " failed.\n";
   return g_fail == 0 ? 0 : 1;
