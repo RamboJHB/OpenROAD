@@ -51,6 +51,8 @@ CandidateWeight VtRepair::weighCandidate(DesignIO& io, FillerId id)
   cw.filler = id;
   const FillerBox box = io.fillerBox(id);
   cw.width = box.width;
+  cw.col = box.col;
+  cw.row = box.row;
   const Vt self = box.vt;
 
   std::map<Vt, long> tally;  // tally[t] = adjacency count to VT t
@@ -116,33 +118,31 @@ int VtRepair::chooseCandidate(const std::vector<CandidateWeight>& c)
   if (c.empty()) {
     return -1;
   }
-  // Tie-break order: weight desc -> width asc -> same_vt (y) asc.
-  long best_w = c[0].weight;
-  for (const auto& x : c) {
-    best_w = std::max(best_w, x.weight);
-  }
-  int min_width = -1;
-  for (const auto& x : c) {
-    if (x.weight == best_w && (min_width < 0 || x.width < min_width)) {
-      min_width = x.width;
+  // Tie-break order: weight desc -> width asc -> same_vt (y) asc ->
+  // leftmost (col asc, then row asc).  Distinct fillers have distinct
+  // (col,row), so this always resolves to a single winner.
+  auto better = [](const CandidateWeight& a, const CandidateWeight& b) {
+    if (a.weight != b.weight) {
+      return a.weight > b.weight;
+    }
+    if (a.width != b.width) {
+      return a.width < b.width;
+    }
+    if (a.same_vt != b.same_vt) {
+      return a.same_vt < b.same_vt;
+    }
+    if (a.col != b.col) {
+      return a.col < b.col;
+    }
+    return a.row < b.row;
+  };
+  int best = 0;
+  for (int i = 1; i < static_cast<int>(c.size()); ++i) {
+    if (better(c[i], c[best])) {
+      best = i;
     }
   }
-  long min_y = -1;
-  for (const auto& x : c) {
-    if (x.weight == best_w && x.width == min_width
-        && (min_y < 0 || x.same_vt < min_y)) {
-      min_y = x.same_vt;
-    }
-  }
-  int chosen = -1, count = 0;
-  for (int i = 0; i < static_cast<int>(c.size()); ++i) {
-    if (c[i].weight == best_w && c[i].width == min_width
-        && c[i].same_vt == min_y) {
-      chosen = i;
-      ++count;
-    }
-  }
-  return count == 1 ? chosen : -1;  // -1 == undecided tie -> unfixable
+  return best;
 }
 
 RunResult VtRepair::run(DesignIO& io, bool verbose) const
@@ -220,11 +220,7 @@ RunResult VtRepair::run(DesignIO& io, bool verbose) const
       ++res.fixed;
     } else {
       std::string reason;
-      if (!usable.empty()) {
-        // chooseCandidate returned -1 with usable candidates -> a tie that the
-        // weight/width/y order could not break.
-        reason = "undecided tie (equal weight, width and same-VT neighbours)";
-      } else if (cands.empty()) {
+      if (cands.empty()) {
         reason = "no filler neighbour (cells/boundary only)";
       } else if (any_target_missing && !any_cell) {
         reason = "no same-size master for the needed VT";

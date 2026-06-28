@@ -130,6 +130,8 @@ struct CandidateWeight
   int width = 0;     // tie-break #1: narrower wins
   long same_vt = 0;  // y = # of same-VT neighbour adjacencies; tie-break #2:
                      // smaller wins
+  int col = 0;       // tie-break #3: leftmost (smaller col, then row) wins
+  int row = 0;
   bool touches_cell = false;
   Vt target;  // VT to relabel into (majority neighbour, realizable)
   bool has_target = false;
@@ -148,9 +150,9 @@ class VtRepair
   static CandidateWeight weighCandidate(DesignIO& io, FillerId id);
 
   // Pick the winner among usable candidates by the tie-break order:
-  //   higher weight -> narrower width -> smaller same_vt (y).
-  // Returns the index into `usable`, or -1 if the top is an undecided tie
-  // (equal weight AND width AND y) -> the violation is unfixable.
+  //   higher weight -> narrower width -> smaller same_vt (y) -> leftmost
+  //   (smaller col, then smaller row).
+  // Returns the index into `usable`, or -1 only if `usable` is empty.
   static int chooseCandidate(const std::vector<CandidateWeight>& usable);
 };
 
