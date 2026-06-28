@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>Filler VT 修复 — Plan C(min-cut)图解</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  :root { --bg:#f8fafc; --card:#fff; --ink:#1e293b; --muted:#64748b; --line:#e2e8f0; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font-family:-apple-system,Segoe UI,Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+  header { padding:28px 24px 8px; }
+  h1 { margin:0 0 4px; font-size:24px; }
+  .sub { color:var(--muted); font-size:14px; }
+  .wrap { max-width:1000px; margin:0 auto; padding:0 16px 60px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:14px;
+          padding:18px 18px 12px; margin:18px 0; box-shadow:0 1px 2px rgba(0,0,0,.04); }
+  .step { display:inline-block; background:#2563eb; color:#fff; font-size:12px;
+          border-radius:999px; padding:2px 10px; margin-bottom:6px; }
+  .card h2 { margin:6px 0 2px; font-size:18px; }
+  .card p { color:#334155; font-size:14px; line-height:1.6; margin:6px 0; }
+  .mermaid { overflow-x:auto; text-align:center; margin:6px 0; }
+  pre.grid { background:#0f172a; color:#e2e8f0; border-radius:8px; padding:12px 14px;
+             font-size:14px; line-height:1.5; overflow-x:auto; }
+  .note { font-size:12px; color:var(--muted); }
+  code { background:#f1f5f9; padding:1px 5px; border-radius:5px; font-size:12px; }
+  .key { color:#dc2626; font-weight:600; }
+  footer { text-align:center; color:var(--muted); font-size:12px; padding:20px; }
+</style>
+</head>
+<body>
+<header class="wrap">
+  <h1>Plan C — 用 min-cut 一次选好所有 filler 的 VT</h1>
+  <div class="sub">把「给每个 filler 选 VT」变成「给图上的点涂两种颜色」,最小割 = 违例最少的涂法。
+  一次全局求解,不迭代、不调 DRC。</div>
+</header>
+
+<div class="wrap">
+
+  <div class="card">
+    <span class="step">STEP 0 · 例子</span>
+    <h2>窗口:左 L cell、右 H cell、中间 3 个可改 filler</h2>
+    <p>ωMS = 1(异 VT 不得相邻)。要给 <code>f1 f2 f3</code> 各选一个 VT(L 或 H),
+    使 MS 违例最少。大写 = 固定 cell,小写问号 = 待定 filler。</p>
+    <pre class="grid">列:   0   1   2   3   4
+      L   f1  f2  f3  H        L=cell(固定)  H=cell(固定)
+          ?   ?   ?            f1..f3 待选 VT</pre>
+    <p class="note">直觉:左边想往 L 靠、右边想往 H 靠,中间必然有一处 L↔H 边界 → 至少 1 个 MS。
+    问题是<strong>把这个边界放在哪</strong>最省。</p>
+  </div>
+
+  <div class="card">
+    <span class="step">STEP 1 · 建图</span>
+    <h2>节点 + 两个端点 S / T</h2>
+    <p>每个 filler = 一个节点;<strong>S = 选 L</strong>,<strong>T = 选 H</strong>。
+    边 = 代价(违例):</p>
+    <p>· <b>端点边</b>:<code>f1</code> 紧挨 L cell → 强连 <b>S</b>(它很想当 L);
+    <code>f3</code> 紧挨 H cell → 强连 <b>T</b>。<br>
+    · <b>相邻边</b>:相邻 filler 之间连 <code>cap=1</code> 的边 = 「颜色不同就 +1 个 MS」。</p>
+    <pre class="mermaid">
+flowchart LR
+  S(["S = 选 L"])
+  T(["T = 选 H"])
+  S -- "强(贴 L cell)" --> f1["f1"]
+  f1 -- "cap 1" --> f2["f2"]
+  f2 -- "cap 1" --> f3["f3"]
+  f3 -- "强(贴 H cell)" --> T
+  classDef s fill:#dbeafe,stroke:#2563eb;
+  classDef t fill:#fee2e2,stroke:#dc2626;
+  classDef f fill:#fef3c7,stroke:#d97706;
+  class S s
+  class T t
+  class f1,f2,f3 f
+    </pre>
+    <p class="note">「强」= 容量很大(几乎不会去割它):意味着 f1 基本一定当 L、f3 基本一定当 H。</p>
+  </div>
+
+  <div class="card">
+    <span class="step">STEP 2 · 什么是「割」</span>
+    <h2>要把 S 和 T 切断,割掉的边权之和 = 这套涂色的总违例</h2>
+    <p>一个「割」= 切掉一组边,使 S 再也走不到 T。切完图分成两半:连着 <b>S</b> 的点 = 涂 <b>L</b>,
+    连着 <b>T</b> 的点 = 涂 <b>H</b>。</p>
+    <p>· 割掉一条 <b>相邻边</b>(cap 1)= 这两个相邻 filler 被分成不同色 → 付 1 个 MS。<br>
+    · 割掉一条 <b>端点强边</b> = 让某 filler 违背它旁边的 cell → 付很大代价(不划算)。</p>
+    <p>从 S 到 T 只有一条链:<code>S → f1 → f2 → f3 → T</code>。要断开它,
+    必须在链上割<strong>至少一条</strong>边。候选:两端的「强边」(贵)或中间两条 <code>cap 1</code> 边(便宜)。</p>
+  </div>
+
+  <div class="card">
+    <span class="step">STEP 3 · 求最小割</span>
+    <h2>最便宜的割 = 割中间一条 cap=1 的相邻边</h2>
+    <p>割 <code class="key">f2 — f3</code>(代价 1)即可断开 S↔T,这是最省的。
+    (割 f1–f2 也是代价 1,平手时任选;端点强边太贵不选。)</p>
+    <pre class="mermaid">
+flowchart LR
+  S(["S = 选 L"])
+  T(["T = 选 H"])
+  S -- "强" --> f1["f1"]
+  f1 -- "cap 1" --> f2["f2"]
+  f2 -. "✂ 割这里 cap 1" .-> f3["f3"]
+  f3 -- "强" --> T
+  classDef s fill:#dbeafe,stroke:#2563eb;
+  classDef t fill:#fee2e2,stroke:#dc2626;
+  classDef f fill:#fef3c7,stroke:#d97706;
+  class S s
+  class T t
+  class f1,f2,f3 f
+  linkStyle 2 stroke:#dc2626,stroke-width:3px;
+    </pre>
+    <p class="note">最小割由 max-flow(最大流)算法精确求出,多项式时间,<strong>不用枚举所有涂法</strong>。
+    这里最小割 = 1 = 最少违例(L、H 两个 cell 夹着,必然有 1 处边界)。</p>
+  </div>
+
+  <div class="card">
+    <span class="step">STEP 4 · 读出涂色</span>
+    <h2>割完两侧:S 侧涂 L,T 侧涂 H</h2>
+    <p>割掉 <code>f2–f3</code> 后:<b>f1、f2</b> 还连着 S → 涂 <b>L</b>;<b>f3</b> 连着 T → 涂 <b>H</b>。</p>
+    <pre class="mermaid">
+flowchart LR
+  subgraph LSIDE["S 侧 → 涂 L"]
+    f1b["f1 = L"]
+    f2b["f2 = L"]
+  end
+  subgraph HSIDE["T 侧 → 涂 H"]
+    f3b["f3 = H"]
+  end
+  f2b -. "唯一边界 = 1 MS" .-> f3b
+  classDef l fill:#dcfce7,stroke:#16a34a;
+  classDef h fill:#fee2e2,stroke:#dc2626;
+  class f1b,f2b l
+  class f3b h
+  linkStyle 0 stroke:#dc2626,stroke-width:2px;
+    </pre>
+  </div>
+
+  <div class="card">
+    <span class="step">STEP 5 · 落地</span>
+    <h2>映射回 VT,一次 apply</h2>
+    <p>把每段同色的 filler run 用库 master <code>exactFill</code> 精确平铺 →
+    <code>clearSite</code> 删旧 + <code>placeFiller</code> 建新。铺不出某段 → 该段 mark unfixable。</p>
+    <pre class="grid">修前:  L   f1  f2  f3  H
+修后:  L   L   L   H   H      ← f1f2=L 接左 cell,f3=H 接右 cell
+              └ 唯一残留 MS 在 f2|f3,已是最优(L、H 夹着无法为 0)</pre>
+    <p class="note">残留的这 1 个 MS 是<strong>下限</strong>(两个异 VT cell 夹着,VT 替换消不掉)→ 如实
+    mark 并回报上游。min-cut 保证把它放在代价最小处。</p>
+  </div>
+
+  <div class="card">
+    <span class="step">为什么用 min-cut</span>
+    <h2>对比 Plan A / B</h2>
+    <p>· <b>Plan A</b>(边界贴合):靠规则手工决定拆分点;简单但复杂布局会过早判 unfixable。<br>
+    · <b>Plan B</b>(窗口枚举/DP):窗内最优,但行数多时状态爆炸。<br>
+    · <b>Plan C</b>(min-cut):把<strong>整片连通区域</strong>一次全局最优解出来,
+    两种 VT 时是<strong>精确解且快</strong>(max-flow 多项式),大簇也不怕。</p>
+    <p><b>超过两种 VT</b> → α-expansion:每次挑一种 VT α,问每个 filler「保持现状 vs 改成 α」
+    (又是一次两色 min-cut),把所有 α 轮一遍直到不再改善 → 强近似全局最优。</p>
+    <p class="note">局限:MW(宽度类)代价不如 MS(相邻类)那么自然地塞进边里,需用「相邻吸引 + 窄段惩罚」
+    近似;这点上 Plan B 直接数 MW 更准。实践:二态大簇用 C,其余用 A+B。</p>
+  </div>
+
+</div>
+<footer>Generated for RamboJHB/OpenROAD · filler VT repair · Plan C (min-cut) · open in any browser</footer>
+<script>
+  mermaid.initialize({ startOnLoad:true, theme:"default", securityLevel:"loose",
+                       flowchart:{ curve:"basis", useMaxWidth:true } });
+</script>
+</body>
+</html>
