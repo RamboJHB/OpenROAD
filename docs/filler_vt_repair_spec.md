@@ -1,206 +1,198 @@
 # 功能规格 — Filler VT 修复(implant MW/MS,只换 VT)
 
-状态:两条路径已实现并测试通过(Part A 15/15 · Part B 12/12)。最后更新 2026-06。
+状态:操作契约 = **一次 fix · 不调 DRC · 修不了 mark unfixable**(§2)。修复算法有
+三套候选 **Plan A / B / C**(§5)。**旧做法(贪心坐标下降 + 反复评估 / oracle
+checkPlace 循环)已废弃**;现有代码 `FillerVtRepair` / `FillerVtRepairOracle` 视为
+legacy,待按本规格重写。最后更新 2026-06。
 
 **一句话**:布线 / ECO 扰动后产生的 implant 层 **MW(最小宽)/ MS(最小间距)**
-违例,本模块**只通过替换 filler 的 VT(implant 类型)**来修——不移动/删除 cell,
-不移动 filler,不改占用(始终 100% 填满)。
+违例,本模块**只替换 filler 的 VT**来修——不动 cell、不移动 filler、不改占用;
+一次过,修不了的标 unfixable 回报上游。
 
 ---
 
 ## 1. 范围与不变量
 
-- **做**:修 implant 层的 MW、MS 违例(含跨行),手段 = 替换 filler 的 VT
-  (删旧 filler,在原位建同宽、新 VT 的 filler)。
-- **不做**(→ 残留回报上游):移动/缩放/删除 cell;移动 filler 或改占用;min-area
-  等其它规则;DRC 检查与违例标记本身。
+- **做**:修 implant 层 MW、MS 违例(含跨行),手段 = 替换 filler 的 VT
+  (删旧 filler、原位建同宽新 VT filler)。
+- **不做**(→ mark unfixable 回报上游):移动/缩放/删除 cell;移动 filler 或改占用;
+  min-area 等其它规则;DRC 检查本身。
 - **不变量**:只动 filler;cell/macro/blockage 是固定边界;occupancy-preserving
-  (不留空 site);目标是**最小化残留**违例(不是要么清零要么报错)。
-- **前置门(FR-0)**:拿到 design 先查 **100% utility**(处理区域内无空 site)。
-  不满足 → **发 warning、跳过修复、不动任何 filler**,标 `skipped_not_full_utility`,
-  把「先填满」交回上游。
+  (不留空 site)。
+- **前置门(FR-0)**:先查 **100% utility**(处理区域无空 site)。不满足 →
+  warning + 跳过、不动任何 filler,标 `skipped_not_full_utility`,交回上游填满。
 
 ---
 
-## 2. 两套实现路径
+## 2. 操作契约(本轮定稿)
 
-算法(决定换哪些 filler 的 VT)一套;违例评估(判 MW/MS)有两个后端。
-
-| | **Part A — 自带 site-grid 评估器** | **Part B — 接 ImplantLayerChecker oracle** |
-|---|---|---|
-| 定位 | 原型 / 可移植 / 无依赖单测 | **生产路径(推荐)** |
-| 违例评估 | 自己的 `countViolations`(MW/MS,含 case-B) | 上游 checker `checkPlace/checkDirect` |
-| 规则覆盖 | MW/MS 的粗略子集 | P/N、PRL、abutment、containment… 全覆盖 |
-| 代码 | `FillerVtRepair.{h,cpp}` · `FillerGrid.h` · `FakeFillerGrid.h` | `FillerVtRepairOracle.{h,cpp}` · `ImplantChecker.h` · `FakeImplantChecker.h` |
-| 测试 | `filler_vt_repair_test.cpp`(15/15) | `filler_vt_repair_oracle_test.cpp`(12/12) |
-
-两路径共用同一套决策(贪心 / 未来 DP),只是「问谁违例多少」不同。生产走 Part B;
-Part A 是无 checker 时的可移植后备 + 模型参考 + 单测桩。
+- **一次 fix**:读输入 → 一次 solve → 一次 apply。**不迭代、不「修完再查再修」**。
+- **不调 DRC check**:全程不调用上游 checker 做评估。若算法内部需要判违例,用我们
+  自己的 MW/MS 模型(§3)。
+- **输入**:上游**一次性**给的 violation 列表(每条含 `xWindow` / `instances` /
+  type / 两侧 VT…,见 §6)+ 当前 grid。
+- **输出**:一次性应用的 filler VT 替换 + 一份 **unfixable 列表**(回报上游)。
+- **废弃**:旧的贪心 + 反复 `countViolations`、oracle 的 `checkPlace` 循环——那依赖
+  反复评估,违背「一次、不调 DRC」,不再用。(因此也**不再需要**上游提供非提交的
+  `checkPlace`;checker 退化为**一次性数据源**,见 §6。)
 
 ---
 
 ## 3. MW/MS 模型(site 网格)
 
-- **site**:行 × 列的最小放置格;每个被占用 site(`Cell` 或 `CleanFiller`)带一个
-  **VT**(= 其 master 的 implant 层)。`run` = 某方向上连续、同 VT 的一段 site。
-- **MW(两类窄颈,均已实现)**:同 VT 区任何地方都要 ≥ ωMW 宽。
-  - **(a) 行内/对角**:某 site 的同 VT 水平 run 与垂直 run **都** < ωMW → +1。
-  - **(b) 跨行交叠颈(case B)**:相邻两行同 VT 区的**交叠列段**宽度 < ωMW,且两行
-    各自的水平 run 都比它宽(真颈,非整块本就小)→ +1。
-- **MS**:两个正交相邻(右 / 下)的被占用 site 若 VT 不同 → +1(ωMS ≥ 1:异 VT
-  不得接触)。
+- **site**:行 × 列最小放置格;被占用 site(`Cell`/`CleanFiller`)带一个 **VT**
+  (= 其 master 的 implant 层)。`run` = 某方向连续、同 VT 的一段 site。
+- **MW(两类窄颈)**:同 VT 区任何地方要 ≥ ωMW 宽。
+  - (a) **行内/对角**:某 site 同 VT 的水平 run 与垂直 run **都** < ωMW → +1。
+  - (b) **跨行交叠颈(case B)**:相邻两行同 VT 区的**交叠列段** < ωMW,且两行各自
+    更宽(真颈)→ +1。
+- **MS**:两个正交相邻(右/下)的被占用 site 若 VT 不同 → +1(ωMS≥1:异 VT 不得接触)。
+- ωMW/ωMS 来自 tech 规则,**可逐 implant 层、逐 P/N band 不同**(§6)。
 
 ---
 
-## 4. 行为速查
+## 4. 公共步骤(三套算法共用)
 
-记号:大写 = cell(固定),小写 = filler(可改),字母 = VT,`.` = 空;默认 ωMW=2、
-ωMS=1。
+三套算法的差别只在 §5「窗内怎么定 VT」;开窗、合并、P/N 对齐、固定 cell、可实现性、
+mark unfixable 都一样:
+
+### 4.1 开窗(大小由 violation type + inter/intra 决定)
+- **intra-row**:窗 = `xWindow` 那段列,**只本行**;横向向外扩到最近固定边界
+  (cell/macro/空)。
+- **inter-row**:横向同上;**纵向**含 `instances` 涉及行 + 相邻耦合行(±1)。
+- 横向扩到固定边界,保证窗外邻居要么固定 cell、要么 VT 一致 → 改窗内不向窗外漏新违例。
+
+### 4.2 合并重叠窗
+所有窗先**合并**(重叠/相邻并成一个)再解,避免多条违例的窗互相打架。
+
+### 4.3 P/N orientation + 两侧对齐
+- 边界匹配**逐 band**:filler 要在 P band 与 N band 上都延续边界 cell 的 implant。
+- 选的 master 必须符合**该行 orientation**(R0/MX 决定 P/N 上下);
+  `(vt,w,h)→master` 映射带 orientation。无匹配 master → unfixable。
+
+### 4.4 窗内有固定 cell(内部固定边界)
+- 固定 cell **永不改**,钉死自己 VT,并约束相邻 filler(避免和它 MS)。
+- 它把窗内可改 filler 切成若干**连通块**(filler 四连通,cell 是墙);每块对着它接触
+  到的固定 cell + 外边界求解。
+- 块接触**同一 VT** → 整块取它;接触**多种 VT** → 块内再拆贴合各自固定邻居;
+  **拆不开**(如 1 个 filler 被左 L、上 H 两个固定邻居夹死)→ 该 filler **unfixable**。
+
+### 4.5 可实现性
+每段选定 VT 必须能被库 master `exactFill` 精确平铺;不行 → 换边界 VT / 调拆分点 /
+该段 unfixable。无 1-site filler ⇒ 不留残缝。
+
+### 4.6 mark unfixable
+两侧/邻居约束冲突无解、库缺 VT、库铺不出、需动 cell 等 → 该 violation 标 unfixable
+回报上游,**不动**对应 filler。
+
+---
+
+## 5. 三套 fix 算法(窗内如何定 VT)
+
+### Plan A — 两侧边界驱动(简单、覆盖常见)
+窗内 VT **照固定边界定**:
+- 边界**单一 VT** → 窗内统一成它;
+- 边界**两种 VT** → **L|R 拆分**(左段=左边界 VT、右段=右边界 VT,拆分点落可平铺处);
+- **无边界**(孤立岛)→ 任选库可平铺且 ≥ωMW 的 VT。
+本质 = 局部贴合;协调性复杂排布会过早判 unfixable(其实有解)——由 B/C 超越。
+
+### Plan B — 窗口内精确最优
+窗内把可改 filler 当变量、固定 cell 当边界,**枚举所有库可实现赋值,取残留 MW/MS 最少**:
+- 窗小 → 穷举 `|VT|^F`;窗大 → 列 DP(状态 = 当前列各行 VT + run 长度封顶,
+  宽度线性、行数指数)。
+- 窗间被固定边界隔开 ⇒ **每窗最优 = 模型下全局最优**;覆盖 ≥ Plan A。
+- 窗超阈值 → 回退 Plan A 并 log。
+
+### Plan C — 图能量最小化 / min-cut(全局、二态精确)
+把整片耦合区域建成一张图,**一次性全局求最优**(详见对话解释):
+- 节点 = 可改 filler;标签 = 候选 VT;固定 cell = 把相邻节点钉到该 VT 的 terminal;
+  相邻 filler 间的边 = 「异 VT 则计 MS」的代价。
+- **两种 VT(P/N 两态)→ 化成 min-cut / max-flow,多项式时间求全局精确最优**,
+  对整片区域一次解(无 Plan B 的行数指数问题)。
+- **>2 种 VT** → 多标签 move-making(α-expansion:反复做二态 min-cut)给强近似全局最优。
+- 自带一个小 max-flow(Dinic/BK,无外部依赖)。
+
+### 建议
+**Plan A 打底 + Plan B 兜上限**(A 判 unfixable / 双边界冲突的窗升级到 B 精确解);
+VT 基本两态(P/N)且簇很大时上 **Plan C**。三者均:一次过、不调 DRC、修不了 mark
+unfixable。共同上限 = **我们模型**下最优(P/N/PRL 偏差以事后一次 DRC 量残留为准)。
+
+---
+
+## 6. 输入 / 输出;上游 checker 的角色(数据源,非 oracle)
+
+我们**只取一次** violation 列表 + grid,**不调 `checkPlace`**。violation 字段对照
+真实 `ImplantLayerChecker::Violation`:
+
+| 我们要的 | 真实 `Violation` 字段 | 用途 |
+|---|---|---|
+| 违例位置(x 线段) | `xWindow`(XInterval) | 开窗(÷siteWidth → 列) |
+| 涉及哪几行 / 哪些实例 | `instances`(+ `PlacedInst.rowId`) | inter/intra 判定、纵向开窗、定位 filler |
+| 两侧 VT | `primaryLayer` / `secondaryLayer` | 定目标 VT(MS=2,MW=1) |
+| 类型 MW/MS | 由 `ruleId`/`relationship` 推 | 分流、开窗规则 |
+| 每个 participant 是不是 filler | **需 RD 暴露** `PlacedInst.isFiller` | 判可改 / 定位 / mark unfixable |
+
+输出:应用的替换 filler 列表 + unfixable 列表。
+
+**需要 RD 提供**:
+1. **删除/替换已提交 filler 实例**(落地用;`removeInstance` 公开 或 `commitPlace`
+   同 id 覆盖)——阻塞项。
+2. 每个 participant 的 **`isFiller`**。
+3. **规则阈值**(换算成 site;逐 implant 层、逐 **P/N band**:`(层,band)→(ωMW,ωMS)`)。
+4. 一次性 violation 列表(上面的字段)+ grid 快照。
+   *(不再需要非提交的 `checkPlace` —— 我们不在修复中调 DRC。)*
+
+---
+
+## 7. 接口 `FillerGrid`(落地用,移植 = 实现这一个类)
+
+| 方法 | 行为 | 新 DB 需暴露 |
+|---|---|---|
+| `numRows()` / `numCols(row)` | 行数 / 行内 site 数 | 行、行宽/site 宽 |
+| `kindAt(r,c)` | Empty/Cell/CleanFiller/Blocked | 覆盖该 site 的实例类别 |
+| `vtAt(r,c)` | 被占用 site 的 VT | master 的 IMPLANT 层 → VT |
+| `clearSite(r,c)` | 删该 filler → 空 | 删实例 |
+| `placeFiller(f)` | 建 VT 为 `f.vt` 的 filler | `(vt,w,h)→master` + 建实例/坐标/朝向 |
+
+坐标全是 site/行;DBU 几何、orientation、`(vt,w,h)→master` 由适配器掌管。参考实现
+`FakeFillerGrid.h`。
+
+---
+
+## 8. 行为速查(默认 ωMW=2、ωMS=1;大写=cell 固定,小写=filler 可改)
 
 | 场景(before) | 违例 | 动作 → 结果 |
 |---|---|---|
-| `行0: L h` / `行1: h L` | 对角 1 宽 filler:MW + MS | 两 `h`→`l` → 残留 0(T1) |
-| `行0: L l l L` / `行1: L h h L` | 上下异 VT 相邻:MS×2 | 下行 `h`→`l` 合并 → 残留 0(T2) |
-| `行0: L h L` | 夹在同 VT cell 间、VT 不对:MW+MS | `h`→`l` 延续 L → 残留 0 |
-| `行0: L H` | 两 cell 异 VT:MS | 无 filler 可动 → 残留(case B,转上游) |
+| `行0: L h` / `行1: h L` | 对角 1 宽 filler:MW+MS | 两 `h`→`l` → 残留 0 |
+| `行0: L l l L` / `行1: L h h L` | 上下异 VT 相邻:MS×2 | 下行 `h`→`l` → 残留 0 |
+| `行0: L h L` | 夹同 VT cell、VT 不对:MW+MS | `h`→`l` |
+| `行0: L H` | 两 cell 异 VT、无 filler | **unfixable**(转上游) |
 
-**case B(ωMW=3 示例)**:两行各自够宽但错开,交叠仅 2 列:
-
+**case-B(ωMW=3)**:两行各自够宽但错开,交叠仅 2 列:
 ```
       0 1 2 3 4 5 6 7 8 9
 行0:  . . L L L L L L . .      L = col2-7
 行1:  . . . . x x L L L L      L = col6-9,col4-5 是异 VT filler x
-                  ^ ^          交叠仅 col6-7(宽 2)< ωMW=3 → MW(b)
+                  ^ ^          交叠仅 col6-7(宽 2)< ωMW=3 → MW
 ```
-
-修:`x`→`l`(col4-5)→ 交叠变 col4-7(宽 4)≥ ωMW;前提 col4-5 是可改 filler 且库
-有 L,否则残留。
+修:`x`→`l`(col4-5)→ 交叠变 col4-7(宽 4)≥ ωMW;col4-5 须可改且库有 L,否则 unfixable。
 
 ---
 
-## 5. 算法
+## 9. 约束与假设
 
-**Part A — `FillerVtRepair`(贪心)**
-1. 读网格 → `vt / present / filler` 三层;`countViolations` 算 MW/MS(含 case-B)。
-2. 贪心坐标下降:逐 filler site 试库内每个 VT,取使违例最少者(合并项打破平台);
-   迭代到不动点。
-3. 落地:VT 变了的同 VT run 用库 master `exactFill` 精确平铺 → `clearSite` +
-   `placeFiller`;铺不出来则回退(残留)。
-
-**Part B — `FillerVtRepairOracle`(贪心 + checker oracle)**
-1. `initialize` 后,`checkDirect` 取当前违例(定位 / 开窗)。
-2. 逐个可改 filler run,对每个候选 VT 用 `checkPlace` 问代价(非提交),取最优;
-   `commitPlace` 落地。迭代到不动点。
-3. 决策层只依赖 `ImplantChecker` 5 方法,不碰 DB / 真实 checker。
-
-> Tier-2(未来):窗口 DP(论文式最优,替换贪心,不动 oracle 接缝)。1D 单行 DP
-> 多项式、最优、可实现;2D 跨行对行数指数,须靠 violation 的 `xWindow` 开小窗。
+- site 网格 implant 模型,非多边形 DRC;「尽量多修」= 我们模型下最优。
+- occupancy-preserving:只换 VT、不留空 site;仅重切 filler 宽度对 MW/MS 无影响
+  (违例只看逐 site 的 VT)。
+- 重铺改动段必须精确填满(无 1-site filler ⇒ 不留残缝);铺不出 → unfixable。
+- 模型保真:case-B 已建模;**P/N band、PRL 是否建模待定**(影响一次 pass 的真实覆盖)。
 
 ---
 
-## 6. 接口
+## 10. 待办
 
-### 6.1 `FillerGrid`(Part A,6 方法;实现它 = 移植到一个新 DB)
-
-| 方法 | 行为 | 新 DB 需暴露 |
-|---|---|---|
-| `numRows()` / `numCols(row)` | 行数 / 行内 site 数 | 行、行宽 / site 宽 |
-| `kindAt(r,c)` | Empty/Cell/CleanFiller/Blocked | 覆盖该 site 的实例类别 |
-| `vtAt(r,c)` | 被占用 site 的 VT | 实例 master 的 IMPLANT 层 → VT id |
-| `clearSite(r,c)` | 删该 filler → 空 | 删实例能力 |
-| `placeFiller(f)` | 建一个 VT 为 `f.vt` 的 filler | `(vt,宽,高)→master` + 建实例/坐标/朝向 |
-
-坐标全是 site/行;DBU 几何、orientation、`(vt,w,h)→master` 由适配器掌管。
-参考实现 `FakeFillerGrid.h`。
-
-### 6.2 `ImplantChecker`(Part B,5 方法)↔ 真实 checker
-
-| `ImplantChecker` | 绑定到 `ImplantLayerChecker` |
-|---|---|
-| `violations()` | `checkDirect(...)` 区域违例计数 |
-| `changeableRuns()` | `placedInsts()`(`isFiller`)+ masters 推出可改 run |
-| `candidateVts()` | `ImplantInput.masters`(`isFiller`)的 implant 层 |
-| `evalReplaceRun(run, vt)` | `checkPlace(...)` 评估「该 run 改 vt」(不提交) |
-| `commitReplaceRun(run, vt)` | `removeInstance(...)` + `commitPlace(...)` |
-
-接真实 checker = 写一个实现这 5 方法的适配器;测试用 `FakeImplantChecker`。
-
----
-
-## 7. 上游 checker(ecoPlace `ImplantLayerChecker`)对接结论
-
-- **它是增量 check/commit oracle**(`initialize → checkPlace/checkDirect →
-  commitPlace`),不是只给数据。我们把它当**代价 oracle**,不自造规则引擎。
-- **数据对照**(他们的结构 → 我们用):
-
-  | checker 结构 | 我们用到的 |
-  |---|---|
-  | `ImplantInput`(layers/rules/masters/placedInsts/rows/tracks/rowHeight/siteWidth) | `initialize` 全部输入;建窗 / 建库 |
-  | `Rule`(primaryLayer, secondaryLayer, minValue, direction, prl, exceptAbutted…) | MW=单层宽;MS=两层间距;阈值 `minValue` |
-  | `ImplantLayer`(id, name, **polarity**) | VT = LayerId;polarity = P/N |
-  | `MasterInput`(width, height, shapes, **isFiller**) | filler 库 = isFiller;宽 = width/siteWidth |
-  | `PlacedInst`(masterId, rowId, columnId, orientation, **isFiller**) | 当前布局;`kindAt/vtAt`;定位 filler |
-  | `TrackPattern`(bandSlot, activeInterRowKind, adjacentSlots) | P/N band 与跨行邻接 |
-  | `Violation`(instances, **xWindow**, measuredValue, requiredValue, primary/secondaryLayer) | 开窗(`xWindow`+涉及行)+ 代价 |
-
-- **checker 覆盖、我们不必自造**:P/N(polarity+bandSlot)、PRL、abutment、
-  containment、case-B(真实 shape 合并)。
-- **我们拥有**:决策 / 搜索(换哪些 VT、怎么开窗)、filler 选择 + exact-fill、
-  DB↔checker 同步、100% utility 前置门。
-- **坐标**:他们 DBU/x、我们 site/行;`Violation.xWindow ÷ siteWidth` + 涉及行
-  = 我们的窗口(再扩到最近 cell + 上下 1 行)。
-- **`fixable_by_filler`**:checker 可给,但**必要非充分**——判据 = 「违例**窗口内**
-  有没有可改 filler」(不能只看直接 participant,否则 case-B 等靠邻近 filler 修的会
-  漏判)。`false` = 可靠跳过(case B);`true` = 值得试,真正可修由我们 `checkPlace`
-  验证。
-
----
-
-## 8. 需要上游 / RD 提供
-
-1. **【阻塞】删除/替换已提交 filler 实例**:VT 替换 = 删旧 + 放新;`removeInstance`
-   需公开,或 `commitPlace` 支持同 `instanceId` 覆盖。
-2. **非提交的 `checkPlace`**:改动后重评估的能力(一次性违例 dump 不够——改一次就
-   过期)。只有全量 `checkDirect` 也能用但慢。
-3. 每个 `Violation` participant 的 **`isFiller`**(算 `fixable_by_filler`、定位 filler)。
-4. **规则阈值**(换算成 site;逐 implant 层、必要时**逐 P/N band**:`(层,band)→(ωMW,
-   ωMS)`)。
-5. `checkDirect` 能对**任意区域**做真值扫描(取初始 / 窗口违例)。
-6. `PhysOrientation` ↔ 行 R0/MX;filler 在某行的合法 orientation。
-7. checker 是否假设 100% 填满 / 如何判空 site。
-
----
-
-## 9. 验证
-
-```
-# Part A (15/15): T1 台阶 · T2 跨行 MS · T3 库缺 VT 残留 · T4 no-op · T5 评估器 · T6 case-B
-g++ -std=c++17 -I dpl2/src dpl2/src/FillerVtRepair.cpp \
-    dpl2/test/filler_vt_repair_test.cpp -o /tmp/vt && /tmp/vt
-# Part B (12/12): O1 台阶 · O2 跨行 MS · O3 库缺 VT 残留 · O4 no-op(经 oracle)
-g++ -std=c++17 -I dpl2/src dpl2/src/FillerVtRepair.cpp \
-    dpl2/src/FillerVtRepairOracle.cpp \
-    dpl2/test/filler_vt_repair_oracle_test.cpp -o /tmp/orc && /tmp/orc
-```
-
----
-
-## 10. 约束与假设
-
-- site 网格 implant 模型,非多边形 DRC。
-- 重铺改动 run 必须精确填满(无 1-site filler ⇒ 不留残缝);铺不出 → 回退(残留)。
-- occupancy-preserving:只换 VT、不留空 site。仅重新切分 filler 宽度对 MW/MS 无影响
-  (违例只看逐 site 的 VT)。「删+重插留空隙」能多修一部分(用 spacing 分开异 VT 区),
-  但破坏 100% utility、引入别的 DRC → 仅作可选升级层,默认关。
-- Part A 评估器:单一全局 ωMW/ωMS(逐 VT、P/N band、ωMS>1 跨空 site 未做)——这些
-  在 Part B 由 checker 覆盖。原型重铺用 height-1 filler。
-
----
-
-## 11. 待办
-
-- **【首要】写 `ImplantChecker` → `ImplantLayerChecker` 适配器**;先解 §8 阻塞项。
-- Tier-2 窗口 DP(替换贪心,不动接缝)。
-- Part A 评估器:逐 P/N band、逐 VT 的 ωMW/ωMS、ωMS>1。
-- 可选「删+重插」升级层(flow 允许留空且额外 DRC 建模时)。
-- 落地支持多行高 filler 重铺(当前 height-1)。
+- **实现 Plan A(+ B 兜底)**,按 §4 公共步骤 + §5;mark unfixable;一次 apply。
+- 写 `FillerGrid` → 真实 DB / `ImplantLayerChecker` 适配器;解 §6 阻塞项(remove/replace)。
+- 视需要建模 P/N band、PRL;评估是否上 Plan C(二态大簇)。
+- 清理 legacy(`FillerVtRepair` 贪心 / `FillerVtRepairOracle`):保留模型函数
+  (`countViolations` 含 case-B、`exactFill`)供 A/B 复用,移除 recheck 循环。
