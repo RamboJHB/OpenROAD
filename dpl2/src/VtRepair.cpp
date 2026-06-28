@@ -161,10 +161,27 @@ RunResult VtRepair::run(DesignIO& io, bool verbose) const
         any_target_missing = true;
       }
       const bool usable = !cw.touches_cell && cw.has_target && cw.weight > 0;
-      if (usable
-          && (best.filler == NO_FILLER || cw.weight > best.weight
-              || (cw.weight == best.weight && id < best.filler))) {
-        best = cw;
+      if (usable) {
+        bool take;
+        if (best.filler == NO_FILLER) {
+          take = true;
+        } else if (cw.weight != best.weight) {
+          take = cw.weight > best.weight;
+        } else {
+          // Tie on weight: prefer the NARROWER filler (more island-like, and a
+          // smaller change).
+          const int bw = io.fillerBox(best.filler).width;
+          if (b.width != bw) {
+            take = b.width < bw;
+          } else {
+            // OPEN QUESTION (see spec): equal weight AND equal width -- which
+            // to pick is undecided.  Deterministic lowest-id fallback for now.
+            take = id < best.filler;
+          }
+        }
+        if (take) {
+          best = cw;
+        }
       }
     }
 

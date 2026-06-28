@@ -130,6 +130,36 @@ int main()
     check(cw2.weight == 0 && cw2.touches_cell, "T5 cell-touch -> weight 0");
   }
 
+  // ---- T6: weight tie -> narrower filler wins ----
+  // Two H islands adjacent to the anchor (1,2): a width-1 at col1 and a width-2
+  // at col3-4, both surrounded by L (both weight MAX).  The width-1 must win.
+  {
+    FakeDesign d;
+    d.resize(3, 6);
+    for (int r = 0; r < 3; ++r) {
+      for (int c = 0; c < 6; ++c) {
+        if (r == 1 && c == 1) {
+          continue;  // narrow H island below
+        }
+        if (r == 1 && (c == 3 || c == 4)) {
+          continue;  // wide H island below
+        }
+        d.addFiller(r, c, 1, 1, "L");
+      }
+    }
+    FillerId narrow = d.addFiller(1, 1, 1, 1, "H");
+    FillerId wide = d.addFiller(1, 3, 2, 1, "H");
+    d.addMaster("L", 1, 1);
+    d.addMaster("L", 2, 1);
+    d.addMaster("H", 1, 1);
+    d.addMaster("H", 2, 1);
+    d.addViolation(6, 1, 2, "MW");  // anchor between the two islands
+    RunResult res = VtRepair().run(d, false);
+    check(res.fixed == 1, "T6 fixed one");
+    check(d.filler(narrow).vt == "L", "T6 narrow island relabeled");
+    check(d.filler(wide).vt == "H", "T6 wide island untouched (tie->narrow)");
+  }
+
   std::cout << "VtRepair test: " << g_pass << " passed, " << g_fail
             << " failed.\n";
   return g_fail == 0 ? 0 : 1;
