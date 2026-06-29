@@ -1,11 +1,11 @@
 // Stand-alone test for the weight-based VT repair (VtRepair).
-//   g++ -std=c++17 -I dpl2/src dpl2/src/VtRepair.cpp \
+//   g++ -std=c++17 -I dpl2/src dpl2/src/FillerVtRepair.cpp \
 //       dpl2/test/vt_repair_test.cpp -o /tmp/vtr && /tmp/vtr
 #include <iostream>
 #include <string>
 
 #include "FakeDesign.h"
-#include "VtRepair.h"
+#include "FillerVtRepair.h"
 
 using namespace vtrepair;
 

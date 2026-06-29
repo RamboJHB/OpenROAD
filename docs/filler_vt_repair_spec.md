@@ -1,6 +1,6 @@
 # 功能规格 — Filler VT 修复(权重法,单次,不调 DRC)
 
-状态:已实现并测试(`dpl2/` 标准库,12/12)。分支基于 **2023 master**(`68fc7ad3`)。
+状态:已实现并测试(`dpl2/` 标准库,22/22)。分支基于 **2023 master**(`68fc7ad3`)。
 最后更新 2026-06。
 
 **一句话**:上游 checker 给一批 implant **MW/MS 违例**;本模块对每条违例,**只替换
@@ -81,10 +81,10 @@ readViolations()                      # 上游一次性给
 
 | 文件 | 作用 |
 |---|---|
-| `dpl2/src/VtRepair.h` | 类型 + **`DesignIO` 接口(PORTING SEAM)** + `VtRepair` 算法声明 |
-| `dpl2/src/VtRepair.cpp` | 权重计算 + 单次流程 + debug |
+| `dpl2/src/FillerVtRepair.h` | 类型 + **`DesignIO` 接口(PORTING SEAM)** + `VtRepair` 算法声明 |
+| `dpl2/src/FillerVtRepair.cpp` | 权重计算 + 单次流程 + debug |
 | `dpl2/src/FakeDesign.h` | `DesignIO` 的内存参考实现(测试 + 移植样板) |
-| `dpl2/test/vt_repair_test.cpp` | 12/12 |
+| `dpl2/test/vt_repair_test.cpp` | 22/22 |
 
 **`DesignIO`** 把所有「读/写 data」隔离成函数,移植 = 只重写这些:
 - 读:`readViolations / numRows / numCols / kindAt / vtAt / fillerIdAt /
@@ -95,7 +95,7 @@ readViolations()                      # 上游一次性给
 
 构建 / 运行(无依赖):
 ```
-g++ -std=c++17 -I dpl2/src dpl2/src/VtRepair.cpp \
+g++ -std=c++17 -I dpl2/src dpl2/src/FillerVtRepair.cpp \
     dpl2/test/vt_repair_test.cpp -o /tmp/vtr && /tmp/vtr
 ```
 
@@ -104,9 +104,9 @@ g++ -std=c++17 -I dpl2/src dpl2/src/VtRepair.cpp \
 ## 6. 给「移植 AI agent」的 prompt(可直接粘贴)
 
 ```
-你的任务:把 dpl2/src/VtRepair.{h,cpp} 的 filler-VT 修复算法接到 <目标数据库/EDA>。
+你的任务:把 dpl2/src/FillerVtRepair.{h,cpp} 的 filler-VT 修复算法接到 <目标数据库/EDA>。
 
-算法本身不要改。只实现 dpl2/src/VtRepair.h 里 `DesignIO` 抽象类的全部方法(那是
+算法本身不要攽。只实现 dpl2/src/FillerVtRepair.h 里 `DesignIO` 抽象类的全部方法(那是
 唯一的数据接缝),参照 dpl2/src/FakeDesign.h 的内存实现照抄结构、把每个方法接到真实
 数据库:
 
@@ -133,7 +133,7 @@ WRITE:
 - 全部坐标用 site/行整数;DBU 换算只在你的实现里做。
 - 先确认 design 是 100% utility(无空 site);否则不要跑修复。
 
-验收:用 FakeDesign 的 12 个单测思路在你的环境复现(孤岛→改 VT、贴 cell→unfixable、
+验收:用 FakeDesign 的 22 个单测思路在你的环境复现(孤岛→改 VT、贴 cell→unfixable、
 缺同尺寸 master→unfixable、4 邻居覆盖脖子)。开 verbose 看 [vtr] debug 链确认逻辑。
 ```
 

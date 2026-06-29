@@ -12,7 +12,7 @@
 //
 // PORTING:  all database access is isolated behind the DesignIO interface below
 // (the "PORTING SEAM").  To move this to another database, re-implement those
-// methods; the algorithm in VtRepair.cpp does not change.  FakeDesign.h is a
+// methods; the algorithm in FillerVtRepair.cpp does not change.  FakeDesign.h is a
 // reference in-memory implementation used by the tests.
 #pragma once
 
