@@ -45,6 +45,19 @@ MW/MS 违例。本模块**只替换 filler 的 VT/implant type**(同宽同高同
 - DRC 规则两类:MW(min-width) 与 MS(min-spacing)。每类又分 intra-row / inter-row。
 - 上游 checker 一次性给 target place、violation list、候选 editable filler。
 
+### 关键事实:violation 与 filler 是多对多
+
+这个问题不能建模成“一条 violation 对应一个 filler”。真实情况是:
+
+- 一个 std cell 改 type 后,可能同时引起多个 MW/MS violation。
+- 一个 filler cell 可能同时参与多个 violation,改它会同时影响多条约束。
+- 两条 violation 可以发生在同一几何位置,但由不同 filler/不同 rule/不同 participant 组合触发。
+- 某条 violation 的 checker participants 不一定包含所有必须一起改的 filler;有些需要改的是
+  **bridge filler**(连接 std cell 与周围 implant 区的短 filler)。
+
+因此 `Violation` 是 constraint,不是唯一 root cause。repair 的基本单位应是
+**局部 violation cluster + 候选 filler 集合**,目标是让整个 cluster checker-clean。
+
 ### 只做
 
 - 只替换 filler type:同一个 filler instance 换成同宽、同高、同 row/orient 可用的另一个
@@ -144,12 +157,17 @@ struct EditableFiller
 | rule type(MW/MS) | 分流、score |
 | relationship(intra/inter) | 决定开窗行数 |
 | row ids | 定位 inter-row 耦合行 |
-| xWindow | 横向开窗 |
+| xWindow | 横向开窗,但不能作为唯一 identity |
 | primary/secondary implant type | 决定 target VT hint |
 | participants | 判断相关 cell/filler |
+| participant.role | 标出 fixed cell / filler / bridge / anchor |
+| participant.instanceId | 找 candidate filler 或 std-cell anchor |
 | participant.isFiller | 只改 filler |
-| participant.instanceId | 找 candidate filler |
+| participant.xRange/row | 做 cluster 和 bridge window |
 | insideTarget/spillover | 区分窗口内残留和窗口外新违例 |
+
+注意:**不能按坐标去重 violation**。同一个 x/y 位置可能有多条不同 rule 或不同 participant 的
+violation,必须都保留到 cluster score 里。
 
 ### 3.3 对 checker API 的建议
 
@@ -173,11 +191,14 @@ std::vector<CheckResult> checkPlaceWithOverlays(
 
 对每条 violation 先抽象成:
 
+- `id`:checker stable id;没有 id 时用 `(rule,relationship,participants,xWindow)` 生成临时 id。
 - `type`:MW 或 MS。
 - `relationship`:intra-row 或 inter-row。
 - `rows`:participant 涉及行;没有 participant 时用 violation anchor row。
 - `xRange`:violation `xWindow` 与 participant bbox 的 union。
 - `vtHint`:MW 用 primary layer;MS 用 primary/secondary layer。
+- `cellAnchors`:参与 violation 或与 violation xRange 邻接的 fixed std cell。
+- `fillerParticipants`:checker 明确列出的 filler。
 
 ### 4.2 窗口 ladder
 
@@ -189,15 +210,33 @@ std::vector<CheckResult> checkPlaceWithOverlays(
 | W1 | 涉及行内与 `xRange` 相交的 filler,横向扩一个 rule distance |
 | W2 | W1 snap 到完整 filler instance,再横向扩到最近 fixed cell/blockage/core 边界 |
 | W3 | inter-row 用:包含耦合相邻行(±1) + 同一个 snapped x range |
-| W4 | 合并所有 overlap/相邻且距离小于一个 rule distance 的 W2/W3 |
+| W4 | cell-centric:对每个 std-cell anchor,包含该 cell 左/右相邻 filler,以及上下相邻行中与 cell 边界/短 filler 对齐的 bridge filler |
+| W5 | 合并所有 overlap/相邻且距离小于一个 rule distance 的 W2/W3/W4 |
 
 默认入口:
 
 - intra-row MW/MS 从 W1 开始。
 - inter-row MW/MS 从 W3 开始。
+- 若 violation 有 fixed std-cell participant,同时加入 W4。
 - 如果 checker 返回 residual violation 刚好在窗口边界外,升一级窗口重试。
 
-### 4.3 合并 violation cluster
+### 4.3 bridge filler 规则
+
+std cell 改 VT 后,常见修法不是改大 filler,而是改夹在 std cell 和大区域之间的短 filler。
+例如一个红色 std cell 旁边有两个蓝色 width-2 filler,上下又接红/蓝 width-6 区域;
+同一位置可同时有 inter-MS 和 inter-row MW。此时把两个 width-2 蓝 filler 改成红,可能一次清掉
+整个 cluster。
+
+因此窗口必须主动包含:
+
+- 与 std-cell anchor 左右接触的 filler。
+- 与 std-cell anchor x-boundary 对齐的上下行 filler。
+- 宽度小于等于 rule window 或明显短于相邻大 filler 的 bridge filler。
+- 位于两个不同 VT 大区域之间的短 filler run。
+
+这些 filler 即使没有出现在某条 violation participant list 中,也应进入候选集。
+
+### 4.4 合并 violation cluster
 
 不能把重叠违例独立修。构图:
 
@@ -205,6 +244,9 @@ std::vector<CheckResult> checkPlaceWithOverlays(
 - 两个 violation 的窗口重叠,连边。
 - 行相同或相邻,且 xRange 距离小于一个 rule distance,连边。
 - 共享 candidate filler,连边。
+- 共享 fixed std-cell anchor,连边。
+- 同一几何位置但 rule/participant 不同,也连边,**但不去重**。
+- 一个 candidate filler 若出现在多条 violation 的窗口里,这些 violation 必须同 cluster 解。
 
 每个 connected component 作为一个 cluster 一次求解。
 
@@ -212,7 +254,8 @@ std::vector<CheckResult> checkPlaceWithOverlays(
 
 1. violation 多的 cluster 先处理。
 2. inter-row 优先于 intra-row。
-3. 仍然相同则小窗口优先。
+3. 含 std-cell anchor 的 cluster 优先。
+4. 仍然相同则小窗口优先。
 
 最终返回前,把所有 cluster 的 changes 合并成一个 full overlay,对整个 `targetPlace` 做一次最终
 `checkPlaceWithOverlay`。
@@ -248,10 +291,12 @@ std::vector<CheckResult> checkPlaceWithOverlays(
 | 分量 | 含义 |
 |---|---|
 | `directParticipant` | filler 出现在 violation participants 中,高优先级 |
-| `cellVote` | 相邻 fixed cell 的 implant == targetVT 的边数 |
+| `cellAnchorVote` | 与 std-cell anchor 接触,且 targetVT == cell VT |
+| `bridgeScore` | 位于 std cell 和相邻大 implant region 之间的短 filler |
 | `cellConflict` | 相邻 fixed cell 的 implant != targetVT 的边数 |
 | `fillerVote` | 相邻 filler 当前/overlay VT == targetVT 的边数 |
 | `diffEdgesRemoved` | 改完能消掉的异 VT 邻接边数 |
+| `multiViolationTouch` | 该 filler 被多个 violation/window 关联 |
 | `sameVtAfter` | 改完后的同 VT 邻接数 |
 | `islandScore` | 当前 filler 没有同 VT 邻居、像孤岛时加权 |
 | `width` | 平票时更窄优先 |
@@ -260,8 +305,8 @@ std::vector<CheckResult> checkPlaceWithOverlays(
 
 候选排序:
 
-1. `directParticipant` 优先。
-2. `cellVote + diffEdgesRemoved + islandScore` 高者优先。
+1. `directParticipant` 或 `bridgeScore` 高者优先。
+2. `cellAnchorVote + diffEdgesRemoved + multiViolationTouch + islandScore` 高者优先。
 3. `cellConflict` 低者优先。
 4. 更窄 filler 优先。
 5. `sameVtBefore` 更小优先。
@@ -269,11 +314,12 @@ std::vector<CheckResult> checkPlaceWithOverlays(
 
 target VT 排序:
 
-1. 匹配相关 fixed cell 的 VT。
-2. 匹配邻近 filler majority region 的 VT。
-3. MW 使用 primary layer 对应 VT。
-4. MS 使用能消掉最多异 VT 邻接的 VT。
-5. 最后按稳定 type id 顺序。
+1. 匹配相关 fixed std-cell anchor 的 VT。
+2. 匹配能同时减少最多 cluster violation 的 VT。
+3. 匹配邻近 filler majority region 的 VT。
+4. MW 使用 primary layer 对应 VT。
+5. MS 使用能消掉最多异 VT 邻接的 VT。
+6. 最后按稳定 type id 顺序。
 
 ---
 
@@ -321,7 +367,9 @@ clean 解定义:
 
 ### 7.3 beam search 兜底
 
-MW 常见情况:单独改一个 filler 不改善,必须两个或多个一起改。greedy 卡住时进入 beam:
+MW 常见情况:单独改一个 filler 不改善,必须两个或多个一起改。greedy 卡住时进入 beam。
+同一位置多 violation 的情况也必须允许 beam 同时选择多个 bridge filler,不能因为第一步不 clean
+就停止。
 
 - 取 Plan sorting V2 排名前 N 的 move。
 - 搜索深度 D。
@@ -372,10 +420,21 @@ MW 常见情况:单独改一个 filler 不改善,必须两个或多个一起改�
 Plan D 正好针对这个链路:
 
 - 从 violation/participant 定位局部窗口。
-- 优先尝试贴 fixed cell、参与 violation、异 VT 边多的 filler。
+- 把同位置、同 std-cell anchor、共享 filler 的多条 violation 合成 cluster。
+- 优先尝试贴 fixed cell、参与 violation、异 VT 边多、桥接 std cell 的短 filler。
 - 每个候选都交给真实 checker 判断。
 - MW 需要多 filler 联动时用 beam search,不是只看单步改善。
 - 窗口不够时自动扩到相邻耦合行/固定边界。
+
+典型例子:一个红色 std cell 改 type 后,其右侧两个 width-2 蓝 filler 同时连接上下不同
+implant 区域;同一 x 位置可能既有 std cell 与右上红色 width-6 filler 的 inter-MS,
+又有左上蓝色 width-6 filler 与 std cell 旁边蓝色 width-2 filler 的 inter-row MW。
+正确修法可能是把两个 width-2 蓝 filler 都换成红色。这个例子要求 solver 同时满足:
+
+- 不按 x 位置去重 violation。
+- 不只改 checker 直接列出的某一个 filler。
+- 把两个 width-2 bridge filler 放进同一个 cluster。
+- 允许 beam 一次评估两个 change 的 overlay。
 
 ---
 
@@ -411,7 +470,9 @@ struct FillerRepairResult
 - checker call 数;
 - window expansion level;
 - best overlay changes;
-- residual violation id/xWindow/row;
+- residual violation id/xWindow/row/participants;
+- std-cell anchor id;
+- bridge filler ids;
 - 失败原因:无合法 master、fixed-cell 冲突、搜索预算耗尽、窗口过大、checker 拒绝所有 overlay。
 
 ---
@@ -422,31 +483,37 @@ struct FillerRepairResult
    `FillerRepairResult`。
 2. 建立 master -> `FillerTypeId` / same-size replacement table。
 3. 实现 violation 归一化、开窗和 cluster 合并。
-4. 实现 Plan sorting V2。
-5. 实现 greedy prefix search。
-6. 实现 beam search fallback。
-7. 实现最终 full-target overlay check。
-8. 加 fake checker 单测:
+4. 实现 cell-centric / bridge filler candidate 扩展。
+5. 实现 Plan sorting V2。
+6. 实现 greedy prefix search。
+7. 实现 beam search fallback。
+8. 实现最终 full-target overlay check。
+9. 加 fake checker 单测:
    - intra-row MS:一个 filler type change 修好;
    - inter-row MS:一个 filler type change 修好;
    - MW:必须两个 filler 同时改才修好;
+   - 同一位置两条 violation,不同 participant,不能去重;
+   - 一个 std cell anchor 引发多个 violation;
+   - 一个 filler 同时关联多个 violation;
    - 三 VT:邻居 majority 不是正确 fixed-cell VT;
    - 缺 same-size target master;
    - fixed cell 约束冲突;
    - 必须扩窗才修好;
    - beam budget exhausted。
-9. 等 `checkPlaceWithOverlay` 接口稳定后接真实 checker。
+10. 等 `checkPlaceWithOverlay` 接口稳定后接真实 checker。
 
 ---
 
 ## 12. 需要 checker team 确认/修改
 
 1. `Violation` 能否暴露 participant 的 `isFiller / instanceId / row / xRange / implant type`?
-2. `CheckResult` 能否区分 original / fixed / residual / new / spillover violation?
-3. `CheckRequest targetPlace` 能否表达多行 x-window,而不只是一个 placement point?
-4. `checkPlaceWithOverlay` 是否支持一个 overlay 内多个 filler changes?
-5. 是否可以提供 batch API `checkPlaceWithOverlays`?
-6. replacement master 是 repair 侧传 `MasterId`,还是 checker/DB 提供
+2. `Violation` 能否保留 stable id,避免同一坐标不同 violation 被误合并?
+3. `CheckResult` 能否区分 original / fixed / residual / new / spillover violation?
+4. `CheckRequest targetPlace` 能否表达多行 x-window,而不只是一个 placement point?
+5. `checkPlaceWithOverlay` 是否支持一个 overlay 内多个 filler changes?
+6. 是否可以提供 batch API `checkPlaceWithOverlays`?
+7. candidateFillers 是 checker 给全窗口 editable filler,还是仅 participant filler?建议给全窗口。
+8. replacement master 是 repair 侧传 `MasterId`,还是 checker/DB 提供
    `FillerTypeId -> same-size master` 查询?
-7. same width/height/orient-compatible 由 checker 强校验,还是 repair 侧保证即可?
-8. `targetPlace` 多大时 checker runtime 会不可接受?需要给 repair 一个默认 call/window budget。
+9. same width/height/orient-compatible 由 checker 强校验,还是 repair 侧保证即可?
+10. `targetPlace` 多大时 checker runtime 会不可接受?需要给 repair 一个默认 call/window budget。
