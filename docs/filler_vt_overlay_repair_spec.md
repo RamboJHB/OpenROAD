@@ -4,9 +4,11 @@
 基线:`2023-base`。最后更新 2026-06-30。
 
 **一句话**:design 已经全局铺满 filler,无空 site;std cell 改 VT/type 后产生 implant
-MW/MS 违例。本模块**只替换 filler 的 VT/implant type**(同宽同高同位置换 master),
-一边构造候选 overlay,一边调用上游 `checkPlaceWithOverlay` 判定,直到找到 checker-clean
-的修改集合;修不了则返回 diagnostics,不动 DB。
+MW/MS 违例。checker 把 violation list 交给 filler engine;filler engine **只替换 filler
+的 VT/implant type**(同宽同高同位置换 master),枚举/搜索若干 overlay 方案,并对每个方案调用
+DP checking API 在局部 window/cluster 上重查。filler engine 根据 checker 返回的 violation
+集合判断 original violation 是否被修掉、是否有 residual/new/spillover,直到找到 clean 的
+`FillerChange` 集合;修不了则返回 diagnostics,不动 DB。
 
 ---
 
@@ -23,16 +25,22 @@ MW/MS 违例。本模块**只替换 filler 的 VT/implant type**(同宽同高同
 
 **定稿建议**:用新的 **Plan D** 作为主路径:
 
-1. 以 `targetPlace` 指向的 std-cell anchor 为根,结合输入 violation 建 repair
-   window / violation cluster。
-2. 在窗口内枚举合法的 same-size filler master 替换。
-3. 用 Plan sorting 的权重和 tie-break 排序,但把 fixed cell 当作 target VT 的投票/约束。
-4. 每一步通过 `checkPlaceWithOverlay` 评估 overlay,不 commit DB。
-5. 找到 target std-cell anchor 相关 MW/MS clean、且不引入 spillover 的 overlay 后,返回
-   `FillerRepairResult.changes`。
-6. 搜不到 checker-clean 解则 `hasSolution=false`,返回 diagnostics 给上游。
+1. checker 初次检查 target std cell,把 violation list 交给 filler engine。
+2. filler engine 以 `targetPlace` 指向的 std-cell anchor 为根,把 violations 合成局部
+   repair window / violation cluster。
+3. filler engine 在窗口内枚举合法的 same-size filler master 替换,形成若干
+   `FillerChange` overlay 方案。
+4. filler engine 用 Plan sorting 的权重和 tie-break 排序,但把 fixed cell 当作 target VT
+   的投票/约束。
+5. 每个 overlay 方案都调用 DP checking API,让 checker 在该局部 window/cluster 上重新检查,
+   不 commit DB。
+6. filler engine 对 checker 返回的 violations 做分类:original 是否被修掉、是否还有
+   residual、是否引入 new violation、是否存在 window 边界 spillover。
+7. 找到 clean overlay 后返回 `FillerRepairResult.changes`。
+8. 搜不到 DRC-clean 解则 `hasSolution=false`,返回 diagnostics 给上游。
 
-核心原则:**真实 DRC 判定交给 checker;我们负责开窗、候选生成、搜索顺序和结果收敛。**
+核心原则:**checker 负责产生 violation snapshot 和真实 DRC 判定;filler engine 负责开窗、
+候选生成、overlay 搜索、result 分类和结果收敛。**
 
 ---
 
@@ -46,8 +54,10 @@ MW/MS 违例。本模块**只替换 filler 的 VT/implant type**(同宽同高同
 - DRC 规则两类:MW(min-width) 与 MS(min-spacing)。每类又分 intra-row / inter-row。
 - `targetPlace` 是上游 opto/ECO 改动的 std cell placement,也是这批 violation 的
   root anchor;它不是 repair 侧任意选择的几何窗口。
-- 上游 checker 给当前 target std cell 在原始/当前状态下的一次 violation snapshot;repair
+- checker 给 filler engine 一次 violation snapshot 作为原始待修 violation list;repair
   侧不会要求 checker 长期维护 violation 状态。
+- filler engine 后续每个 overlay 方案都会调用 DP checking API,要求 checker 在指定局部
+  window/cluster 上重新检查并返回新的 violation snapshot。
 
 ### 关键事实:violation 与 filler 是多对多
 
@@ -60,7 +70,7 @@ MW/MS 违例。本模块**只替换 filler 的 VT/implant type**(同宽同高同
   **bridge filler**(连接 std cell 与周围 implant 区的短 filler)。
 
 因此 `Violation` 是 constraint,不是唯一 root cause。repair 的基本单位应是
-**局部 violation cluster + 候选 filler 集合**,目标是让整个 cluster checker-clean。
+**局部 violation cluster + 候选 filler 集合**,目标是让整个 cluster 在 checker result 中 clean。
 
 ### 关键事实:`targetPlace` 是 std-cell anchor,不是 repair window
 
@@ -81,12 +91,14 @@ struct CheckRequest
 - `targetPlace.instanceId` 是被 opto 改 VT/type 的 std cell,也是 violation 的根因 anchor。
 - `rowId/colId/orientation` 描述该 std cell 的 placement,供 checker 重建局部 implant
   check context。
-- repair 的 W0-W5 "窗口"只是**候选 filler 选择和搜索预算**的内部概念,不能再作为
-  `targetPlace` 传给 checker。
-- 每次调用 `checkPlaceWithOverlay({targetPlace, fillerChanges})` 时,`targetPlace`
-  保持同一个 std-cell anchor;变化的只有 overlay 里的 filler replacement。
-- 如果 repair 扩大候选窗口,它只是允许更多 filler 进入 `fillerChanges`;checker 仍然围绕
-  这个 target std cell 做真实 DRC 判定。
+- repair 的 W0-W5 "窗口"首先是**候选 filler 选择和搜索预算**的内部概念;调用 DP checking
+  API 时,它会被转成局部 `checkRegion` / `clusterWindow`,但不能复用 `targetPlace`
+  表达。
+- 每次调用 `checkPlaceWithOverlay` 时,`targetPlace` 保持同一个 std-cell anchor;
+  `fillerChanges` 表示候选方案,`checkRegion` 表示本次要让 checker 重查的局部
+  window/cluster。
+- 如果 repair 扩大候选窗口,它既允许更多 filler 进入 `fillerChanges`,也扩大本次 overlay
+  check 的 `checkRegion`。
 - 因为 checker 不是全局 DRC,当 overlay 改到 target std-cell 局部作用域边界附近时,
   checker 最好返回 edge/spillover violation,或者提供一个可选 guard/check region。
 
@@ -138,11 +150,17 @@ struct FillerChange
     MasterId newMasterId = 0;
 };
 
+struct CheckRegion
+{
+    // Local window / violation cluster selected by filler engine.
+    // Exact representation can be Rect, grid rows + col range, or checker-native region id.
+};
+
 struct FillerRepairRequest
 {
-    CheckRequest targetPlace;
-    std::vector<Violation> violations;
-    std::vector<EditableFiller> candidateFillers;
+    CheckRequest targetPlace;              // changed std-cell anchor
+    std::vector<Violation> violations;     // original snapshot from checker
+    std::vector<EditableFiller> candidateFillers;  // optional; filler engine can also collect by region
 };
 
 struct FillerRepairResult
@@ -155,11 +173,21 @@ struct FillerRepairResult
 struct CheckOverlay
 {
     CheckRequest targetPlace;  // fixed std-cell anchor, not a repair window
+    CheckRegion checkRegion;   // local window / cluster to re-check
     std::vector<FillerChange> fillerChanges;
 };
 
 CheckResult checkPlaceWithOverlay(const CheckOverlay& overlay) const;
 ```
+
+完整调用方向:
+
+1. checker / DP 发现 implant MW/MS violations,构造 `FillerRepairRequest`。
+2. filler engine 从 `request.violations` 建 cluster/window,生成 `CheckRegion`。
+3. filler engine 枚举一组 `FillerChange` 作为一个 overlay。
+4. filler engine 调用 `checkPlaceWithOverlay({targetPlace, checkRegion, fillerChanges})`。
+5. checker 只对这个 overlay 在 `checkRegion` 上做局部重查,返回本次 `CheckResult`。
+6. filler engine 比较 original violation set 与本次 result,决定 accept/reject/扩窗/继续搜索。
 
 ### 3.1 对 `EditableFiller` 的建议
 
@@ -189,9 +217,21 @@ struct EditableFiller
 
 ### 3.2 对 `Violation` / `CheckResult` 的建议
 
-`CheckResult` 不应只给 pass/fail,需要返回**本次 check 的 violation snapshot**。
-checker 不需要把 violation 存成长期 member/state;repair 只需要消费当前 overlay 下的临时
-结果。每个 violation 最好包含:
+`CheckResult` 不应只给 pass/fail,需要返回**本次 overlay + checkRegion 下重新检查得到的
+violation snapshot**。checker 不需要把 violation 存成长期 member/state;repair 只需要消费
+当前 overlay 下的临时结果。
+
+filler engine 会把 `FillerRepairRequest.violations` 作为 original set,把每次
+`CheckResult.violations` 作为 checked set,并分类为:
+
+| 分类 | 定义 | 用途 |
+|---|---|---|
+| fixed original | original set 中有、checked set 中没有 | 证明原违例被修掉 |
+| residual original | original set 中仍然存在 | overlay 还没修干净 |
+| new inside-window | checked set 中新增,且在当前 checkRegion 内 | overlay 引入新违例 |
+| spillover | checked set 中新增或残留在 checkRegion 边界/guard 区 | 提示扩窗或拒绝方案 |
+
+每个 violation 最好包含:
 
 | 字段 | 用途 |
 |---|---|
@@ -206,7 +246,7 @@ checker 不需要把 violation 存成长期 member/state;repair 只需要消费�
 | participant.instanceId | 找 candidate filler 或 std-cell anchor |
 | participant.isFiller | 只改 filler |
 | participant.xRange/row | 做 cluster 和 bridge window |
-| insideTarget/spillover | 区分窗口内残留和窗口外新违例 |
+| insideRegion/spillover | 区分窗口内残留和窗口外/边界违例 |
 
 注意:**不能按坐标去重 violation**。同一个 x/y 位置可能有多条不同 rule 或不同 participant 的
 violation,必须都保留到 cluster score 里。
@@ -217,15 +257,17 @@ violation,必须都保留到 cluster score 里。
 - 函数必须 non-mutating,不改 DB。
 - 相同 overlay 返回 deterministic result。
 - `targetPlace` 必须被解释为 changed std-cell anchor,不是可变 check window。
-- `CheckResult.violations` 是本次 overlay check 的 snapshot,checker 不需要 maintain
-  历史 violation。
-- 如果 checker 的内部 check region 不能覆盖 repair 可能改到的 filler 边界,建议新增可选
-  guard/check region,但不要复用 `targetPlace` 表达窗口:
+- `CheckOverlay.checkRegion` / `clusterWindow` 才是本次局部重查范围。
+- `CheckResult.violations` 是本次 overlay + checkRegion 的 snapshot,checker 不需要
+  maintain 历史 violation。
+- 如果 checker 需要更大范围收集边界影响,建议在 `checkRegion` 外再加 optional
+  guard/collect region,但不要复用 `targetPlace` 表达窗口:
 
 ```cpp
 struct CheckOverlay
 {
     CheckRequest targetPlace;
+    CheckRegion checkRegion;
     std::vector<FillerChange> fillerChanges;
     std::optional<Rect> guardRegion;  // optional, for spillover collection only
 };
@@ -244,9 +286,10 @@ std::vector<CheckResult> checkPlaceWithOverlays(
 
 目标:窗口足够覆盖 implant interaction,但不要大到搜索爆炸。
 
-注意:这里的"窗口"不是 `CheckRequest targetPlace`。它是 repair planner 用来选
-candidate filler、限制搜索和解释 residual violation 的内部 region。checker 调用时仍然使用同一个
-target std-cell anchor。
+注意:这里的"窗口"不是 `CheckRequest targetPlace`。它由 filler engine 生成,用于选
+candidate filler、限制搜索和解释 residual violation;调用 DP checking API 时,同一个窗口会作为
+`CheckOverlay.checkRegion` / `clusterWindow` 传给 checker 做局部重查。`targetPlace`
+仍然只是 changed std-cell anchor。
 
 ### 4.1 违例归一化
 
@@ -321,8 +364,9 @@ std cell 改 VT 后,常见修法不是改大 filler,而是改夹在 std cell 和
 4. 仍然相同则小窗口优先。
 
 最终返回前,把所有 cluster 的 changes 合并成一个 full overlay,用同一个
-`targetPlace` 做一次最终 `checkPlaceWithOverlay`。如果 checker 支持 `guardRegion`,
-最终 check 使用覆盖所有 changed filler 及其相邻 rule distance 的 guard region。
+`targetPlace` 和覆盖所有 cluster/change 的 `checkRegion` 做一次最终
+`checkPlaceWithOverlay`。如果 checker 支持 `guardRegion`,最终 check 使用覆盖所有 changed
+filler 及其相邻 rule distance 的 guard region。
 
 ---
 
@@ -391,14 +435,15 @@ target VT 排序:
 
 ### 7.1 score
 
-每个 overlay 都通过 `checkPlaceWithOverlay` 得到真实 checker result。
+每个 overlay 都通过 `checkPlaceWithOverlay` 得到真实 checker result。filler engine 不用
+checker 直接替它判断 accept/reject,而是把 result violations 和 original violations 做匹配分类。
 
 建议 score:
 
 ```text
-score = 100000 * targetViolations
+score = 100000 * residualOriginalViolations
       +  50000 * spilloverViolations
-      +  20000 * newInsideTargetViolations
+      +  20000 * newInsideWindowViolations
       +    100 * changes.size()
       +      1 * lowPriorityPenalty
 ```
@@ -406,16 +451,17 @@ score = 100000 * targetViolations
 排序含义:
 
 1. clean 解绝对优先。
-2. target violation 更少优先。
+2. residual original violation 更少优先。
 3. 不引入新 violation 优先。
 4. change 数更少优先。
 5. Plan sorting penalty 只做最后 tie-break。
 
 clean 解定义:
 
-- 与 `targetPlace.instanceId` 相关的目标 MW/MS 全清。
-- 没有新增 inside-target MW/MS。
-- 没有不可接受的 spillover MW/MS。
+- original violation set 全部 fixed,即没有 residual original MW/MS。
+- 当前 checkRegion 内没有新增 MW/MS。
+- window/guard 边界没有不可接受的 spillover MW/MS。
+- 最终 full overlay check 仍满足以上条件。
 
 ### 7.2 greedy prefix search
 
@@ -425,7 +471,7 @@ clean 解定义:
 2. 逐个评估 `overlay + move`。
 3. 选择 score strict improvement 最大的 move。
 4. 加入 overlay。
-5. checker clean 则返回。
+5. filler engine 分类结果为 clean 则返回。
 
 适合简单 MS、孤岛 MW、单 filler 修复。
 
@@ -515,7 +561,7 @@ struct FillerRepairResult
 
 约定:
 
-- `hasSolution=true`: `changes` 经最终 full-target overlay check 为 clean。
+- `hasSolution=true`: `changes` 经最终 full overlay + checkRegion 检查为 clean。
 - `hasSolution=false`:默认 `changes` 为空,diagnostics 说明为什么未找到 clean 解。
 - partial repair 以后可加,但必须显式请求。
 
@@ -536,24 +582,27 @@ struct FillerRepairResult
 - window expansion level;
 - best overlay changes;
 - residual violation id/xWindow/row/participants;
+- fixed original / residual original / new inside-window / spillover 分类统计;
 - std-cell anchor id;
 - bridge filler ids;
-- 失败原因:无合法 master、fixed-cell 冲突、搜索预算耗尽、窗口过大、checker 拒绝所有 overlay。
+- 失败原因:无合法 master、fixed-cell 冲突、搜索预算耗尽、窗口过大、所有 overlay 都有
+  residual/new/spillover。
 
 ---
 
 ## 11. 实现 TODO
 
-1. 定义 checker-facing 的 pure repair planner,输入 `FillerRepairRequest`,输出
+1. 定义 filler-engine 的 pure repair planner,输入 `FillerRepairRequest`,输出
    `FillerRepairResult`。
 2. 建立 master -> `FillerTypeId` / same-size replacement table。
 3. 实现 violation 归一化、开窗和 cluster 合并。
 4. 实现 cell-centric / bridge filler candidate 扩展。
 5. 实现 Plan sorting V2。
-6. 实现 greedy prefix search。
-7. 实现 beam search fallback。
-8. 实现最终 full-target overlay check。
-9. 加 fake checker 单测:
+6. 实现 overlay result 分类:fixed original / residual original / new inside-window / spillover。
+7. 实现 greedy prefix search。
+8. 实现 beam search fallback。
+9. 实现最终 full overlay + checkRegion 检查。
+10. 加 fake checker 单测:
    - intra-row MS:一个 filler type change 修好;
    - inter-row MS:一个 filler type change 修好;
    - MW:必须两个 filler 同时改才修好;
@@ -564,8 +613,10 @@ struct FillerRepairResult
    - 缺 same-size target master;
    - fixed cell 约束冲突;
    - 必须扩窗才修好;
+   - overlay 修掉 original 但引入 new violation,必须拒绝;
+   - overlay 在 window 边界产生 spillover,必须扩窗或拒绝;
    - beam budget exhausted。
-10. 等 `checkPlaceWithOverlay` 接口稳定后接真实 checker。
+11. 等 `checkPlaceWithOverlay` 接口稳定后接真实 checker。
 
 ---
 
@@ -574,15 +625,18 @@ struct FillerRepairResult
 1. `Violation` 能否暴露 participant 的 `isFiller / instanceId / row / xRange / implant type`?
 2. `Violation` 能否保留 stable id,避免同一坐标不同 violation 被误合并?
 3. `CheckResult` 能否区分 original / fixed / residual / new / spillover violation?
-4. `checkPlaceWithOverlay` 围绕 `targetPlace` 的内部 check region 有多大?是否覆盖
-   inter-row MW/MS 和 overlay changed filler 的边界 spillover?
-5. 是否需要新增可选 `guardRegion` / `collectRegion`,专门用于收集 spillover violation?
-6. `checkPlaceWithOverlay` 是否支持一个 overlay 内多个 filler changes?
-7. 是否可以提供 batch API `checkPlaceWithOverlays`?
-8. candidateFillers 是 checker/opto 给 target std-cell 周边 editable filler,还是 repair
+4. `CheckOverlay` 是否可以显式携带 `checkRegion` / `clusterWindow`,让 checker 在该局部
+   window/cluster 上重新检查?
+5. `checkRegion` 的表示用 Rect、grid rows + col range,还是 checker-native region id?
+6. 是否需要新增可选 `guardRegion` / `collectRegion`,专门用于收集 window 边界 spillover
+   violation?
+7. `CheckResult.violations` 是否能标记 violation 在 checkRegion 内部还是 guard/boundary?
+8. `checkPlaceWithOverlay` 是否支持一个 overlay 内多个 filler changes?
+9. 是否可以提供 batch API `checkPlaceWithOverlays`?
+10. candidateFillers 是 checker/opto 给 target std-cell 周边 editable filler,还是 repair
    侧从 DB 根据 W0-W5 自己收集?建议至少覆盖 W3/W4,不能仅 participant filler。
-9. replacement master 是 repair 侧传 `MasterId`,还是 checker/DB 提供
+11. replacement master 是 repair 侧传 `MasterId`,还是 checker/DB 提供
    `FillerTypeId -> same-size master` 查询?
-10. same width/height/orient-compatible 由 checker 强校验,还是 repair 侧保证即可?
-11. 单个 `targetPlace` 的 checker runtime 会随 overlay change 数如何增长?需要给 repair
+12. same width/height/orient-compatible 由 checker 强校验,还是 repair 侧保证即可?
+13. 单个 `checkRegion` 的 checker runtime 会随 overlay change 数如何增长?需要给 repair
     一个默认 call/window budget。
