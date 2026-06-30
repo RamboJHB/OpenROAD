@@ -268,3 +268,49 @@ preflight fail 时必须:
 可以按 Plan D 开工,但第一阶段不要直接写复杂搜索。先把 checker contract、fake checker、violation signature、guard/check coverage 和 batch API 语义打牢。否则 solver 会很快写得很聪明,但难以证明 `clean overlay` 真的 clean。
 
 实现上推荐把 repair engine 做成 deterministic pure planner:输入 request 和 checker adapter,输出 result;所有 DB commit 仍留给上游。这样最容易测试、复现和 debug。
+
+## 9. Reviewer update: checker guard window
+
+结论:建议 checker 使用比 repair window 更大的 check/guard window。这个设计可以采纳,但必须把 `repairWindow` 和 `checkWindow` 语义分开,否则 solver 很容易把 violation 推到局部窗口边界外,或者因为窗口外已有 violation 产生假失败。
+
+推荐语义:
+
+- `repairWindow`:filler engine 只允许在这个区域内收集 editable filler、生成 candidate、输出 `FillerChange`。
+- `checkWindow` / `guardRegion`:checker 在这个更大区域内 collect violations,用于发现 spillover 和 boundary side effects。
+- guard-only 区域里的 filler 只能参与 checking 和 diagnostics,不能被当前 overlay 修改。
+- checker result 应能区分 violation 位于 `repairWindow` 内、guard halo 内、还是跨越两者边界。
+
+`checkWindow` 可以定义为:
+
+```text
+checkWindow = repairWindow expanded by halo
+halo = max(one-neighbor-cell ring, ruleReach)
+```
+
+其中 one-neighbor-cell ring 至少覆盖左右相邻 std cell/filler、上下相邻 row 中与 repair window xRange 相交或贴近的 cell/filler;`ruleReach` 应覆盖 MW/MS rule 可能跨越的最大 interaction distance。第一版如果 ruleReach 不容易从 tech rule 中取出,可以先用一圈相邻 cell 加 conservative margin,但 diagnostics 需要打印实际 halo。
+
+候选评估必须使用 baseline delta classification:
+
+1. 对同一个 `checkWindow` 做 baseline check,不带 overlay。
+2. 对每个 candidate overlay 使用同一个 `checkWindow` 做 check。
+3. 分类时比较 overlay result 和 baseline result。
+4. 原始 target violation 没消掉,判为 residual。
+5. `repairWindow` 内新增 violation,必须 reject。
+6. guard halo 内新增 violation,或 violation 开始 touch changed filler,判为 spillover,默认 reject 或强降级。
+7. guard halo 内原本就存在且与 changed filler 无关的 violation,不能导致当前 overlay 失败。
+
+accept clean overlay 时至少满足:
+
+- original target violations 在 `checkWindow` 下消失;
+- `repairWindow` 内没有新增 violation;
+- guard halo 内没有由 changed fillers 引入或移动出来的 violation;
+- `CheckResult.isLegal == true`;
+- final merged overlay 使用同样或更大的 guard check 仍 clean。
+
+测试建议补充:
+
+- overlay 修掉 repairWindow 内 violation,但在 halo 中新增 violation,必须拒绝。
+- halo 中 baseline 已有 unrelated violation,candidate 不应因此失败。
+- violation 从 repairWindow 边界移动到 halo,必须 classify 为 spillover。
+- guard-only filler 不允许出现在 `FillerChange` 中。
+- 不同 halo 大小下 diagnostics 能打印 `repairWindow`, `checkWindow`, halo source 和 classification reason。
