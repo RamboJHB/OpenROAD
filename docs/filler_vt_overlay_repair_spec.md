@@ -4,11 +4,12 @@
 基线:`2023-base`。最后更新 2026-06-30。
 
 **一句话**:design 已经全局铺满 filler,无空 site;std cell 改 VT/type 后产生 implant
-MW/MS 违例。checker 把 violation list 交给 filler engine;filler engine **只替换 filler
-的 VT/implant type**(同宽同高同位置换 master),枚举/搜索若干 overlay 方案,并对每个方案调用
-DP checking API 在局部 window/cluster 上重查。filler engine 根据 checker 返回的 violation
-集合判断 original violation 是否被修掉、是否有 residual/new/spillover,直到找到 clean 的
-`FillerChange` 集合;修不了则返回 diagnostics,不动 DB。
+MW/MS 违例。checker 把 violation list 交给 filler engine;filler engine 先确认 design 是
+100% utility,否则直接报错。通过 preflight 后,filler engine **只替换 filler 的 VT/implant
+type**(同宽同高同位置换 master),枚举/搜索若干 overlay 方案,并对每个方案调用 DP checking
+API 在局部 window/cluster 上重查。filler engine 根据 checker 返回的 violation 集合判断
+original violation 是否被修掉、是否有 residual/new/spillover,直到找到 clean 的 `FillerChange`
+集合;修不了则返回 diagnostics,不动 DB。
 
 ---
 
@@ -26,18 +27,20 @@ DP checking API 在局部 window/cluster 上重查。filler engine 根据 checke
 **定稿建议**:用新的 **Plan D** 作为主路径:
 
 1. checker 初次检查 target std cell,把 violation list 交给 filler engine。
-2. filler engine 以 `targetPlace` 指向的 std-cell anchor 为根,把 violations 合成局部
+2. filler engine 做 100% utility preflight:每个合法 site 必须已被 std cell 或 filler
+   覆盖。如果发现空 site/gap,立即返回 fatal diagnostic,不进入 repair search。
+3. filler engine 以 `targetPlace` 指向的 std-cell anchor 为根,把 violations 合成局部
    repair window / violation cluster。
-3. filler engine 在窗口内枚举合法的 same-size filler master 替换,形成若干
+4. filler engine 在窗口内枚举合法的 same-size filler master 替换,形成若干
    `FillerChange` overlay 方案。
-4. filler engine 用 Plan sorting 的权重和 tie-break 排序,但把 fixed cell 当作 target VT
+5. filler engine 用 Plan sorting 的权重和 tie-break 排序,但把 fixed cell 当作 target VT
    的投票/约束。
-5. 每个 overlay 方案都调用 DP checking API,让 checker 在该局部 window/cluster 上重新检查,
+6. 每个 overlay 方案都调用 DP checking API,让 checker 在该局部 window/cluster 上重新检查,
    不 commit DB。
-6. filler engine 对 checker 返回的 violations 做分类:original 是否被修掉、是否还有
+7. filler engine 对 checker 返回的 violations 做分类:original 是否被修掉、是否还有
    residual、是否引入 new violation、是否存在 window 边界 spillover。
-7. 找到 clean overlay 后返回 `FillerRepairResult.changes`。
-8. 搜不到 DRC-clean 解则 `hasSolution=false`,返回 diagnostics 给上游。
+8. 找到 clean overlay 后返回 `FillerRepairResult.changes`。
+9. 搜不到 DRC-clean 解则 `hasSolution=false`,返回 diagnostics 给上游。
 
 核心原则:**checker 负责产生 violation snapshot 和真实 DRC 判定;filler engine 负责开窗、
 候选生成、overlay 搜索、result 分类和结果收敛。**
@@ -58,6 +61,28 @@ DP checking API 在局部 window/cluster 上重查。filler engine 根据 checke
   侧不会要求 checker 长期维护 violation 状态。
 - filler engine 后续每个 overlay 方案都会调用 DP checking API,要求 checker 在指定局部
   window/cluster 上重新检查并返回新的 violation snapshot。
+
+### 硬前置条件:100% utility
+
+filler engine 开始 repair 前必须检查 occupancy:
+
+- 每个合法 site 必须被 std cell 或 filler 覆盖。
+- 不允许存在空 site/gap。
+- 不允许把"补洞"作为 repair 的隐含行为。
+- 如果实现顺手能发现 overlap/非法占用,也应报 placement precondition error。
+
+失败语义:
+
+- 不生成 candidate filler。
+- 不调用 `checkPlaceWithOverlay`。
+- 不返回 partial changes。
+- `FillerRepairResult.hasSolution=false`。
+- `FillerRepairResult.changes` 为空。
+- `diagnostics` 带 fatal/error 级别的 `NonFullUtility` 或等价 code,并报告至少一个 gap 的
+  row/col range/site count。
+
+原因:本方案只替换 filler master,保持同宽同高同位置。如果 design 没有全局铺满 filler,
+正确动作应该是先跑 filler insertion / placement repair,不是让 VT repair 搜索承担补洞职责。
 
 ### 关键事实:violation 与 filler 是多对多
 
@@ -563,6 +588,8 @@ struct FillerRepairResult
 
 - `hasSolution=true`: `changes` 经最终 full overlay + checkRegion 检查为 clean。
 - `hasSolution=false`:默认 `changes` 为空,diagnostics 说明为什么未找到 clean 解。
+- 100% utility preflight 失败时,`hasSolution=false`,changes 为空,diagnostics 必须是
+  fatal/error,原因是 placement precondition 不满足,不是搜索无解。
 - partial repair 以后可加,但必须显式请求。
 
 ---
@@ -571,6 +598,7 @@ struct FillerRepairResult
 
 建议至少记录:
 
+- 100% utility preflight 状态;若失败,记录 gap row/col range/site count;
 - target std-cell anchor:`targetPlace.instanceId/rowId/colId/orientation`;
 - cluster/window id;
 - rule type(MW/MS) 与 intra/inter;
@@ -594,15 +622,17 @@ struct FillerRepairResult
 
 1. 定义 filler-engine 的 pure repair planner,输入 `FillerRepairRequest`,输出
    `FillerRepairResult`。
-2. 建立 master -> `FillerTypeId` / same-size replacement table。
-3. 实现 violation 归一化、开窗和 cluster 合并。
-4. 实现 cell-centric / bridge filler candidate 扩展。
-5. 实现 Plan sorting V2。
-6. 实现 overlay result 分类:fixed original / residual original / new inside-window / spillover。
-7. 实现 greedy prefix search。
-8. 实现 beam search fallback。
-9. 实现最终 full overlay + checkRegion 检查。
-10. 加 fake checker 单测:
+2. 实现 100% utility preflight;失败时直接 fatal diagnostic,不生成 overlay,不调用 checker。
+3. 建立 master -> `FillerTypeId` / same-size replacement table。
+4. 实现 violation 归一化、开窗和 cluster 合并。
+5. 实现 cell-centric / bridge filler candidate 扩展。
+6. 实现 Plan sorting V2。
+7. 实现 overlay result 分类:fixed original / residual original / new inside-window / spillover。
+8. 实现 greedy prefix search。
+9. 实现 beam search fallback。
+10. 实现最终 full overlay + checkRegion 检查。
+11. 加 fake checker 单测:
+   - 非 100% utility:存在 gap 时直接 fatal,不调用 checker,changes 为空;
    - intra-row MS:一个 filler type change 修好;
    - inter-row MS:一个 filler type change 修好;
    - MW:必须两个 filler 同时改才修好;
@@ -616,7 +646,7 @@ struct FillerRepairResult
    - overlay 修掉 original 但引入 new violation,必须拒绝;
    - overlay 在 window 边界产生 spillover,必须扩窗或拒绝;
    - beam budget exhausted。
-11. 等 `checkPlaceWithOverlay` 接口稳定后接真实 checker。
+12. 等 `checkPlaceWithOverlay` 接口稳定后接真实 checker。
 
 ---
 
