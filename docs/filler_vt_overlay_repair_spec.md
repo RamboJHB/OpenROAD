@@ -1,56 +1,73 @@
-# Filler VT Overlay Repair Spec
+# 功能规格 — Filler VT Overlay 修复(checker-guided,只换 type)
 
-Status: proposed plan for `claude/filler-vt-overlay-repair-plan-2023`.
-Base: `2023-base`.
-Last updated: 2026-06-30.
+状态:方案定稿提案。分支:`claude/filler-vt-overlay-repair-plan-2023`。
+基线:`2023-base`。最后更新 2026-06-30。
 
-## 1. Decision
+**一句话**:design 已经全局铺满 filler,无空 site;std cell 改 VT/type 后产生 implant
+MW/MS 违例。本模块**只替换 filler 的 VT/implant type**(同宽同高同位置换 master),
+一边构造候选 overlay,一边调用上游 `checkPlaceWithOverlay` 判定,直到找到 checker-clean
+的修改集合;修不了则返回 diagnostics,不动 DB。
 
-Use a new Plan D: **checker-guided overlay search**.
+---
 
-Earlier Plan A/B/C are useful, but each has a mismatch with the newest goal:
+## 1. 最终选择:Plan D(checker-guided overlay search)
 
-- Plan A is fast but too local. It can miss cases where multiple nearby fillers must change together.
-- Plan B/Plan C can optimize a site-grid model, but that duplicates DRC logic and risks disagreeing with the real checker.
-- Plan sorting from `claude/filler-vt-weight-2023` gives a good candidate order, but its old rule `touches_cell -> weight 0` is wrong for this problem, because the DRC is caused by std-cell VT changes. A filler touching a changed/fixed std cell is often exactly the filler that must change.
+之前的 Plan A/B/C 都有价值,但不完全匹配最新方向:
 
-So the chosen flow is:
+- **Plan A**:边界驱动,很快,但太局部;遇到 MW 需要多个 filler 同时改 type 时容易误判。
+- **Plan B/C**:能在 site-grid 模型里做更优搜索,但会重复实现 DRC,且可能和真实 checker
+  的 MW/MS/P/N/PRL 细节不一致。
+- **Plan sorting**(`claude/filler-vt-weight-2023`):候选顺序很好,但旧规则
+  `touches_cell -> weight 0` 不适用。本问题的 DRC 正是 std cell 改 VT 引起的,贴着
+  fixed cell 的 filler 往往最该优先尝试。
 
-1. Build a small repair window around each MW/MS violation cluster.
-2. Generate legal same-size filler-type changes inside that window.
-3. Sort candidates using the weight/tie-break idea from Plan sorting, modified so fixed cells vote for target VT instead of freezing adjacent fillers.
-4. Try changes through `checkPlaceWithOverlay` without committing to DB.
-5. Accept only an overlay that the checker says is clean for the target place and does not introduce new target MW/MS violations.
-6. Return `FillerRepairResult` with the final list of filler master swaps.
+**定稿建议**:用新的 **Plan D** 作为主路径:
 
-This keeps the hard truth in the real checker while keeping the search space small and deterministic.
+1. 由输入 violation 建 repair window / violation cluster。
+2. 在窗口内枚举合法的 same-size filler master 替换。
+3. 用 Plan sorting 的权重和 tie-break 排序,但把 fixed cell 当作 target VT 的投票/约束。
+4. 每一步通过 `checkPlaceWithOverlay` 评估 overlay,不 commit DB。
+5. 找到 target place 内 MW/MS clean、且不引入 spillover 的 overlay 后,返回
+   `FillerRepairResult.changes`。
+6. 搜不到 checker-clean 解则 `hasSolution=false`,返回 diagnostics 给上游。
 
-## 2. Scope And Invariants
+核心原则:**真实 DRC 判定交给 checker;我们负责开窗、候选生成、搜索顺序和结果收敛。**
 
-Input design state:
+---
 
-- The design is fully filled: no legal empty sites in the repair region.
-- DRC is caused by std-cell type / VT changes after ECO or optimization.
-- Filler repair may only change filler type, implemented as replacing a filler instance's master with another legal same-geometry filler master.
-- There are three VT / implant types.
-- DRC rules are MW and MS, each split into intra-row and inter-row cases.
+## 2. 范围与不变量
 
-Hard invariants:
+### 输入背景
 
-- Do not move cells.
-- Do not move fillers.
-- Do not change filler width, height, x, row, or orientation.
-- Do not delete fillers or leave sites empty.
-- Do not split or merge filler instances in this phase.
-- Do not commit intermediate candidates to DB. All evaluation uses overlay checks.
-- If no checker-clean overlay is found within the search budget, return `hasSolution=false` with diagnostics.
+- design 已经 100% utility:每个合法 site 都被 cell 或 filler 占用。
+- DRC 来源:opto/ECO 后 std cell 改 type/VT,改变了与周围 filler 的 implant 邻接。
+- VT/implant type 有三种。
+- DRC 规则两类:MW(min-width) 与 MS(min-spacing)。每类又分 intra-row / inter-row。
+- 上游 checker 一次性给 target place、violation list、候选 editable filler。
 
-## 3. Required Data Model
+### 只做
 
-A candidate filler must expose enough data to enumerate legal same-size replacements.
-The current draft is close but should be expanded.
+- 只替换 filler type:同一个 filler instance 换成同宽、同高、同 row/orient 可用的另一个
+  filler master。
+- 支持一次 overlay 包含多个 filler 替换。
+- 中间候选只通过 checker overlay 验证。
+- 最终输出 `FillerRepairResult`。
 
-Current draft:
+### 不做
+
+- 不移动 std cell。
+- 不移动 filler。
+- 不改 filler width/height/x/row/orientation。
+- 不删 filler,不留空 site。
+- 不 split/merge filler instance。
+- 不在 repair 内直接 commit DB。
+- 不自己做最终 DRC 判定。
+
+---
+
+## 3. 接口草案与建议
+
+当前 checker 侧草案:
 
 ```cpp
 struct EditableFiller
@@ -61,40 +78,25 @@ struct EditableFiller
     DbCoord x = 0;
     PhysOrientation orientation = PhysOrientation::R0;
 };
-```
 
-Recommended addition:
-
-```cpp
-struct EditableFiller
-{
-    InstanceId instanceId = 0;
-    MasterId currentMasterId = 0;
-    FillerTypeId currentTypeId = 0;       // VT / implant abstraction
-    RowId rowId = 0;
-    DbCoord x = 0;
-    DbCoord width = 0;
-    DbCoord height = 0;
-    PhysOrientation orientation = PhysOrientation::R0;
-    std::vector<MasterId> legalReplacementMasters; // same w/h, orient-compatible
-};
-```
-
-Why:
-
-- `currentMasterId` alone is not enough unless the repair code can query master width, height, implant type, and same-size replacement masters.
-- The search should not guess master compatibility.
-- Three VT types are easier to reason about through `FillerTypeId`; final output can still use `newMasterId`.
-
-## 4. Checker Interface Feedback
-
-The proposed evaluation API is the right shape:
-
-```cpp
 struct FillerChange
 {
     InstanceId instanceId = 0;
     MasterId newMasterId = 0;
+};
+
+struct FillerRepairRequest
+{
+    CheckRequest targetPlace;
+    std::vector<Violation> violations;
+    std::vector<EditableFiller> candidateFillers;
+};
+
+struct FillerRepairResult
+{
+    bool hasSolution = false;
+    std::vector<FillerChange> changes;
+    std::vector<Diagnostic> diagnostics;
 };
 
 struct CheckOverlay
@@ -106,231 +108,278 @@ struct CheckOverlay
 CheckResult checkPlaceWithOverlay(const CheckOverlay& overlay) const;
 ```
 
-Requests for the checker side:
+### 3.1 对 `EditableFiller` 的建议
 
-- `CheckResult` should return a full violation list, not only pass/fail.
-- Each `Violation` should include stable id if possible, rule type MW/MS, intra/inter relationship, row ids, x window, primary/secondary implant types, and participants.
-- Participants should indicate instance id and whether the participant is a filler or fixed cell.
-- `checkPlaceWithOverlay` must support multiple filler changes in one overlay.
-- The checker should be deterministic for identical overlays.
-- The checker should not mutate DB.
-- The checker should report violations inside `targetPlace`; if it also reports nearby spillover violations, tag them separately as `insideTarget` / `spillover`.
-- Add a batch API if possible:
+建议把 filler 的几何、type、可替换 master 直接给 repair,避免 repair 侧猜 master 兼容性:
+
+```cpp
+struct EditableFiller
+{
+    InstanceId instanceId = 0;
+    MasterId currentMasterId = 0;
+    FillerTypeId currentTypeId = 0;  // VT / implant type 抽象
+    RowId rowId = 0;
+    DbCoord x = 0;
+    DbCoord width = 0;
+    DbCoord height = 0;
+    PhysOrientation orientation = PhysOrientation::R0;
+    std::vector<MasterId> legalReplacementMasters;  // 同 w/h 且 orient-compatible
+};
+```
+
+原因:
+
+- `currentMasterId` 不足以枚举三种 VT 的 same-size 替换。
+- repair 侧必须知道 width/height 才能保证 occupancy-preserving。
+- 如果 checker/DB 已经能判断 legal master,最好由它直接给 `legalReplacementMasters`。
+- 最终输出仍可保持 `MasterId newMasterId`,不强制上游接受 `FillerTypeId`。
+
+### 3.2 对 `Violation` / `CheckResult` 的建议
+
+`CheckResult` 不应只给 pass/fail,需要完整 violation 列表。每个 violation 最好包含:
+
+| 字段 | 用途 |
+|---|---|
+| stable id | 对比 original / fixed / residual |
+| rule type(MW/MS) | 分流、score |
+| relationship(intra/inter) | 决定开窗行数 |
+| row ids | 定位 inter-row 耦合行 |
+| xWindow | 横向开窗 |
+| primary/secondary implant type | 决定 target VT hint |
+| participants | 判断相关 cell/filler |
+| participant.isFiller | 只改 filler |
+| participant.instanceId | 找 candidate filler |
+| insideTarget/spillover | 区分窗口内残留和窗口外新违例 |
+
+### 3.3 对 checker API 的建议
+
+- `checkPlaceWithOverlay` 必须接受多个 `FillerChange`。
+- 函数必须 non-mutating,不改 DB。
+- 相同 overlay 返回 deterministic result。
+- 如果可能,加 batch API,beam search 会大量受益:
 
 ```cpp
 std::vector<CheckResult> checkPlaceWithOverlays(
     const std::vector<CheckOverlay>& overlays) const;
 ```
 
-Batch evaluation will make beam search much cheaper.
+---
 
-## 5. Window Construction
+## 4. 开窗策略(重点)
 
-The window must be large enough to cover the local implant interaction, but not so large that the search explodes.
+目标:窗口足够覆盖 implant interaction,但不要大到搜索爆炸。
 
-### 5.1 Normalize Each Violation
+### 4.1 违例归一化
 
-For every input violation, derive:
+对每条 violation 先抽象成:
 
-- `type`: MW or MS.
-- `relationship`: intra-row or inter-row.
-- `rows`: involved row ids from participants; if missing, use the violation anchor row.
-- `xRange`: union of violation `xWindow` and participant bboxes.
-- `vtHint`: primary layer for MW; primary and secondary layers for MS.
+- `type`:MW 或 MS。
+- `relationship`:intra-row 或 inter-row。
+- `rows`:participant 涉及行;没有 participant 时用 violation anchor row。
+- `xRange`:violation `xWindow` 与 participant bbox 的 union。
+- `vtHint`:MW 用 primary layer;MS 用 primary/secondary layer。
 
-### 5.2 Initial Windows
+### 4.2 窗口 ladder
 
-Use a ladder. Try smaller windows first, then expand only if no clean overlay exists.
+按从小到大尝试:
 
-- W0: anchor filler plus its 4-neighbor fillers. This preserves the useful Plan sorting neighborhood.
-- W1: all fillers intersecting `xRange` expanded by one rule distance on involved rows.
-- W2: snap W1 to whole filler instances and expand horizontally to the nearest fixed cell, blockage, or core boundary on the involved rows.
-- W3: for inter-row violations, include the coupled adjacent rows and the same snapped x range.
-- W4: merge all W2/W3 windows whose x ranges overlap or whose rows are adjacent and x ranges are within one rule distance.
+| 窗口 | 内容 |
+|---|---|
+| W0 | anchor site 上的 filler + 上下左右 4-neighbor filler |
+| W1 | 涉及行内与 `xRange` 相交的 filler,横向扩一个 rule distance |
+| W2 | W1 snap 到完整 filler instance,再横向扩到最近 fixed cell/blockage/core 边界 |
+| W3 | inter-row 用:包含耦合相邻行(±1) + 同一个 snapped x range |
+| W4 | 合并所有 overlap/相邻且距离小于一个 rule distance 的 W2/W3 |
 
-Recommended default:
+默认入口:
 
-- Intra-row MW/MS starts at W1.
-- Inter-row MW/MS starts at W3.
-- If checker reports a residual violation just outside the window, expand one ladder step and retry.
+- intra-row MW/MS 从 W1 开始。
+- inter-row MW/MS 从 W3 开始。
+- 如果 checker 返回 residual violation 刚好在窗口边界外,升一级窗口重试。
 
-### 5.3 Candidate Limit
+### 4.3 合并 violation cluster
 
-If a merged window has too many candidate fillers, split by connected components of filler adjacency and violation membership.
-If still too large, cap the search and return a diagnostic with the window size and candidate count.
+不能把重叠违例独立修。构图:
 
-Suggested initial cap:
+- 节点 = violation。
+- 两个 violation 的窗口重叠,连边。
+- 行相同或相邻,且 xRange 距离小于一个 rule distance,连边。
+- 共享 candidate filler,连边。
 
-- Greedy mode: up to 64 candidate fillers.
-- Beam mode: up to 24 top-ranked candidate fillers per window.
+每个 connected component 作为一个 cluster 一次求解。
 
-## 6. Candidate Generation
+处理顺序:
 
-For each editable filler in the window:
+1. violation 多的 cluster 先处理。
+2. inter-row 优先于 intra-row。
+3. 仍然相同则小窗口优先。
 
-1. Enumerate legal replacement masters from `legalReplacementMasters`.
-2. Drop the current master.
-3. Keep only same width/height and row-orientation-compatible replacements.
-4. Map each replacement to a `FillerTypeId` / VT.
+最终返回前,把所有 cluster 的 changes 合并成一个 full overlay,对整个 `targetPlace` 做一次最终
+`checkPlaceWithOverlay`。
 
-A candidate move is:
+---
+
+## 5. 候选生成
+
+对窗口内每个 editable filler:
+
+1. 从 `legalReplacementMasters` 枚举 target master。
+2. 去掉 current master。
+3. 只保留 same width / same height / row orientation compatible 的 master。
+4. 将 master 映射到 `FillerTypeId` / VT。
+
+候选 move:
 
 ```cpp
 (instanceId, oldMasterId, newMasterId, oldType, newType)
 ```
 
-Never generate moves for std cells or non-editable fillers.
+绝不为 std cell、macro、non-editable filler 生成 move。
 
-## 7. Plan Sorting V2
+---
 
-Use Plan sorting as candidate order, with one important correction: fixed cells are constraints and votes, not a reason to give weight 0.
+## 6. Plan sorting V2
 
-For every candidate filler and target VT, compute:
+沿用 `claude/filler-vt-weight-2023` 的排序思想,但修正 fixed-cell 处理:
+**fixed cell 是约束和投票,不是禁止改动的理由。**
 
-- `directParticipant`: high priority if the filler appears in the violation participants.
-- `cellVote`: adjacency count to fixed std cells whose implant equals the target VT.
-- `cellConflict`: adjacency count to fixed std cells whose implant differs from the target VT.
-- `fillerVote`: adjacency count to neighboring fillers whose current or overlay VT equals target VT.
-- `diffEdgesRemoved`: number of current different-VT adjacencies that would disappear.
-- `sameVtAfter`: number of same-VT adjacencies after the change.
-- `islandScore`: high if the current filler has no same-VT neighbor and is surrounded by another VT.
-- `width`: narrower wins ties.
-- `sameVtBefore`: smaller wins ties, inherited from Plan sorting.
-- `position`: smaller col, then row, for deterministic final tie-break.
+对一个候选 `(filler, targetVT)` 计算:
 
-Candidate ordering:
+| 分量 | 含义 |
+|---|---|
+| `directParticipant` | filler 出现在 violation participants 中,高优先级 |
+| `cellVote` | 相邻 fixed cell 的 implant == targetVT 的边数 |
+| `cellConflict` | 相邻 fixed cell 的 implant != targetVT 的边数 |
+| `fillerVote` | 相邻 filler 当前/overlay VT == targetVT 的边数 |
+| `diffEdgesRemoved` | 改完能消掉的异 VT 邻接边数 |
+| `sameVtAfter` | 改完后的同 VT 邻接数 |
+| `islandScore` | 当前 filler 没有同 VT 邻居、像孤岛时加权 |
+| `width` | 平票时更窄优先 |
+| `sameVtBefore` | 平票时 same-VT 邻居更少优先 |
+| `position` | 最后按 col,row 保证 deterministic |
 
-1. Direct participant first.
-2. Higher `cellVote + diffEdgesRemoved + islandScore`.
-3. Lower `cellConflict`; a target with conflicting fixed cells may still be tried, but ranked late.
-4. Narrower filler width.
-5. Lower `sameVtBefore`.
-6. Leftmost coordinate, then lower row.
+候选排序:
 
-Target VT ordering for one filler:
+1. `directParticipant` 优先。
+2. `cellVote + diffEdgesRemoved + islandScore` 高者优先。
+3. `cellConflict` 低者优先。
+4. 更窄 filler 优先。
+5. `sameVtBefore` 更小优先。
+6. col 更小优先,再 row 更小优先。
 
-1. VT matching fixed-cell neighbors involved in the violation.
-2. VT matching the majority neighboring filler region.
-3. VT from the violation primary layer for MW.
-4. VT that removes the most MS edges.
-5. Stable type id order.
+target VT 排序:
 
-## 8. Checker-Guided Search
+1. 匹配相关 fixed cell 的 VT。
+2. 匹配邻近 filler majority region 的 VT。
+3. MW 使用 primary layer 对应 VT。
+4. MS 使用能消掉最多异 VT 邻接的 VT。
+5. 最后按稳定 type id 顺序。
 
-### 8.1 Score Function
+---
 
-Every overlay is evaluated by `checkPlaceWithOverlay`.
+## 7. checker-guided 搜索
 
-Define:
+### 7.1 score
+
+每个 overlay 都通过 `checkPlaceWithOverlay` 得到真实 checker result。
+
+建议 score:
 
 ```text
 score = 100000 * targetViolations
-      +  20000 * newInsideTargetViolations
       +  50000 * spilloverViolations
+      +  20000 * newInsideTargetViolations
       +    100 * changes.size()
       +      1 * lowPriorityPenalty
 ```
 
-A clean solution has `targetViolations == 0` and no new inside-target or spillover MW/MS violations.
+排序含义:
 
-The exact constants can move, but the ordering must remain:
+1. clean 解绝对优先。
+2. target violation 更少优先。
+3. 不引入新 violation 优先。
+4. change 数更少优先。
+5. Plan sorting penalty 只做最后 tie-break。
 
-1. Clean beats everything.
-2. Fewer target violations beats fewer changes.
-3. No new violations beats smaller edit count.
-4. Smaller change count breaks ties.
+clean 解定义:
 
-### 8.2 Greedy Prefix Search
+- targetPlace 内目标 MW/MS 全清。
+- 没有新增 inside-target MW/MS。
+- 没有不可接受的 spillover MW/MS。
 
-Start with an empty overlay.
+### 7.2 greedy prefix search
 
-Loop:
+从空 overlay 开始:
 
-1. Generate sorted candidate moves not already applied.
-2. For each move, evaluate `overlay + move`.
-3. Pick the best strict score improvement.
-4. Append it to the overlay.
-5. Stop when checker reports clean.
+1. 生成尚未应用的 sorted moves。
+2. 逐个评估 `overlay + move`。
+3. 选择 score strict improvement 最大的 move。
+4. 加入 overlay。
+5. checker clean 则返回。
 
-This handles simple MS and isolated MW cases cheaply.
+适合简单 MS、孤岛 MW、单 filler 修复。
 
-### 8.3 Beam Search Escape
+### 7.3 beam search 兜底
 
-MW often requires two or more filler changes before any single change improves the checker result.
-When greedy cannot improve:
+MW 常见情况:单独改一个 filler 不改善,必须两个或多个一起改。greedy 卡住时进入 beam:
 
-1. Take the top N candidate moves by Plan sorting V2.
-2. Run beam search to depth D.
-3. Keep the best K partial overlays at each depth using checker score.
-4. Stop early on a clean overlay.
+- 取 Plan sorting V2 排名前 N 的 move。
+- 搜索深度 D。
+- 每层保留 K 个最佳 partial overlay。
+- 每个 partial overlay 都由 checker 真实评分。
+- 一旦 clean,立刻返回。
 
-Suggested defaults:
+建议初值:
 
-- N = 24 candidates.
-- K = 8 beam width.
-- D = 4 depth.
-- Max checker calls per window = 512 initially.
+| 参数 | 值 |
+|---|---|
+| N | 24 |
+| K | 8 |
+| D | 4 |
+| 每窗口 checker call 上限 | 512 |
 
-If a clean overlay is found, return it.
-If only an improvement is found, adopt the best improving overlay prefix and resume greedy.
-If no improvement is found, expand the window.
+若 beam 找到改善但未 clean,采用 best improving overlay 继续 greedy。
+若没有改善,扩窗。
 
-### 8.4 Window Expansion And Failure
+### 7.4 失败策略
 
-For each violation cluster:
+对每个 cluster:
 
-1. Try the initial window.
-2. Greedy search.
-3. Beam search.
-4. Expand the window one step.
-5. Repeat until clean, candidate cap exceeded, or call budget exhausted.
+1. 当前窗口 greedy。
+2. 当前窗口 beam。
+3. 扩窗一级。
+4. 重复,直到 clean / candidate cap / call budget / window cap。
 
-If not clean:
+失败时:
 
-- `hasSolution=false`.
-- `changes` should normally be empty unless the caller explicitly accepts partial repair.
-- `diagnostics` should include best score, residual violations, candidate count, checker-call count, and the final window bounds.
+- 默认 `hasSolution=false`。
+- 默认 `changes` 为空,避免 partial repair 把违例挪走但未清干净。
+- diagnostics 带 best overlay、残留 violation、窗口范围、候选数、checker call 数、失败原因。
 
-## 9. Cluster Processing
+可选:以后加 explicit partial mode,但不能默认开启。
 
-Do not solve overlapping violations independently.
+---
 
-Build a violation graph:
+## 8. 为什么这个方法适合当前 design
 
-- Nodes are violations.
-- Edge if windows overlap.
-- Edge if rows are equal or adjacent and x ranges are within one rule distance.
-- Edge if they share a candidate filler.
+当前问题链路是:
 
-Solve each connected component as one cluster.
+1. std cell 改 VT/type。
+2. 周围 filler 还保留旧 implant type。
+3. cell/filler 或 filler/filler 边界产生 intra/inter MW/MS。
+4. 把局部 filler 换成匹配新 implant context 的 same-size master,即可消掉真实 checker 看到的违例。
 
-Process clusters in descending severity:
+Plan D 正好针对这个链路:
 
-1. More violations first.
-2. Inter-row before intra-row if tied.
-3. Smaller window first if still tied.
+- 从 violation/participant 定位局部窗口。
+- 优先尝试贴 fixed cell、参与 violation、异 VT 边多的 filler。
+- 每个候选都交给真实 checker 判断。
+- MW 需要多 filler 联动时用 beam search,不是只看单步改善。
+- 窗口不够时自动扩到相邻耦合行/固定边界。
 
-The final result is the union of cluster overlays. Before returning success, run one final `checkPlaceWithOverlay` over the full `targetPlace` with all accumulated changes.
+---
 
-## 10. Why This Should Fix The Input Design
-
-The likely failure mode is:
-
-1. A std cell changes VT / implant type.
-2. Nearby fillers still carry the old implant type.
-3. The boundary creates MW/MS, either in-row or across adjacent rows.
-4. Changing one or several same-geometry filler masters to match the new local implant context removes the checker violation.
-
-The proposed search directly targets that cause:
-
-- It starts at the violation and nearby fillers.
-- It prioritizes fillers adjacent to fixed std cells and violation participants.
-- It tests real checker results after each overlay.
-- It expands only when the local window is insufficient.
-
-## 11. Result Contract
-
-Final output:
+## 9. 输出语义
 
 ```cpp
 struct FillerRepairResult
@@ -341,55 +390,63 @@ struct FillerRepairResult
 };
 ```
 
-Recommended semantics:
+约定:
 
-- `hasSolution=true`: `changes` is checker-clean for the requested target place.
-- `hasSolution=false`: `changes` is empty by default; diagnostics explain why no clean solution was found.
-- A partial-change mode can be added later, but should be explicit because partial repair may hide or move violations.
+- `hasSolution=true`: `changes` 经最终 full-target overlay check 为 clean。
+- `hasSolution=false`:默认 `changes` 为空,diagnostics 说明为什么未找到 clean 解。
+- partial repair 以后可加,但必须显式请求。
 
-## 12. Diagnostics
+---
 
-Diagnostics should include:
+## 10. diagnostics
 
-- branch/window id;
-- rule type and intra/inter relationship;
-- initial violation count;
-- final violation count;
-- candidate filler count;
-- generated move count;
-- checker call count;
+建议至少记录:
+
+- cluster/window id;
+- rule type(MW/MS) 与 intra/inter;
+- 初始 violation 数;
+- 最终 residual violation 数;
+- candidate filler 数;
+- generated move 数;
+- checker call 数;
 - window expansion level;
 - best overlay changes;
-- residual violation ids and x windows;
-- failure reason: no legal master, fixed-cell conflict, search budget, window cap, checker rejected all overlays.
+- residual violation id/xWindow/row;
+- 失败原因:无合法 master、fixed-cell 冲突、搜索预算耗尽、窗口过大、checker 拒绝所有 overlay。
 
-## 13. Implementation Plan
+---
 
-1. Add a pure repair planner over the checker-facing structs.
-2. Add conversion from filler masters to `FillerTypeId` and legal replacement lists.
-3. Implement window construction and violation clustering.
-4. Implement Plan sorting V2.
-5. Implement greedy prefix search.
-6. Add beam search fallback.
-7. Add final full-target overlay validation.
-8. Add unit tests with a fake checker:
-   - intra-row MS fixed by one filler type change;
-   - inter-row MS fixed by one filler type change;
-   - MW fixed only by two simultaneous filler changes;
-   - three-VT case where the majority neighbor is not the correct fixed-cell VT;
-   - no same-size target master;
-   - conflicting fixed std-cell VT constraints;
-   - window expansion required;
-   - beam budget exhausted.
-9. Integrate with the real checker once `checkPlaceWithOverlay` stabilizes.
+## 11. 实现 TODO
 
-## 14. Open Questions For Checker Team
+1. 定义 checker-facing 的 pure repair planner,输入 `FillerRepairRequest`,输出
+   `FillerRepairResult`。
+2. 建立 master -> `FillerTypeId` / same-size replacement table。
+3. 实现 violation 归一化、开窗和 cluster 合并。
+4. 实现 Plan sorting V2。
+5. 实现 greedy prefix search。
+6. 实现 beam search fallback。
+7. 实现最终 full-target overlay check。
+8. 加 fake checker 单测:
+   - intra-row MS:一个 filler type change 修好;
+   - inter-row MS:一个 filler type change 修好;
+   - MW:必须两个 filler 同时改才修好;
+   - 三 VT:邻居 majority 不是正确 fixed-cell VT;
+   - 缺 same-size target master;
+   - fixed cell 约束冲突;
+   - 必须扩窗才修好;
+   - beam budget exhausted。
+9. 等 `checkPlaceWithOverlay` 接口稳定后接真实 checker。
 
-- Can `Violation` expose participants with `isFiller`, `instanceId`, row, x range, and implant type?
-- Can `CheckResult` classify violations as original, fixed, new, and spillover?
-- Can `CheckRequest targetPlace` represent a multi-row x-window, not only one placement point?
-- Will `checkPlaceWithOverlay` accept an overlay with multiple filler changes?
-- Is there a batch overlay API planned?
-- Are replacement masters expected to be passed by us as `MasterId`, or should checker own a `FillerTypeId -> same-size master` lookup?
-- Should the checker enforce same geometry, or should it trust repair to provide only legal replacements?
-- How large can `targetPlace` be before checker runtime becomes an issue?
+---
+
+## 12. 需要 checker team 确认/修改
+
+1. `Violation` 能否暴露 participant 的 `isFiller / instanceId / row / xRange / implant type`?
+2. `CheckResult` 能否区分 original / fixed / residual / new / spillover violation?
+3. `CheckRequest targetPlace` 能否表达多行 x-window,而不只是一个 placement point?
+4. `checkPlaceWithOverlay` 是否支持一个 overlay 内多个 filler changes?
+5. 是否可以提供 batch API `checkPlaceWithOverlays`?
+6. replacement master 是 repair 侧传 `MasterId`,还是 checker/DB 提供
+   `FillerTypeId -> same-size master` 查询?
+7. same width/height/orient-compatible 由 checker 强校验,还是 repair 侧保证即可?
+8. `targetPlace` 多大时 checker runtime 会不可接受?需要给 repair 一个默认 call/window budget。
