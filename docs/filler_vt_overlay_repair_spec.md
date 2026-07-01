@@ -1,7 +1,7 @@
 # 功能规格 — Filler VT Overlay 修复(checker-guided,只换 type)
 
 状态:方案定稿提案。分支:`claude/filler-vt-overlay-repair-plan-2023`。
-基线:`2023-base`。最后更新 2026-07-01。
+基线:`2023-base`。最后更新 2026-07-01。当前对齐本地 `src/dpl2` header draft。
 
 **一句话**:design 已经全局铺满 filler,无空 site;std cell 改 VT/type 后产生 implant
 MW/MS 违例。checker 把 violation list 交给 filler engine;filler engine 先确认 design 是
@@ -81,7 +81,7 @@ filler engine 开始 repair 前必须检查 occupancy:
 - `FillerRepairResult.hasSolution=false`。
 - `FillerRepairResult.changes` 为空。
 - `diagnostics` 带 fatal/error 级别的 `NonFullUtility` 或等价 code,并报告至少一个 gap 的
-  row/col range/site count。
+  row/x range/site count。
 
 原因:本方案只替换 filler master,保持同宽同高同位置。如果 design 没有全局铺满 filler,
 正确动作应该是先跑 filler insertion / placement repair,不是让 VT repair 搜索承担补洞职责。
@@ -101,22 +101,23 @@ filler engine 开始 repair 前必须检查 occupancy:
 
 ### 关键事实:`targetPlace` 是 std-cell anchor,不是 repair window
 
-checker 更新后的 `CheckRequest` 语义如下:
+checker 当前本地 `src/dpl2/src/drc/ImplantLayerChecker.h` 中的 `CheckRequest` 语义如下:
 
 ```cpp
 struct CheckRequest
 {
     InstanceId instanceId = 0;  // upstream opto changed std cell
-    GridY rowId{0};
-    GridX colId{0};
-    PhysOrientation orientation = PhysOrientationE::R0;  // exact enum spelling follows checker
+    MasterId masterId = 0;
+    RowId rowId = 0;
+    DbCoord x = 0;
+    PhysOrientation orientation = PhysOrientationE::R0;
 };
 ```
 
 这会改变本 spec 的几个结论:
 
 - `targetPlace.instanceId` 是被 opto 改 VT/type 的 std cell,也是 violation 的根因 anchor。
-- `rowId/colId/orientation` 描述该 std cell 的 placement,供 checker 重建局部 implant
+- `masterId/rowId/x/orientation` 描述该 std cell 的 candidate placement 和 master,供 checker 重建局部 implant
   check context。
 - repair 的 W0-W5 "窗口"是 filler engine 的**候选 filler 选择、搜索预算和 batch 分组**
   概念;当前已同意的 DP checking API 不显式接收这个窗口,不能复用 `targetPlace` 表达。
@@ -149,14 +150,24 @@ struct CheckRequest
 
 ## 3. 接口草案与建议
 
-当前 checker 侧草案:
+当前本地 checker/helper 已有的数据模型在 `dpl2::ipl` namespace 下:
+
+- `ImplantLayerCheckerHelper.h` 已定义 `DbCoord / LayerId / MasterId / InstanceId / ShapeId / RowId`。
+- `Family { VTS, VTL, VTH, VTUL, Unknown }` 可作为 VT/implant family 抽象。
+- `RuleSource { Width, Spacing, Lef58Width, Lef58Spacing }` 可映射到 MW/MS。
+- `MasterInput` 已有 `masterId / width / height / shapes / rawShapes / siteHeight / isFiller`。
+- `PlacedInst` 已有 `instanceId / masterId / rowId / columnId / orientation / isFiller`。
+- `ImplantInput` 已聚合 layers、rules、masters、placedInsts、rows、tracks、rowHeight、siteWidth。
+
+当前 checker 侧草案应对齐这些已有类型:
 
 ```cpp
 struct CheckRequest
 {
     InstanceId instanceId = 0;  // upstream opto changed std cell
-    GridY rowId{0};
-    GridX colId{0};
+    MasterId masterId = 0;
+    RowId rowId = 0;
+    DbCoord x = 0;
     PhysOrientation orientation = PhysOrientationE::R0;
 };
 
@@ -164,9 +175,13 @@ struct EditableFiller
 {
     InstanceId instanceId = 0;
     MasterId currentMasterId = 0;
+    Family currentFamily = Family::Unknown;
     RowId rowId = 0;
     DbCoord x = 0;
+    DbCoord width = 0;
+    DbCoord height = 0;
     PhysOrientation orientation = PhysOrientation::R0;
+    std::vector<MasterId> legalReplacementMasters;
 };
 
 struct FillerChange
@@ -232,7 +247,7 @@ struct EditableFiller
 {
     InstanceId instanceId = 0;
     MasterId currentMasterId = 0;
-    FillerTypeId currentTypeId = 0;  // VT / implant type 抽象
+    Family currentFamily = Family::Unknown;  // VT / implant type 抽象
     RowId rowId = 0;
     DbCoord x = 0;
     DbCoord width = 0;
@@ -247,7 +262,7 @@ struct EditableFiller
 - `currentMasterId` 不足以枚举三种 VT 的 same-size 替换。
 - repair 侧必须知道 width/height 才能保证 occupancy-preserving。
 - 如果 checker/DB 已经能判断 legal master,最好由它直接给 `legalReplacementMasters`。
-- 最终输出仍可保持 `MasterId newMasterId`,不强制上游接受 `FillerTypeId`。
+- 最终输出仍可保持 `MasterId newMasterId`,不强制上游接受额外 type id。
 
 ### 3.2 对 `Violation` / `CheckResult` 的建议
 
@@ -290,27 +305,50 @@ diagnostics、非 clean overlay 的排序提示、扩窗解释和未来增强:
 | new inside-window | checked set 中新增,且落在 filler engine 当前 window 内 | 如果能可靠识别则用于诊断 |
 | spillover | checked set 中新增或残留在 filler engine window 边界/guard 区 | 如果能可靠识别则提示扩窗 |
 
-checker 侧更新: `Violation` 不保留 stable id,但会提供 `rowIDs` 和 `type`:
+当前本地 checker header 中 `Violation` 不保留 stable id,但已经提供比早期草案更丰富的
+matching 字段:
 
 ```cpp
 struct Violation
 {
-    ViolationType type;          // MW / MS
-    std::vector<RowId> rowIDs;   // rows touched by this violation
-    // other geometry / participant fields are optional but useful for matching and diagnostics
+    int ruleId = 0;
+    RuleSource ruleSource = RuleSource::Width;
+    LayerId primaryLayer = 0;
+    std::optional<LayerId> secondaryLayer;
+    std::vector<InstanceId> instances;
+    std::vector<ShapeId> shapeIds;
+    std::vector<int> mergedShapeIds;
+    DbCoord measuredValue = 0;
+    DbCoord requiredValue = 0;
+    XInterval xWindow;
+    Relationship relationship = Relationship::IntraInstance;
+    std::string status = "detected";
+    std::string layerName;
+    XInterval targetInterval;
+    XInterval neighborInterval;
+
+    // Required addition for filler repair.
+    std::vector<RowId> rowIds;
 };
 ```
+
+`ruleSource == Width/Lef58Width` 对应 MW;`ruleSource == Spacing/Lef58Spacing` 对应 MS。
+`relationship` 已经能区分 intra-instance / intra-row / inter-row,不需要 repair 从 row 数量反推。
+但是 `rowIds` 仍建议显式加入输出,因为 inter-row violation 的两个 row 是开窗、cluster merge 和
+debug print 的核心信息。
 
 因为没有 stable id,filler engine 必须生成**临时 violation signature**,只用于本次 repair
 request 内的 original/checked set 匹配,不跨调用保存。signature 优先使用:
 
-1. `type`;
-2. sorted `rowIDs`;
-3. violation x/bbox/window,如果 checker 暴露;
-4. participant instance ids / roles,如果 checker 暴露;
-5. implant type hint,如果 checker 暴露。
+1. `ruleId` + `ruleSource`;
+2. sorted `rowIds`;
+3. `relationship`;
+4. `primaryLayer` / `secondaryLayer`;
+5. `xWindow` / `targetInterval` / `neighborInterval`;
+6. sorted `instances`;
+7. `shapeIds` / `mergedShapeIds`,如果 checker 输出稳定。
 
-若 checker 只提供 `type + rowIDs`,匹配会比较粗,diagnostics 应说明 classification 是
+若 checker 只提供 `ruleSource + relationship + xWindow`,匹配会比较粗,diagnostics 应说明 classification 是
 coarse matching。此时不要因为无法区分 residual/new/spillover 阻塞实现;accept 仍只看
 `isCheckerClean(result)`。无论如何,仍然**不能只按坐标去重**。
 
@@ -318,14 +356,14 @@ coarse matching。此时不要因为无法区分 residual/new/spillover 阻塞�
 
 | 字段 | 用途 |
 |---|---|
-| type(MW/MS) | 必需;分流、score、signature |
-| relationship(intra/inter) | 决定开窗行数 |
-| rowIDs | 必需;定位 inter-row 耦合行,参与 signature |
-| xWindow | 横向开窗,但不能作为唯一 identity |
-| primary/secondary implant type | 决定 target VT hint |
-| participants | 判断相关 cell/filler |
+| ruleSource(MW/MS) | 必需;分流、score、signature |
+| relationship(intra/inter) | 已有;决定开窗行数 |
+| rowIds | 建议新增;定位 inter-row 耦合行,参与 signature |
+| xWindow/targetInterval/neighborInterval | 已有;横向开窗,但不能作为唯一 identity |
+| primaryLayer/secondaryLayer | 已有;决定 target VT hint |
+| instances | 已有;判断相关 cell/filler |
 | participant.role | 标出 fixed cell / filler / bridge / anchor |
-| participant.instanceId | 找 candidate filler 或 std-cell anchor |
+| participant.instanceId | 可由 `instances` 和 DB/helper 判断 filler/std-cell |
 | participant.isFiller | 只改 filler |
 | participant.xRange/row | 做 cluster 和 bridge window |
 | insideRegion/spillover | 可选;区分窗口内残留和窗口外/边界违例 |
@@ -379,6 +417,73 @@ guard/check region 的推荐语义:
 - 如果 checker 尚不能返回 inside/boundary 信息,第一版仍可运行,只是 diagnostics 需要标明
   spillover classification unavailable。
 
+### 3.4 对 helper / data-source API 的建议
+
+当前 `ImplantLayerCheckerHelper` 已能抽取 `ImplantInput`,但 repair 侧不应该直接扫描所有
+vectors 并猜 master 兼容性。建议在 `src/dpl2/src/drc/ImplantLayerCheckerHelper.h` 的
+`dpl2::ipl::ImplantLayerCheckerHelper` 上补只读查询:
+
+```cpp
+const PlacedInst* findPlacedInst(InstanceId instanceId) const;
+const MasterInput* findMaster(MasterId masterId) const;
+std::vector<MasterId> legalReplacementMasters(MasterId currentMasterId) const;
+Family masterFamily(MasterId masterId) const;
+std::vector<Family> masterFamilies(MasterId masterId) const;
+```
+
+语义:
+
+- `legalReplacementMasters` 只返回 filler master,且 same width / same height / same
+  siteHeight / orientation-compatible。它不返回当前 master 本身。
+- `masterFamily` 可从 `MasterInput.shapes -> ImplantLayer.family` 推导;如果一个 master 同时有
+  多个 family,使用 `masterFamilies` 或更完整 signature。
+- `findPlacedInst` 和 `findMaster` 返回 `nullptr` 时,repair 必须打 diagnostic,不能猜。
+
+`RowInput` 目前只有 `rowId`,不够做 100% utility preflight。建议扩展为:
+
+```cpp
+struct RowInput
+{
+    RowId rowId = 0;
+    DbCoord xMin = 0;
+    DbCoord xMax = 0;
+    DbCoord siteWidth = 0;
+};
+```
+
+如果 row range 仍由 `Grid` 提供,也可以由 filler repair 的 data-source adapter 提供
+`rowSiteRange(rowId)`,但 100% utility check 必须能报告具体 gap row/x/site count。
+
+### 3.5 filler repair 实现分层
+
+第一版实现放在 `src/dpl2/src/fillerRepair/`,先做 pure planner,不要直接依赖 UDM 或 checker
+内部 mutable state:
+
+```cpp
+class FillerRepairChecker
+{
+ public:
+  virtual ~FillerRepairChecker() = default;
+  virtual std::vector<CheckResult> checkPlaceWithOverlays(
+      const CheckRequest& targetPlace,
+      const std::vector<std::vector<FillerChange>>& overlays) const = 0;
+};
+
+class FillerRepairDataSource
+{
+ public:
+  virtual ~FillerRepairDataSource() = default;
+  virtual bool isFullUtility(/* repair/check region */) const = 0;
+  virtual std::vector<EditableFiller> collectCandidateFillers(/* cluster/window */) const = 0;
+  virtual std::vector<MasterId> legalReplacementMasters(MasterId currentMasterId) const = 0;
+  virtual Family masterFamily(MasterId masterId) const = 0;
+};
+```
+
+这样 skeleton 可以先用 fake checker / fake data-source 单测 `isCheckerClean`、candidate sorting、
+group seed、beam 和 diagnostics;真实 checker adapter 等
+`ImplantLayerChecker::checkPlaceWithOverlays` 稳定后再接入。
+
 ---
 
 ## 4. 开窗策略(重点)
@@ -394,11 +499,12 @@ DP checking API 不显式接收 `checkRegion`;checker 根据 `targetPlace` 和�
 
 对每条 violation 先抽象成:
 
-- `signature`:filler engine 生成的临时 key;至少使用 `type + sorted(rowIDs)`,并尽量加入
-  xWindow/participants/implant hint。
-- `type`:MW 或 MS。
+- `signature`:filler engine 生成的临时 key;至少使用
+  `ruleId + ruleSource + relationship + sorted(rowIds)`,并尽量加入
+  xWindow/instances/implant hint。
+- `type`:从 `ruleSource` 映射出的 MW 或 MS。
 - `relationship`:intra-row 或 inter-row。
-- `rowIDs`:checker 提供的行集合;为空时退回 `targetPlace.rowId` 并在 diagnostics 中标记。
+- `rowIds`:checker 提供的行集合;为空时退回 `targetPlace.rowId` 并在 diagnostics 中标记。
 - `xRange`:violation `xWindow` 与 participant bbox 的 union。
 - `vtHint`:MW 用 primary layer;MS 用 primary/secondary layer。
 - `cellAnchors`:至少包含 `targetPlace.instanceId`;再加入参与 violation 或与 violation
@@ -481,7 +587,7 @@ result 中的 returned violations、changed filler 邻接关系和窗口重叠�
 1. 从 `legalReplacementMasters` 枚举 target master。
 2. 去掉 current master。
 3. 只保留 same width / same height / row orientation compatible 的 master。
-4. 将 master 映射到 `FillerTypeId` / VT。
+4. 将 master 映射到 `Family` / VT。
 
 候选 move:
 
@@ -513,7 +619,7 @@ result 中的 returned violations、changed filler 邻接关系和窗口重叠�
 | `islandScore` | 当前 filler 没有同 VT 邻居、像孤岛时加权 |
 | `width` | 平票时更窄优先 |
 | `sameVtBefore` | 平票时 same-VT 邻居更少优先 |
-| `position` | 最后按 col,row 保证 deterministic |
+| `position` | 最后按 x,row 保证 deterministic |
 
 候选排序:
 
@@ -522,7 +628,7 @@ result 中的 returned violations、changed filler 邻接关系和窗口重叠�
 3. `cellConflict` 低者优先。
 4. 更窄 filler 优先。
 5. `sameVtBefore` 更小优先。
-6. col 更小优先,再 row 更小优先。
+6. x 更小优先,再 row 更小优先。
 
 target VT 排序:
 
@@ -536,6 +642,24 @@ target VT 排序:
 ---
 
 ## 7. checker-guided 搜索
+
+### 7.0 算法 review 结论
+
+今天 review 后保留 Plan D 主路径,但对算法做以下收紧:
+
+1. **第一版只接受 strict checker-clean**。`isLegal == true && violations.empty()` 是唯一
+   成功 gate。best-effort residual/new/spillover 分类只影响日志、排序和扩窗说明。
+2. **strict clean 可能过保守**。如果 checker 当前局部范围里存在与本次 overlay 无关的 baseline
+   violation,第一版会返回 no solution diagnostics,不做 partial commit。后续只有在 checker 能提供
+   guard/boundary/participant 足够稳定字段时,才启用 baseline-delta mode。
+3. **搜索不能假设单调改善**。MW/bridge case 里单个 move 可能让 violation count 不变甚至更差,
+   但 group move 可 clean。因此 beam 必须允许少量 non-improving partial overlay 存活。
+4. **所有 overlay 必须 canonicalize/cache**。同一组 `(instanceId,newMasterId)` 不应重复调用
+   checker;batch 前先去重,batch 后按原输入顺序还原 result。
+5. **扩窗不能只依赖 residual classification**。如果 result 非 clean、best overlay 停滞、remaining
+   violation 的 `xWindow`/instances 靠近当前 repairWindow 边界,都可以触发扩窗。
+6. **最终 merge fail 要 retry**。cluster 单独 clean 但 full overlay 不 clean 时,用 changed
+   filler、returned violations、窗口重叠建 conflict graph,合并 cluster 后重新搜索。
 
 ### 7.1 score
 
@@ -582,8 +706,18 @@ struct OverlayScore
 6. `changes` 少者优先。
 7. `sortingPenalty` 小者优先。
 
-如果 checker 暂时只返回 `type + rowIDs`,第 4/5 项可以关闭或仅打印 diagnostics。只要
+如果 checker 暂时缺少 `rowIds` 或 boundary/guard 字段,第 4/5 项可以关闭或仅打印 diagnostics。只要
 result 非 clean,即使分类显示 original 好像被修掉,该 overlay 也不能作为最终解返回。
+
+overlay canonical key:
+
+```text
+sorted_unique((instanceId, newMasterId))
+```
+
+同一个 `instanceId` 在一个 overlay 中只能出现一次;若重复出现且 `newMasterId` 不同,该 overlay
+直接标为 invalid candidate。checker call 前必须用 canonical key 去重并查 cache。cache value
+至少包含 `CheckResult`、score、diagnostics 摘要和 checker call index。
 
 ### 7.2 greedy prefix search
 
@@ -596,6 +730,7 @@ result 非 clean,即使分类显示 original 好像被修掉,该 overlay 也不�
 5. checker result 满足 `isCheckerClean(result)` 则返回。
 
 适合简单 MS、孤岛 MW、单 filler 修复。
+如果没有 strict improvement,不要在 greedy 中硬加 move;转入 beam/group seed。
 
 ### 7.3 beam search 兜底
 
@@ -614,6 +749,8 @@ MW 常见情况:单独改一个 filler 不改善,必须两个或多个一起改�
 - 每层保留 K 个最佳 partial overlay。
 - 每个 partial overlay 都由 checker 真实评分。
 - 一旦 clean,立刻返回。
+- 每层允许保留少量 non-improving partial overlay,避免错过必须同时改多个 filler 的非单调修复。
+- 对同一个 filler,beam 不再枚举与当前 overlay 冲突的 second assignment。
 
 建议初值:
 
@@ -703,8 +840,8 @@ struct FillerRepairResult
 
 建议至少记录:
 
-- 100% utility preflight 状态;若失败,记录 gap row/col range/site count;
-- target std-cell anchor:`targetPlace.instanceId/rowId/colId/orientation`;
+- 100% utility preflight 状态;若失败,记录 gap row/x range/site count;
+- target std-cell anchor:`targetPlace.instanceId/masterId/rowId/x/orientation`;
 - cluster/window id;
 - rule type(MW/MS) 与 intra/inter;
 - 初始 violation 数;
@@ -716,7 +853,7 @@ struct FillerRepairResult
 - batch checker call 数与 batch size;
 - window expansion level;
 - best overlay changes;
-- remaining violation signature/type/rowIDs/xWindow/participants(若 checker 暴露);
+- remaining violation signature/ruleSource/rowIds/xWindow/instances(若 checker 暴露);
 - 可选的 fixed original / residual original / new inside-window / spillover best-effort 分类统计;
 - std-cell anchor id;
 - bridge filler ids;
@@ -730,16 +867,18 @@ struct FillerRepairResult
 1. 定义 filler-engine 的 pure repair planner,输入 `FillerRepairRequest`,输出
    `FillerRepairResult`。
 2. 实现 100% utility preflight;失败时直接 fatal diagnostic,不生成 overlay,不调用 checker。
-3. 建立 master -> `FillerTypeId` / same-size replacement table。
-4. 实现 violation 归一化、开窗和 cluster 合并。
-5. 实现 cell-centric / bridge filler candidate 扩展。
-6. 实现 Plan sorting V2。
-7. 实现 `isCheckerClean(result)` gate:`isLegal == true && violations.empty()`。
-8. 实现 overlay result best-effort 分类,仅用于 diagnostics/ranking,不作为第一版 accept 条件。
-9. 实现 greedy prefix search。
-10. 实现 beam search fallback,包含 bridge/group seed。
-11. 实现最终 full overlay 检查;若合并后不 clean,尝试 conflict cluster merge retry。
-12. 加 fake checker 单测:
+3. 在 helper/data-source adapter 中建立 master -> `Family` / same-size replacement table。
+4. 实现 `FillerRepairChecker` 与 `FillerRepairDataSource` interface,先用 fake adapter 测 planner。
+5. 实现 violation 归一化、开窗和 cluster 合并。
+6. 实现 cell-centric / bridge filler candidate 扩展。
+7. 实现 Plan sorting V2。
+8. 实现 overlay canonicalization/cache,避免重复 checker call。
+9. 实现 `isCheckerClean(result)` gate:`isLegal == true && violations.empty()`。
+10. 实现 overlay result best-effort 分类,仅用于 diagnostics/ranking,不作为第一版 accept 条件。
+11. 实现 greedy prefix search。
+12. 实现 beam search fallback,包含 bridge/group seed 和少量 non-improving partial。
+13. 实现最终 full overlay 检查;若合并后不 clean,尝试 conflict cluster merge retry。
+14. 加 fake checker 单测:
    - 非 100% utility:存在 gap 时直接 fatal,不调用 checker,changes 为空;
    - intra-row MS:一个 filler type change 修好;
    - inter-row MS:一个 filler type change 修好;
@@ -757,42 +896,88 @@ struct FillerRepairResult
    - overlay 在 window 边界产生 spillover;若 checker 暴露 guard/boundary,必须诊断并扩窗或拒绝;
    - batch API 返回顺序与 candidate overlay 输入顺序一一对应;
    - batch API 中一个非法 overlay 不影响其他 overlay result;
+   - canonical 相同 overlay 只调用一次 checker;
+   - 单 move 不改善但 two-filler group seed clean;
+   - baseline/local checker 存在 unrelated violation 时,strict clean 返回 no solution diagnostic;
    - beam budget exhausted。
-13. 等 `checkPlaceWithOverlay` 接口稳定后接真实 checker。
+15. 等 `checkPlaceWithOverlay` / `checkPlaceWithOverlays` 接口稳定后接真实 checker。
+16. `src/dpl2` CMake 接入后,再把 skeleton 纳入 build/test。
 
 ---
 
 ## 12. 需要 checker team 确认/修改
 
-1. `Violation` 除 `type(MW/MS)` 与 `rowIDs` 外,能否继续暴露 participant 的
-   `isFiller / instanceId / row / xRange / implant type`?这些字段能显著提高临时 signature
-   匹配质量。
-2. `Violation.rowIDs` 是否保证 deterministic ordering?若不保证,filler engine 会排序后使用。
-3. `Violation.type` enum 是否只含 MW/MS,还是还会区分 intra/inter?若不区分,intra/inter
-   需要从 `rowIDs` 或其他字段推导。
-4. `CheckResult.isLegal=false` 时,是否保证 `violations` / `diagnostics` 至少说明主要原因?
-5. `CheckResult` 目前不区分 original/fixed/residual/new/spillover;第一版可以接受。
-   filler engine 会以 checker-clean 为最终 gate,分类只做 best-effort diagnostics/ranking。
-6. 已同意的 batch API 是否保持如下签名?
+当前最需要 checker/helper 补的接口如下,按本地文件和 class/struct 标注。
+
+1. `src/dpl2/src/drc/ImplantLayerChecker.h`, namespace `dpl2::ipl`,新增:
+
+```cpp
+struct FillerChange
+{
+    InstanceId instanceId = 0;
+    MasterId newMasterId = 0;
+};
+```
+
+2. `src/dpl2/src/drc/ImplantLayerChecker.h`,
+   class `dpl2::ipl::ImplantLayerChecker`,新增 multi-change overlay API:
 
 ```cpp
 std::vector<CheckResult> checkPlaceWithOverlays(
     const CheckRequest& targetPlace,
     const std::vector<std::vector<FillerChange>>& candidateOverlays) const;
+
+CheckResult checkPlaceWithOverlay(
+    const CheckRequest& targetPlace,
+    const std::vector<FillerChange>& overlay) const;
 ```
 
-7. batch API 返回结果顺序是否与 `candidateOverlays` 输入顺序一一对应?若需要显式关联,
-   建议未来加 `requestIndex`,不要在 `CheckResult` 里保存 request 裸指针。
-8. batch API 对单个非法 overlay 的错误是否只落在对应 `CheckResult`,不影响同 batch 其他
-   overlay?
-9. 是否需要新增可选 `guardRegion` / `collectRegion`,专门用于收集 window 边界 spillover
-   violation?
-10. `CheckResult.violations` 是否能标记 violation 在 checker 内部局部区域还是 guard/boundary?
-11. `checkPlaceWithOverlay` / batch overlay 是否支持一个 overlay 内多个 filler changes?
-12. candidateFillers 是 checker/opto 给 target std-cell 周边 editable filler,还是 repair
-   侧从 DB 根据 W0-W5 自己收集?建议至少覆盖 W3/W4,不能仅 participant filler。
-13. replacement master 是 repair 侧传 `MasterId`,还是 checker/DB 提供
-   `FillerTypeId -> same-size master` 查询?
-14. same width/height/orient-compatible 由 checker 强校验,还是 repair 侧保证即可?
-15. 单个 `targetPlace` 的 checker runtime 会随 batch size 和 overlay change 数如何增长?
-    需要给 repair 一个默认 call/window budget。
+3. batch API 语义:
+
+- 返回结果顺序与 `candidateOverlays` 输入顺序一一对应。
+- 单个非法 overlay 的错误只落在对应 `CheckResult`,不影响同 batch 其他 overlay。
+- 一个 overlay 内必须支持多个 `FillerChange`。
+- 相同 input overlay deterministic。
+- `CheckResult.isLegal=false` 时,仍尽量返回 violations 或 diagnostics。
+- 不需要在 `CheckResult` 里保存 request 裸指针;若未来需要显式关联,加 `requestIndex`。
+
+4. `src/dpl2/src/drc/ImplantLayerChecker.h`, struct `dpl2::ipl::Violation`,建议新增:
+
+```cpp
+std::vector<RowId> rowIds;
+```
+
+已有 `ruleId/ruleSource/primaryLayer/secondaryLayer/instances/shapeIds/mergedShapeIds/xWindow/
+relationship/targetInterval/neighborInterval` 很有用,请保持 deterministic 输出。
+
+5. `src/dpl2/src/drc/ImplantLayerCheckerHelper.h`,
+   class `dpl2::ipl::ImplantLayerCheckerHelper`,建议新增:
+
+```cpp
+const PlacedInst* findPlacedInst(InstanceId instanceId) const;
+const MasterInput* findMaster(MasterId masterId) const;
+std::vector<MasterId> legalReplacementMasters(MasterId currentMasterId) const;
+Family masterFamily(MasterId masterId) const;
+std::vector<Family> masterFamilies(MasterId masterId) const;
+```
+
+6. `src/dpl2/src/drc/ImplantLayerCheckerHelper.h`, struct `dpl2::ipl::RowInput`,建议扩展:
+
+```cpp
+struct RowInput
+{
+    RowId rowId = 0;
+    DbCoord xMin = 0;
+    DbCoord xMax = 0;
+    DbCoord siteWidth = 0;
+};
+```
+
+若 row range 由 `Grid` 提供,则请明确 filler repair 该从哪个 adapter/query 取。
+
+7. 可选但推荐:为 checker overlay API 预留 guard/check region,例如 `CheckOverlay` 加
+   `std::optional<Rect> guardRegion` 或未来 batch request 加 guard region。第一版可以忽略
+   该字段,但接口语义需说明是否 collect boundary/spillover violations。
+
+8. 需要确认 runtime budget:单个 `targetPlace` 的 checker runtime 随 batch size 和 overlay
+   change 数如何增长,以便 repair 设默认 `N/K/D/callBudget`。
