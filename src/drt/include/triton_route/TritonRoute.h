@@ -175,11 +175,8 @@ class TritonRoute
                           const std::string& serializedViaData);
   void reportDRC(const std::string& file_name,
                  const std::list<std::unique_ptr<fr::frMarker>>& markers,
-                 odb::Rect bbox = odb::Rect(0, 0, 0, 0));
-  // Print a compact per-type / per-layer violation-count table to the log.
-  // Shared by detailed routing (FlexDR::searchRepair) and check_drc.
-  void reportDRCViolationTable(
-      const std::list<std::unique_ptr<fr::frMarker>>& markers);
+                 odb::Rect bbox = odb::Rect(0, 0, 0, 0),
+                 bool report_summary = false);
   // check_pg: when true, only power/ground objects are checked (-check_pg);
   // this also reports PG shapes that extend outside the die boundary.
   void checkDRC(const char* drc_file,
