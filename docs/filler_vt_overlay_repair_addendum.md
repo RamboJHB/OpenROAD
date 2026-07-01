@@ -36,18 +36,20 @@ Plan D(checker-guided overlay search)是正确的主方向。
 
 若 checker 暂时只能提供 `type + rowIDs`,filler engine 仍可运行,但 diagnostics 必须标明 classification 是 coarse matching;accept clean overlay 时也应更保守,最好依赖 `CheckResult.isLegal` 和 guard check。
 
-### 2.2 guardRegion / collectRegion 应第一版预留
+### 2.2 guardRegion / collectRegion 应作为第一版 request 参数
 
-主 spec 把 spillover 作为重要分类,但当前 API 不显式传 check/guard region。没有 guard region 时,repair engine 很难判断 overlay 是真的 clean,还是只是把 violation 推到 checker 当前局部作用域之外。
+主 spec 把 spillover 作为重要分类。每个 checker overlay request 应显式传
+`guardRegion`;没有 guard region 时,repair engine 很难判断 overlay 是真的 clean,
+还是只是把 violation 推到 checker 当前局部作用域之外。
 
-建议第一版就保留 optional region:
+建议第一版 request 直接包含 region:
 
 ```cpp
 struct CheckOverlay
 {
     CheckRequest targetPlace;
     std::vector<FillerChange> fillerChanges;
-    std::optional<Rect> guardRegion;  // collect spillover/boundary violations
+    Rect guardRegion;  // repair window expanded by a two-cell guard halo
 };
 ```
 
@@ -55,7 +57,8 @@ struct CheckOverlay
 
 - `targetPlace` 仍然是 changed std-cell anchor,不是窗口。
 - `guardRegion` 只用于扩大 violation collection / spillover detection。
-- checker 可先忽略该字段,但接口层预留能避免后续破坏式改 API。
+- checker 至少应在该区域内 collect violations;如果第一版分类字段较粗,repair 侧仍可先用
+  baseline delta 做保守判定。
 
 ### 2.3 Batch API 语义需要硬约定
 
@@ -153,7 +156,7 @@ struct CheckOverlayBatchRequest
 {
     std::vector<CheckRequest> targetPlaces;
     std::vector<FillerChange> fillerChanges;
-    std::optional<Rect> guardRegion;
+    Rect guardRegion;
 };
 ```
 
@@ -283,11 +286,14 @@ preflight fail 时必须:
 `checkWindow` 可以定义为:
 
 ```text
-checkWindow = repairWindow expanded by halo
-halo = max(one-neighbor-cell ring, ruleReach)
+checkWindow = guardRegion
+guardRegion = expandByCellRing(repairWindow, 2)
 ```
 
-其中 one-neighbor-cell ring 至少覆盖左右相邻 std cell/filler、上下相邻 row 中与 repair window xRange 相交或贴近的 cell/filler;`ruleReach` 应覆盖 MW/MS rule 可能跨越的最大 interaction distance。第一版如果 ruleReach 不容易从 tech rule 中取出,可以先用一圈相邻 cell 加 conservative margin,但 diagnostics 需要打印实际 halo。
+其中 two-cell guard halo 至少覆盖窗口左右各两圈相邻 std cell/filler,以及上下各两条相邻
+row 中与 repair window xRange 相交或贴近的 std cell/filler。第一版如果只能用几何距离近似,
+必须使用不小于 two-cell ring 的 conservative expansion,并在 diagnostics 中打印实际
+`repairWindow`, `guardRegion` 和 halo 来源。
 
 候选评估必须使用 baseline delta classification:
 
