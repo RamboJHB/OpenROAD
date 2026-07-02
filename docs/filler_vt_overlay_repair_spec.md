@@ -156,11 +156,13 @@ repair engine 内部是五层管线,每层单独可测、单独可替换:
 
 ---
 
-## 4. 核心抽象:Move = Span Rewrite
+## 4. 核心抽象:Move = Span Rewrite(planner 内部)
 
 ### 4.1 定义与不变量
 
-算法的原子操作定义为**区段重铺**,而不是"instance 换 master":
+**planner 内部**的算法原子操作定义为**区段重铺**,而不是"instance 换 master"。
+注意这是 repair engine 的内部抽象;第一版对外(checker / infrastructure)的
+wire format 保留 V1 的 `FillerChange`,由 adapter 无损转换(见 §5.2):
 
 ```cpp
 struct FillerRewrite
@@ -184,9 +186,16 @@ struct FillerRewrite
 单元素 masterSeq;split = span 覆盖 1 个 filler、多元素 masterSeq;multi-height =
 `rowIds` 多行。**升级 move 类型不改变本节以下的任何定义。**
 
-之所以不用 `FillerChange{instanceId, newMasterId}` 作原子操作:merge/split 会创建/
-销毁 instance,新 instance 在 commit 前没有 instanceId,以 instanceId 为锚的 API 与
-delta 分类(§6.8)都会在扩展时失效;span 几何锚不会。
+之所以内部不用 `FillerChange{instanceId, newMasterId}` 作原子操作:merge/split 会
+创建/销毁 instance,新 instance 在 commit 前没有 instanceId,以 instanceId 为锚的
+冲突判定、canonical key 与 delta 分类(§6.8)都会在扩展时失效;span 几何锚不会。
+
+**wire format 取舍**:第一版所有 move 都是"单 filler 同尺寸换 master",
+`SwapMove ↔ FillerChange` 一一对应、无损互转,因此对外接口保留 V1 形态,
+`FillerRewrite` 作为 checker API 的演进形态列入 future work(§8.1)。扩展性真正
+依赖 span 锚的部分(canonical key、冲突、相关性判定)全部在 planner 内部,不经过
+checker API,所以这个取舍几乎不损失算法侧扩展性;代价是 merge/split 落地时
+checker API 需要一次版本化升级。
 
 ### 4.2 canonical key、冲突与 cache
 
@@ -229,9 +238,15 @@ checker 侧必须保证:
   其中 `rowId` 用于区分同 x 位置、不同 row/participant 的 violation。
 - violation 不需要 stable id;repair 侧自己生成临时 signature(§6.2)。
 
-### 5.2 Checker overlay API
+### 5.2 Checker overlay API(第一版 wire format = V1 `FillerChange`)
 
 ```cpp
+struct FillerChange
+{
+    InstanceId instanceId = 0;  // 只能是 filler instance
+    MasterId newMasterId = 0;   // 同宽/同高/orientation 兼容的 filler master
+};
+
 using OverlayRequestId = int;
 
 struct OverlayCheckRequest
@@ -239,7 +254,7 @@ struct OverlayCheckRequest
     OverlayRequestId requestId = -1;  // repair 生成,batch 内唯一
     TargetPlace targetPlace;
     Rect guardRegion;                 // repair window 外扩 two-cell guard halo
-    std::vector<FillerRewrite> rewrites;  // 一个 atomic overlay 候选
+    std::vector<FillerChange> fillerChanges;  // 一个 atomic overlay 候选
 };
 
 enum class CheckStatus { Checked, InvalidOverlay, Unsupported, CheckerError };
@@ -262,16 +277,20 @@ class ImplantOverlayChecker
 };
 ```
 
-checker 实现 overlay 的语义:把每个 `rewrite.span` 内的 filler 从局部 context 中
-移除,按 `newMasterIds` 从左到右实例化,然后按 target-local 规则重查。第一版所有
-rewrite 都是"单 filler 换 master",实现代价与 V1 的 `FillerChange` 相当。
-若 checker RD 短期先落地 `FillerChange{instanceId, newMasterId}` 形态,repair 侧用
-adapter 降级兼容,但 API 必须版本化预留 span 形态,避免 merge/split 时 breaking。
+checker 实现 overlay 的语义与 V1 相同:把每个 `fillerChanges` 中的 filler instance
+按 `newMasterId` 换 master 后,在 target-local 规则下重查。planner 内部的 SwapMove
+由 adapter 无损转换为 `FillerChange`。
+
+**future work(merge/split 前置条件)**:届时 API 升级为 span 形态的
+`FillerRewrite`(§4.1/§8.1),那是一次版本化的 breaking change。为降低升级成本,
+现在需要 checker RD 遵守两点:① 接口版本化预留(升级时新增 v2 接口而非原地改
+语义);② 不把"overlay 不会创建/销毁 instance"的假设固化到 checker 内部深处
+(例如 violation participant 的 id 引用方式)。
 
 协议约定(与 V1 相同,原样保留):
 
 - non-mutating,不 commit DB。
-- 一个 request 内的 `rewrites` 是 atomic candidate,必须一起 overlay 后检查;
+- 一个 request 内的 `fillerChanges` 是 atomic candidate,必须一起 overlay 后检查;
   batch API 输入是 request vector,不在一个 request 里嵌套 candidates。
 - 每个 request 必须携带 `guardRegion`;checker 至少在该区域内 collect violations。
   `guardRegion` 只扩大 checking/diagnostics 范围,**不允许** repair 修改 guard-only
@@ -328,7 +347,7 @@ struct FillerRepairRequest
 struct FillerRepairResult
 {
     bool hasSolution = false;
-    std::vector<FillerRewrite> changes;
+    std::vector<FillerChange> changes;  // 第一版 wire format,见 §5.2
     std::vector<Diagnostic> diagnostics;
 };
 ```
@@ -427,7 +446,7 @@ guardRegion = expandByCellRing(repairWindow, 2)
 不小于 two-cell ring 的 conservative expansion,并在 diagnostics 打印实际
 `repairWindow`、`guardRegion` 与 halo 来源。同一窗口生成的所有 `OverlayCheckRequest`
 携带同一个 `guardRegion`;guard-only 区域的 filler 只参与 checking/diagnostics,
-不得出现在 `rewrites` 中(违反判 invalid request)。
+不得出现在 `fillerChanges` 中(违反判 invalid request)。
 
 ### 6.4 cluster:第一版单 cluster
 
@@ -448,9 +467,10 @@ single-overlay(或单元素 batch)check,仍以 baseline-delta clean 判定。单
 
 1. 调 `getUsableMasterCandidates`;为空则该 filler 不生成 move,diagnostics 记
    no usable master。
-2. 对每个 candidate master 生成一个 SwapMove
-   (`FillerRewrite{ {rowId}, instanceSpan, {newMasterId} }`),并经
-   adapter 把 master 映射到 `Family`/VT 供排序使用。
+2. 对每个 candidate master 生成一个 SwapMove(内部为
+   `{ {rowId}, instanceSpan, {newMasterId} }` 的 span 表示,对外经 adapter 映射为
+   `FillerChange{instanceId, newMasterId}`),并把 master 映射到 `Family`/VT
+   供排序使用。
 3. 绝不为 std cell、macro、guard-only filler、non-editable filler 生成 move。
 
 **组合建议(group hint)**:MoveGenerator 同时产出少量高价值 move 组合,直接插入
@@ -499,7 +519,7 @@ size-2/3 子集,不需要任何特殊机制;好排序 + group hint 下通常出�
 ### 6.8 accept gate:baseline-delta clean(唯一 accept 标准)
 
 对每个窗口/guardRegion,先发一次 **baseline request**(同 `targetPlace`、同
-`guardRegion`、空 `rewrites`),再比较 candidate overlay result。candidate 判
+`guardRegion`、空 `fillerChanges`),再比较 candidate overlay result。candidate 判
 **delta-clean** 当且仅当:
 
 1. `status == CheckStatus::Checked` 且无 checker fatal/protocol diagnostics;
@@ -558,8 +578,9 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 - **②层增量**:排序加 move 类型偏好与 span 面积项(§6.6)。
 - **③④⑤层零改动**:冲突判定(span 相交)、canonical key、cache、delta 分类
   (span 几何锚)、gate、diagnostics 全部按 §4/§6.8 的定义直接适用。
-- **接口**:checker 的 `FillerRewrite` 已是 span 形态;infrastructure 候选查询切换
-  到 per-span tiling 键(§5.3 演进方向)。
+- **接口(前置条件)**:checker API 从 `FillerChange` 版本化升级为 span 形态的
+  `FillerRewrite`(§4.1/§5.2 已预留约定);infrastructure 候选查询切换到
+  per-span tiling 键(§5.3 演进方向)。
 - **不变量**:重铺精确覆盖 span、宽度和相等,100% utility 继续按构造保持。
 
 ### 8.2 multi-height
@@ -601,8 +622,10 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 前置与协议:
 
 - 非 100% utility:存在 gap 时直接 fatal,不调 checker,changes 为空。
-- guard-only filler 出现在 rewrite 中,判 invalid request。
-- rewrite 宽度和 ≠ span 宽度、span 切开 instance、span 触碰 std cell:invalid。
+- guard-only filler 出现在 `fillerChanges` 中,判 invalid request。
+- 非 filler instance 出现在 `FillerChange` 中,判 invalid request。
+- planner 内部 Move 不变量(span 精确覆盖完整 instance、宽度和相等)单测,
+  为 future `FillerRewrite` 升级预置。
 - batch result 必须 echo `requestId`;乱序返回不影响 correctness;缺失/重复/未知
   id 判 protocol error 拒绝整个 batch。
 - batch 中单个 invalid overlay 不影响其他 result。
@@ -634,8 +657,9 @@ gate 语义:
 
 ## 11. 实现 TODO
 
-1. 定义 pure planner API(`FillerRepairRequest -> FillerRepairResult`)与
-   `FillerRewrite`/canonical key/冲突判定。
+1. 定义 pure planner API(`FillerRepairRequest -> FillerRepairResult`)、内部
+   Move(`FillerRewrite`)与 canonical key/冲突判定,以及 Move ↔ `FillerChange`
+   的 adapter 转换。
 2. fake checker + fake candidate provider,先锁定 overlay/协议语义。
 3. 100% utility preflight(fatal 短路路径)。
 4. violation 归一化 + signature 匹配(§6.2 的钉死规则)。
@@ -656,7 +680,7 @@ gate 语义:
 
 | # | 项目 | V1 | V2 定稿 | 理由 |
 |---|---|---|---|---|
-| 1 | 原子操作 | `FillerChange{instanceId, newMasterId}` | `FillerRewrite`(span rewrite),swap 是退化形式 | merge/split 会创建/销毁 instance,instanceId 锚在扩展时失效;span 几何锚使冲突/cache/delta 分类对 move 类型无感知 |
+| 1 | 原子操作 | `FillerChange{instanceId, newMasterId}` | planner 内部升格为 span rewrite(swap 是退化形式);对外 wire format 保留 `FillerChange`,`FillerRewrite` 列入 future work | merge/split 会创建/销毁 instance,instanceId 锚在扩展时失效;span 锚的冲突/cache/delta 分类全在 planner 内部,接口可延后升级 |
 | 2 | 搜索内核 | greedy prefix + beam(N/K/D、survivor 配额、partial 打分) | 排序枚举 move 子集 + batch 验证,首 clean 即停 | 一条代码路径;无 partial 打分噪声与 magic knob;MW 非单调 case 是普通 size-2 子集;批并行友好 |
 | 3 | 窗口 | W0-W5 六级,按类型选入口 | L0/L1/L2 三级 | 规则尺度 ~1 site,六级状态过多;语义等价、测试面减半 |
 | 4 | cluster | 划分 + 独立求解 + final merge + conflict-graph retry | 单 cluster(opto 单 cell),final check 保留 | 单 anchor 下所有 violation 同邻域;merge retry 机制移到 batch opto 时代 |
