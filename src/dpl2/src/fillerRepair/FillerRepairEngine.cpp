@@ -3,7 +3,7 @@
 
 #include "FillerRepairEngine.h"
 
-#include "Preflight.h"
+#include "PreCheck.h"
 
 namespace dpl2::fillerRepair {
 
@@ -33,7 +33,7 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
 
   // Stage 1: hard precondition (spec 6.1). On failure: fatal, no candidate
   // generation, zero checker calls, empty changes.
-  const SiteCoverageResult coverage = runUtilityPreflight(view_, log_);
+  const SiteCoverageResult coverage = runUtilityPreCheck(view_, log_);
   if (!coverage.isFullUtility) {
     const CoverageIssue& first = coverage.issues.front();
     result.hasSolution = false;
@@ -47,7 +47,7 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
                               coverage.diagnostics.begin(),
                               coverage.diagnostics.end());
     log_.msg("engine",
-             cat("preflight FAIL (", coverage.issues.size(),
+             cat("precheck FAIL (", coverage.issues.size(),
                  " issue(s)) -> NonFullUtility fatal; skip candidates, ",
                  "0 checker calls"));
     return result;
@@ -63,7 +63,7 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
                "NotImplemented",
                "search pipeline stages (spec TODO 4-10) not implemented yet"));
   log_.msg("engine",
-           "preflight OK -> search pipeline pending (TODO 4-10), "
+           "precheck OK -> search pipeline pending (TODO 4-10), "
            "returning NotImplemented");
   return result;
 }

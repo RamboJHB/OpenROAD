@@ -3,7 +3,7 @@
 
 // Unit tests for spec section 11 TODO items 1-3: planner API + Move
 // abstraction, fake checker / fake candidate provider protocol, and the
-// 100% utility preflight. Plain C++17, no external test framework so the
+// 100% utility pre-check. Plain C++17, no external test framework so the
 // suite runs before dpl2 is wired into the CMake build.
 //
 // Run: test/run_tests.sh   (FR_VERBOSE=1 prints the [fr] debug transcript)
@@ -17,7 +17,7 @@
 
 #include "../FillerRepairEngine.h"
 #include "../Move.h"
-#include "../Preflight.h"
+#include "../PreCheck.h"
 #include "../fake/FakeCandidateProvider.h"
 #include "../fake/FakeDesign.h"
 #include "../fake/FakeImplantChecker.h"
@@ -154,9 +154,6 @@ void testSwapMoveConstruction()
   CHECK_EQ(move->oldVt, kVt1);
   CHECK_EQ(move->newVt, kVt2);
 
-  // Degenerate rewrite passes structural validation.
-  CHECK(!fr::validateRewriteCoverage(f.design, move->rewrite()).has_value());
-
   // Rejections, each with a reason.
   CHECK(!fr::makeSwapMove(f.design, 999, fillerMaster(2, kVt2), &error).has_value());
   CHECK(!fr::makeSwapMove(f.design, 101, fillerMaster(4, kVt2), &error).has_value());
@@ -189,42 +186,10 @@ void testConflictDetection()
   auto m1b = *fr::makeSwapMove(f.design, 100, fillerMaster(4, kVt3));
   auto m2 = *fr::makeSwapMove(f.design, 101, fillerMaster(2, kVt2));
 
-  // Same instance twice = span overlap on the same row.
+  // Same instance twice: two swaps of one filler cannot be atomic.
   CHECK(fr::overlayHasConflict({m1, m1b}));
-  // Disjoint spans on the same row: no conflict.
+  // Different instances never conflict in swap-only mode.
   CHECK(!fr::overlayHasConflict({m1, m2}));
-
-  // Same x span, different rows: no conflict.
-  f.design.addRow(1, 0, 16)
-      .place(200, fillerMaster(4, kVt1), 1, 0)
-      .place(201, fillerMaster(8, kVt1), 1, 4)
-      .place(202, fillerMaster(4, kVt1), 1, 12);
-  auto m3 = *fr::makeSwapMove(f.design, 200, fillerMaster(4, kVt2));
-  CHECK(!fr::overlayHasConflict({m1, m3}));
-}
-
-void testRewriteCoverageValidation()
-{
-  RowFixture f = makeCoveredRow();
-
-  // Span covering fillers 100+101 exactly, tiled by 4+2: OK.
-  fr::FillerRewrite merge2{{0}, {0, 6}, {fillerMaster(4, kVt2), fillerMaster(2, kVt2)}};
-  CHECK(!fr::validateRewriteCoverage(f.design, merge2).has_value());
-
-  // Width sum mismatch.
-  fr::FillerRewrite badWidth{{0}, {0, 6}, {fillerMaster(4, kVt2)}};
-  CHECK(fr::validateRewriteCoverage(f.design, badWidth).has_value());
-
-  // Span cutting instance 100 (w4 at x=0) in half.
-  fr::FillerRewrite cut{{0}, {2, 6}, {fillerMaster(4, kVt2)}};
-  CHECK(fr::validateRewriteCoverage(f.design, cut).has_value());
-
-  // Span touching a std cell.
-  f.design.remove(101).place(101, cellMaster(kVt1), 0, 4);  // w4 cell at [4,8)
-  f.design.remove(102).place(102, fillerMaster(4, kVt1), 0, 8);
-  f.design.remove(103);
-  fr::FillerRewrite overCell{{0}, {0, 8}, {fillerMaster(8, kVt2)}};
-  CHECK(fr::validateRewriteCoverage(f.design, overCell).has_value());
 }
 
 void testWireAdapter()
@@ -242,22 +207,22 @@ void testWireAdapter()
   CHECK_EQ(changes[1].newMasterId, fillerMaster(2, kVt2));
 }
 
-// --- TODO 3: utility preflight ----------------------------------------------
+// --- TODO 3: utility pre-check ----------------------------------------------
 
-void testPreflightFullUtility()
+void testPreCheckFullUtility()
 {
   RowFixture f = makeCoveredRow();
-  const auto coverage = fr::runUtilityPreflight(f.design, fr::DebugLog(verbose()));
+  const auto coverage = fr::runUtilityPreCheck(f.design, fr::DebugLog(verbose()));
   CHECK(coverage.isFullUtility);
   CHECK(coverage.issues.empty());
 }
 
-void testPreflightGap()
+void testPreCheckGap()
 {
   RowFixture f = makeCoveredRow();
   f.design.remove(101);  // hole [4,6)
 
-  const auto coverage = fr::runUtilityPreflight(f.design, fr::DebugLog(verbose()));
+  const auto coverage = fr::runUtilityPreCheck(f.design, fr::DebugLog(verbose()));
   CHECK(!coverage.isFullUtility);
   CHECK_EQ(coverage.issues.size(), 1u);
   CHECK(coverage.issues[0].kind == fr::CoverageIssueKind::Gap);
@@ -267,12 +232,12 @@ void testPreflightGap()
   CHECK_EQ(coverage.issues[0].siteCount, 2);
 }
 
-void testPreflightOverlapOffGridIllegal()
+void testPreCheckOverlapOffGridIllegal()
 {
   RowFixture f = makeCoveredRow();
   // Overlap: extra filler on top of [4,6).
   f.design.place(300, fillerMaster(2, kVt2), 0, 5);
-  auto coverage = fr::runUtilityPreflight(f.design, fr::DebugLog(verbose()));
+  auto coverage = fr::runUtilityPreCheck(f.design, fr::DebugLog(verbose()));
   CHECK(!coverage.isFullUtility);
   bool sawOverlap = false;
   for (const auto& issue : coverage.issues) {
@@ -283,7 +248,7 @@ void testPreflightOverlapOffGridIllegal()
 
   // Illegal occupant: instance sticking out of the legal row span.
   f.design.remove(104).place(104, fillerMaster(8, kVt1), 0, 12);  // [12,20) > 16
-  coverage = fr::runUtilityPreflight(f.design, fr::DebugLog(verbose()));
+  coverage = fr::runUtilityPreCheck(f.design, fr::DebugLog(verbose()));
   bool sawIllegal = false;
   for (const auto& issue : coverage.issues) {
     sawIllegal |= issue.kind == fr::CoverageIssueKind::IllegalOccupant;
@@ -293,7 +258,7 @@ void testPreflightOverlapOffGridIllegal()
   // Off-grid: site width 2, instance at odd x.
   fr::FakeDesign design = makeLibrary();
   design.setSiteWidth(2).addRow(0, 0, 8).place(400, fillerMaster(4, kVt1), 0, 1);
-  coverage = fr::runUtilityPreflight(design, fr::DebugLog(verbose()));
+  coverage = fr::runUtilityPreCheck(design, fr::DebugLog(verbose()));
   bool sawOffGrid = false;
   for (const auto& issue : coverage.issues) {
     sawOffGrid |= issue.kind == fr::CoverageIssueKind::OffGrid;
@@ -323,7 +288,7 @@ void testEngineFatalOnGapWithoutCheckerCalls()
     sawFatal |= diag.severity == fr::Severity::Fatal && diag.code == "NonFullUtility";
   }
   CHECK(sawFatal);
-  // Spec 6.1: preflight failure must not reach the checker.
+  // Spec 6.1: pre-check failure must not reach the checker.
   CHECK_EQ(checker.requestCount(), 0);
 }
 
@@ -549,11 +514,10 @@ int main()
       {"swap_move_construction", testSwapMoveConstruction},
       {"canonical_key_order_independent", testCanonicalKeyOrderIndependent},
       {"conflict_detection", testConflictDetection},
-      {"rewrite_coverage_validation", testRewriteCoverageValidation},
       {"wire_adapter", testWireAdapter},
-      {"preflight_full_utility", testPreflightFullUtility},
-      {"preflight_gap", testPreflightGap},
-      {"preflight_overlap_offgrid_illegal", testPreflightOverlapOffGridIllegal},
+      {"precheck_full_utility", testPreCheckFullUtility},
+      {"precheck_gap", testPreCheckGap},
+      {"precheck_overlap_offgrid_illegal", testPreCheckOverlapOffGridIllegal},
       {"engine_fatal_on_gap_without_checker_calls",
        testEngineFatalOnGapWithoutCheckerCalls},
       {"candidate_provider", testCandidateProvider},

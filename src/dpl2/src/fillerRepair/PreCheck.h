@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// 100% utility preflight (spec section 6.1).
+// 100% utility pre-check (spec section 6.1).
 //
 // Hard precondition of the repair: every legal std-cell site is covered
 // exactly once by a std cell or a filler. Gap / overlap / off-grid / illegal
@@ -20,7 +20,7 @@ namespace dpl2::fillerRepair {
 // Scans every row of the view. Collects all issues (deterministic order:
 // row ascending, then x ascending) so diagnostics can report more than the
 // first defect. isFullUtility == issues.empty().
-SiteCoverageResult runUtilityPreflight(const PlacementView& view,
+SiteCoverageResult runUtilityPreCheck(const PlacementView& view,
                                        const DebugLog& log);
 
 }  // namespace dpl2::fillerRepair

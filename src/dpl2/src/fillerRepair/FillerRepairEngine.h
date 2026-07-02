@@ -3,7 +3,7 @@
 
 // Pure repair planner entry point (spec sections 3.2 / 5.4).
 //
-// Deterministic pipeline: preflight -> normalize -> window -> move gen ->
+// Deterministic pipeline: precheck -> normalize -> window -> move gen ->
 // rank -> subset search -> oracle gate -> result. The engine owns no state
 // between repair() calls and never mutates the design; all effects are the
 // returned FillerRepairResult.
@@ -11,7 +11,7 @@
 // Implementation status (spec section 11 TODO order):
 //   [x] 1  planner API, internal Move, canonical key/conflict, adapter
 //   [x] 2  fake checker / fake candidate provider (see fake/)
-//   [x] 3  100% utility preflight with fatal short-circuit
+//   [x] 3  100% utility pre-check with fatal short-circuit
 //   [ ] 4  violation normalization + signature matching
 //   [ ] 5  L0/L1/L2 window builder + guardRegion
 //   [ ] 6  swap move generator + bridge fillers + group hints

@@ -9,7 +9,7 @@
 //         .addRow(0, 0, 16)
 //         .place(100, 41, /*row=*/0, /*x=*/0);
 // It is deliberately dumb: no legality checks on construction, so tests can
-// build broken layouts (gaps, overlaps) for the preflight cases.
+// build broken layouts (gaps, overlaps) for the pre-check cases.
 
 #pragma once
 

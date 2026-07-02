@@ -13,8 +13,8 @@ planner is built and tested against the fakes in `fake/`.
 | `PlacementView.h` | Read-only DB view interface (real adapter wraps the UDM design) |
 | `CheckerApi.h` | Abstract `ImplantOverlayChecker` (spec §5.2 protocol) |
 | `CandidateApi.h` | Abstract `FillerMasterCandidateProvider` (spec §5.3) |
-| `Move.h/.cpp` | Internal span-rewrite Move, `SwapMove`, canonical key, conflict, wire adapter, coverage invariants (spec §4) |
-| `Preflight.h/.cpp` | 100% utility preflight (spec §6.1) |
+| `Move.h/.cpp` | Swap-only internal move (`SwapMove`), canonical key, duplicate-instance conflict, wire adapter (spec §4) |
+| `PreCheck.h/.cpp` | 100% utility pre-check (spec §6.1) |
 | `FillerRepairEngine.h/.cpp` | Planner entry + pipeline skeleton (spec §3.2) |
 | `fake/FakeDesign.h` | In-memory `PlacementView` with fluent builders |
 | `fake/FakeCandidateProvider.h` | Same-size replacement lookup over the fake library |
@@ -46,9 +46,9 @@ FR_VERBOSE=1 test/run_tests.sh # with the [fr] debug transcript
 
 | # | Item | Status |
 |---|---|---|
-| 1 | Planner API, internal Move, canonical key/conflict, wire adapter | done |
+| 1 | Planner API, swap-only Move, canonical key/conflict, wire adapter | done |
 | 2 | Fake checker + fake candidate provider, protocol locked by tests | done |
-| 3 | 100% utility preflight with fatal short-circuit | done |
+| 3 | 100% utility pre-check with fatal short-circuit | done |
 | 4 | Violation normalization + signature matching | next |
 | 5 | L0/L1/L2 window builder + guardRegion | pending |
 | 6 | Swap move generator + bridge fillers + group hints | pending |

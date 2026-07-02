@@ -76,7 +76,7 @@ enum class Severity
 };
 
 // Stable machine-readable code + human-readable message. Codes used so far:
-//   NonFullUtility     - utility preflight failed (placement precondition)
+//   NonFullUtility     - utility pre-check failed (placement precondition)
 //   NotImplemented     - pipeline stage not implemented yet (skeleton only)
 struct Diagnostic
 {
@@ -193,7 +193,7 @@ struct FillerRepairResult
   std::vector<Diagnostic> diagnostics;
 };
 
-// --- Utility preflight types (spec section 5.4 / 6.1) ----------------------
+// --- Utility pre-check types (spec section 5.4 / 6.1) ----------------------
 
 enum class CoverageIssueKind
 {

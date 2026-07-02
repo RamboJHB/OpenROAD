@@ -90,7 +90,7 @@ std::vector<FakeImplantChecker::Run> FakeImplantChecker::buildRuns(
     const MasterInfo* master = design_.masterInfo(effectiveMaster(placed, request, overlay));
     const XInterval span = XInterval{placed.x, placed.x + master->width};
     // Extend the previous run only when same VT and x-contiguous; a gap in
-    // coverage (illegal design, preflight territory) breaks the run.
+    // coverage (illegal design, pre-check territory) breaks the run.
     if (!runs.empty() && runs.back().vt == master->vt
         && runs.back().span.xh == span.xl) {
       runs.back().span.xh = span.xh;

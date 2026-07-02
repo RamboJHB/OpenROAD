@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "Preflight.h"
+#include "PreCheck.h"
 
 #include <algorithm>
 
@@ -26,7 +26,7 @@ const char* kindName(CoverageIssueKind kind)
 
 }  // namespace
 
-SiteCoverageResult runUtilityPreflight(const PlacementView& view,
+SiteCoverageResult runUtilityPreCheck(const PlacementView& view,
                                        const DebugLog& log)
 {
   SiteCoverageResult result;
@@ -44,7 +44,7 @@ SiteCoverageResult runUtilityPreflight(const PlacementView& view,
     issue.xHi = xHi;
     issue.siteCount = static_cast<int>((xHi - xLo) / siteWidth);
     issue.instances = std::move(instances);
-    log.msg("preflight",
+    log.msg("precheck",
             cat(kindName(kind), " row=", rowId, " x=", show(XInterval{xLo, xHi}),
                 " sites=", issue.siteCount, " -> precondition failure"));
     result.issues.push_back(std::move(issue));
@@ -82,7 +82,7 @@ SiteCoverageResult runUtilityPreflight(const PlacementView& view,
 
   result.isFullUtility = result.issues.empty();
   if (result.isFullUtility) {
-    log.msg("preflight", "all rows fully covered -> 100% utility OK");
+    log.msg("precheck", "all rows fully covered -> 100% utility OK");
   } else {
     for (const CoverageIssue& issue : result.issues) {
       result.diagnostics.push_back(makeDiag(
