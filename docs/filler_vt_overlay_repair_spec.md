@@ -475,10 +475,16 @@ single-overlay(或单元素 batch)check,仍以 baseline-delta clean 判定。单
    供排序使用。
 3. 绝不为 std cell、macro、guard-only filler、non-editable filler 生成 move。
 
-**组合建议(group hint)**:MoveGenerator 同时产出少量高价值 move 组合,直接插入
-③层同 size 队列最前——anchor 左右 bridge filler pair、上下行与 cell 边界对齐的
-bridge pair、同一短 filler run 整段同改、同一 violation 的 filler participants 全组。
-这继承了 V1 group seed 的价值,但只是枚举顺序的提示,不是独立搜索机制。
+**anchor-follow 首发种子(固定)**:根因永远是"anchor 换到新 VT、周围 filler
+还是旧色",且库 VT 齐全保证该方向恒可构造(附录 A)。因此首批固定包含:
+baseline + "anchor 相邻 filler 与 bridge filler 全部换成 anchor 新 VT"的 overlay +
+它的 size-1/2 子集。预期多数 repair 一个 batch 即 clean,对 opto 内环总耗时是
+乘法级收益。
+
+**其余组合建议(group hint)**:MoveGenerator 同时产出少量高价值 move 组合,直接
+插入③层同 size 队列最前——anchor 左右 bridge filler pair、上下行与 cell 边界对齐
+的 bridge pair、同一短 filler run 整段同改、同一 violation 的 filler participants
+全组。这继承了 V1 group seed 的价值,但只是枚举顺序的提示,不是独立搜索机制。
 
 ### 6.6 排序(Ranker)
 
@@ -497,6 +503,11 @@ target VT 顺序:① anchor 的新 VT;② 邻接 majority VT(**按 band-slot 分
 candidate provider 实际返回的 master 中取值(防御库变化;当前库各宽度 VT 齐全,
 附录 A)。
 
+**第三 VT 强降权**:三档 VT 下,每个 filler 的两个候选中总有一个"既非 anchor 新
+VT、也非邻接 majority"的第三色,几乎不可能是解的一部分——固定排到 move 列表
+队尾(降权,**不剔除**,三 VT 相邻的犄角场景仍可达)。有效分支因子由此从 2 降到
+~1,有效搜索空间从 3^k 缩到 ~2^k;配合 §6.7 的完备枚举,正确性完全不依赖该启发。
+
 fixed cell 是投票和约束,不是禁改理由(贴着 fixed cell 的 filler 往往最该先试)。
 V1 的其余特征(`fillerVote`/`diffEdgesRemoved`/`multiViolationTouch`/`islandScore`/
 `sameVtBefore`/`cellConflict`)列为 backlog,fake-checker 测试显示排序命中率不足时
@@ -507,10 +518,17 @@ V1 的其余特征(`fillerVote`/`diffEdgesRemoved`/`multiViolationTouch`/`island
 
 从排序后的 move 列表 `m1..mM` 枚举 overlay 候选:
 
-- **枚举顺序** = 按 `(子集 size, 成员 rank 的字典序)`;MoveGenerator 的 group hint
-  插到对应 size 队列最前。
-- **成员限制**:size 1 允许全部 M 个;size ≥ 2 限制在 rank 前 `N_s` 的 move 中
-  (建议 `N_2 = 24`,`N_3 = 12`,`N_4 = 8`;size > 4 不枚举,直接扩窗)。
+- **枚举顺序** = 按 `(子集 size, 成员 rank 的字典序)`;anchor-follow 首发种子与
+  group hint 插到对应 size 队列最前(§6.5)。
+- **小窗口完备枚举(优先规则)**:窗口内 editable filler 数为 k 时,完整子集空间
+  = 3^k 个着色方案(每个 filler 恒 2 候选,附录 A)。当 `3^k ≤ 剩余预算` 时
+  (k ≤ 5 对应 243 ≤ 512),**完整枚举全部非冲突子集**,仍按 rank 序分批、首
+  clean 早停。此时"窗口内无解"是**确定性结论**——扩窗触发精确、不可能漏解,
+  排序只影响速度不影响完备性,`hasSolution=false` 的诊断含义从"预算耗尽"升级为
+  "窗口内确定无解"。
+- **成员限制(仅大窗口)**:`3^k > 剩余预算` 时启用截断——size 1 允许全部 M 个;
+  size ≥ 2 限制在 rank 前 `N_s` 的 move 中(建议 `N_2 = 24`,`N_3 = 12`,
+  `N_4 = 8`;size > 4 不枚举,直接扩窗)。
 - 跳过含冲突 move 的子集;canonical key 去重、查 cache(§4.2)。
 - **分批验证**:每批 16-32 个候选发 batch checker;批内按枚举序取第一个
   delta-clean 作为解(保证确定性),命中立即停止。
@@ -564,7 +582,8 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 |---|---|---|
 | 每窗口 checker call 上限 | 512 | 含 baseline;与 V1 持平 |
 | batch 大小 | 16-32 | 批内枚举序定序 |
-| size-2/3/4 成员上限 N_s | 24 / 12 / 8 | 超出则依赖扩窗 |
+| 完备枚举阈值 | 3^k ≤ 剩余预算(k ≤ 5) | 满足则完整枚举,无解结论确定(§6.7) |
+| size-2/3/4 成员上限 N_s | 24 / 12 / 8 | 仅大窗口截断时启用;超出则依赖扩窗 |
 | 最大子集 size | 4 | 更大组合交给扩窗后的 L1/L2 |
 | 窗口级数 | L0/L1/L2 | 到顶即失败路径 |
 
@@ -659,6 +678,10 @@ gate 语义:
   此 case 为防御性,附录 A),返回 no usable master diagnostics;fixed cell 约束冲突。
 - 必须扩窗(L0 不够,L1 修好);枚举预算耗尽触发扩窗;窗口到顶返回 no solution
   且 diagnostics 带 best overlay 与 remaining violations。
+- anchor-follow 首发:典型单/双 filler case 在首个 batch 内 clean。
+- 小窗口完备枚举:窗口内确无解时,枚举完 3^k 空间后**确定性**扩窗(诊断区分
+  "确定无解"与"预算耗尽")。
+- 第三 VT 降权但可达:正解需要第三色的犄角 case 仍能被找到。
 - 确定性:同输入两次运行,产出完全相同的 changes/diagnostics/call 序列。
 
 ---
@@ -743,3 +766,6 @@ VT 后缀含义(按业界常规命名推断,待 library 团队确认):R = RVT(re
 4. **split 的价值定位**:库 VT 齐全时,split 的意义不是补库的缺口,而是提供比
    整个 filler 换 VT 更细的粒度(例如 4 → 2+2 允许半段换 VT、半段保持),
    这是 swap-only 覆盖不了的解形态(§8.1)。
+5. **齐全库解锁的三项搜索精化**(已并入正文):anchor-follow 首发种子恒可构造
+   (§6.5);第三 VT 强降权,有效分支因子 ~1(§6.6);小窗口 3^k 完备枚举,
+   "窗口内无解"成为确定性结论(§6.7)。
