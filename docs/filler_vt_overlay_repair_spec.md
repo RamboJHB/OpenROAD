@@ -192,7 +192,8 @@ struct FillerRewrite
 
 **wire format 取舍**:第一版所有 move 都是"单 filler 同尺寸换 master",
 `SwapMove ↔ FillerChange` 一一对应、无损互转,因此对外接口保留 V1 形态,
-`FillerRewrite` 作为 checker API 的演进形态列入 future work(§8.1)。扩展性真正
+对外的演进形态见 §5.2(推荐 primitive-op 列表,而非直接暴露 span;
+`FillerRewrite` 是纯 planner 内部抽象)。扩展性真正
 依赖 span 锚的部分(canonical key、冲突、相关性判定)全部在 planner 内部,不经过
 checker API,所以这个取舍几乎不损失算法侧扩展性;代价是 merge/split 落地时
 checker API 需要一次版本化升级。
@@ -281,20 +282,37 @@ checker 实现 overlay 的语义与 V1 相同:把每个 `fillerChanges` 中的 f
 按 `newMasterId` 换 master 后,在 target-local 规则下重查。planner 内部的 SwapMove
 由 adapter 无损转换为 `FillerChange`。
 
-**future work(merge/split 前置条件)**:届时 API 升级为 span 形态的
-`FillerRewrite`(§4.1/§8.1),那是一次版本化的 breaking change。为降低升级成本,
-现在需要 checker RD 遵守两点:① 接口版本化预留(升级时新增 v2 接口而非原地改
-语义);② 不把"overlay 不会创建/销毁 instance"的假设固化到 checker 内部深处
-(例如 violation participant 的 id 引用方式)。
+**future work(merge/split 前置条件)与职责归属(决策记录)**:届时 API
+需要一次版本化升级。"在 overlay context 里删除/实例化 filler"拆成两半,归属
+不同:
 
-**为什么不现在就切到 `FillerRewrite`(决策记录)**:span 形态的完整契约依赖
-尚未定稿的设计——overlay 中新创建的 filler 没有 instanceId,`CheckResult` 的
-`ViolationParticipant` 如何引用它(合成 id 还是 span 引用)直接影响 delta 分类
-协议;multi-height 的 `rowIds` 对齐语义、commit 侧 instance id 分配流程同样未定。
-现在拍板是投机性 API,届时大概率仍需 breaking。而 merge/split 落地时 checker
-反正要新写 overlay 内删除/实例化 filler 的实现,API 升级与该工作同批完成,不产生
-额外成本;V1 用 `instanceId` 引用则是零歧义、零新增工作量。上述 participant
-引用问题应作为未来 v2 API 设计的第一个议题。
+- **语义半 = repair engine 做**:把一个 span rewrite 翻译成"删哪些 instance、
+  在哪些 x 放哪些 master"。tiling 规划知识(库宽度、切法、每段位置)全在
+  planner,①MoveGenerator 本来就要算出精确位置;让 checker 解释 tiling 意图
+  会把规划知识泄漏进 oracle。
+- **机械半 = checker 做**:把删/加操作应用到 checker 内部 candidate context
+  (candidate intervals、merged shapes)并跑规则——这些索引是 checker 内部的,
+  只能它做;且 V1 的换 master 内部本来就是 remove + add,这是已有机制的直接
+  推广,不是新语义。
+
+由此推论,**v2 wire format 推荐 primitive-op 形态而非 span 形态**:repair 发
+`remove(instanceId)` 若干 + `add(masterId, rowId, x, orientation, overlayId)`
+若干;`overlayId` 是请求方分配的 request-scoped 合成 id,checker 在
+`ViolationParticipant` 中 echo 它——这直接消解了"overlay 新建 filler 没有
+instanceId、participant 无法引用"的协议难题(id 分配权归请求方)。checker 侧
+保留防御性校验(removed span 的并集必须等于 added tiles 铺出的并集,否则
+`InvalidOverlay`),但不解释 tiling 意图。op 形态还与 commit 路径同构:
+infrastructure 的 commit 原语同样是删/建 instance,solution 可直通 commit。
+`FillerRewrite`(§4.1)因此定位为**纯 planner 内部抽象**,对外始终翻译成
+op 列表。
+
+**为什么不现在就升级(决策记录)**:V1 所有 move 都是同尺寸换 master,
+`FillerChange` 零歧义、零新增工作量;multi-height 的行对齐语义、commit 侧
+id 分配流程等契约细节仍依赖未定稿的设计,现在拍板是投机性 API。merge/split
+落地时 checker 反正要做机械半的推广实现,API 升级与其同批完成,不产生额外
+成本。现在只要求 checker RD 两点:① 接口版本化预留(升级时新增 v2 接口而非
+原地改语义);② 不把"overlay 不会创建/销毁 instance"的假设固化到 checker
+内部深处。
 
 协议约定(与 V1 相同,原样保留):
 
@@ -633,9 +651,9 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 - **②层增量**:排序加 move 类型偏好与 span 面积项(§6.6)。
 - **③④⑤层零改动**:冲突判定(span 相交)、canonical key、cache、delta 分类
   (span 几何锚)、gate、diagnostics 全部按 §4/§6.8 的定义直接适用。
-- **接口(前置条件)**:checker API 从 `FillerChange` 版本化升级为 span 形态的
-  `FillerRewrite`(§4.1/§5.2 已预留约定);infrastructure 候选查询切换到
-  per-span tiling 键(§5.3 演进方向)。
+- **接口(前置条件)**:checker API 从 `FillerChange` 版本化升级为
+  primitive-op 形态(remove/add + overlayId echo,职责归属与协议见 §5.2 决策
+  记录);infrastructure 候选查询切换到 per-span tiling 键(§5.3 演进方向)。
 - **不变量**:重铺精确覆盖 span、宽度和相等,100% utility 继续按构造保持。
 
 ### 8.2 multi-height
@@ -825,7 +843,8 @@ contour-driven refinement(逐级扩圈重指派,带"违例未减少即终止"准
 - **已采纳**(V1):swap-unfixable 快速判定(§6.2,源自其 unsolvable violation
   分类);扩窗截止准则(§6.3,源自其 contour 终止准则)。
 - **已列入 future**:DP row-optimal tiling 作为 split/tiling 生成器参考
-  (§8.1);model-guided proposal 作为 Ranker backlog(§6.6)。
+  (§8.1,tiling 语义由 repair 侧翻译为 primitive op,§5.2);model-guided
+  proposal 作为 Ranker backlog(§6.6)。
 - **反向验证**:其 inference 规则生成的强制赋值,与本 spec 的 anchor-follow
   首发种子、第三 VT 降权方向一致;其"部分违例在 filler 阶段无解"的分类,
   佐证 `hasSolution=false` + 明确失败码的输出语义。
