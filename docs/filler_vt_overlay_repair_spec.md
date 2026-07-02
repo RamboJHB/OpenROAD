@@ -159,8 +159,8 @@ struct CheckRequest
 - checker RD:只做 non-mutating overlay DRC verify。输入一个或多个
   `OverlayCheckRequest`;每个 request 是一个 atomic overlay 方案,输出对应 request 的真实
   violation snapshot。
-- infrastructure RD:只做 placement/filler/master 查询。包括 100% utility precheck、editable
-  filler 收集、same-size legal filler master 查询。
+- infrastructure RD:只做 100% utility precheck 和 per-filler usable master candidate
+  查询。editable filler 收集、窗口筛选、master metadata 解释由 filler repair engine/adapter 负责。
 - filler repair engine:只做 window/cluster、候选排序、overlay 搜索和 baseline-delta clean 收敛。
 
 ### 3.1 共享基础类型
@@ -368,66 +368,46 @@ class PlacementQuery
 - macro、blockage、core cutout 等非 legal std-cell site 由 infrastructure 排除。
 - `isFullUtility == false` 时,repair 直接 fatal diagnostic,不生成 overlay,不调用 checker。
 
-### 3.4 Infrastructure RD:Filler/Master Query API
+### 3.4 Infrastructure RD:Usable Master Candidate API
 
-repair 不应该自己扫描所有 master 猜哪些能换。infrastructure 直接给 editable filler 和
-legal same-size replacements。
+repair 不应该自己扫描所有 master 猜哪些能换。infrastructure 侧只需要回答:
+对某个已知 filler instance,当前有哪些可直接替换的 legal master candidates。
+editable filler 收集、窗口筛选、当前 master/family 读取和排序特征由 filler repair
+engine/adapter 自己处理。
 
 ```cpp
-struct FillerMasterInfo
+struct MasterCandidateRequest
+{
+    InstanceId fillerInstanceId = 0;
+};
+
+struct MasterCandidate
 {
     MasterId masterId = 0;
-    DbCoord width = 0;
-    DbCoord height = 0;
-    DbCoord siteHeight = 0;
-    Family family = Family::Unknown;  // VT / implant type abstraction
-    bool isFiller = false;
 };
 
-struct EditableFiller
+struct MasterCandidateResult
 {
-    InstanceId instanceId = 0;
-    MasterId currentMasterId = 0;
-
-    RowId rowId = 0;
-    DbCoord x = 0;
-    DbCoord width = 0;
-    DbCoord height = 0;
-    PhysOrientation orientation = PhysOrientationE::R0;
-
-    Family currentFamily = Family::Unknown;
-
-    // Excludes currentMasterId. Every entry must be same-size and legal.
-    std::vector<MasterId> legalReplacementMasters;
+    std::vector<MasterCandidate> candidates;
+    std::vector<Diagnostic> diagnostics;
 };
 
-struct FillerQuery
-{
-    std::vector<RowId> rowIds;
-    DbCoord xLo = 0;
-    DbCoord xHi = 0;
-};
-
-class FillerInfrastructureQuery
+class FillerMasterCandidateProvider
 {
  public:
-  std::vector<EditableFiller> collectEditableFillers(
-      const FillerQuery& query) const;
-
-  const FillerMasterInfo* getFillerMasterInfo(
-      MasterId masterId) const;
-
-  std::vector<MasterId> getLegalReplacementMasters(
-      InstanceId fillerInstanceId) const;
+  MasterCandidateResult getUsableMasterCandidates(
+      const MasterCandidateRequest& request) const;
 };
 ```
 
 语义:
 
-- `collectEditableFillers` 只返回 filler instance,不返回 std cell/macro/non-editable instance。
-- `legalReplacementMasters` 只返回 filler master,不返回当前 master 本身。
-- 每个 replacement 必须 same width / same height / same site compatibility /
-  orientation-compatible。
+- 输入 instance 必须是 filler instance;若不是 filler,返回 empty candidates 并给 diagnostic。
+- `candidates` 只包含可直接用于 `FillerChange.newMasterId` 的 replacement master,不包含当前 master。
+- 每个 candidate 必须是 filler master,且满足 same width / same height / same site
+  compatibility / row-orientation compatibility。
+- 如果某个 filler 没有合法替换 master,返回 empty candidates,这不是 checker error。
+- infrastructure 不需要返回 editable filler list、完整 master metadata 或 family 排序信息。
 - repair 最终只输出 `FillerChange { instanceId, newMasterId }`,不移动、不 split、不 merge、不删 filler。
 
 ### 3.5 Filler Repair Engine 边界
@@ -454,7 +434,7 @@ planner 依赖:
 
 - `ImplantOverlayChecker` 做 batch overlay check。
 - `PlacementQuery` 做 100% utility preflight。
-- `FillerInfrastructureQuery` 做 candidate filler 和 legal master 查询。
+- `FillerMasterCandidateProvider` 做 per-filler usable master candidate 查询。
 
 这样 skeleton 可以先用 fake checker / fake infrastructure 单测 baseline-delta clean、
 candidate sorting、group seed、beam 和 diagnostics;真实 adapter 等各 RD 接口稳定后再接入。
@@ -576,10 +556,11 @@ solution diagnostics。
 
 对窗口内每个 editable filler:
 
-1. 从 `legalReplacementMasters` 枚举 target master。
-2. 去掉 current master。
-3. 只保留 same width / same height / row orientation compatible 的 master。
-4. 将 master 映射到 `Family` / VT。
+1. 调用 `FillerMasterCandidateProvider::getUsableMasterCandidates(
+   MasterCandidateRequest{fillerInstanceId})`。
+2. 对返回的 candidates 逐个生成 target master move。
+3. filler repair engine/adapter 将 master 映射到 `Family` / VT,用于 Plan sorting。
+4. 如果 candidates 为空,该 filler 不生成 move,并在 diagnostics 中记录 no usable master。
 
 候选 move:
 
@@ -877,8 +858,9 @@ struct FillerRepairResult
 1. 定义 filler-engine 的 pure repair planner,输入 `FillerRepairRequest`,输出
    `FillerRepairResult`。
 2. 实现 100% utility preflight;失败时直接 fatal diagnostic,不生成 overlay,不调用 checker。
-3. 在 helper/data-source adapter 中建立 master -> `Family` / same-size replacement table。
-4. 实现 `ImplantOverlayChecker`、`PlacementQuery`、`FillerInfrastructureQuery` adapter,
+3. 在 helper/data-source adapter 中建立 master -> `Family` 映射;合法 replacement 由
+   infrastructure candidate API 保证。
+4. 实现 `ImplantOverlayChecker`、`PlacementQuery`、`FillerMasterCandidateProvider` adapter,
    先用 fake adapter 测 planner。
 5. 实现 violation 归一化、开窗和 cluster 合并。
 6. 实现 cell-centric / bridge filler candidate 扩展。
@@ -1075,47 +1057,27 @@ SiteCoverageResult checkFullSiteCoverage(
     const SiteCoverageRequest& request) const;
 ```
 
-需要 infrastructure RD 提供 filler/master 查询:
+需要 infrastructure RD 提供 per-filler usable master candidate 查询:
 
 ```cpp
-struct FillerMasterInfo
+struct MasterCandidateRequest
+{
+    InstanceId fillerInstanceId = 0;
+};
+
+struct MasterCandidate
 {
     MasterId masterId = 0;
-    DbCoord width = 0;
-    DbCoord height = 0;
-    DbCoord siteHeight = 0;
-    Family family = Family::Unknown;
-    bool isFiller = false;
 };
 
-struct EditableFiller
+struct MasterCandidateResult
 {
-    InstanceId instanceId = 0;
-    MasterId currentMasterId = 0;
-    RowId rowId = 0;
-    DbCoord x = 0;
-    DbCoord width = 0;
-    DbCoord height = 0;
-    PhysOrientation orientation = PhysOrientationE::R0;
-    Family currentFamily = Family::Unknown;
-    std::vector<MasterId> legalReplacementMasters;
+    std::vector<MasterCandidate> candidates;
+    std::vector<Diagnostic> diagnostics;
 };
 
-struct FillerQuery
-{
-    std::vector<RowId> rowIds;
-    DbCoord xLo = 0;
-    DbCoord xHi = 0;
-};
-
-std::vector<EditableFiller> collectEditableFillers(
-    const FillerQuery& query) const;
-
-const FillerMasterInfo* getFillerMasterInfo(
-    MasterId masterId) const;
-
-std::vector<MasterId> getLegalReplacementMasters(
-    InstanceId fillerInstanceId) const;
+MasterCandidateResult getUsableMasterCandidates(
+    const MasterCandidateRequest& request) const;
 ```
 
 infrastructure 侧必须确认的语义:
@@ -1123,6 +1085,9 @@ infrastructure 侧必须确认的语义:
 - `checkFullSiteCoverage` 检查所有 legal std-cell sites 是否被 std cell 或 filler 精确覆盖一次。
 - gap/overlap/off-grid/illegal occupant 都要作为 precondition failure 返回。
 - macro/blockage/core cutout 等非 legal std-cell site 由 infrastructure 排除。
-- `collectEditableFillers` 只返回 filler instance。
-- `legalReplacementMasters` 只返回 filler master,不包含当前 master。
-- replacement 必须 same width / same height / same site compatibility / orientation-compatible。
+- `getUsableMasterCandidates` 输入是一个已知 filler instance。
+- 返回的 candidates 只包含可直接替换当前 filler 的 master,不包含当前 master。
+- 每个 candidate 必须是 filler master,且 same width / same height / same site
+  compatibility / orientation-compatible。
+- 若输入不是 filler 或没有可用 replacement,返回 empty candidates,并用 diagnostics 区分原因。
+- infrastructure 不需要提供 editable filler collection、完整 master metadata 或 family 排序信息。
