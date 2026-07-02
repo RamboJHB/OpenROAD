@@ -159,9 +159,9 @@ struct CheckRequest
 - checker RD:只做 non-mutating overlay DRC verify。输入一个或多个
   `OverlayCheckRequest`;每个 request 是一个 atomic overlay 方案,输出对应 request 的真实
   violation snapshot。
-- infrastructure RD:只做 100% utility precheck 和 per-filler usable master candidate
-  查询。editable filler 收集、窗口筛选、master metadata 解释由 filler repair engine/adapter 负责。
-- filler repair engine:只做 window/cluster、候选排序、overlay 搜索和 baseline-delta clean 收敛。
+- infrastructure RD:只做 per-filler usable master candidate 查询。
+- filler repair engine:自己做 100% utility precheck、editable filler 收集、窗口筛选、
+  master metadata 解释、候选排序、overlay 搜索和 baseline-delta clean 收敛。
 
 ### 3.1 共享基础类型
 
@@ -316,18 +316,12 @@ checker API 约定:
   repair 会用同一个 `guardRegion` 下的 baseline request 和 overlay request 做 delta
   classification。
 
-### 3.3 Infrastructure RD:100% Utility API
+### 3.3 Filler Repair Engine:100% Utility Preflight
 
-100% utility 是 filler repair 的硬前置条件,应该由 placement/infrastructure 提供,不放在
-checker 里。
+100% utility 是 filler repair 的硬前置条件,由 filler repair engine 自己基于
+DB/placement adapter 检查,不要求 checker RD 或 infrastructure RD 提供 API。
 
 ```cpp
-struct SiteCoverageRequest
-{
-    // Empty means all legal std-cell rows.
-    std::vector<RowId> rowIds;
-};
-
 enum class CoverageIssueKind
 {
     Gap,
@@ -352,20 +346,13 @@ struct SiteCoverageResult
     std::vector<CoverageIssue> issues;
     std::vector<Diagnostic> diagnostics;
 };
-
-class PlacementQuery
-{
- public:
-  SiteCoverageResult checkFullSiteCoverage(
-      const SiteCoverageRequest& request) const;
-};
 ```
 
 语义:
 
 - 每个 legal std-cell site 必须被 std cell 或 filler 精确覆盖一次。
 - gap / overlap / off-grid / illegal occupant 都是 precondition failure。
-- macro、blockage、core cutout 等非 legal std-cell site 由 infrastructure 排除。
+- macro、blockage、core cutout 等非 legal std-cell site 由 filler repair engine/DB adapter 排除。
 - `isFullUtility == false` 时,repair 直接 fatal diagnostic,不生成 overlay,不调用 checker。
 
 ### 3.4 Infrastructure RD:Usable Master Candidate API
@@ -433,8 +420,8 @@ struct FillerRepairResult
 planner 依赖:
 
 - `ImplantOverlayChecker` 做 batch overlay check。
-- `PlacementQuery` 做 100% utility preflight。
 - `FillerMasterCandidateProvider` 做 per-filler usable master candidate 查询。
+- filler repair engine 内部 DB/placement adapter 做 100% utility preflight。
 
 这样 skeleton 可以先用 fake checker / fake infrastructure 单测 baseline-delta clean、
 candidate sorting、group seed、beam 和 diagnostics;真实 adapter 等各 RD 接口稳定后再接入。
@@ -860,7 +847,7 @@ struct FillerRepairResult
 2. 实现 100% utility preflight;失败时直接 fatal diagnostic,不生成 overlay,不调用 checker。
 3. 在 helper/data-source adapter 中建立 master -> `Family` 映射;合法 replacement 由
    infrastructure candidate API 保证。
-4. 实现 `ImplantOverlayChecker`、`PlacementQuery`、`FillerMasterCandidateProvider` adapter,
+4. 实现 `ImplantOverlayChecker`、`FillerMasterCandidateProvider` adapter,
    先用 fake adapter 测 planner。
 5. 实现 violation 归一化、开窗和 cluster 合并。
 6. 实现 cell-centric / bridge filler candidate 扩展。
@@ -1020,42 +1007,9 @@ checker 侧必须确认的语义:
 
 ### 12.2 给 Infrastructure RD
 
-需要 infrastructure RD 提供 100% utility precheck:
-
-```cpp
-struct SiteCoverageRequest
-{
-    std::vector<RowId> rowIds;  // empty means all legal std-cell rows
-};
-
-enum class CoverageIssueKind
-{
-    Gap,
-    Overlap,
-    OffGrid,
-    IllegalOccupant
-};
-
-struct CoverageIssue
-{
-    CoverageIssueKind kind = CoverageIssueKind::Gap;
-    RowId rowId = 0;
-    DbCoord xLo = 0;
-    DbCoord xHi = 0;
-    int siteCount = 0;
-    std::vector<InstanceId> instances;
-};
-
-struct SiteCoverageResult
-{
-    bool isFullUtility = false;
-    std::vector<CoverageIssue> issues;
-    std::vector<Diagnostic> diagnostics;
-};
-
-SiteCoverageResult checkFullSiteCoverage(
-    const SiteCoverageRequest& request) const;
-```
+不需要 infrastructure RD 提供 100% utility precheck。filler repair engine 会自己基于
+DB/placement adapter 扫描 legal std-cell sites,检查 gap / overlap / off-grid /
+illegal occupant,并在失败时直接返回 precondition diagnostic。
 
 需要 infrastructure RD 提供 per-filler usable master candidate 查询:
 
@@ -1082,9 +1036,6 @@ MasterCandidateResult getUsableMasterCandidates(
 
 infrastructure 侧必须确认的语义:
 
-- `checkFullSiteCoverage` 检查所有 legal std-cell sites 是否被 std cell 或 filler 精确覆盖一次。
-- gap/overlap/off-grid/illegal occupant 都要作为 precondition failure 返回。
-- macro/blockage/core cutout 等非 legal std-cell site 由 infrastructure 排除。
 - `getUsableMasterCandidates` 输入是一个已知 filler instance。
 - 返回的 candidates 只包含可直接替换当前 filler 的 master,不包含当前 master。
 - 每个 candidate 必须是 filler master,且 same width / same height / same site
