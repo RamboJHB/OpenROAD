@@ -287,6 +287,15 @@ checker 实现 overlay 的语义与 V1 相同:把每个 `fillerChanges` 中的 f
 语义);② 不把"overlay 不会创建/销毁 instance"的假设固化到 checker 内部深处
 (例如 violation participant 的 id 引用方式)。
 
+**为什么不现在就切到 `FillerRewrite`(决策记录)**:span 形态的完整契约依赖
+尚未定稿的设计——overlay 中新创建的 filler 没有 instanceId,`CheckResult` 的
+`ViolationParticipant` 如何引用它(合成 id 还是 span 引用)直接影响 delta 分类
+协议;multi-height 的 `rowIds` 对齐语义、commit 侧 instance id 分配流程同样未定。
+现在拍板是投机性 API,届时大概率仍需 breaking。而 merge/split 落地时 checker
+反正要新写 overlay 内删除/实例化 filler 的实现,API 升级与该工作同批完成,不产生
+额外成本;V1 用 `instanceId` 引用则是零歧义、零新增工作量。上述 participant
+引用问题应作为未来 v2 API 设计的第一个议题。
+
 协议约定(与 V1 相同,原样保留):
 
 - non-mutating,不 commit DB。
