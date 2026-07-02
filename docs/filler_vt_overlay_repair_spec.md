@@ -329,8 +329,8 @@ class FillerMasterCandidateProvider
 语义(与 V1 相同):输入必须是 filler instance;candidates 只含可直接替换的
 filler master(不含当前 master),保证 same width / same height / same site /
 orientation 兼容;没有可用替换时返回 empty candidates + diagnostics,不是 error。
-当前工艺下每个宽度的候选数只有 1-2 个,且部分宽度缺 VT(宽 8 无 UL、宽 4 无 L),
-empty/partial candidates 是常态路径,见附录 A。
+当前工艺下每个 filler 恒有 2 个同尺寸候选(3 VT − 当前,附录 A);
+empty candidates 保留为防御性路径,不是常态。
 
 **演进方向**(merge/split 需要,提前告知 infrastructure RD):查询按几何键而非
 instance 键——"在 `(rowId, width, orientation)` 下有哪些可用 filler master(或
@@ -493,9 +493,9 @@ bridge pair、同一短 filler run 整段同改、同一 violation 的 filler pa
 | 5 | `position` | x 更小优先,再 row 更小,保证 deterministic |
 
 target VT 顺序:① anchor 的新 VT;② 邻接 majority VT(**按 band-slot 分别计数**,
-不能按 cell 整体数);③ 稳定 type id。所有顺序都先按该 filler 宽度**实际可用的
-VT** 过滤(以 candidate provider 返回为准;当前工艺宽 8 无 UL、宽 4 无 L,
-见附录 A),不能盲目按 anchor VT 排。
+不能按 cell 整体数);③ 稳定 type id。所有顺序都只在
+candidate provider 实际返回的 master 中取值(防御库变化;当前库各宽度 VT 齐全,
+附录 A)。
 
 fixed cell 是投票和约束,不是禁改理由(贴着 fixed cell 的 filler 往往最该先试)。
 V1 的其余特征(`fillerVote`/`diffEdgesRemoved`/`multiViolationTouch`/`islandScore`/
@@ -578,9 +578,10 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 
 - **①层增量**:新增 MergeMoveGenerator / SplitMoveGenerator,只提议少数高价值
   tiling(两个 bridge filler 合一、在 cell 边界切开宽 filler、短 run 重铺),控制
-  分支爆炸的位置在生成器,不在搜索。当前 master 库下 **split 的优先级高于 merge**:
-  它恰好闭合 swap-only 的 VT 覆盖缺口(8 → 4+4 可得 UL,4 → 2+2 可得 L,附录 A);
-  tiling 每段宽度必须取自库中实际存在的宽度集合。
+  分支爆炸的位置在生成器,不在搜索。split 的价值在于比 swap 更细的
+  VT 粒度(例如 4 → 2+2 允许 span 的半段换 VT、半段保持,是 swap-only 覆盖不了的
+  解形态);tiling 每段宽度必须取自库中实际存在的宽度集合(附录 A,当前为
+  {2,3,4,8})。
 - **②层增量**:排序加 move 类型偏好与 span 面积项(§6.6)。
 - **③④⑤层零改动**:冲突判定(span 相交)、canonical key、cache、delta 分类
   (span 几何锚)、gate、diagnostics 全部按 §4/§6.8 的定义直接适用。
@@ -654,8 +655,8 @@ gate 语义:
 - 同一位置两条 violation(不同 participant / 不同 P-N band),不去重,一起解。
 - 一个 filler 关联多条 violation;一个 anchor 引发多条 violation。
 - 三 VT:邻居 majority 不是正确的 anchor VT(验证 target VT 顺序)。
-- 缺 same-size replacement master(具体化:宽 8 filler 目标 UL / 宽 4 filler 目标
-  L,附录 A 缺口),返回 no usable master diagnostics;fixed cell 约束冲突。
+- 缺 same-size replacement master(fake provider 构造;当前真实库 VT 齐全,
+  此 case 为防御性,附录 A),返回 no usable master diagnostics;fixed cell 约束冲突。
 - 必须扩窗(L0 不够,L1 修好);枚举预算耗尽触发扩窗;窗口到顶返回 no solution
   且 diagnostics 带 best overlay 与 remaining violations。
 - 确定性:同输入两次运行,产出完全相同的 changes/diagnostics/call 序列。
@@ -707,40 +708,38 @@ adapter 先行、失败不返回 partial、diagnostics 要求。
 
 ## 附录 A. 可用 filler master 库(示例工艺备注)
 
-当前工艺可用的 filler cell master(命名 `F_FILL{宽度}_63S6T9{VT}_1`,同一
-site/track 族、同一高度,VT 后缀 R / L / UL):
+filler master 命名 `F_FILL{宽度}_63S6T9{VT}_1`,同一 site/track 族、同一高度;
+宽度 ∈ {8, 4, 3, 2},VT 后缀 ∈ {R, L, UL}。**每个宽度三种 VT 齐全**,共 12 个:
 
 ```text
-F_FILL8_63S6T9R_1   F_FILL8_63S6T9L_1
-F_FILL4_63S6T9R_1   F_FILL4_63S6T9UL_1
+F_FILL8_63S6T9R_1   F_FILL8_63S6T9L_1   F_FILL8_63S6T9UL_1
+F_FILL4_63S6T9R_1   F_FILL4_63S6T9L_1   F_FILL4_63S6T9UL_1
 F_FILL3_63S6T9R_1   F_FILL3_63S6T9L_1   F_FILL3_63S6T9UL_1
 F_FILL2_63S6T9R_1   F_FILL2_63S6T9L_1   F_FILL2_63S6T9UL_1
 ```
 
-可用性矩阵:
+VT 后缀含义(按业界常规命名推断,待 library 团队确认):R = RVT(regular,
+标准阈值)、L = LVT(low-VT,低阈值,更快/更漏电)、UL = ULVT(ultra-low-VT,
+超低阈值)。三者即本 feature 的三种 implant type;与 checker header 中
+`Family` 的映射由 adapter 从 master 的 implant 层导出(参见
+`ImplantLayerCheckerHelper` 的 layer 解析路径),不依赖 master 名字符串解析,
+本附录命名仅供人读。
 
-| 宽度 | R | L | UL | 同尺寸替换候选数 |
-|---|---|---|---|---|
-| 8 | ✓ | ✓ | — | 1 |
-| 4 | ✓ | — | ✓ | 1 |
-| 3 | ✓ | ✓ | ✓ | 2 |
-| 2 | ✓ | ✓ | ✓ | 2 |
-
-对算法的推论(备注性质,算法本身不 hard-code 这张表,一切以
+对算法的推论(备注性质,算法不 hard-code 这张表,一切以
 `FillerMasterCandidateProvider` 运行时返回为准):
 
-1. **枚举预算充裕**:每个 filler 的同尺寸候选数只有 1-2 个,窗口内 move 总数很小,
-   §6.7 的排序枚举远够用——这张表是该选型的直接佐证。
-2. **swap-only 的真实覆盖缺口**:宽 8 无 UL、宽 4 无 L。当 target VT(§6.6,通常
-   跟随 anchor 新 VT)恰好是该宽度缺失的 VT 时,第一版可能合法地返回
-   `hasSolution=false`,diagnostics 记录 no usable master——这不是 bug。ranker 的
-   target VT 顺序必须按"该宽度实际可用 VT"过滤,不能盲目按 anchor VT 排。
-3. **split 的具体动机**(§8.1):split 恰好闭合上述缺口——8 → 4+4 可得 UL,
-   4 → 2+2 可得 L。因此 future work 中 split 的价值排在 merge 之前。
-4. **tiling 宽度约束**(future work):库中没有宽 1/5/6/7 的 master,任何
-   span-rewrite tiling 的每一段宽度必须 ∈ {2,3,4,8},不得留宽 1 残段;宽 5/6/7 的
-   span 无法 merge 成单个 master,只能多 master 重铺——这也支持 §4 采用一般的
-   span-rewrite 形式而非严格"merge 成一个"。
-5. **Family 映射不解析命名**:R/L/UL 与 `Family`(VT 族)的映射由 adapter 从
-   master 的 implant 层导出(参见 `ImplantLayerCheckerHelper` 的 layer 解析路径),
-   不依赖 master 名字符串解析;本附录命名仅供人读。
+1. **枚举预算充裕**:每个 filler 恒有 2 个同尺寸替换候选(3 VT − 当前),
+   分支因子小且均匀,窗口内 move 总数很小,§6.7 的排序枚举远够用——这张表是
+   该选型的直接佐证。
+2. **无 VT 覆盖缺口**:任意宽度都可换到任意 VT。因此 swap-only 下
+   `hasSolution=false` 只会来自 DRC 不可满足(搜索无 clean 解),不会来自缺
+   master;"no usable master"路径保留为防御性处理(库变化时行为可控),
+   不是常态路径。
+3. **tiling 宽度约束**(future work):库中宽度集合为 {2,3,4,8},没有宽
+   1/5/6/7 的 master。任何 span-rewrite tiling 的每一段宽度必须取自该集合,
+   不得留宽 1 残段;宽 5/6/7 的 span 无法 merge 成单个 master,只能多 master
+   重铺——这也支持 §4 采用一般的 span-rewrite 形式而非严格"merge 成一个"。
+   以库实际为准。
+4. **split 的价值定位**:库 VT 齐全时,split 的意义不是补库的缺口,而是提供比
+   整个 filler 换 VT 更细的粒度(例如 4 → 2+2 允许半段换 VT、半段保持),
+   这是 swap-only 覆盖不了的解形态(§8.1)。
