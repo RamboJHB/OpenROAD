@@ -1,7 +1,13 @@
 # Spec Supplement - Filler VT Overlay Repair Implementation Assessment
 
-状态:评估补充,不替代主 spec。
-关联主 spec:`docs/filler_vt_overlay_repair_spec.md`。
+> **版本标签:V1 补充(存档,已被 V2 取代)**
+> 本文档是 V1 spec 的实现评估补充。其中被采纳的结论(lexicographic score、
+> guardRegion/checkWindow 分离、baseline delta、group move 价值、bridge filler
+> 默认必选等)已并入 `docs/filler_vt_overlay_repair_spec.md`(V2 定稿),
+> 本文仅作历史参考。
+
+状态:V1 评估补充,存档。
+关联主 spec:`docs/filler_vt_overlay_repair_spec_v1.md`(V1 存档)。
 目标分支:`claude/filler-vt-overlay-repair-plan-2023`。
 最后更新 2026-07-01。
 
