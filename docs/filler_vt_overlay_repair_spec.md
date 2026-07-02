@@ -416,6 +416,15 @@ signature = (ruleId, kind, relation, sorted(rowIds), xWindow 重叠 ≥ 阈值)
 span,或其 xWindow 距任一 changed span ≤ 1 个 rule distance。以 span 几何为锚而非
 instanceId,保证 merge/split 时代 instance 被销毁后判定依然成立。
 
+**swap-unfixable 快速判定**(借鉴 DAC'23 [Zou et al.] 的 unsolvable violation
+分类思想,弱化为保守充分条件):若某条 original violation 的 xWindow 外扩
+two-cell ring 内不存在任何 editable filler,则任何 swap move 都不可能影响它——
+直接 fast-fail:`hasSolution=false`,diagnostics 记 `UnfixableByTypeSwap`,
+不进入搜索、不调 checker(0 次 call)。判定只用几何与 participant 信息,不依赖
+规则语义,不越 checker-as-oracle 边界。这类 case 通常意味着需要 merge/split
+(§8.1)或上游回退该 opto 改动;明确的失败码让上游能区分"搜索无解"与
+"结构性不可修"。
+
 ### 6.3 开窗:L0 → L1 → L2 与 guardRegion
 
 窗口用于圈定 candidate filler、限制搜索、和 delta 分类;它不是 `targetPlace`。
@@ -430,6 +439,10 @@ instanceId,保证 merge/split 时代 instance 被销毁后判定依然成立。
 - intra-row violation 从 L0 入,inter-row 从含 ±1 行的 L0 入(bridge 集合天然覆盖)。
 - 升级触发:result 非 clean 且 remaining violation 的 xWindow/participants 靠近当前
   窗口边界;或当前窗口枚举预算耗尽仍无 clean。
+- **扩窗截止**(借鉴 DAC'23 contour refinement 的终止准则):若升级后的窗口没有
+  引入任何新的 editable filler/move,或(完备枚举前提下)升级后 remaining
+  violation 集合与上一级完全相同,则违例与更远的 filler 无关——停止扩窗,直接
+  进入失败路径,不烧剩余预算。
 - multi-height 预留规则:窗口按行扩展时,跨行 instance 把它占用的所有行拉进同一窗口。
 
 **bridge filler 默认必选**(不是兜底):与 anchor std cell 左右接触的 filler、上下行
@@ -512,7 +525,10 @@ fixed cell 是投票和约束,不是禁改理由(贴着 fixed cell 的 filler �
 V1 的其余特征(`fillerVote`/`diffEdgesRemoved`/`multiViolationTouch`/`islandScore`/
 `sameVtBefore`/`cellConflict`)列为 backlog,fake-checker 测试显示排序命中率不足时
 再逐个引入;merge/split 时代加"move 类型偏好(swap 优先)、changed span 面积小者
-优先"两项。
+优先"两项。backlog 还包括 **model-guided proposal**(DAC'23 的 inference /
+forced-assignment 思想:用近似局部规则模型推导"该 filler 必须是某色否则必然
+违例"的强制赋值,用于排序与剪枝)——anchor-follow 种子与第三 VT 降权正是它的
+弱化版;模型不准只多花 checker call,正确性始终由 ④OracleGate 保证。
 
 ### 6.7 子集搜索(SubsetSearcher)
 
@@ -569,7 +585,8 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
   clean(§6.4)。
 - `hasSolution=false`:`changes` 为空(不返回 partial repair,避免把违例挪走但未清
   干净;explicit partial mode 未来可加,不默认开启),diagnostics 说明失败原因:
-  无合法 master、fixed-cell 冲突、枚举/call 预算耗尽、窗口到顶、所有 overlay 均未
+  swap-unfixable(§6.2,结构性不可修)、无合法 master、fixed-cell 冲突、
+  枚举/call 预算耗尽、窗口到顶(含扩窗截止,§6.3)、所有 overlay 均未
   delta-clean;附 best overlay、remaining violations、窗口与预算统计。
 - utility preflight 失败:`hasSolution=false`、changes 为空、fatal diagnostics,
   语义是 placement precondition 不满足,不是搜索无解。
@@ -600,7 +617,10 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
   分支爆炸的位置在生成器,不在搜索。split 的价值在于比 swap 更细的
   VT 粒度(例如 4 → 2+2 允许 span 的半段换 VT、半段保持,是 swap-only 覆盖不了的
   解形态);tiling 每段宽度必须取自库中实际存在的宽度集合(附录 A,当前为
-  {2,3,4,8})。
+  {2,3,4,8})。tiling 生成器可参考 DAC'23 的 DP row-optimal insertion(状态 =
+  位置 × VT-interval 长度 × filler-interval 长度 × label,配 inter-row cost
+  table 可线性化):在 span 上求近似违例最少的 tiling 作为 proposal,checker 仍作
+  终判;MF(min filler width)约束由库宽度集合自然满足。
 - **②层增量**:排序加 move 类型偏好与 span 面积项(§6.6)。
 - **③④⑤层零改动**:冲突判定(span 相交)、canonical key、cache、delta 分类
   (span 几何锚)、gate、diagnostics 全部按 §4/§6.8 的定义直接适用。
@@ -678,6 +698,9 @@ gate 语义:
   此 case 为防御性,附录 A),返回 no usable master diagnostics;fixed cell 约束冲突。
 - 必须扩窗(L0 不够,L1 修好);枚举预算耗尽触发扩窗;窗口到顶返回 no solution
   且 diagnostics 带 best overlay 与 remaining violations。
+- swap-unfixable 快速判定:violation 外扩 ring 内无 editable filler,0 次
+  checker call 直接 fail,diagnostics 带 `UnfixableByTypeSwap`。
+- 扩窗截止:升级窗口无新增 editable filler/move 时停止扩窗,不烧剩余预算。
 - anchor-follow 首发:典型单/双 filler case 在首个 batch 内 clean。
 - 小窗口完备枚举:窗口内确无解时,枚举完 3^k 空间后**确定性**扩窗(诊断区分
   "确定无解"与"预算耗尽")。
@@ -769,3 +792,31 @@ VT 后缀含义(按业界常规命名推断,待 library 团队确认):R = RVT(re
 5. **齐全库解锁的三项搜索精化**(已并入正文):anchor-follow 首发种子恒可构造
    (§6.5);第三 VT 强降权,有效分支因子 ~1(§6.6);小窗口 3^k 完备枚举,
    "窗口内无解"成为确定性结论(§6.7)。
+
+---
+
+## 附录 B. 相关工作对照 — DAC'23 filler insertion(Zou et al.)
+
+《Toward Optimal Filler Cell Insertion with Complex Implant Layer Constraints》
+(DAC 2023,Fudan)解决的是 **filler insertion** 问题:layout 存在空 site,
+选择各空位的 filler VT,全局最小化 intra/inter-row MW/MS 与 MF(min filler
+width)违例;三档 VT,不移动 cell。三段式:inference-driven violation
+identification(局部 pattern 规则集 + 级联推理,预先识别 placed cell 锁死的
+unsolvable violation)→ DP-based row-optimal insertion(线性化)→
+contour-driven refinement(逐级扩圈重指派,带"违例未减少即终止"准则)。
+
+与本 feature 的关系:
+
+- **问题互补**:该工作是 insertion 阶段的全局求解器,正是本 spec §6.1 preflight
+  失败时应先运行的那类上游工具;本 feature 是 insertion 之后、opto 内环的增量
+  repair。规则形式化(intra/inter MW/MS、三 VT)一致。
+- **架构差异**:该工作自建完整规则引擎(它没有 checker-in-the-loop);本 feature
+  保持 checker-as-oracle,不复刻 DRC——但它证明了近似规则模型作为 **proposal
+  生成器**的有效性,模型不准只多花 checker call,不影响正确性。
+- **已采纳**(V1):swap-unfixable 快速判定(§6.2,源自其 unsolvable violation
+  分类);扩窗截止准则(§6.3,源自其 contour 终止准则)。
+- **已列入 future**:DP row-optimal tiling 作为 split/tiling 生成器参考
+  (§8.1);model-guided proposal 作为 Ranker backlog(§6.6)。
+- **反向验证**:其 inference 规则生成的强制赋值,与本 spec 的 anchor-follow
+  首发种子、第三 VT 降权方向一致;其"部分违例在 filler 阶段无解"的分类,
+  佐证 `hasSolution=false` + 明确失败码的输出语义。
