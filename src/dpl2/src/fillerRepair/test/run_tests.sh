@@ -11,6 +11,7 @@ mkdir -p "$BUILD_DIR"
 
 g++ -std=c++17 -Wall -Wextra -Werror -g \
   Swap.cpp PreCheck.cpp Signature.cpp Window.cpp SwapGenerator.cpp \
+  Ranker.cpp SubsetSearch.cpp OracleGate.cpp \
   FillerRepairEngine.cpp \
   fake/FakeImplantChecker.cpp \
   test/test_main.cpp \

@@ -10,7 +10,9 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <cstring>
+#include <map>
 #include <functional>
 #include <string>
 #include <vector>
@@ -19,6 +21,9 @@
 #include "../Swap.h"
 #include "../PreCheck.h"
 #include "../Signature.h"
+#include "../OracleGate.h"
+#include "../Ranker.h"
+#include "../SubsetSearch.h"
 #include "../SwapGenerator.h"
 #include "../Window.h"
 #include "../fake/FakeCandidateProvider.h"
@@ -861,42 +866,472 @@ void testSwapGeneratorNoUsableMaster()
   CHECK(sawNoUsable);
 }
 
-void testEngineReachesSwapGeneration()
+
+// --- TODO 7-10: ranker, enumeration, oracle gate, end-to-end -----------------
+
+// Scenario A (inter-row MW): anchor 102 changes VT1->VT2, bridging filler
+// 203 (VT2, [9,11) row1) now overlaps the anchor shape by 1 < mwInter=2.
+// The checker itself produces the initial snapshot, like the real flow.
+struct ScenarioA
 {
-  // Normal request passes precheck/normalize/window/movegen and stops at the
-  // explicit NotImplemented of the pending search stages -- proving move
-  // generation produced work without touching the checker yet.
-  fr::FakeDesign design = makeTwoRowDesign();
-  fr::FakeImplantChecker checker(design, {});
+  fr::FakeDesign design;
+  fr::FakeImplantRules rules;
+  fr::FillerRepairRequest request;
+};
+
+ScenarioA makeScenarioA()
+{
+  ScenarioA sc;
+  sc.design = makeTwoRowDesign();
+  sc.rules.mwInter = 2;
+  sc.request.targetPlace = anchorPlace(sc.design, 102);
+  sc.request.targetPlace.masterId = cellMaster(kVt2);  // the opto change
+
+  fr::FakeImplantChecker snapshotChecker(sc.design, sc.rules);
+  auto initial = baselineRequest(sc.design, 102, 0);
+  initial.targetPlace.masterId = cellMaster(kVt2);
+  sc.request.violations =
+      snapshotChecker.checkPlaceWithOverlay(initial).violations;
+  return sc;
+}
+
+void testRankerOrder()
+{
+  ScenarioA sc = makeScenarioA();
+  const auto normalized =
+      fr::normalizeViolations(sc.request, sc.design, fr::DebugLog(verbose()));
+  const auto window = fr::buildWindow(0, sc.request.targetPlace, normalized,
+                                      sc.design, 2, fr::DebugLog(verbose()));
+  fr::FakeCandidateProvider provider(sc.design);
+  const auto generated = fr::generateSwaps(window, sc.design, provider,
+                                           fr::DebugLog(verbose()));
+  const auto ranked =
+      fr::rankSwaps(generated.swaps, sc.request.targetPlace, normalized,
+                    window, sc.design, fr::DebugLog(verbose()));
+
+  // 203 is the only direct participant -> its swaps rank first; the
+  // neighbor-majority (VT1) target beats the demoted third VT (VT3).
+  CHECK_EQ(ranked[0].instanceId, 203);
+  CHECK_EQ(ranked[0].newVt, kVt1);
+  // Third-VT swaps are demoted to the tail but never removed.
+  CHECK_EQ(ranked.back().newVt, kVt3);
+  CHECK_EQ(ranked.size(), generated.swaps.size());
+}
+
+void testEnumerationOrderAndCompleteness()
+{
+  RowFixture f = makeCoveredRow();
+  auto s1 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt2));
+  auto s2 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3));
+  auto s3 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
+  auto s4 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt3));
+  const std::vector<fr::Swap> ranked = {s1, s2, s3, s4};
+
+  fr::RepairConfig config;
+  const auto plan =
+      fr::enumerateOverlays(ranked, config, 512, fr::DebugLog(verbose()));
+  // Space = (1+2)(1+2)-1 = 8: 4 singles + 4 cross-filler pairs.
+  CHECK(plan.complete);
+  CHECK_EQ(plan.overlays.size(), 8u);
+  CHECK_EQ(plan.overlays[0].size(), 1u);
+  CHECK_EQ(plan.overlays[0][0].instanceId, 100);
+  // First pair = ranks (0,2): same-filler combos (0,1) are skipped.
+  CHECK_EQ(plan.overlays[4].size(), 2u);
+  CHECK_EQ(plan.overlays[4][0].instanceId, 100);
+  CHECK_EQ(plan.overlays[4][1].instanceId, 101);
+  CHECK_EQ(plan.overlays[4][1].newMasterId, fillerMaster(2, kVt2));
+
+  // Tiny budget truncates and clears the completeness claim.
+  const auto truncated =
+      fr::enumerateOverlays(ranked, config, 3, fr::DebugLog(verbose()));
+  CHECK(!truncated.complete);
+  CHECK_EQ(truncated.overlays.size(), 3u);
+}
+
+void testEngineSolvesSingleSwap()
+{
+  ScenarioA sc = makeScenarioA();
+  fr::FakeImplantChecker checker(sc.design, sc.rules);
+  fr::FakeCandidateProvider provider(sc.design);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(sc.design, checker, provider, config);
+
+  const auto result = engine.repair(sc.request);
+  CHECK(result.hasSolution);
+  CHECK_EQ(result.changes.size(), 1u);
+  CHECK_EQ(result.changes[0].instanceId, 203);
+  CHECK_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt1));
+  // One baseline + at most one batch (clean overlay is the top-ranked
+  // candidate; the final check is a cache hit, not a new request).
+  CHECK(checker.requestCount() <= 1 + config.batchSize);
+
+  // Determinism: same input -> identical outcome and identical call count.
+  fr::FakeImplantChecker checker2(sc.design, sc.rules);
+  fr::FillerRepairEngine engine2(sc.design, checker2, provider, config);
+  const auto result2 = engine2.repair(sc.request);
+  CHECK(result2.hasSolution);
+  CHECK_EQ(result2.changes.size(), result.changes.size());
+  CHECK_EQ(result2.changes[0].instanceId, result.changes[0].instanceId);
+  CHECK_EQ(result2.changes[0].newMasterId, result.changes[0].newMasterId);
+  CHECK_EQ(checker2.requestCount(), checker.requestCount());
+}
+
+// Scenario B (MW-style pair, non-monotone): anchor C4 VT2 [0,4) and fixed
+// cell C4 VT2 [8,12) with msIntra=5. Originals: VT2 MS across [4,8) and the
+// VT1 MS between [4,8) and [12,16). No single swap is clean; recoloring both
+// gap fillers 110+111 to VT2 fixes everything.
+void testEngineSolvesPairNonMonotone()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 16)
+      .place(102, cellMaster(kVt2), 0, 0)    // anchor (already at new VT)
+      .place(110, fillerMaster(2, kVt1), 0, 4)
+      .place(111, fillerMaster(2, kVt1), 0, 6)
+      .place(112, cellMaster(kVt2), 0, 8)    // fixed std cell, not editable
+      .place(113, fillerMaster(4, kVt1), 0, 12);
+  fr::FakeImplantRules rules;
+  rules.msIntra = 5;
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  fr::FakeImplantChecker snapshotChecker(design, rules);
+  request.violations =
+      snapshotChecker.checkPlaceWithOverlay(baselineRequest(design, 102, 0))
+          .violations;
+  CHECK_EQ(request.violations.size(), 2u);  // VT2 MS + VT1 MS
+
+  fr::FakeImplantChecker checker(design, rules);
   fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.verbose = verbose();
   fr::FillerRepairEngine engine(design, checker, provider, config);
 
+  const auto result = engine.repair(request);
+  CHECK(result.hasSolution);
+  CHECK_EQ(result.changes.size(), 2u);
+  CHECK_EQ(result.changes[0].instanceId, 110);
+  CHECK_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt2));
+  CHECK_EQ(result.changes[1].instanceId, 111);
+  CHECK_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt2));
+  // All size-1 candidates were evaluated and rejected before the pair won:
+  // 6 swaps (3 fillers x 2 usable VTs) + baseline at least.
+  CHECK(checker.requestCount() >= 7);
+}
+
+// Unrelated pre-existing violation inside the guard halo must not block
+// acceptance (spec 6.8 rule 5). Far VT3 inter-row MW at x=[2,3) exists in
+// baseline and in every overlay result; the initial snapshot (target-local)
+// contains only the anchor-caused violation.
+void testEngineIgnoresUnrelatedHaloViolation()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 16)
+      .place(130, fillerMaster(3, kVt3), 0, 0)
+      .place(131, fillerMaster(2, kVt1), 0, 3)
+      .place(132, fillerMaster(3, kVt1), 0, 5)
+      .place(101, fillerMaster(2, kVt1), 0, 8)
+      .place(102, cellMaster(kVt1), 0, 10)   // anchor, changes to VT2
+      .place(103, fillerMaster(2, kVt1), 0, 14)
+      .addRow(1, 0, 16)
+      .place(200, fillerMaster(2, kVt1), 1, 0)
+      .place(206, fillerMaster(2, kVt3), 1, 2)   // overlaps 130 by 1 -> MW
+      .place(201, fillerMaster(2, kVt1), 1, 4)
+      .place(202, fillerMaster(3, kVt1), 1, 6)
+      .place(203, fillerMaster(2, kVt2), 1, 9)
+      .place(204, fillerMaster(2, kVt1), 1, 11)
+      .place(205, fillerMaster(3, kVt1), 1, 13);
+  fr::FakeImplantRules rules;
+  rules.mwInter = 2;
+
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
   request.targetPlace.masterId = cellMaster(kVt2);
-  auto v = makeViolation(3, fr::ViolationKind::MinWidth,
-                         fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+
+  // Target-local initial snapshot: only the anchor-caused MW (the far VT3
+  // pre-existing violation is out of the checker's target-local scope).
+  fr::Violation v = makeViolation(3, fr::ViolationKind::MinWidth,
+                                  fr::ViolationRelation::InterRow, {0, 1},
+                                  {10, 11});
   fr::ViolationParticipant pf;
   pf.instanceId = 203;
   pf.rowId = 1;
   pf.xRange = {9, 11};
   pf.isFiller = true;
   v.participants = {pf};
+  v.requiredValue = 2;
   request.violations = {v};
+
+  fr::FakeImplantChecker checker(design, rules);
+  fr::FakeCandidateProvider provider(design);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(design, checker, provider, config);
+
+  const auto result = engine.repair(request);
+  // The pre-existing VT3 MW sits in the baseline of the same guard region;
+  // being unrelated to any changed filler it must not veto the fix.
+  CHECK(result.hasSolution);
+  CHECK_EQ(result.changes.size(), 1u);
+  CHECK_EQ(result.changes[0].instanceId, 203);
+}
+
+// mwIntra=100 makes every run violate: no overlay can ever be clean. The
+// window space is tiny -> complete enumeration -> definitive no-solution,
+// and L1 triggers the expansion cutoff (same editable set).
+void testEngineNoSolutionDefinitive()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 8)
+      .place(102, cellMaster(kVt2), 0, 0)  // anchor
+      .place(120, fillerMaster(2, kVt1), 0, 4)
+      .place(121, fillerMaster(2, kVt2), 0, 6);
+  fr::FakeImplantRules rules;
+  rules.mwIntra = 100;
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  fr::FakeImplantChecker snapshotChecker(design, rules);
+  request.violations =
+      snapshotChecker.checkPlaceWithOverlay(baselineRequest(design, 102, 0))
+          .violations;
+  CHECK(!request.violations.empty());
+
+  fr::FakeImplantChecker checker(design, rules);
+  fr::FakeCandidateProvider provider(design);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(design, checker, provider, config);
 
   const auto result = engine.repair(request);
   CHECK(!result.hasSolution);
-  bool sawNotImplemented = false;
-  bool sawNoSwap = false;
+  CHECK(result.changes.empty());
+  bool sawNoClean = false;
+  bool sawDefinitive = false;
+  bool sawCutoff = false;
+  bool sawBest = false;
   for (const auto& diag : result.diagnostics) {
-    sawNotImplemented |= diag.code == "NotImplemented";
-    sawNoSwap |= diag.code == "NoSwapGenerated";
+    sawNoClean |= diag.code == "NoCleanOverlay";
+    sawDefinitive |= diag.code == "NoCleanOverlay"
+                     && diag.message.find("definitively") != std::string::npos;
+    sawCutoff |= diag.code == "ExpansionCutoff";
+    sawBest |= diag.code == "BestOverlay";
   }
-  CHECK(sawNotImplemented);
-  CHECK(!sawNoSwap);
-  CHECK_EQ(checker.requestCount(), 0);  // search not wired yet
+  CHECK(sawNoClean);
+  CHECK(sawDefinitive);
+  CHECK(sawCutoff);
+  CHECK(sawBest);
+}
+
+// Gate-level cache: the same overlay under the same guard hits the checker
+// exactly once, including the baseline.
+void testGateCacheSingleEvaluation()
+{
+  ScenarioA sc = makeScenarioA();
+  fr::FakeImplantChecker checker(sc.design, sc.rules);
+  fr::RepairConfig config;
+  fr::DebugLog log(verbose());
+  fr::OracleGate gate(checker, sc.request.targetPlace, sc.request.violations,
+                      1, 2, config, log);
+
+  const auto normalized =
+      fr::normalizeViolations(sc.request, sc.design, log);
+  const auto window = fr::buildWindow(0, sc.request.targetPlace, normalized,
+                                      sc.design, 2, log);
+  auto swap = *fr::makeSwap(sc.design, 204, fillerMaster(2, kVt2));
+  const fr::Overlay o1 = {swap};
+
+  int budget = 100;
+  CHECK(gate.runBaseline(window.guardRegion, budget));
+  CHECK(gate.runBaseline(window.guardRegion, budget));  // cache hit
+  (void) gate.search({o1}, window, window.guardRegion, budget);
+  (void) gate.search({o1}, window, window.guardRegion, budget);  // cache hit
+  CHECK_EQ(checker.requestCount(), 2);  // baseline + o1, each exactly once
+  CHECK(gate.cacheHits() >= 2);
+}
+
+// A checker that violates the requestId echo protocol must abort the repair
+// with CheckerProtocolError instead of producing a result.
+class MisbehavingChecker : public fr::ImplantOverlayChecker
+{
+ public:
+  explicit MisbehavingChecker(fr::FakeImplantChecker& inner) : inner_(inner) {}
+  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& request) override
+  {
+    return inner_.checkPlaceWithOverlay(request);  // baseline stays honest
+  }
+  std::vector<fr::CheckResult> checkPlaceWithOverlays(
+      const std::vector<fr::OverlayCheckRequest>& requests) override
+  {
+    auto results = inner_.checkPlaceWithOverlays(requests);
+    for (auto& result : results) {
+      result.requestId = -42;  // corrupt every echo
+    }
+    return results;
+  }
+ private:
+  fr::FakeImplantChecker& inner_;
+};
+
+void testEngineDetectsProtocolError()
+{
+  ScenarioA sc = makeScenarioA();
+  fr::FakeImplantChecker inner(sc.design, sc.rules);
+  MisbehavingChecker checker(inner);
+  fr::FakeCandidateProvider provider(sc.design);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(sc.design, checker, provider, config);
+
+  const auto result = engine.repair(sc.request);
+  CHECK(!result.hasSolution);
+  CHECK(result.changes.empty());
+  bool sawProtocol = false;
+  for (const auto& diag : result.diagnostics) {
+    sawProtocol |= diag.code == "CheckerProtocolError";
+  }
+  CHECK(sawProtocol);
+}
+
+// Batch result order must not matter: a checker returning results reversed
+// (with honest ids) yields the identical solution.
+class ReversingChecker : public fr::ImplantOverlayChecker
+{
+ public:
+  explicit ReversingChecker(fr::FakeImplantChecker& inner) : inner_(inner) {}
+  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& request) override
+  {
+    return inner_.checkPlaceWithOverlay(request);
+  }
+  std::vector<fr::CheckResult> checkPlaceWithOverlays(
+      const std::vector<fr::OverlayCheckRequest>& requests) override
+  {
+    auto results = inner_.checkPlaceWithOverlays(requests);
+    std::reverse(results.begin(), results.end());
+    return results;
+  }
+ private:
+  fr::FakeImplantChecker& inner_;
+};
+
+void testEngineOrderIndependentBatches()
+{
+  ScenarioA sc = makeScenarioA();
+  fr::FakeImplantChecker inner(sc.design, sc.rules);
+  ReversingChecker checker(inner);
+  fr::FakeCandidateProvider provider(sc.design);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(sc.design, checker, provider, config);
+
+  const auto result = engine.repair(sc.request);
+  CHECK(result.hasSolution);
+  CHECK_EQ(result.changes.size(), 1u);
+  CHECK_EQ(result.changes[0].instanceId, 203);
+  CHECK_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt1));
+}
+
+
+// Scripted checker: fixed violation sets per overlay key, honest protocol.
+// Lets us hit each delta-classification branch exactly (spec 6.8).
+class ScriptedChecker : public fr::ImplantOverlayChecker
+{
+ public:
+  std::map<std::string, std::vector<fr::Violation>> byKey;
+
+  static std::string keyOf(const std::vector<fr::FillerChange>& changes)
+  {
+    std::vector<fr::FillerChange> sorted = changes;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const fr::FillerChange& a, const fr::FillerChange& b) {
+                return a.instanceId != b.instanceId
+                           ? a.instanceId < b.instanceId
+                           : a.newMasterId < b.newMasterId;
+              });
+    std::string key;
+    for (const auto& c : sorted) {
+      key += std::to_string(c.instanceId) + ">" + std::to_string(c.newMasterId) + "|";
+    }
+    return key;
+  }
+
+  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& request) override
+  {
+    fr::CheckResult result;
+    result.requestId = request.requestId;
+    result.status = fr::CheckStatus::Checked;
+    result.violations = byKey[keyOf(request.fillerChanges)];
+    result.isLegal = result.violations.empty();
+    return result;
+  }
+  std::vector<fr::CheckResult> checkPlaceWithOverlays(
+      const std::vector<fr::OverlayCheckRequest>& requests) override
+  {
+    std::vector<fr::CheckResult> results;
+    for (const auto& request : requests) {
+      results.push_back(checkPlaceWithOverlay(request));
+    }
+    return results;
+  }
+};
+
+// Three overlays, three classification outcomes: a new violation inside the
+// repair window rejects; a related new violation in the guard halo rejects;
+// an unrelated pre-existing-style halo violation does not block.
+void testGateDeltaClassificationBranches()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 20)
+      .place(500, fillerMaster(2, kVt1), 0, 4)
+      .place(501, fillerMaster(2, kVt1), 0, 14);
+
+  const fr::Violation original =
+      makeViolation(1, fr::ViolationKind::MinWidth,
+                    fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const auto newInWindow =
+      makeViolation(9, fr::ViolationKind::MinSpacing,
+                    fr::ViolationRelation::IntraRow, {0}, {5, 6});
+  const auto relatedInHalo =  // touches 501's span [14,16)
+      makeViolation(9, fr::ViolationKind::MinSpacing,
+                    fr::ViolationRelation::IntraRow, {0}, {15, 16});
+  const auto unrelatedInHalo =  // 12 sites away from 500's span [4,6)
+      makeViolation(9, fr::ViolationKind::MinSpacing,
+                    fr::ViolationRelation::IntraRow, {0}, {18, 19});
+
+  const fr::Overlay o1 = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
+  const fr::Overlay o2 = {*fr::makeSwap(design, 501, fillerMaster(2, kVt2))};
+  const fr::Overlay o3 = {*fr::makeSwap(design, 500, fillerMaster(2, kVt3))};
+
+  ScriptedChecker checker;
+  checker.byKey[ScriptedChecker::keyOf({})] = {original};
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o1))] = {newInWindow};
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o2))] = {relatedInHalo};
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o3))] = {unrelatedInHalo};
+
+  fr::RepairWindow window;
+  window.rows = {0};
+  window.x = {0, 10};
+  window.guardRegion = fr::Region{{0, 20}, 0, 0};
+
+  const fr::TargetPlace anchor{};
+  const std::vector<fr::Violation> originals = {original};
+  fr::RepairConfig config;
+  fr::DebugLog log(verbose());
+  fr::OracleGate gate(checker, anchor, originals, /*siteWidth=*/1,
+                      /*ruleDistance=*/2, config, log);
+
+  int budget = 100;
+  CHECK(gate.runBaseline(window.guardRegion, budget));
+  const auto sr = gate.search({o1, o2, o3}, window, window.guardRegion, budget);
+
+  // o1/o2 rejected for the pinned reasons; o3 accepted despite the unrelated
+  // halo violation (and despite isLegal=false in its raw result).
+  CHECK(sr.foundClean);
+  CHECK_EQ(sr.cleanOverlay.size(), 1u);
+  CHECK_EQ(sr.cleanOverlay[0].instanceId, 500);
+  CHECK_EQ(sr.cleanOverlay[0].newMasterId, fillerMaster(2, kVt3));
+  CHECK(sr.hasBest);
+  CHECK_EQ(sr.bestSummary.newInWindow, 1);  // o1 was the best-tracked reject
 }
 
 }  // namespace
@@ -930,7 +1365,17 @@ int main()
       {"engine_empty_snapshot_is_success", testEngineEmptySnapshotIsSuccess},
       {"swap_generator_basic", testSwapGeneratorBasic},
       {"swap_generator_no_usable_master", testSwapGeneratorNoUsableMaster},
-      {"engine_reaches_swap_generation", testEngineReachesSwapGeneration},
+      {"ranker_order", testRankerOrder},
+      {"enumeration_order_and_completeness", testEnumerationOrderAndCompleteness},
+      {"engine_solves_single_swap", testEngineSolvesSingleSwap},
+      {"engine_solves_pair_non_monotone", testEngineSolvesPairNonMonotone},
+      {"engine_ignores_unrelated_halo_violation",
+       testEngineIgnoresUnrelatedHaloViolation},
+      {"engine_no_solution_definitive", testEngineNoSolutionDefinitive},
+      {"gate_cache_single_evaluation", testGateCacheSingleEvaluation},
+      {"engine_detects_protocol_error", testEngineDetectsProtocolError},
+      {"engine_order_independent_batches", testEngineOrderIndependentBatches},
+      {"gate_delta_classification_branches", testGateDeltaClassificationBranches},
   };
 
   for (const Test& test : tests) {

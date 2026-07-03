@@ -3,8 +3,11 @@
 
 #include "FillerRepairEngine.h"
 
+#include "OracleGate.h"
 #include "PreCheck.h"
+#include "Ranker.h"
 #include "Signature.h"
+#include "SubsetSearch.h"
 #include "SwapGenerator.h"
 #include "Window.h"
 
@@ -69,10 +72,8 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
   const std::vector<NormalizedViolation> violations =
       normalizeViolations(request, view_, log_);
 
-  // Stage 2b (spec 6.2): swap-unfixable fast check. A violation with no
-  // filler inside its two-instance ring cannot be affected by any swap ->
-  // fail fast, zero checker calls, so upstream can tell "structurally
-  // unrepairable" from "search exhausted".
+  // Stage 2b (spec 6.2): swap-unfixable fast check -- zero checker calls, so
+  // upstream can tell "structurally unrepairable" from "search exhausted".
   for (size_t i = 0; i < violations.size(); ++i) {
     if (!hasFillerNearViolation(violations[i], view_)) {
       result.hasSolution = false;
@@ -89,52 +90,152 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
     }
   }
 
-  // Stage 3 (spec 6.3): open the repair window at L0. Escalation to L1/L2
-  // is driven by the subset search (TODO 8) once it lands.
   const DbCoord ruleDistance =
       estimateRuleDistance(request.violations, view_.siteWidth());
-  const RepairWindow window = buildWindow(
-      /*level=*/0, request.targetPlace, violations, view_, ruleDistance, log_);
-  if (window.editableFillers.empty()) {
-    result.hasSolution = false;
+  OracleGate gate(checker_, request.targetPlace, request.violations,
+                  view_.siteWidth(), ruleDistance, config_, log_);
+
+  // Stages 3..7 under the window escalation loop (spec 6.3/6.7/6.8):
+  // L0 -> L1 -> L2, with the expansion cutoff when a level adds nothing new.
+  OracleGate::SearchResult best;   // best non-clean across levels (diagnostics)
+  bool anyDefinitive = false;      // some level was exhausted completely
+  std::vector<InstanceId> previousEditable;
+
+  for (int level = 0; level <= 2; ++level) {
+    const RepairWindow window =
+        buildWindow(level, request.targetPlace, violations, view_, ruleDistance, log_);
+
+    if (level > 0 && window.editableFillers == previousEditable) {
+      // Expansion cutoff (spec 6.3): nothing new to try at this level.
+      result.diagnostics.push_back(makeDiag(
+          Severity::Info, "ExpansionCutoff",
+          cat("window L", level, " adds no new editable filler -> stop escalation")));
+      log_.msg("engine",
+               cat("window L", level, " identical editable set -> expansion cutoff"));
+      break;
+    }
+    previousEditable = window.editableFillers;
+
+    if (window.editableFillers.empty()) {
+      result.diagnostics.push_back(makeDiag(
+          Severity::Warning, "NoEditableFiller",
+          cat("window L", level, " ", show(window.area()),
+              " contains no editable filler")));
+      continue;
+    }
+
+    const SwapGenerationResult generated =
+        generateSwaps(window, view_, candidates_, log_);
+    result.diagnostics.insert(result.diagnostics.end(),
+                              generated.diagnostics.begin(),
+                              generated.diagnostics.end());
+    if (generated.swaps.empty()) {
+      result.diagnostics.push_back(makeDiag(
+          Severity::Warning, "NoSwapGenerated",
+          cat("window L", level, ": no usable swap")));
+      continue;
+    }
+
+    const std::vector<Swap> ranked = rankSwaps(
+        generated.swaps, request.targetPlace, violations, window, view_, log_);
+
+    int budget = config_.checkerCallBudgetPerWindow;
+    if (!gate.runBaseline(window.guardRegion, budget)) {
+      result.hasSolution = false;
+      result.diagnostics.insert(result.diagnostics.end(),
+                                gate.diagnostics().begin(),
+                                gate.diagnostics().end());
+      result.diagnostics.push_back(makeDiag(
+          Severity::Fatal, "CheckerError",
+          cat("baseline check unusable at window L", level)));
+      log_.msg("engine", "baseline unusable -> abort");
+      return result;
+    }
+
+    const EnumerationPlan plan =
+        enumerateOverlays(ranked, config_, budget, log_);
+
+    OracleGate::SearchResult sr =
+        gate.search(plan.overlays, window, window.guardRegion, budget);
+    if (sr.protocolError) {
+      result.hasSolution = false;
+      result.diagnostics.insert(result.diagnostics.end(),
+                                gate.diagnostics().begin(),
+                                gate.diagnostics().end());
+      result.diagnostics.push_back(makeDiag(
+          Severity::Fatal, "CheckerProtocolError",
+          "batch protocol violated; rejecting this repair"));
+      log_.msg("engine", "checker protocol error -> abort");
+      return result;
+    }
+
+    if (sr.foundClean) {
+      // Stage 8 (spec 6.4): final full-overlay check under the same guard.
+      // Identical single-window request -> served from the gate cache.
+      if (!gate.finalCheck(sr.cleanOverlay, window, window.guardRegion, budget)) {
+        result.diagnostics.push_back(makeDiag(
+            Severity::Error, "FinalCheckFailed",
+            cat("winning overlay failed the final re-check at window L", level)));
+        log_.msg("engine", "final check failed -> continue escalation");
+        continue;
+      }
+      result.hasSolution = true;
+      result.changes = toFillerChanges(sr.cleanOverlay);
+      result.diagnostics.push_back(makeDiag(
+          Severity::Info, "Solution",
+          cat("window L", level, ": ", result.changes.size(),
+              " change(s); checker requests=", gate.requestsSent(),
+              " batches=", gate.batchesSent(), " cacheHits=", gate.cacheHits())));
+      log_.msg("engine",
+               cat("SOLUTION at L", level, ": ", result.changes.size(),
+                   " change(s), requests=", gate.requestsSent(),
+                   " cacheHits=", gate.cacheHits()));
+      return result;
+    }
+
+    if (sr.hasBest
+        && (!best.hasBest
+            || sr.bestSummary.residualOriginals + sr.bestSummary.newInWindow
+                       + sr.bestSummary.relatedInHalo
+                   < best.bestSummary.residualOriginals
+                         + best.bestSummary.newInWindow
+                         + best.bestSummary.relatedInHalo)) {
+      best = sr;
+    }
+    anyDefinitive |= plan.complete && !sr.budgetExhausted;
     result.diagnostics.push_back(makeDiag(
-        Severity::Error, "NoEditableFiller",
-        cat("window L0 ", show(window.area()), " contains no editable filler")));
-    log_.msg("engine", "window L0 has no editable filler -> no solution");
-    return result;
+        Severity::Info, "WindowExhausted",
+        cat("window L", level, ": ", plan.overlays.size(), " candidate(s), ",
+            plan.complete && !sr.budgetExhausted
+                ? "complete enumeration, definitively no clean overlay"
+                : "truncated (size caps or budget), no clean overlay found")));
+    log_.msg("engine",
+             cat("window L", level, " no clean overlay (",
+                 plan.complete && !sr.budgetExhausted ? "definitive" : "truncated",
+                 ") -> escalate"));
   }
 
-  // Stage 4 (spec 6.5): generate atomic swaps for the window's editable
-  // fillers. No swaps at all means the search cannot start.
-  const SwapGenerationResult generated =
-      generateSwaps(window, view_, candidates_, log_);
-  result.diagnostics.insert(result.diagnostics.end(),
-                            generated.diagnostics.begin(),
-                            generated.diagnostics.end());
-  if (generated.swaps.empty()) {
-    result.hasSolution = false;
-    result.diagnostics.push_back(makeDiag(
-        Severity::Error, "NoSwapGenerated",
-        cat("window L0 has ", window.editableFillers.size(),
-            " editable filler(s) but no usable swap")));
-    log_.msg("engine", "no swap generated -> no solution");
-    return result;
-  }
-
-  // Stages 5..7 (ranking, subset search, oracle gate) land with spec section
-  // 11 TODO items 7-10. Until then the engine reports an explicit
-  // NotImplemented instead of a silent "no solution" so callers cannot
-  // mistake the skeleton for a real search.
+  // No clean overlay anywhere (spec 6.9): empty changes, explain why.
   result.hasSolution = false;
-  result.diagnostics.push_back(
-      makeDiag(Severity::Error,
-               "NotImplemented",
-               "search pipeline stages (spec TODO 7-10) not implemented yet"));
+  result.diagnostics.push_back(makeDiag(
+      Severity::Error, "NoCleanOverlay",
+      cat("no baseline-delta clean overlay found; ",
+          anyDefinitive ? "window space exhausted definitively" : "budget/caps truncated",
+          "; checker requests=", gate.requestsSent(), " batches=",
+          gate.batchesSent(), " cacheHits=", gate.cacheHits())));
+  if (best.hasBest) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Info, "BestOverlay",
+        cat("best non-clean candidate: ", best.bestOverlay.size(),
+            " swap(s), residualOriginals=", best.bestSummary.residualOriginals,
+            " newInWindow=", best.bestSummary.newInWindow,
+            " relatedInHalo=", best.bestSummary.relatedInHalo,
+            " unrelatedInHalo=", best.bestSummary.unrelatedInHalo)));
+  }
   log_.msg("engine",
-           cat("window L0 ready (editable=", window.editableFillers.size(),
-               ", swaps=", generated.swaps.size(),
-               ") -> search pipeline pending (TODO 7-10), returning "
-               "NotImplemented"));
+           cat("NO SOLUTION (", anyDefinitive ? "definitive" : "truncated",
+               "), requests=", gate.requestsSent(),
+               " cacheHits=", gate.cacheHits()));
   return result;
 }
 

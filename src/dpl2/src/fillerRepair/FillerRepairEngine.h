@@ -15,10 +15,10 @@
 //   [x] 4  violation normalization + signature matching (Signature.h)
 //   [x] 5  L0/L1/L2 window builder + guardRegion + unfixable fast check
 //   [x] 6  swap generator: atomic swap moves only (SwapGenerator.h)
-//   [ ] 7  ranker
-//   [ ] 8  subset searcher
-//   [ ] 9  oracle gate (batch, cache, baseline-delta)
-//   [ ] 10 final full-overlay check + diagnostics
+//   [x] 7  ranker (Ranker.h)
+//   [x] 8  subset searcher (SubsetSearch.h)
+//   [x] 9  oracle gate: batch, cache, baseline-delta (OracleGate.h)
+//   [x] 10 window escalation + final check + diagnostics
 
 #pragma once
 
