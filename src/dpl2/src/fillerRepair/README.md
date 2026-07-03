@@ -18,6 +18,9 @@ planner is built and tested against the fakes in `fake/`.
 | `Signature.h/.cpp` | Violation normalization, pinned signature matching, change-relatedness (spec §6.2) |
 | `Window.h/.cpp` | L0/L1/L2 window builder, guardRegion two-cell ring, bridge fillers, swap-unfixable fast check (spec §6.2/6.3) |
 | `SwapGenerator.h/.cpp` | Swap generator: atomic swaps only, no group/seed machinery (spec §6.5) |
+| `Ranker.h/.cpp` | 5-feature lexicographic ordering + third-VT demotion; realizes anchor-follow (spec §6.6) |
+| `SubsetSearch.h/.cpp` | Ordered per-filler subset enumeration, complete-space rule (spec §6.7) |
+| `OracleGate.h/.cpp` | Baseline + batched checker calls, protocol validation, result cache, baseline-delta gate (spec §6.8) |
 | `FillerRepairEngine.h/.cpp` | Planner entry + pipeline skeleton (spec §3.2) |
 | `fake/FakeDesign.h` | In-memory `PlacementView` with fluent builders |
 | `fake/FakeCandidateProvider.h` | Same-size replacement lookup over the fake library |
@@ -65,9 +68,9 @@ FR_VERBOSE=1 test/run_tests.sh # with the [fr] debug transcript
 | 4 | Violation normalization + signature matching | done |
 | 5 | L0/L1/L2 window builder + guardRegion + unfixable fast check | done |
 | 6 | Swap generator (atomic swaps only) | done |
-| 7 | Ranker | next |
-| 8 | Subset searcher | pending |
-| 9 | Oracle gate (batch, cache, baseline-delta) | pending |
-| 10 | Final full-overlay check + diagnostics | pending |
-| 11 | Full spec test set | partial (TODO 1-6 cases) |
+| 7 | Ranker (5 features, third-VT demotion) | done |
+| 8 | Subset searcher (ordered enumeration, complete-space rule) | done |
+| 9 | Oracle gate (batch, cache, baseline-delta, protocol validation) | done |
+| 10 | Window escalation + final check + diagnostics | done |
+| 11 | Full spec test set | done for fake-checker scope (34 tests) |
 | 12 | Real checker adapter + CMake integration | pending |
