@@ -12,8 +12,8 @@
 //   [x] 1  planner API, internal Move, canonical key/conflict, adapter
 //   [x] 2  fake checker / fake candidate provider (see fake/)
 //   [x] 3  100% utility pre-check with fatal short-circuit
-//   [ ] 4  violation normalization + signature matching
-//   [ ] 5  L0/L1/L2 window builder + guardRegion
+//   [x] 4  violation normalization + signature matching (Signature.h)
+//   [x] 5  L0/L1/L2 window builder + guardRegion + unfixable fast check
 //   [ ] 6  swap move generator + bridge fillers + group hints
 //   [ ] 7  ranker
 //   [ ] 8  subset searcher

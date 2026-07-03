@@ -4,6 +4,8 @@
 #include "FillerRepairEngine.h"
 
 #include "PreCheck.h"
+#include "Signature.h"
+#include "Window.h"
 
 namespace dpl2::fillerRepair {
 
@@ -53,18 +55,67 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
     return result;
   }
 
-  // Stages 2..7 (normalization, windowing, move generation, ranking, subset
-  // search, oracle gate) land with spec section 11 TODO items 4-10. Until
-  // then the engine reports an explicit NotImplemented instead of a silent
-  // "no solution" so callers cannot mistake the skeleton for a real search.
+  // Empty snapshot: nothing to repair is a success with no changes.
+  if (request.violations.empty()) {
+    result.hasSolution = true;
+    result.diagnostics.push_back(makeDiag(
+        Severity::Info, "EmptySnapshot", "no violations in initial snapshot"));
+    log_.msg("engine", "empty violation snapshot -> hasSolution=true, 0 changes");
+    return result;
+  }
+
+  // Stage 2 (spec 6.2): normalize the snapshot into signatures/footprints.
+  const std::vector<NormalizedViolation> violations =
+      normalizeViolations(request, view_, log_);
+
+  // Stage 2b (spec 6.2): swap-unfixable fast check. A violation with no
+  // filler inside its two-instance ring cannot be affected by any swap ->
+  // fail fast, zero checker calls, so upstream can tell "structurally
+  // unrepairable" from "search exhausted".
+  for (size_t i = 0; i < violations.size(); ++i) {
+    if (!hasFillerNearViolation(violations[i], view_)) {
+      result.hasSolution = false;
+      result.diagnostics.push_back(makeDiag(
+          Severity::Error,
+          "UnfixableByTypeSwap",
+          cat("violation#", i, " rule=", violations[i].raw.ruleId,
+              " footprint=", show(violations[i].xRange),
+              " has no filler within its two-instance ring")));
+      log_.msg("engine",
+               cat("violation#", i, " has no nearby filler -> "
+                   "UnfixableByTypeSwap, abort before search, 0 checker calls"));
+      return result;
+    }
+  }
+
+  // Stage 3 (spec 6.3): open the repair window at L0. Escalation to L1/L2
+  // is driven by the subset search (TODO 8) once it lands.
+  const DbCoord ruleDistance =
+      estimateRuleDistance(request.violations, view_.siteWidth());
+  const RepairWindow window = buildWindow(
+      /*level=*/0, request.targetPlace, violations, view_, ruleDistance, log_);
+  if (window.editableFillers.empty()) {
+    result.hasSolution = false;
+    result.diagnostics.push_back(makeDiag(
+        Severity::Error, "NoEditableFiller",
+        cat("window L0 ", show(window.area()), " contains no editable filler")));
+    log_.msg("engine", "window L0 has no editable filler -> no solution");
+    return result;
+  }
+
+  // Stages 4..7 (move generation, ranking, subset search, oracle gate) land
+  // with spec section 11 TODO items 6-10. Until then the engine reports an
+  // explicit NotImplemented instead of a silent "no solution" so callers
+  // cannot mistake the skeleton for a real search.
   result.hasSolution = false;
   result.diagnostics.push_back(
       makeDiag(Severity::Error,
                "NotImplemented",
-               "search pipeline stages (spec TODO 4-10) not implemented yet"));
+               "search pipeline stages (spec TODO 6-10) not implemented yet"));
   log_.msg("engine",
-           "precheck OK -> search pipeline pending (TODO 4-10), "
-           "returning NotImplemented");
+           cat("window L0 ready (editable=", window.editableFillers.size(),
+               ") -> search pipeline pending (TODO 6-10), returning "
+               "NotImplemented"));
   return result;
 }
 

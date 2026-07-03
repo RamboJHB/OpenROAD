@@ -18,6 +18,8 @@
 #include "../FillerRepairEngine.h"
 #include "../Move.h"
 #include "../PreCheck.h"
+#include "../Signature.h"
+#include "../Window.h"
 #include "../fake/FakeCandidateProvider.h"
 #include "../fake/FakeDesign.h"
 #include "../fake/FakeImplantChecker.h"
@@ -506,6 +508,302 @@ void testCheckerTargetOverrideSeedsViolation()
   CHECK(fr::isRawCheckerSnapshotClean(fixed));
 }
 
+
+// --- TODO 4: normalization + signature ---------------------------------------
+
+// Hand-built violation matching the inter-row MW shape of the fake checker.
+fr::Violation makeViolation(int ruleId,
+                            fr::ViolationKind kind,
+                            fr::ViolationRelation relation,
+                            std::vector<fr::RowId> rows,
+                            fr::XInterval xWindow)
+{
+  fr::Violation v;
+  v.ruleId = ruleId;
+  v.kind = kind;
+  v.relation = relation;
+  v.rowIds = std::move(rows);
+  v.xWindow = xWindow;
+  v.requiredValue = 2;
+  return v;
+}
+
+void testNormalizeViolations()
+{
+  RowFixture f = makeCoveredRow();
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(f.design, 103);
+
+  // Violation with participants: footprint must union xWindow with
+  // participant ranges; filler/cell participants split into the two lists.
+  fr::Violation v = makeViolation(3, fr::ViolationKind::MinWidth,
+                                  fr::ViolationRelation::InterRow, {0, 1},
+                                  {10, 11});
+  fr::ViolationParticipant cell;
+  cell.instanceId = 103;
+  cell.rowId = 0;
+  cell.xRange = {10, 12};
+  cell.isFiller = false;
+  cell.isTarget = true;
+  fr::ViolationParticipant filler;
+  filler.instanceId = 104;
+  filler.rowId = 0;
+  filler.xRange = {12, 16};
+  filler.isFiller = true;
+  v.participants = {cell, filler};
+
+  // Violation without rows: must fall back to the anchor row and say so.
+  fr::Violation noRows = makeViolation(2, fr::ViolationKind::MinSpacing,
+                                       fr::ViolationRelation::IntraRow, {},
+                                       {4, 6});
+  request.violations = {v, noRows};
+
+  const auto normalized =
+      fr::normalizeViolations(request, f.design, fr::DebugLog(verbose()));
+  CHECK_EQ(normalized.size(), 2u);
+
+  CHECK(normalized[0].xRange == (fr::XInterval{10, 16}));
+  CHECK_EQ(normalized[0].fillerParticipants.size(), 1u);
+  CHECK_EQ(normalized[0].fillerParticipants[0], 104);
+  CHECK_EQ(normalized[0].cellAnchors.size(), 1u);  // target == participant 103
+  CHECK_EQ(normalized[0].cellAnchors[0], 103);
+  CHECK(!normalized[0].rowIdFallback);
+
+  CHECK(normalized[1].rowIdFallback);
+  CHECK_EQ(normalized[1].rowIds.size(), 1u);
+  CHECK_EQ(normalized[1].rowIds[0], 0);  // anchor row
+}
+
+void testSignatureMatching()
+{
+  const auto base = makeViolation(3, fr::ViolationKind::MinWidth,
+                                  fr::ViolationRelation::InterRow, {0, 1},
+                                  {10, 14});
+
+  // Identical -> match; rows in different order -> still match.
+  auto same = base;
+  same.rowIds = {1, 0};
+  CHECK(fr::sameSignature(base, same, 1));
+
+  // Shifted by one site -> match (jitter tolerance).
+  auto shifted = base;
+  shifted.xWindow = {11, 15};
+  CHECK(fr::sameSignature(base, shifted, 1));
+
+  // Far away -> no match even with identical ids.
+  auto far = base;
+  far.xWindow = {30, 34};
+  CHECK(!fr::sameSignature(base, far, 1));
+
+  // Different rule / kind / relation / rows -> no match.
+  auto rule = base;
+  rule.ruleId = 4;
+  CHECK(!fr::sameSignature(base, rule, 1));
+  auto kind = base;
+  kind.kind = fr::ViolationKind::MinSpacing;
+  CHECK(!fr::sameSignature(base, kind, 1));
+  auto rel = base;
+  rel.relation = fr::ViolationRelation::IntraRow;
+  CHECK(!fr::sameSignature(base, rel, 1));
+  auto rows = base;
+  rows.rowIds = {0};
+  CHECK(!fr::sameSignature(base, rows, 1));
+}
+
+void testRelatedness()
+{
+  RowFixture f = makeCoveredRow();
+  const auto move = *fr::makeSwapMove(f.design, 101, fillerMaster(2, kVt2));
+  const fr::Overlay overlay = {move};  // span [4,6) row 0
+
+  // Participant is the changed instance -> related.
+  auto direct = makeViolation(2, fr::ViolationKind::MinSpacing,
+                              fr::ViolationRelation::IntraRow, {0}, {20, 22});
+  fr::ViolationParticipant p;
+  p.instanceId = 101;
+  direct.participants = {p};
+  CHECK(fr::isRelatedToOverlay(direct, overlay, 1));
+
+  // Geometric proximity on the same row -> related.
+  auto near = makeViolation(2, fr::ViolationKind::MinSpacing,
+                            fr::ViolationRelation::IntraRow, {0}, {6, 7});
+  CHECK(fr::isRelatedToOverlay(near, overlay, 1));
+
+  // Same row but far in x -> unrelated.
+  auto farX = makeViolation(2, fr::ViolationKind::MinSpacing,
+                            fr::ViolationRelation::IntraRow, {0}, {12, 14});
+  CHECK(!fr::isRelatedToOverlay(farX, overlay, 1));
+
+  // Near in x but two rows away -> unrelated (rules couple adjacent rows).
+  auto farRow = makeViolation(2, fr::ViolationKind::MinSpacing,
+                              fr::ViolationRelation::IntraRow, {2}, {5, 6});
+  CHECK(!fr::isRelatedToOverlay(farRow, overlay, 1));
+}
+
+// --- TODO 5: window builder + guard + unfixable ------------------------------
+
+// Two-row fixture from testCheckerTargetOverrideSeedsViolation: anchor cell
+// 102 [10,14) row0, bridge filler 203 [9,11) row1.
+fr::FakeDesign makeTwoRowDesign()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 16)
+      .place(100, fillerMaster(8, kVt1), 0, 0)
+      .place(101, fillerMaster(2, kVt1), 0, 8)
+      .place(102, cellMaster(kVt1), 0, 10)
+      .place(103, fillerMaster(2, kVt1), 0, 14)
+      .addRow(1, 0, 16)
+      .place(200, fillerMaster(3, kVt1), 1, 0)
+      .place(201, fillerMaster(3, kVt1), 1, 3)
+      .place(202, fillerMaster(3, kVt1), 1, 6)
+      .place(203, fillerMaster(2, kVt2), 1, 9)
+      .place(204, fillerMaster(2, kVt1), 1, 11)
+      .place(205, fillerMaster(3, kVt1), 1, 13);
+  return design;
+}
+
+void testWindowL0()
+{
+  fr::FakeDesign design = makeTwoRowDesign();
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  request.targetPlace.masterId = cellMaster(kVt2);  // the opto change
+
+  // The seeded inter-row MW between anchor [10,14) and filler 203 [9,11).
+  auto v = makeViolation(3, fr::ViolationKind::MinWidth,
+                         fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  fr::ViolationParticipant pf;
+  pf.instanceId = 203;
+  pf.rowId = 1;
+  pf.xRange = {9, 11};
+  pf.isFiller = true;
+  v.participants = {pf};
+  request.violations = {v};
+
+  const auto normalized =
+      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+  const auto window = fr::buildWindow(0, request.targetPlace, normalized,
+                                      design, 1, fr::DebugLog(verbose()));
+
+  // Participant 203, anchor-adjacent 101/103, bridge under anchor 204/205
+  // ([13,16) overlaps the widened anchor span [9,15)).
+  CHECK(window.containsEditable(203));
+  CHECK(window.containsEditable(101));
+  CHECK(window.containsEditable(103));
+  CHECK(window.containsEditable(204));
+  CHECK(!window.containsEditable(100));  // [0,8) does not overlap [8,16)
+  CHECK(!window.containsEditable(202));  // [6,9) touches 9 only
+  // Bridge subset flagged.
+  bool bridge203 = false;
+  for (const auto id : window.bridgeFillers) {
+    bridge203 |= id == 203;
+  }
+  CHECK(bridge203);
+  CHECK_EQ(window.rows.size(), 2u);
+}
+
+void testWindowL1ExtendsToFixedBoundary()
+{
+  fr::FakeDesign design = makeTwoRowDesign();
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+
+  auto v = makeViolation(3, fr::ViolationKind::MinWidth,
+                         fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  request.violations = {v};
+  const auto normalized =
+      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+
+  const auto window = fr::buildWindow(1, request.targetPlace, normalized,
+                                      design, 1, fr::DebugLog(verbose()));
+  // Row0 left of x=8 is filler 100 -> extension reaches the row edge; row1 is
+  // all fillers -> whole row. L1 window covers [0,16) and pulls in 100/200s.
+  CHECK(window.x == (fr::XInterval{0, 16}));
+  CHECK(window.containsEditable(100));
+  CHECK(window.containsEditable(200));
+}
+
+void testGuardRegionTwoCellRing()
+{
+  fr::FakeDesign design = makeTwoRowDesign();
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+
+  auto v = makeViolation(3, fr::ViolationKind::MinWidth,
+                         fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  fr::ViolationParticipant pf;
+  pf.instanceId = 203;
+  pf.rowId = 1;
+  pf.xRange = {9, 11};
+  pf.isFiller = true;
+  v.participants = {pf};
+  request.violations = {v};
+  const auto normalized =
+      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+
+  const auto window = fr::buildWindow(0, request.targetPlace, normalized,
+                                      design, 1, fr::DebugLog(verbose()));
+  // Guard: rows clamped to the design (0..1); x widened by two instances
+  // beyond the window on each side -> reaches the row edges here.
+  CHECK_EQ(window.guardRegion.rowLo, 0);
+  CHECK_EQ(window.guardRegion.rowHi, 1);
+  CHECK(window.guardRegion.x.xl <= 3);   // two instances left of x=8 on row1
+  CHECK(window.guardRegion.x.xh >= 16);  // right edge of both rows
+  // Guard must always contain the window itself.
+  CHECK(window.guardRegion.x.xl <= window.x.xl);
+  CHECK(window.guardRegion.x.xh >= window.x.xh);
+}
+
+void testEngineUnfixableFastFail()
+{
+  // A row of std cells only: a violation there has no filler in its ring.
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 16)
+      .place(100, cellMaster(kVt1), 0, 0)
+      .place(101, cellMaster(kVt1), 0, 4)
+      .place(102, cellMaster(kVt2), 0, 8)
+      .place(103, cellMaster(kVt1), 0, 12);
+
+  fr::FakeImplantChecker checker(design, {});
+  fr::FakeCandidateProvider provider(design);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(design, checker, provider, config);
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  auto v = makeViolation(2, fr::ViolationKind::MinSpacing,
+                         fr::ViolationRelation::IntraRow, {0}, {8, 9});
+  request.violations = {v};
+
+  const auto result = engine.repair(request);
+  CHECK(!result.hasSolution);
+  CHECK(result.changes.empty());
+  bool sawUnfixable = false;
+  for (const auto& diag : result.diagnostics) {
+    sawUnfixable |= diag.code == "UnfixableByTypeSwap";
+  }
+  CHECK(sawUnfixable);
+  CHECK_EQ(checker.requestCount(), 0);  // fail before any checker call
+}
+
+void testEngineEmptySnapshotIsSuccess()
+{
+  RowFixture f = makeCoveredRow();
+  fr::FakeImplantChecker checker(f.design, {});
+  fr::FakeCandidateProvider provider(f.design);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(f.design, checker, provider, config);
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(f.design, f.anchor);
+  const auto result = engine.repair(request);
+  CHECK(result.hasSolution);
+  CHECK(result.changes.empty());
+  CHECK_EQ(checker.requestCount(), 0);
+}
+
 }  // namespace
 
 int main()
@@ -528,6 +826,14 @@ int main()
       {"checker_guard_region_filter", testCheckerGuardRegionFilter},
       {"checker_target_override_seeds_violation",
        testCheckerTargetOverrideSeedsViolation},
+      {"normalize_violations", testNormalizeViolations},
+      {"signature_matching", testSignatureMatching},
+      {"relatedness", testRelatedness},
+      {"window_L0", testWindowL0},
+      {"window_L1_extends_to_fixed_boundary", testWindowL1ExtendsToFixedBoundary},
+      {"guard_region_two_cell_ring", testGuardRegionTwoCellRing},
+      {"engine_unfixable_fast_fail", testEngineUnfixableFastFail},
+      {"engine_empty_snapshot_is_success", testEngineEmptySnapshotIsSuccess},
   };
 
   for (const Test& test : tests) {

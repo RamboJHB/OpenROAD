@@ -15,6 +15,8 @@ planner is built and tested against the fakes in `fake/`.
 | `CandidateApi.h` | Abstract `FillerMasterCandidateProvider` (spec §5.3) |
 | `Move.h/.cpp` | Swap-only internal move (`SwapMove`), canonical key, duplicate-instance conflict, wire adapter (spec §4) |
 | `PreCheck.h/.cpp` | 100% utility pre-check (spec §6.1) |
+| `Signature.h/.cpp` | Violation normalization, pinned signature matching, change-relatedness (spec §6.2) |
+| `Window.h/.cpp` | L0/L1/L2 window builder, guardRegion two-cell ring, bridge fillers, swap-unfixable fast check (spec §6.2/6.3) |
 | `FillerRepairEngine.h/.cpp` | Planner entry + pipeline skeleton (spec §3.2) |
 | `fake/FakeDesign.h` | In-memory `PlacementView` with fluent builders |
 | `fake/FakeCandidateProvider.h` | Same-size replacement lookup over the fake library |
@@ -49,12 +51,12 @@ FR_VERBOSE=1 test/run_tests.sh # with the [fr] debug transcript
 | 1 | Planner API, swap-only Move, canonical key/conflict, wire adapter | done |
 | 2 | Fake checker + fake candidate provider, protocol locked by tests | done |
 | 3 | 100% utility pre-check with fatal short-circuit | done |
-| 4 | Violation normalization + signature matching | next |
-| 5 | L0/L1/L2 window builder + guardRegion | pending |
-| 6 | Swap move generator + bridge fillers + group hints | pending |
+| 4 | Violation normalization + signature matching | done |
+| 5 | L0/L1/L2 window builder + guardRegion + unfixable fast check | done |
+| 6 | Swap move generator + group hints | next |
 | 7 | Ranker | pending |
 | 8 | Subset searcher | pending |
 | 9 | Oracle gate (batch, cache, baseline-delta) | pending |
 | 10 | Final full-overlay check + diagnostics | pending |
-| 11 | Full spec test set | partial (TODO 1-3 cases) |
+| 11 | Full spec test set | partial (TODO 1-5 cases) |
 | 12 | Real checker adapter + CMake integration | pending |
