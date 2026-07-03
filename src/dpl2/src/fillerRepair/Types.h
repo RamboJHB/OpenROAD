@@ -22,37 +22,33 @@
 #include <string>
 #include <vector>
 
+// Base ids and XInterval are the checker's own types (single source of
+// truth, extended in place per the reuse rule): see drc/ImplantBaseTypes.h.
+#include "../drc/ImplantBaseTypes.h"
+
 namespace dpl2::fillerRepair {
 
-using DbCoord = int64_t;
-using InstanceId = int32_t;
-using MasterId = int32_t;
-using RowId = int32_t;
-using LayerId = int32_t;
+using ipl::DbCoord;
+using ipl::InstanceId;
+using ipl::LayerId;
+using ipl::MasterId;
+using ipl::RowId;
+using ipl::XInterval;
 
 // VT family identity. The planner only compares VT ids; it never interprets
 // them -- rule semantics stay inside the checker (checker-as-oracle).
 using VtId = int32_t;
 inline constexpr VtId kUnknownVt = -1;
 
+// Placement orientation. The checker draft uses eUTL::PhysOrientation (a
+// UDM type); the pure planner keeps this minimal enum and the real DB
+// adapter maps between the two.
 enum class Orient : uint8_t
 {
   R0,
   R180,
   MX,
   MY
-};
-
-struct XInterval
-{
-  DbCoord xl = 0;
-  DbCoord xh = 0;
-
-  DbCoord length() const { return xh - xl; }
-  bool empty() const { return xh <= xl; }
-  bool overlaps(const XInterval& o) const { return xl < o.xh && o.xl < xh; }
-  bool contains(DbCoord x) const { return x >= xl && x < xh; }
-  bool operator==(const XInterval& o) const { return xl == o.xl && xh == o.xh; }
 };
 
 // Planner-side guard region. The wire-level checker API uses a geometric

@@ -7,7 +7,7 @@
 
 namespace dpl2::fillerRepair {
 
-SwapGenerationResult generateSwapMoves(
+SwapGenerationResult generateSwaps(
     const RepairWindow& window,
     const PlacementView& view,
     const FillerMasterCandidateProvider& provider,
@@ -28,8 +28,8 @@ SwapGenerationResult generateSwapMoves(
       result.diagnostics.push_back(
           makeDiag(Severity::Info, "NoUsableMaster",
                    cat("filler ", fillerId, ": no same-size replacement")));
-      log.msg("movegen",
-              cat("filler ", fillerId, " -> 0 candidates, no moves"));
+      log.msg("swapgen",
+              cat("filler ", fillerId, " -> 0 candidates, no swaps"));
       continue;
     }
 
@@ -43,29 +43,29 @@ SwapGenerationResult generateSwapMoves(
     int emitted = 0;
     for (const MasterCandidate& candidate : candidates.candidates) {
       std::string error;
-      // Defense in depth: the provider guarantees compatibility, but a move
+      // Defense in depth: the provider guarantees compatibility, but a swap
       // that fails validation must never enter the search.
-      const auto move = makeSwapMove(view, fillerId, candidate.masterId, &error);
-      if (!move.has_value()) {
+      const auto swap = makeSwap(view, fillerId, candidate.masterId, &error);
+      if (!swap.has_value()) {
         result.diagnostics.push_back(
             makeDiag(Severity::Warning, "RejectedCandidate",
                      cat("filler ", fillerId, " -> master ",
                          candidate.masterId, ": ", error)));
         continue;
       }
-      result.moves.push_back(*move);
+      result.swaps.push_back(*swap);
       ++emitted;
     }
-    log.msg("movegen",
+    log.msg("swapgen",
             cat("filler ", fillerId, " (row=",
                 view.instance(fillerId)->rowId, " x=",
-                view.instance(fillerId)->x, ") -> ", emitted, " swap move(s)"));
+                view.instance(fillerId)->x, ") -> ", emitted, " swap(s)"));
   }
 
-  log.msg("movegen",
+  log.msg("swapgen",
           cat("window L", window.level, ": ", window.editableFillers.size(),
-              " editable filler(s) -> ", result.moves.size(),
-              " swap move(s) total"));
+              " editable filler(s) -> ", result.swaps.size(),
+              " swap(s) total"));
   return result;
 }
 

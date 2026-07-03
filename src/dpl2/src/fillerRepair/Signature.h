@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "Log.h"
-#include "Move.h"
+#include "Swap.h"
 #include "PlacementView.h"
 #include "Types.h"
 

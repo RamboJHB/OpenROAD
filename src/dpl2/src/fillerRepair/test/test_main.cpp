@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Unit tests for spec section 11 TODO items 1-3: planner API + Move
-// abstraction, fake checker / fake candidate provider protocol, and the
+// Unit tests for the fillerRepair planner: Swap primitives, fake checker /
+// fake candidate provider protocol, and the
 // 100% utility pre-check. Plain C++17, no external test framework so the
 // suite runs before dpl2 is wired into the CMake build.
 //
@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "../FillerRepairEngine.h"
-#include "../Move.h"
+#include "../Swap.h"
 #include "../PreCheck.h"
 #include "../Signature.h"
 #include "../SwapGenerator.h"
@@ -142,15 +142,15 @@ fr::TargetPlace anchorPlace(const fr::FakeDesign& design, fr::InstanceId id)
   return place;
 }
 
-// --- TODO 1: Move abstraction ----------------------------------------------
+// --- TODO 1: Swap primitives -------------------------------------------------
 
-void testSwapMoveConstruction()
+void testSwapConstruction()
 {
   RowFixture f = makeCoveredRow();
   std::string error;
 
   // Valid swap: filler 101 (w2 vt1) -> w2 vt2 master.
-  auto move = fr::makeSwapMove(f.design, 101, fillerMaster(2, kVt2), &error);
+  auto move = fr::makeSwap(f.design, 101, fillerMaster(2, kVt2), &error);
   CHECK(move.has_value());
   CHECK_EQ(move->rowId, 0);
   CHECK(move->span == (fr::XInterval{4, 6}));
@@ -158,48 +158,35 @@ void testSwapMoveConstruction()
   CHECK_EQ(move->newVt, kVt2);
 
   // Rejections, each with a reason.
-  CHECK(!fr::makeSwapMove(f.design, 999, fillerMaster(2, kVt2), &error).has_value());
-  CHECK(!fr::makeSwapMove(f.design, 101, fillerMaster(4, kVt2), &error).has_value());
+  CHECK(!fr::makeSwap(f.design, 999, fillerMaster(2, kVt2), &error).has_value());
+  CHECK(!fr::makeSwap(f.design, 101, fillerMaster(4, kVt2), &error).has_value());
   CHECK(!error.empty());  // size mismatch reason recorded
-  CHECK(!fr::makeSwapMove(f.design, 101, fillerMaster(2, kVt1), &error).has_value());
-  CHECK(!fr::makeSwapMove(f.design, 101, cellMaster(kVt2), &error).has_value());
+  CHECK(!fr::makeSwap(f.design, 101, fillerMaster(2, kVt1), &error).has_value());
+  CHECK(!fr::makeSwap(f.design, 101, cellMaster(kVt2), &error).has_value());
 
   // Std cell is never a move target.
   f.design.remove(103).place(103, cellMaster(kVt2), 0, 10);
-  CHECK(!fr::makeSwapMove(f.design, 103, fillerMaster(2, kVt1), &error).has_value());
+  CHECK(!fr::makeSwap(f.design, 103, fillerMaster(2, kVt1), &error).has_value());
 }
 
 void testCanonicalKeyOrderIndependent()
 {
   RowFixture f = makeCoveredRow();
-  auto m1 = *fr::makeSwapMove(f.design, 100, fillerMaster(4, kVt2));
-  auto m2 = *fr::makeSwapMove(f.design, 101, fillerMaster(2, kVt2));
+  auto m1 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt2));
+  auto m2 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
 
   CHECK(fr::canonicalKey({m1, m2}) == fr::canonicalKey({m2, m1}));
   CHECK(fr::canonicalKey({m1}) != fr::canonicalKey({m1, m2}));
   // Same instance, different target master => different overlay.
-  auto m1b = *fr::makeSwapMove(f.design, 100, fillerMaster(4, kVt3));
+  auto m1b = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3));
   CHECK(fr::canonicalKey({m1}) != fr::canonicalKey({m1b}));
-}
-
-void testConflictDetection()
-{
-  RowFixture f = makeCoveredRow();
-  auto m1 = *fr::makeSwapMove(f.design, 100, fillerMaster(4, kVt2));
-  auto m1b = *fr::makeSwapMove(f.design, 100, fillerMaster(4, kVt3));
-  auto m2 = *fr::makeSwapMove(f.design, 101, fillerMaster(2, kVt2));
-
-  // Same instance twice: two swaps of one filler cannot be atomic.
-  CHECK(fr::overlayHasConflict({m1, m1b}));
-  // Different instances never conflict in swap-only mode.
-  CHECK(!fr::overlayHasConflict({m1, m2}));
 }
 
 void testWireAdapter()
 {
   RowFixture f = makeCoveredRow();
-  auto m1 = *fr::makeSwapMove(f.design, 101, fillerMaster(2, kVt2));
-  auto m2 = *fr::makeSwapMove(f.design, 100, fillerMaster(4, kVt3));
+  auto m1 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
+  auto m2 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3));
 
   const auto changes = fr::toFillerChanges({m1, m2});
   CHECK_EQ(changes.size(), 2u);
@@ -614,7 +601,7 @@ void testSignatureMatching()
 void testRelatedness()
 {
   RowFixture f = makeCoveredRow();
-  const auto move = *fr::makeSwapMove(f.design, 101, fillerMaster(2, kVt2));
+  const auto move = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
   const fr::Overlay overlay = {move};  // span [4,6) row 0
 
   // Participant is the changed instance -> related.
@@ -830,24 +817,24 @@ void testSwapGeneratorBasic()
       fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
   const auto window = fr::buildWindow(0, request.targetPlace, normalized,
                                       design, 1, fr::DebugLog(verbose()));
-  const auto generated = fr::generateSwapMoves(window, design, provider,
+  const auto generated = fr::generateSwaps(window, design, provider,
                                                fr::DebugLog(verbose()));
 
   // Full library: every editable filler has exactly 2 same-size candidates.
-  CHECK_EQ(generated.moves.size(), window.editableFillers.size() * 2);
+  CHECK_EQ(generated.swaps.size(), window.editableFillers.size() * 2);
 
   // Deterministic order: window editable order (row, x), then master id.
   // First editable filler is 101 (row0, x=8, w2 vt1) -> masters 22, 23.
-  CHECK_EQ(generated.moves[0].instanceId, 101);
-  CHECK_EQ(generated.moves[0].newMasterId, fillerMaster(2, kVt2));
-  CHECK_EQ(generated.moves[1].instanceId, 101);
-  CHECK_EQ(generated.moves[1].newMasterId, fillerMaster(2, kVt3));
+  CHECK_EQ(generated.swaps[0].instanceId, 101);
+  CHECK_EQ(generated.swaps[0].newMasterId, fillerMaster(2, kVt2));
+  CHECK_EQ(generated.swaps[1].instanceId, 101);
+  CHECK_EQ(generated.swaps[1].newMasterId, fillerMaster(2, kVt3));
 
-  // Every move targets an editable filler and never the current master.
-  for (const auto& move : generated.moves) {
-    CHECK(window.containsEditable(move.instanceId));
-    CHECK(move.newMasterId != move.oldMasterId);
-    CHECK(move.newVt != move.oldVt);
+  // Every swap targets an editable filler and never the current master.
+  for (const auto& swap : generated.swaps) {
+    CHECK(window.containsEditable(swap.instanceId));
+    CHECK(swap.newMasterId != swap.oldMasterId);
+    CHECK(swap.newVt != swap.oldVt);
   }
 }
 
@@ -864,9 +851,9 @@ void testSwapGeneratorNoUsableMaster()
   window.x = {0, 5};
   window.editableFillers = {100};
 
-  const auto generated = fr::generateSwapMoves(window, design, provider,
+  const auto generated = fr::generateSwaps(window, design, provider,
                                                fr::DebugLog(verbose()));
-  CHECK(generated.moves.empty());
+  CHECK(generated.swaps.empty());
   bool sawNoUsable = false;
   for (const auto& diag : generated.diagnostics) {
     sawNoUsable |= diag.code == "NoUsableMaster";
@@ -874,7 +861,7 @@ void testSwapGeneratorNoUsableMaster()
   CHECK(sawNoUsable);
 }
 
-void testEngineReachesMoveGeneration()
+void testEngineReachesSwapGeneration()
 {
   // Normal request passes precheck/normalize/window/movegen and stops at the
   // explicit NotImplemented of the pending search stages -- proving move
@@ -902,13 +889,13 @@ void testEngineReachesMoveGeneration()
   const auto result = engine.repair(request);
   CHECK(!result.hasSolution);
   bool sawNotImplemented = false;
-  bool sawNoMove = false;
+  bool sawNoSwap = false;
   for (const auto& diag : result.diagnostics) {
     sawNotImplemented |= diag.code == "NotImplemented";
-    sawNoMove |= diag.code == "NoMoveGenerated";
+    sawNoSwap |= diag.code == "NoSwapGenerated";
   }
   CHECK(sawNotImplemented);
-  CHECK(!sawNoMove);
+  CHECK(!sawNoSwap);
   CHECK_EQ(checker.requestCount(), 0);  // search not wired yet
 }
 
@@ -917,9 +904,8 @@ void testEngineReachesMoveGeneration()
 int main()
 {
   const std::vector<Test> tests = {
-      {"swap_move_construction", testSwapMoveConstruction},
+      {"swap_construction", testSwapConstruction},
       {"canonical_key_order_independent", testCanonicalKeyOrderIndependent},
-      {"conflict_detection", testConflictDetection},
       {"wire_adapter", testWireAdapter},
       {"precheck_full_utility", testPreCheckFullUtility},
       {"precheck_gap", testPreCheckGap},
@@ -944,7 +930,7 @@ int main()
       {"engine_empty_snapshot_is_success", testEngineEmptySnapshotIsSuccess},
       {"swap_generator_basic", testSwapGeneratorBasic},
       {"swap_generator_no_usable_master", testSwapGeneratorNoUsableMaster},
-      {"engine_reaches_move_generation", testEngineReachesMoveGeneration},
+      {"engine_reaches_swap_generation", testEngineReachesSwapGeneration},
   };
 
   for (const Test& test : tests) {

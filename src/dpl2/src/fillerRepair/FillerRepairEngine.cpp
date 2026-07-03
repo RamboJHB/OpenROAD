@@ -104,20 +104,20 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
     return result;
   }
 
-  // Stage 4 (spec 6.5): generate atomic swap moves for the window's
-  // editable fillers. No moves at all means the search cannot start.
-  const SwapGenerationResult moves =
-      generateSwapMoves(window, view_, candidates_, log_);
+  // Stage 4 (spec 6.5): generate atomic swaps for the window's editable
+  // fillers. No swaps at all means the search cannot start.
+  const SwapGenerationResult generated =
+      generateSwaps(window, view_, candidates_, log_);
   result.diagnostics.insert(result.diagnostics.end(),
-                            moves.diagnostics.begin(),
-                            moves.diagnostics.end());
-  if (moves.moves.empty()) {
+                            generated.diagnostics.begin(),
+                            generated.diagnostics.end());
+  if (generated.swaps.empty()) {
     result.hasSolution = false;
     result.diagnostics.push_back(makeDiag(
-        Severity::Error, "NoMoveGenerated",
+        Severity::Error, "NoSwapGenerated",
         cat("window L0 has ", window.editableFillers.size(),
-            " editable filler(s) but no usable swap move")));
-    log_.msg("engine", "no swap move generated -> no solution");
+            " editable filler(s) but no usable swap")));
+    log_.msg("engine", "no swap generated -> no solution");
     return result;
   }
 
@@ -132,7 +132,7 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
                "search pipeline stages (spec TODO 7-10) not implemented yet"));
   log_.msg("engine",
            cat("window L0 ready (editable=", window.editableFillers.size(),
-               ", moves=", moves.moves.size(),
+               ", swaps=", generated.swaps.size(),
                ") -> search pipeline pending (TODO 7-10), returning "
                "NotImplemented"));
   return result;

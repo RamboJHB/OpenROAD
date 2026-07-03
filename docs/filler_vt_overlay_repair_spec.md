@@ -77,7 +77,7 @@ opto 改动次数,所以"好排序让首批候选命中"比"搜索策略高级"�
 ### 2.1 第一版实现范围(只换 type)
 
 - 只替换 filler master:同一 filler instance 换成同宽、同高、同 row/orientation
-  兼容的另一个 filler master(`SwapMove`,见 §4)。
+  兼容的另一个 filler master(`Swap`,见 §4)。
 - 一个 solution 可包含多个 filler 替换。
 - 中间候选只通过 checker overlay API 验证,不自己做 DRC 判定。
 - 最终输出 `FillerRepairResult`。
@@ -131,12 +131,12 @@ repair engine 内部是五层管线,每层单独可测、单独可替换:
 ```text
 ┌─ 窗口控制外环(L0 → L1 → L2,预算耗尽则升级,§6.3)─────────────┐
 │                                                                  │
-│  ① MoveGenerator   窗口内生成候选 move                           │
-│                    第一版:仅 SwapMove;未来:+Merge/Split/…      │
+│  ① SwapGenerator   窗口内生成候选 swap                           │
+│                    本阶段:仅 swap;未来:+RewriteGenerator       │
 │  ② Ranker          启发式排序(5 特征起步,只影响评估顺序,       │
 │                    不判合法性,§6.6)                             │
-│  ③ SubsetSearcher  按 rank 序枚举 size-1/2/3… 的非冲突 move      │
-│                    子集,分批产出(§6.7)                          │
+│  ③ SubsetSearcher  按 rank 序枚举 size-1/2/3… 的 swap 子集       │
+│                    (按 filler 分组,无冲突),分批产出(§6.7)    │
 │  ④ OracleGate      canonical cache + batch checker call +        │
 │                    baseline-delta clean 判定(§6.8)              │
 │  ⑤ Result/Diag     首个 clean 即返回;预算尽扩窗;仍无解则       │
@@ -151,23 +151,26 @@ repair engine 内部是五层管线,每层单独可测、单独可替换:
   survivor 配额等 magic knob**,只有 clean/not-clean 二值判定,天然免疫 MW 非单调
   陷阱(双 filler 联动在枚举里只是一个普通的 size-2 子集)。
 - 批间无串行依赖,batch checker API 可并行;好排序下答案通常在首批 16-32 个候选里。
-- 未来 move 类型增加时,主要扩展①②层;canonical key/冲突判定届时从 instanceId
-  锚升级为 span 锚(§4.3),③④⑤层的结构与语义不变。
+- 未来加入 rewrite 时,主要扩展①②层;cache key 届时从 instanceId 锚升级为
+  span 锚(§4.3),③④⑤层的结构与语义不变。
 - beam 保留为 escape hatch(§8.3),第一版不实现。
 
 ---
 
-## 4. 核心抽象:Move(本阶段 = swap-only)
+## 4. 核心操作:Swap(本阶段唯一操作)
 
 ### 4.1 本阶段需求钉死
 
-本阶段(V1)的需求收敛为**只做 swap**:planner 内部与对外 wire format 统一使用
-`FillerChange{instanceId, newMasterId}` 语义,代码中不引入任何 merge/split 机器
-(无 span-rewrite 结构、无 tiling 校验)。planner 内部的 move 是带几何与排序
-元数据的 `SwapMove`:
+本 feature 的操作演进是两步:**第一步 swap(本阶段),第二步 rewrite(未来,
+§8)**。没有、也不引入论文式的通用"Move"抽象层——那是文献里的概念,不是本
+feature 的需要。代码中不出现 Move/FillerRewrite/adapter 转换,也没有 merge/split
+机器(无 span-rewrite 结构、无 tiling 校验)。
+
+planner 的原子操作就是 `Swap`:`FillerChange` 的语义(instanceId + newMasterId)
+加上排序/几何要用的元数据:
 
 ```cpp
-struct SwapMove
+struct Swap
 {
     InstanceId instanceId = 0;
     MasterId oldMasterId = 0;
@@ -181,23 +184,23 @@ struct SwapMove
 
 `rowId`/`span` 不是 merge/split 预留:开窗(§6.3)、bridge filler 识别(§6.5)、
 delta 相关性判定(§6.2)、swap-unfixable 快速判定(§6.2)都是几何计算,是 V1
-自身的需要。`SwapMove ↔ FillerChange` 一一对应、无损互转。
+自身的需要。`Swap.change()` 直接产出 `FillerChange`,不存在独立的 adapter 层。
 
-### 4.2 canonical key、冲突与 cache
+### 4.2 overlay cache key
 
-- 一个 **overlay 候选** = 一组不冲突 move 的集合。
-- canonical key = `sorted_unique((instanceId, newMasterId))`,order-independent。
-  checker call 前必须用 canonical key 去重并查 cache;cache value 至少含
-  `CheckResult`、score 摘要和 checker call index。
-- 两个 move **冲突** = 同一 instance 出现两次(同一 filler 的两次 swap 无法
-  atomic)。冲突的 move 不进入同一个 overlay。
-- 同一 canonical overlay 在一次 repair 内只调用一次 checker。
+- 一个 **overlay 候选** = 一组 Swap 的集合,原子应用。
+- cache key = `sorted_unique((instanceId, newMasterId))`,order-independent。
+  checker call 前必须用它去重并查 cache;cache value 至少含 `CheckResult`、
+  score 摘要和 checker call index。同一 key 的 overlay 在一次 repair 内只调用
+  一次 checker。
+- **不需要冲突判定机制**:③层枚举按 filler 分组(每个 filler 至多选一个目标
+  VT),"同一 instance 出现两次"按构造不可能发生。
 
 ### 4.3 未来演进(不在本阶段)
 
-merge/split 需要"span rewrite(区段重铺)"内部抽象与 primitive-op 形态的 v2
-checker API;设计、职责归属与升级时机见 §5.2 决策记录和 §8.1,multi-height 见
-§8.2。本阶段代码中不出现这些概念。
+第二步 rewrite(merge/split)需要"span rewrite(区段重铺)"抽象与
+primitive-op 形态的 v2 checker API;设计、职责归属与升级时机见 §5.2 决策记录和
+§8.1,multi-height 见 §8.2。本阶段代码中不出现这些概念。
 
 ---
 
@@ -269,8 +272,8 @@ class ImplantOverlayChecker
 ```
 
 checker 实现 overlay 的语义与 V1 相同:把每个 `fillerChanges` 中的 filler instance
-按 `newMasterId` 换 master 后,在 target-local 规则下重查。planner 内部的 SwapMove
-由 adapter 无损转换为 `FillerChange`。
+按 `newMasterId` 换 master 后,在 target-local 规则下重查。planner 的 `Swap`
+直接携带 `FillerChange` 语义,无转换层。
 
 **future work(merge/split 前置条件)与职责归属(决策记录)**:届时 API
 需要一次版本化升级。"在 overlay context 里删除/实例化 filler"拆成两半,归属
@@ -278,7 +281,7 @@ checker 实现 overlay 的语义与 V1 相同:把每个 `fillerChanges` 中的 f
 
 - **语义半 = repair engine 做**:把一个 span rewrite 翻译成"删哪些 instance、
   在哪些 x 放哪些 master"。tiling 规划知识(库宽度、切法、每段位置)全在
-  planner,①MoveGenerator 本来就要算出精确位置;让 checker 解释 tiling 意图
+  planner,①生成器本来就要算出精确位置;让 checker 解释 tiling 意图
   会把规划知识泄漏进 oracle。
 - **机械半 = checker 做**:把删/加操作应用到 checker 内部 candidate context
   (candidate intervals、merged shapes)并跑规则——这些索引是 checker 内部的,
@@ -498,16 +501,16 @@ single-overlay(或单元素 batch)check,仍以 baseline-delta clean 判定。单
 生成器是纯枚举,**只产出原子 swap move,不产出任何组合/种子/hint**:
 
 1. 对窗口内每个 editable filler 调 `getUsableMasterCandidates`;为空则该 filler
-   不生成 move,diagnostics 记 `NoUsableMaster`(正常结果,不是 error)。
-2. 对每个 candidate master 生成一个 `SwapMove`(§4.1),经 adapter 把 master 映射
-   到 `Family`/VT 供排序使用;通不过构造校验的候选记 diagnostics 后跳过
+   不生成 swap,diagnostics 记 `NoUsableMaster`(正常结果,不是 error)。
+2. 对每个 candidate master 生成一个 `Swap`(§4.1),master 到 VT 的映射由 DB
+   adapter 提供,供排序使用;通不过构造校验的候选记 diagnostics 后跳过
    (defense in depth)。
-3. 绝不为 std cell、macro、guard-only filler、non-editable filler 生成 move。
+3. 绝不为 std cell、macro、guard-only filler、non-editable filler 生成 swap。
 4. 输出定序:窗口 editable 顺序(row, x),同 filler 内按 master id 升序。
 
 **组合不在生成器做**:多 filler 联动方案由③层 SubsetSearcher 枚举 size-2/3 子集
 自然产生(§6.7);anchor-follow 方向(把 anchor 相邻/bridge filler 换成 anchor
-新 VT)由②层 Ranker 的排序实现(§6.6)——排序把该方向的 move 排最前,首批
+新 VT)由②层 Ranker 的排序实现(§6.6)——排序把该方向的 swap 排最前,首批
 size-1/2 子集就等价于 anchor-follow 组合,不需要独立的种子注入机制。
 
 ### 6.6 排序(Ranker)
@@ -535,8 +538,8 @@ VT、也非邻接 majority"的第三色,几乎不可能是解的一部分——�
 fixed cell 是投票和约束,不是禁改理由(贴着 fixed cell 的 filler 往往最该先试)。
 V1 的其余特征(`fillerVote`/`diffEdgesRemoved`/`multiViolationTouch`/`islandScore`/
 `sameVtBefore`/`cellConflict`)列为 backlog,fake-checker 测试显示排序命中率不足时
-再逐个引入;merge/split 时代加"move 类型偏好(swap 优先)、changed span 面积小者
-优先"两项。backlog 还包括 **model-guided proposal**(DAC'23 的 inference /
+再逐个引入;merge/split 时代加"操作类型偏好(swap 优先于 rewrite)、changed span 面积
+小者优先"两项。backlog 还包括 **model-guided proposal**(DAC'23 的 inference /
 forced-assignment 思想:用近似局部规则模型推导"该 filler 必须是某色否则必然
 违例"的强制赋值,用于排序与剪枝)——anchor-follow 种子与第三 VT 降权正是它的
 弱化版;模型不准只多花 checker call,正确性始终由 ④OracleGate 保证。
@@ -624,7 +627,7 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 
 ### 8.1 merge/split
 
-- **①层增量**:新增 MergeMoveGenerator / SplitMoveGenerator,只提议少数高价值
+- **①层增量**:新增 RewriteGenerator(merge/split),只提议少数高价值
   tiling(两个 bridge filler 合一、在 cell 边界切开宽 filler、短 run 重铺),控制
   分支爆炸的位置在生成器,不在搜索。split 的价值在于比 swap 更细的
   VT 粒度(例如 4 → 2+2 允许 span 的半段换 VT、半段保持,是 swap-only 覆盖不了的
@@ -633,7 +636,7 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
   位置 × VT-interval 长度 × filler-interval 长度 × label,配 inter-row cost
   table 可线性化):在 span 上求近似违例最少的 tiling 作为 proposal,checker 仍作
   终判;MF(min filler width)约束由库宽度集合自然满足。
-- **②层增量**:排序加 move 类型偏好与 span 面积项(§6.6)。
+- **②层增量**:排序加操作类型偏好(swap 优先于 rewrite)与 span 面积项(§6.6)。
 - **③④⑤层零改动**:冲突判定(span 相交)、canonical key、cache、delta 分类
   (span 几何锚)、gate、diagnostics 全部按 §4/§6.8 的定义直接适用。
 - **接口(前置条件)**:checker API 从 `FillerChange` 版本化升级为
@@ -652,7 +655,7 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 
 ### 8.3 beam escape hatch
 
-当窗口内可行 move 数大到排序枚举预算不够(预计出现在 merge/split 时代的大窗口),
+当窗口内可行操作数大到排序枚举预算不够(预计出现在 merge/split 时代的大窗口),
 在③层后插入 beam searcher 作为替代子集生成器。它复用②的排序与④的 gate,不引入
 新的 accept 语义。第一版不实现,只保留此接口位。
 
@@ -667,7 +670,7 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 
 至少记录:precheck 状态(失败时 gap row/x range/site count);anchor
 (`targetPlace` 五元组);窗口级别与实际 `repairWindow`/`guardRegion`/halo 来源;
-初始 violation 数与归一化 signature;候选 filler 数、生成 move 数;
+初始 violation 数与归一化 signature;候选 filler 数、生成 swap 数;
 枚举子集数、canonical cache 命中数、checker call 数(batch 次数与 batch size);
 baseline result 摘要;final result 是否 checked/legal/delta-clean 与 returned
 violation 数;best overlay 及其分类(residual original / new inside-window /
@@ -682,8 +685,8 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 - 非 100% utility:存在 gap 时直接 fatal,不调 checker,changes 为空。
 - guard-only filler 出现在 `fillerChanges` 中,判 invalid request。
 - 非 filler instance 出现在 `FillerChange` 中,判 invalid request。
-- planner 内部 Move 不变量(span 精确覆盖完整 instance、宽度和相等)单测,
-  为 future `FillerRewrite` 升级预置。
+- (future)rewrite 不变量(span 精确覆盖完整 instance、宽度和相等)单测,
+  随第二步 rewrite 一起引入,本阶段无此代码。
 - batch result 必须 echo `requestId`;乱序返回不影响 correctness;缺失/重复/未知
   id 判 protocol error 拒绝整个 batch。
 - batch 中单个 invalid overlay 不影响其他 result。
@@ -723,9 +726,8 @@ gate 语义:
 
 ## 11. 实现 TODO
 
-1. 定义 pure planner API(`FillerRepairRequest -> FillerRepairResult`)、内部
-   Move(`FillerRewrite`)与 canonical key/冲突判定,以及 Move ↔ `FillerChange`
-   的 adapter 转换。
+1. 定义 pure planner API(`FillerRepairRequest -> FillerRepairResult`)与
+   `Swap` 结构、overlay cache key。
 2. fake checker + fake candidate provider,先锁定 overlay/协议语义。
 3. 100% utility precheck(fatal 短路路径)。
 4. violation 归一化 + signature 匹配(§6.2 的钉死规则)。
@@ -746,7 +748,7 @@ gate 语义:
 
 | # | 项目 | V1 | V2 定稿 | 理由 |
 |---|---|---|---|---|
-| 1 | 原子操作 | `FillerChange{instanceId, newMasterId}` | 本阶段内外统一 swap/`FillerChange`(`SwapMove` 带 row/span 几何元数据);span rewrite 与 primitive-op API 全部列入 future work(§4.3/§5.2/§8.1) | 阶段需求明确只做 swap;merge/split 的抽象与 API 升级同批设计,避免投机 |
+| 1 | 原子操作 | `FillerChange{instanceId, newMasterId}` | 本阶段内外统一 swap/`FillerChange`(`Swap` 带 row/span 几何元数据);无通用 Move 抽象层;rewrite 与 primitive-op API 全部列入 future work(§4.3/§5.2/§8.1) | 操作演进钉死为两步:swap → rewrite;merge/split 的抽象与 API 升级同批设计,避免投机 |
 | 2 | 搜索内核 | greedy prefix + beam(N/K/D、survivor 配额、partial 打分) | 排序枚举 move 子集 + batch 验证,首 clean 即停 | 一条代码路径;无 partial 打分噪声与 magic knob;MW 非单调 case 是普通 size-2 子集;批并行友好 |
 | 3 | 窗口 | W0-W5 六级,按类型选入口 | L0/L1/L2 三级 | 规则尺度 ~1 site,六级状态过多;语义等价、测试面减半 |
 | 4 | cluster | 划分 + 独立求解 + final merge + conflict-graph retry | 单 cluster(opto 单 cell),final check 保留 | 单 anchor 下所有 violation 同邻域;merge retry 机制移到 batch opto 时代 |

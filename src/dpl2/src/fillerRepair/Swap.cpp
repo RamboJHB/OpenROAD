@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "Move.h"
+#include "Swap.h"
 
 #include <algorithm>
 #include <utility>
@@ -10,12 +10,12 @@
 
 namespace dpl2::fillerRepair {
 
-std::optional<SwapMove> makeSwapMove(const PlacementView& view,
-                                     InstanceId instanceId,
-                                     MasterId newMasterId,
-                                     std::string* error)
+std::optional<Swap> makeSwap(const PlacementView& view,
+                             InstanceId instanceId,
+                             MasterId newMasterId,
+                             std::string* error)
 {
-  const auto fail = [error](std::string why) -> std::optional<SwapMove> {
+  const auto fail = [error](std::string why) -> std::optional<Swap> {
     if (error != nullptr) {
       *error = std::move(why);
     }
@@ -46,35 +46,23 @@ std::optional<SwapMove> makeSwapMove(const PlacementView& view,
                     " h=", oldMaster->height));
   }
 
-  SwapMove move;
-  move.instanceId = instanceId;
-  move.oldMasterId = inst->masterId;
-  move.newMasterId = newMasterId;
-  move.rowId = inst->rowId;
-  move.span = XInterval{inst->x, inst->x + oldMaster->width};
-  move.oldVt = oldMaster->vt;
-  move.newVt = newMaster->vt;
-  return move;
-}
-
-bool overlayHasConflict(const Overlay& overlay)
-{
-  for (size_t i = 0; i < overlay.size(); ++i) {
-    for (size_t j = i + 1; j < overlay.size(); ++j) {
-      if (overlay[i].instanceId == overlay[j].instanceId) {
-        return true;
-      }
-    }
-  }
-  return false;
+  Swap swap;
+  swap.instanceId = instanceId;
+  swap.oldMasterId = inst->masterId;
+  swap.newMasterId = newMasterId;
+  swap.rowId = inst->rowId;
+  swap.span = XInterval{inst->x, inst->x + oldMaster->width};
+  swap.oldVt = oldMaster->vt;
+  swap.newVt = newMaster->vt;
+  return swap;
 }
 
 std::string canonicalKey(const Overlay& overlay)
 {
   std::vector<std::pair<InstanceId, MasterId>> pairs;
   pairs.reserve(overlay.size());
-  for (const SwapMove& move : overlay) {
-    pairs.emplace_back(move.instanceId, move.newMasterId);
+  for (const Swap& swap : overlay) {
+    pairs.emplace_back(swap.instanceId, swap.newMasterId);
   }
   std::sort(pairs.begin(), pairs.end());
   pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
@@ -90,8 +78,8 @@ std::vector<FillerChange> toFillerChanges(const Overlay& overlay)
 {
   std::vector<FillerChange> changes;
   changes.reserve(overlay.size());
-  for (const SwapMove& move : overlay) {
-    changes.push_back(move.change());
+  for (const Swap& swap : overlay) {
+    changes.push_back(swap.change());
   }
   std::sort(changes.begin(),
             changes.end(),

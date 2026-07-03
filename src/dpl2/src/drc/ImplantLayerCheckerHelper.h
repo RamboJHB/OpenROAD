@@ -8,6 +8,9 @@
 #include <utility>
 #include <vector>
 
+// Shared UDM-free base types (ids, XInterval); also reused by fillerRepair.
+#include "drc/ImplantBaseTypes.h"
+
 // UDM
 #include <phys/fpManager.hh>
 #include <phys/physDesMgr.hh>
@@ -51,25 +54,14 @@ using eUTL::PhysOrientation;
 namespace dpl2 {
 namespace ipl {
 
-using DbCoord = int64_t;
-using LayerId = int32_t;
-using MasterId = int32_t;
-using InstanceId = int32_t;
-using ShapeId = int32_t;
-using RowId = int32_t;
-using GroupId = int32_t;
+// DbCoord/LayerId/MasterId/InstanceId/ShapeId/RowId/GroupId and XInterval
+// now live in drc/ImplantBaseTypes.h (shared with fillerRepair).
 
 enum class BandSlot { Bottom, Top };
 enum class Polarity { N, P };
 enum class Family { VTS, VTL, VTH, VTUL, Unknown };
 enum class RuleSource { Width, Spacing, Lef58Width, Lef58Spacing };
 enum class RuleDirection { Any, Horizontal, Vertical };
-
-struct XInterval
-{
-  DbCoord xl = 0;
-  DbCoord xh = 0;
-};
 
 // Use eUTL::Rect (included via using eUTL::Rect above) rather than defining
 // our own to avoid name conflicts with the UDM Rect type.

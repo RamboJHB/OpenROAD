@@ -127,10 +127,10 @@ bool isRelatedToOverlay(const Violation& violation,
                         const Overlay& overlay,
                         DbCoord ruleDistance)
 {
-  for (const SwapMove& move : overlay) {
+  for (const Swap& swap : overlay) {
     // Direct participation of a changed instance.
     for (const ViolationParticipant& p : violation.participants) {
-      if (p.instanceId == move.instanceId) {
+      if (p.instanceId == swap.instanceId) {
         return true;
       }
     }
@@ -139,12 +139,12 @@ bool isRelatedToOverlay(const Violation& violation,
     // adjacent rows).
     bool rowNear = violation.rowIds.empty();  // no row info -> conservative
     for (const RowId row : violation.rowIds) {
-      if (row >= move.rowId - 1 && row <= move.rowId + 1) {
+      if (row >= swap.rowId - 1 && row <= swap.rowId + 1) {
         rowNear = true;
         break;
       }
     }
-    if (rowNear && intervalDistance(violation.xWindow, move.span) <= ruleDistance) {
+    if (rowNear && intervalDistance(violation.xWindow, swap.span) <= ruleDistance) {
       return true;
     }
   }

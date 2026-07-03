@@ -9,15 +9,15 @@ planner is built and tested against the fakes in `fake/`.
 
 | Path | Content |
 |---|---|
-| `Types.h` | Base ids, intervals, wire types (`TargetPlace`, `FillerChange`, `Violation`, `OverlayCheckRequest`, `CheckResult`), planner entry types, coverage types |
+| `Types.h` | Wire types (`TargetPlace`, `FillerChange`, `Violation`, `OverlayCheckRequest`, `CheckResult`), planner entry/coverage types; base ids + `XInterval` reused from `drc/ImplantBaseTypes.h` |
 | `PlacementView.h` | Read-only DB view interface (real adapter wraps the UDM design) |
 | `CheckerApi.h` | Abstract `ImplantOverlayChecker` (spec §5.2 protocol) |
 | `CandidateApi.h` | Abstract `FillerMasterCandidateProvider` (spec §5.3) |
-| `Move.h/.cpp` | Swap-only internal move (`SwapMove`), canonical key, duplicate-instance conflict, wire adapter (spec §4) |
+| `Swap.h/.cpp` | `Swap` (the stage's atomic operation: FillerChange + geometry metadata), overlay cache key (spec §4) |
 | `PreCheck.h/.cpp` | 100% utility pre-check (spec §6.1) |
 | `Signature.h/.cpp` | Violation normalization, pinned signature matching, change-relatedness (spec §6.2) |
 | `Window.h/.cpp` | L0/L1/L2 window builder, guardRegion two-cell ring, bridge fillers, swap-unfixable fast check (spec §6.2/6.3) |
-| `SwapGenerator.h/.cpp` | Swap generator: atomic swap moves only, no group/seed machinery (spec §6.5) |
+| `SwapGenerator.h/.cpp` | Swap generator: atomic swaps only, no group/seed machinery (spec §6.5) |
 | `FillerRepairEngine.h/.cpp` | Planner entry + pipeline skeleton (spec §3.2) |
 | `fake/FakeDesign.h` | In-memory `PlacementView` with fluent builders |
 | `fake/FakeCandidateProvider.h` | Same-size replacement lookup over the fake library |
@@ -25,6 +25,16 @@ planner is built and tested against the fakes in `fake/`.
 | `test/` | Unit tests + runner |
 
 ## Conventions
+
+- Base ids (`DbCoord`, `InstanceId`, `MasterId`, `RowId`, `LayerId`) and
+  `XInterval` are the checker's own types, shared through
+  `src/dpl2/src/drc/ImplantBaseTypes.h` (extracted from
+  `ImplantLayerCheckerHelper.h`, extended in place). `PlacedInstance` /
+  `MasterInfo` are adapter-side projections of the infrastructure `Node` /
+  `Master` classes (UDM-typed, hence not directly reusable in the pure
+  planner).
+- The operation vocabulary is **swap** (this stage) and **rewrite** (future).
+  There is no generic "Move" abstraction.
 
 - All x coordinates are DBU; intervals are half-open `[xl, xh)`; `Region` row
   ranges are inclusive. The wire-level `Rect` conversion is an adapter concern.
@@ -49,12 +59,12 @@ FR_VERBOSE=1 test/run_tests.sh # with the [fr] debug transcript
 
 | # | Item | Status |
 |---|---|---|
-| 1 | Planner API, swap-only Move, canonical key/conflict, wire adapter | done |
+| 1 | Planner API, `Swap` struct, overlay cache key | done |
 | 2 | Fake checker + fake candidate provider, protocol locked by tests | done |
 | 3 | 100% utility pre-check with fatal short-circuit | done |
 | 4 | Violation normalization + signature matching | done |
 | 5 | L0/L1/L2 window builder + guardRegion + unfixable fast check | done |
-| 6 | Swap generator (atomic swap moves only) | done |
+| 6 | Swap generator (atomic swaps only) | done |
 | 7 | Ranker | next |
 | 8 | Subset searcher | pending |
 | 9 | Oracle gate (batch, cache, baseline-delta) | pending |
