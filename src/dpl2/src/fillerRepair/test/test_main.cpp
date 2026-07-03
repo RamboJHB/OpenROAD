@@ -19,6 +19,7 @@
 #include "../Move.h"
 #include "../PreCheck.h"
 #include "../Signature.h"
+#include "../SwapGenerator.h"
 #include "../Window.h"
 #include "../fake/FakeCandidateProvider.h"
 #include "../fake/FakeDesign.h"
@@ -804,6 +805,113 @@ void testEngineEmptySnapshotIsSuccess()
   CHECK_EQ(checker.requestCount(), 0);
 }
 
+
+// --- TODO 6: swap generator ---------------------------------------------------
+
+void testSwapGeneratorBasic()
+{
+  fr::FakeDesign design = makeTwoRowDesign();
+  fr::FakeCandidateProvider provider(design);
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  request.targetPlace.masterId = cellMaster(kVt2);
+
+  auto v = makeViolation(3, fr::ViolationKind::MinWidth,
+                         fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  fr::ViolationParticipant pf;
+  pf.instanceId = 203;
+  pf.rowId = 1;
+  pf.xRange = {9, 11};
+  pf.isFiller = true;
+  v.participants = {pf};
+  request.violations = {v};
+
+  const auto normalized =
+      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+  const auto window = fr::buildWindow(0, request.targetPlace, normalized,
+                                      design, 1, fr::DebugLog(verbose()));
+  const auto generated = fr::generateSwapMoves(window, design, provider,
+                                               fr::DebugLog(verbose()));
+
+  // Full library: every editable filler has exactly 2 same-size candidates.
+  CHECK_EQ(generated.moves.size(), window.editableFillers.size() * 2);
+
+  // Deterministic order: window editable order (row, x), then master id.
+  // First editable filler is 101 (row0, x=8, w2 vt1) -> masters 22, 23.
+  CHECK_EQ(generated.moves[0].instanceId, 101);
+  CHECK_EQ(generated.moves[0].newMasterId, fillerMaster(2, kVt2));
+  CHECK_EQ(generated.moves[1].instanceId, 101);
+  CHECK_EQ(generated.moves[1].newMasterId, fillerMaster(2, kVt3));
+
+  // Every move targets an editable filler and never the current master.
+  for (const auto& move : generated.moves) {
+    CHECK(window.containsEditable(move.instanceId));
+    CHECK(move.newMasterId != move.oldMasterId);
+    CHECK(move.newVt != move.oldVt);
+  }
+}
+
+void testSwapGeneratorNoUsableMaster()
+{
+  // A width-5 filler exists in exactly one VT: no same-size replacement.
+  fr::FakeDesign design = makeLibrary();
+  design.addMaster(51, 5, 1, /*isFiller=*/true, kVt1);
+  design.addRow(0, 0, 5).place(100, 51, 0, 0);
+
+  fr::FakeCandidateProvider provider(design);
+  fr::RepairWindow window;
+  window.rows = {0};
+  window.x = {0, 5};
+  window.editableFillers = {100};
+
+  const auto generated = fr::generateSwapMoves(window, design, provider,
+                                               fr::DebugLog(verbose()));
+  CHECK(generated.moves.empty());
+  bool sawNoUsable = false;
+  for (const auto& diag : generated.diagnostics) {
+    sawNoUsable |= diag.code == "NoUsableMaster";
+  }
+  CHECK(sawNoUsable);
+}
+
+void testEngineReachesMoveGeneration()
+{
+  // Normal request passes precheck/normalize/window/movegen and stops at the
+  // explicit NotImplemented of the pending search stages -- proving move
+  // generation produced work without touching the checker yet.
+  fr::FakeDesign design = makeTwoRowDesign();
+  fr::FakeImplantChecker checker(design, {});
+  fr::FakeCandidateProvider provider(design);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(design, checker, provider, config);
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  request.targetPlace.masterId = cellMaster(kVt2);
+  auto v = makeViolation(3, fr::ViolationKind::MinWidth,
+                         fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  fr::ViolationParticipant pf;
+  pf.instanceId = 203;
+  pf.rowId = 1;
+  pf.xRange = {9, 11};
+  pf.isFiller = true;
+  v.participants = {pf};
+  request.violations = {v};
+
+  const auto result = engine.repair(request);
+  CHECK(!result.hasSolution);
+  bool sawNotImplemented = false;
+  bool sawNoMove = false;
+  for (const auto& diag : result.diagnostics) {
+    sawNotImplemented |= diag.code == "NotImplemented";
+    sawNoMove |= diag.code == "NoMoveGenerated";
+  }
+  CHECK(sawNotImplemented);
+  CHECK(!sawNoMove);
+  CHECK_EQ(checker.requestCount(), 0);  // search not wired yet
+}
+
 }  // namespace
 
 int main()
@@ -834,6 +942,9 @@ int main()
       {"guard_region_two_cell_ring", testGuardRegionTwoCellRing},
       {"engine_unfixable_fast_fail", testEngineUnfixableFastFail},
       {"engine_empty_snapshot_is_success", testEngineEmptySnapshotIsSuccess},
+      {"swap_generator_basic", testSwapGeneratorBasic},
+      {"swap_generator_no_usable_master", testSwapGeneratorNoUsableMaster},
+      {"engine_reaches_move_generation", testEngineReachesMoveGeneration},
   };
 
   for (const Test& test : tests) {

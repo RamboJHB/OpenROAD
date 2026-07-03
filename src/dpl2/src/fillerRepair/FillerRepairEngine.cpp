@@ -5,6 +5,7 @@
 
 #include "PreCheck.h"
 #include "Signature.h"
+#include "SwapGenerator.h"
 #include "Window.h"
 
 namespace dpl2::fillerRepair {
@@ -103,18 +104,36 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
     return result;
   }
 
-  // Stages 4..7 (move generation, ranking, subset search, oracle gate) land
-  // with spec section 11 TODO items 6-10. Until then the engine reports an
-  // explicit NotImplemented instead of a silent "no solution" so callers
-  // cannot mistake the skeleton for a real search.
+  // Stage 4 (spec 6.5): generate atomic swap moves for the window's
+  // editable fillers. No moves at all means the search cannot start.
+  const SwapGenerationResult moves =
+      generateSwapMoves(window, view_, candidates_, log_);
+  result.diagnostics.insert(result.diagnostics.end(),
+                            moves.diagnostics.begin(),
+                            moves.diagnostics.end());
+  if (moves.moves.empty()) {
+    result.hasSolution = false;
+    result.diagnostics.push_back(makeDiag(
+        Severity::Error, "NoMoveGenerated",
+        cat("window L0 has ", window.editableFillers.size(),
+            " editable filler(s) but no usable swap move")));
+    log_.msg("engine", "no swap move generated -> no solution");
+    return result;
+  }
+
+  // Stages 5..7 (ranking, subset search, oracle gate) land with spec section
+  // 11 TODO items 7-10. Until then the engine reports an explicit
+  // NotImplemented instead of a silent "no solution" so callers cannot
+  // mistake the skeleton for a real search.
   result.hasSolution = false;
   result.diagnostics.push_back(
       makeDiag(Severity::Error,
                "NotImplemented",
-               "search pipeline stages (spec TODO 6-10) not implemented yet"));
+               "search pipeline stages (spec TODO 7-10) not implemented yet"));
   log_.msg("engine",
            cat("window L0 ready (editable=", window.editableFillers.size(),
-               ") -> search pipeline pending (TODO 6-10), returning "
+               ", moves=", moves.moves.size(),
+               ") -> search pipeline pending (TODO 7-10), returning "
                "NotImplemented"));
   return result;
 }

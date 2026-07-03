@@ -10,7 +10,8 @@ BUILD_DIR=test/build
 mkdir -p "$BUILD_DIR"
 
 g++ -std=c++17 -Wall -Wextra -Werror -g \
-  Move.cpp PreCheck.cpp Signature.cpp Window.cpp FillerRepairEngine.cpp \
+  Move.cpp PreCheck.cpp Signature.cpp Window.cpp SwapGenerator.cpp \
+  FillerRepairEngine.cpp \
   fake/FakeImplantChecker.cpp \
   test/test_main.cpp \
   -o "$BUILD_DIR/fillerRepair_tests"

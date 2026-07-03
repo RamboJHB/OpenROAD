@@ -14,7 +14,7 @@
 //   [x] 3  100% utility pre-check with fatal short-circuit
 //   [x] 4  violation normalization + signature matching (Signature.h)
 //   [x] 5  L0/L1/L2 window builder + guardRegion + unfixable fast check
-//   [ ] 6  swap move generator + bridge fillers + group hints
+//   [x] 6  swap generator: atomic swap moves only (SwapGenerator.h)
 //   [ ] 7  ranker
 //   [ ] 8  subset searcher
 //   [ ] 9  oracle gate (batch, cache, baseline-delta)

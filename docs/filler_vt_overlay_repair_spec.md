@@ -493,28 +493,22 @@ single-overlay(或单元素 batch)check,仍以 baseline-delta clean 判定。单
 下该检查通常与搜索中最后一次 clean check 相同,可由 cache 直接命中;保留它是为了
 守住"返回值一定经过整体验证"的公理,且在扩窗/多窗口合并路径下不可省略。
 
-### 6.5 move 生成(第一版:SwapMove)
+### 6.5 Swap 生成器(本阶段唯一的 move 生成器)
 
-对窗口内每个 editable filler:
+生成器是纯枚举,**只产出原子 swap move,不产出任何组合/种子/hint**:
 
-1. 调 `getUsableMasterCandidates`;为空则该 filler 不生成 move,diagnostics 记
-   no usable master。
-2. 对每个 candidate master 生成一个 SwapMove(内部为
-   `{ {rowId}, instanceSpan, {newMasterId} }` 的 span 表示,对外经 adapter 映射为
-   `FillerChange{instanceId, newMasterId}`),并把 master 映射到 `Family`/VT
-   供排序使用。
+1. 对窗口内每个 editable filler 调 `getUsableMasterCandidates`;为空则该 filler
+   不生成 move,diagnostics 记 `NoUsableMaster`(正常结果,不是 error)。
+2. 对每个 candidate master 生成一个 `SwapMove`(§4.1),经 adapter 把 master 映射
+   到 `Family`/VT 供排序使用;通不过构造校验的候选记 diagnostics 后跳过
+   (defense in depth)。
 3. 绝不为 std cell、macro、guard-only filler、non-editable filler 生成 move。
+4. 输出定序:窗口 editable 顺序(row, x),同 filler 内按 master id 升序。
 
-**anchor-follow 首发种子(固定)**:根因永远是"anchor 换到新 VT、周围 filler
-还是旧色",且库 VT 齐全保证该方向恒可构造(附录 A)。因此首批固定包含:
-baseline + "anchor 相邻 filler 与 bridge filler 全部换成 anchor 新 VT"的 overlay +
-它的 size-1/2 子集。预期多数 repair 一个 batch 即 clean,对 opto 内环总耗时是
-乘法级收益。
-
-**其余组合建议(group hint)**:MoveGenerator 同时产出少量高价值 move 组合,直接
-插入③层同 size 队列最前——anchor 左右 bridge filler pair、上下行与 cell 边界对齐
-的 bridge pair、同一短 filler run 整段同改、同一 violation 的 filler participants
-全组。这继承了 V1 group seed 的价值,但只是枚举顺序的提示,不是独立搜索机制。
+**组合不在生成器做**:多 filler 联动方案由③层 SubsetSearcher 枚举 size-2/3 子集
+自然产生(§6.7);anchor-follow 方向(把 anchor 相邻/bridge filler 换成 anchor
+新 VT)由②层 Ranker 的排序实现(§6.6)——排序把该方向的 move 排最前,首批
+size-1/2 子集就等价于 anchor-follow 组合,不需要独立的种子注入机制。
 
 ### 6.6 排序(Ranker)
 
@@ -551,8 +545,9 @@ forced-assignment 思想:用近似局部规则模型推导"该 filler 必须是�
 
 从排序后的 move 列表 `m1..mM` 枚举 overlay 候选:
 
-- **枚举顺序** = 按 `(子集 size, 成员 rank 的字典序)`;anchor-follow 首发种子与
-  group hint 插到对应 size 队列最前(§6.5)。
+- **枚举顺序** = 按 `(子集 size, 成员 rank 的字典序)`。Ranker 把 anchor-follow
+  方向的 move 排最前(§6.6),因此首批 size-1/2 子集天然覆盖 anchor-follow
+  组合——没有独立的种子/hint 注入机制(§6.5)。
 - **小窗口完备枚举(优先规则)**:窗口内 editable filler 数为 k 时,完整子集空间
   = 3^k 个着色方案(每个 filler 恒 2 候选,附录 A)。当 `3^k ≤ 剩余预算` 时
   (k ≤ 5 对应 243 ≤ 512),**完整枚举全部非冲突子集**,仍按 rank 序分批、首
@@ -569,7 +564,7 @@ forced-assignment 思想:用近似局部规则模型推导"该 filler 必须是�
   clean → 窗口升级(L0→L1→L2);窗口耗尽 → 失败路径(§6.9)。
 
 MW"必须多 filler 联动、单改不改善甚至更差"的非单调 case,在这里只是一个普通的
-size-2/3 子集,不需要任何特殊机制;好排序 + group hint 下通常出现在首批。
+size-2/3 子集,不需要任何特殊机制;好排序下通常出现在首批。
 
 ### 6.8 accept gate:baseline-delta clean(唯一 accept 标准)
 
@@ -672,7 +667,7 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 
 至少记录:precheck 状态(失败时 gap row/x range/site count);anchor
 (`targetPlace` 五元组);窗口级别与实际 `repairWindow`/`guardRegion`/halo 来源;
-初始 violation 数与归一化 signature;候选 filler 数、生成 move 数、group hint 数;
+初始 violation 数与归一化 signature;候选 filler 数、生成 move 数;
 枚举子集数、canonical cache 命中数、checker call 数(batch 次数与 batch size);
 baseline result 摘要;final result 是否 checked/legal/delta-clean 与 returned
 violation 数;best overlay 及其分类(residual original / new inside-window /
@@ -707,7 +702,7 @@ gate 语义:
 
 - intra-row MS:单 filler swap 修好(size-1 首批命中)。
 - inter-row MS:单 filler swap 修好。
-- MW:必须两个 filler 同时改才 clean;单改不改善——size-2 子集或 group hint 命中。
+- MW:必须两个 filler 同时改才 clean;单改不改善——size-2 子集命中。
 - 同一位置两条 violation(不同 participant / 不同 P-N band),不去重,一起解。
 - 一个 filler 关联多条 violation;一个 anchor 引发多条 violation。
 - 三 VT:邻居 majority 不是正确的 anchor VT(验证 target VT 顺序)。
@@ -735,7 +730,7 @@ gate 语义:
 3. 100% utility precheck(fatal 短路路径)。
 4. violation 归一化 + signature 匹配(§6.2 的钉死规则)。
 5. L0/L1/L2 window builder + guardRegion 生成。
-6. SwapMove 生成器 + bridge filler 收集 + group hint。
+6. Swap 生成器(只产原子 swap move;组合由⑧枚举、方向由⑦排序承担)。
 7. Ranker(5 特征,per-band 计数)。
 8. SubsetSearcher(排序枚举、批产出、预算)。
 9. OracleGate(batch wrapper、canonical cache、baseline-delta gate、best-overlay
@@ -806,9 +801,9 @@ VT 后缀含义(按业界常规命名推断,待 library 团队确认):R = RVT(re
 4. **split 的价值定位**:库 VT 齐全时,split 的意义不是补库的缺口,而是提供比
    整个 filler 换 VT 更细的粒度(例如 4 → 2+2 允许半段换 VT、半段保持),
    这是 swap-only 覆盖不了的解形态(§8.1)。
-5. **齐全库解锁的三项搜索精化**(已并入正文):anchor-follow 首发种子恒可构造
-   (§6.5);第三 VT 强降权,有效分支因子 ~1(§6.6);小窗口 3^k 完备枚举,
-   "窗口内无解"成为确定性结论(§6.7)。
+5. **齐全库解锁的三项搜索精化**(已并入正文):anchor-follow 方向恒可构造,
+   由 Ranker 排序实现(§6.6);第三 VT 强降权,有效分支因子 ~1(§6.6);
+   小窗口 3^k 完备枚举,"窗口内无解"成为确定性结论(§6.7)。
 
 ---
 
@@ -836,5 +831,5 @@ contour-driven refinement(逐级扩圈重指派,带"违例未减少即终止"准
   (§8.1,tiling 语义由 repair 侧翻译为 primitive op,§5.2);model-guided
   proposal 作为 Ranker backlog(§6.6)。
 - **反向验证**:其 inference 规则生成的强制赋值,与本 spec 的 anchor-follow
-  首发种子、第三 VT 降权方向一致;其"部分违例在 filler 阶段无解"的分类,
+  排序方向、第三 VT 降权一致;其"部分违例在 filler 阶段无解"的分类,
   佐证 `hasSolution=false` + 明确失败码的输出语义。
