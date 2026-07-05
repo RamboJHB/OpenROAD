@@ -601,6 +601,19 @@ void testSignatureMatching()
   auto rows = base;
   rows.rowIds = {0};
   CHECK(!fr::sameSignature(base, rows, 1));
+
+  // P/N band: same rule/kind/relation/rows/xWindow but different implant
+  // layer -> distinct violations (spec 6.2, no dedup by position).
+  fr::Violation pband = base;
+  pband.primaryLayer = 10;  // e.g. P-band implant
+  fr::Violation nband = base;
+  nband.primaryLayer = 11;  // e.g. N-band implant at the same x gap
+  CHECK(!fr::sameSignature(pband, nband, 1));
+  CHECK(fr::sameSignature(pband, pband, 1));  // same layer still matches
+  // secondaryLayer also participates (MS uses primary/secondary).
+  fr::Violation sec = pband;
+  sec.secondaryLayer = 12;
+  CHECK(!fr::sameSignature(pband, sec, 1));
 }
 
 void testRelatedness()

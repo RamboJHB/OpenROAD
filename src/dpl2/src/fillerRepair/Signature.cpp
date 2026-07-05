@@ -89,7 +89,9 @@ std::vector<NormalizedViolation> normalizeViolations(
 
     log.msg("normalize",
             cat("violation#", i, " rule=", raw.ruleId, ' ', kindName(raw.kind),
-                '/', relationName(raw.relation), " rows=", nv.rowIds.size(),
+                '/', relationName(raw.relation), " layer=", raw.primaryLayer,
+                (raw.secondaryLayer ? cat('/', *raw.secondaryLayer) : std::string()),
+                " rows=", nv.rowIds.size(),
                 (nv.rowIdFallback ? " (fallback to anchor row)" : ""),
                 " xWindow=", show(raw.xWindow), " -> footprint=",
                 show(nv.xRange), " anchors=", nv.cellAnchors.size(),
@@ -105,6 +107,14 @@ std::vector<NormalizedViolation> normalizeViolations(
 bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth)
 {
   if (a.ruleId != b.ruleId || a.kind != b.kind || a.relation != b.relation) {
+    return false;
+  }
+  // Implant layers distinguish otherwise-identical violations -- in
+  // particular P-band vs N-band MS at the same x gap, which the checker may
+  // report with the same ruleId/kind/relation/rows (spec 6.2). Both default
+  // to 0/nullopt when the checker leaves them unset, so this is a no-op for
+  // layer-agnostic checkers.
+  if (a.primaryLayer != b.primaryLayer || a.secondaryLayer != b.secondaryLayer) {
     return false;
   }
   if (sortedUniqueRows(a.rowIds) != sortedUniqueRows(b.rowIds)) {

@@ -6,10 +6,15 @@
 //
 // The signature key is pinned by the spec -- the baseline-delta gate depends
 // on it, so no implementation freedom here:
-//   signature = (ruleId, kind, relation, sorted(rowIds), xWindow overlap)
-// Two violations from different checker snapshots match iff the first four
-// fields are equal and their xWindows overlap by at least half of the
-// shorter window (or lie within one site of each other).
+//   signature = (ruleId, kind, relation, primaryLayer, secondaryLayer,
+//                sorted(rowIds), xWindow overlap)
+// Two violations from different checker snapshots match iff all id/enum/layer
+// fields are equal and their xWindows overlap by at least half of the shorter
+// window (or lie within one site of each other). The implant layers matter
+// because P-band and N-band MS can occur at the same x gap with the same
+// rule/kind/relation/rows -- they are distinct violations (spec 6.2: no dedup
+// by position), and only the layer tells them apart when the checker shares a
+// ruleId across bands.
 //
 // "Related to this overlay" is likewise pinned: a violation is related iff a
 // participant is a changed instance, or its xWindow is within one rule

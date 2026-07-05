@@ -426,11 +426,20 @@ layer,**按 band-slot / P-N 区分别记**)、`cellAnchors`(至少含
 **signature 匹配键(钉死,delta 分类依赖它)**:
 
 ```text
-signature = (ruleId, kind, relation, sorted(rowIds), xWindow 重叠 ≥ 阈值)
+signature = (ruleId, kind, relation, primaryLayer, secondaryLayer,
+             sorted(rowIds), xWindow 重叠 ≥ 阈值)
 ```
 
-两条 violation 跨 baseline/overlay result 匹配,当且仅当前四项相等且 xWindow 重叠
-超过阈值(建议:重叠长度 ≥ min(两者长度) 的一半,或距离 ≤ 1 site)。
+两条 violation 跨 baseline/overlay result 匹配,当且仅当所有 id/enum/layer 字段
+相等且 xWindow 重叠超过阈值(建议:重叠长度 ≥ min(两者长度) 的一半,或距离 ≤
+1 site)。
+
+**为什么必须带 layer**:MS 分 P 区 / N 区,同一个 x 间隙可能同时产生 N-band 和
+P-band 两条 MS,它们的 ruleId/kind/relation/rowIds/xWindow 可能完全相同,只有
+implant layer 不同。若签名不含 layer,这两条会被误当成一条,直接违反"不按几何位置
+去重"(§1.2/§1.3)。因此 `primaryLayer`(MW)与 `primaryLayer/secondaryLayer`
+(MS)必须进签名;checker 未填 layer 时字段默认 0/空,对 layer-agnostic checker 是
+no-op,不影响行为。
 
 **"与本次改动相关"的定义(钉死)**:violation 的 participants 触及任一 changed
 span,或其 xWindow 距任一 changed span ≤ 1 个 rule distance。以 span 几何为锚而非
