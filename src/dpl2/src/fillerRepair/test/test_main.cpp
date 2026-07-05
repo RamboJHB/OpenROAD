@@ -1336,8 +1336,13 @@ void testGateDeltaClassificationBranches()
 
 }  // namespace
 
-int main()
+int main(int argc, char** argv)
 {
+  // Optional name filter: `fillerRepair_tests <substring>` runs only the
+  // tests whose name contains <substring>. With FR_VERBOSE=1 this isolates
+  // one case's full [fr] transcript.
+  const char* filter = argc > 1 ? argv[1] : nullptr;
+
   const std::vector<Test> tests = {
       {"swap_construction", testSwapConstruction},
       {"canonical_key_order_independent", testCanonicalKeyOrderIndependent},
@@ -1378,18 +1383,27 @@ int main()
       {"gate_delta_classification_branches", testGateDeltaClassificationBranches},
   };
 
+  size_t ran = 0;
   for (const Test& test : tests) {
-    g_current = test.name;
-    test.fn();
-    if (verbose()) {
-      std::printf("ran  %s\n", test.name);
+    if (filter != nullptr && std::strstr(test.name, filter) == nullptr) {
+      continue;
     }
+    g_current = test.name;
+    if (verbose()) {
+      std::printf("\n===== case: %s =====\n", test.name);
+    }
+    test.fn();
+    ++ran;
   }
 
+  if (ran == 0) {
+    std::printf("no test matched filter \"%s\"\n", filter ? filter : "");
+    return 1;
+  }
   if (g_failures == 0) {
-    std::printf("OK: %zu tests passed\n", tests.size());
+    std::printf("OK: %zu test(s) passed\n", ran);
     return 0;
   }
-  std::printf("FAILED: %d check(s) across %zu tests\n", g_failures, tests.size());
+  std::printf("FAILED: %d check(s) across %zu test(s)\n", g_failures, ran);
   return 1;
 }
