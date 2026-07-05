@@ -15,6 +15,7 @@
 #include <map>
 #include <functional>
 #include <string>
+#include <tuple>
 #include <vector>
 
 #include "../FillerRepairEngine.h"
@@ -1347,6 +1348,112 @@ void testGateDeltaClassificationBranches()
   CHECK_EQ(sr.bestSummary.newInWindow, 1);  // o1 was the best-tracked reject
 }
 
+// --- User-provided realistic grid ------------------------------------------
+//
+// A 5-row multi-width layout with two VT types (0/1) and four std cells,
+// supplied to exercise the engine at scale. Its own master scheme (VTs {0,1},
+// widths {2,3,4,8}) is kept separate from the {1,2,3}-VT library above.
+//
+// NOTE ON SEMANTICS: the fake checker is a simplified run-based MW/MS model,
+// not the real implant checker. At MW=MS=1 it reports the violations it can
+// see on this static layout (a corner-touch inter-row MS near rows 2-3), not
+// necessarily the ones the author had in mind. That is exactly the
+// checker-as-oracle boundary: the engine repairs whatever the checker
+// reports, and the real checker will drive the intended violations unchanged.
+
+namespace grid {
+
+fr::MasterId filler(int w, int vt) { return static_cast<fr::MasterId>(w * 10 + vt); }
+fr::MasterId cell(int w, int vt) { return static_cast<fr::MasterId>(900 + w * 10 + vt); }
+
+// (vt, width, isCell) rows exactly as supplied.
+const std::vector<std::vector<std::tuple<int, int, int>>> kRows = {
+    {{1,3,0},{1,8,0},{1,4,0},{1,2,0},{1,8,0},{0,2,0},{0,2,0},{0,2,0},{1,4,0},{0,4,0},{1,3,0},{1,3,0},{1,2,0},{0,3,0},{1,4,0},{1,2,0},{0,3,0},{1,3,0},{1,2,0}},
+    {{1,2,0},{1,3,0},{1,3,0},{1,4,0},{0,2,0},{0,4,0},{0,2,0},{0,8,0},{1,3,1},{1,3,0},{0,2,0},{1,2,1},{0,4,0},{1,3,0},{0,3,0},{0,2,0},{1,2,0},{0,2,0},{1,4,0},{1,2,0},{1,4,0}},
+    {{1,3,0},{1,3,0},{1,4,0},{0,3,0},{1,4,1},{0,3,0},{0,4,0},{1,8,0},{1,3,0},{1,3,0},{0,3,0},{0,8,1},{1,4,0},{1,4,0},{1,3,0},{1,4,0}},
+    {{1,3,0},{1,3,0},{1,3,0},{0,8,0},{0,2,0},{0,2,0},{0,2,0},{1,4,0},{1,3,0},{1,3,0},{0,4,0},{0,4,0},{1,8,0},{0,8,0},{0,2,0},{0,2,0},{1,3,0}},
+    {{1,3,0},{1,8,0},{1,4,0},{1,2,0},{1,2,0},{1,3,0},{1,8,0},{1,4,0},{1,3,0},{1,4,0},{1,3,0},{1,3,0},{1,2,0},{1,3,0},{1,3,0},{1,2,0},{1,2,0},{1,3,0},{1,2,0}},
+};
+
+// Instance id = row*1000 + column index. Std cells: 1008,1011,2004,2011.
+fr::FakeDesign build()
+{
+  fr::FakeDesign d;
+  d.setSiteWidth(1);
+  for (const int w : {2, 3, 4, 8}) {
+    for (const int vt : {0, 1}) {
+      d.addMaster(filler(w, vt), w, 1, /*isFiller=*/true, vt);
+      d.addMaster(cell(w, vt), w, 1, /*isFiller=*/false, vt);
+    }
+  }
+  for (int r = 0; r < static_cast<int>(kRows.size()); ++r) {
+    int x = 0;
+    for (int i = 0; i < static_cast<int>(kRows[r].size()); ++i) {
+      const auto& c = kRows[r][i];
+      const int vt = std::get<0>(c), w = std::get<1>(c), isCell = std::get<2>(c);
+      d.place(r * 1000 + i, isCell ? cell(w, vt) : filler(w, vt), r, x);
+      x += w;
+    }
+    d.addRow(r, 0, x);
+  }
+  return d;
+}
+
+}  // namespace grid
+
+// The engine runs end-to-end on the large layout and deterministically
+// repairs what the fake checker reports at MW=MS=1: a single inter-row MS
+// near rows 2-3, cleared by one filler swap. Anchored at the width-2 std cell
+// (1011); the window follows the violation footprint to reach the fix.
+void testEngineUserGridMwMs1()
+{
+  fr::FakeDesign design = grid::build();
+  fr::FakeImplantRules rules;  // MW=MS=1 on all four rule classes
+  rules.mwIntra = 1;
+  rules.msIntra = 1;
+  rules.mwInter = 1;
+  rules.msInter = 1;
+
+  fr::TargetPlace anchor;  // width-2 std cell 1011 (row1, x=36)
+  anchor.instanceId = 1011;
+  anchor.masterId = grid::cell(2, 1);
+  anchor.rowId = 1;
+  anchor.x = 36;
+
+  fr::FakeImplantChecker snapshotChecker(design, rules);
+  fr::OverlayCheckRequest snapReq;
+  snapReq.requestId = 0;
+  snapReq.targetPlace = anchor;
+  snapReq.guardRegion = fr::Region{fr::XInterval{-1, 1000}, 0, 4};
+  const auto snapshot = snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
+  CHECK_EQ(snapshot.size(), 2u);  // two corner-touch inter-row MS at [49,50)
+
+  fr::FakeImplantChecker checker(design, rules);
+  fr::FakeCandidateProvider provider(design);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(design, checker, provider, config);
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchor;
+  request.violations = snapshot;
+  const auto result = engine.repair(request);
+
+  // Deterministic solution: swap the row3 width-8 vt0 filler 3013 to vt1.
+  CHECK(result.hasSolution);
+  CHECK_EQ(result.changes.size(), 1u);
+  CHECK_EQ(result.changes[0].instanceId, 3013);
+  CHECK_EQ(result.changes[0].newMasterId, grid::filler(8, 1));
+
+  // Same input -> identical result (planner determinism).
+  fr::FakeImplantChecker checker2(design, rules);
+  fr::FillerRepairEngine engine2(design, checker2, provider, config);
+  const auto result2 = engine2.repair(request);
+  CHECK(result2.hasSolution);
+  CHECK_EQ(result2.changes.size(), 1u);
+  CHECK_EQ(result2.changes[0].instanceId, 3013);
+}
+
 }  // namespace
 
 int main(int argc, char** argv)
@@ -1394,6 +1501,7 @@ int main(int argc, char** argv)
       {"engine_detects_protocol_error", testEngineDetectsProtocolError},
       {"engine_order_independent_batches", testEngineOrderIndependentBatches},
       {"gate_delta_classification_branches", testGateDeltaClassificationBranches},
+      {"engine_user_grid_mw_ms_1", testEngineUserGridMwMs1},
   };
 
   size_t ran = 0;
