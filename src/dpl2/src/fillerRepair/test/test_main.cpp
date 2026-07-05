@@ -108,10 +108,13 @@ fr::FakeDesign makeLibrary()
   return design;
 }
 
-// One fully covered row [0,16):
-//   x:      0        4      6        10       12         16
-//   inst: 100(F w4) 101(F w2) 102(F w4) 103(C w2*)  104(F w4)
-// Layout below uses fillers except inst 103; callers adjust as needed.
+// One fully covered row [0,16). Instance ids 100..104.
+//
+// Vt Type: 1=vt type 1  |  Widths: {2, 4}  |  cell type: 1=std cell, 0=filler
+// Format: (vt type, width, cell type)
+// Row 0: (1,4,0) (1,2,0) (1,4,0) (1,2,0) (1,4,0)
+//   ids:   100     101     102     103     104
+// All fillers here; callers often swap inst 103 to a std cell (the anchor).
 struct RowFixture
 {
   fr::FakeDesign design;
@@ -649,8 +652,16 @@ void testRelatedness()
 
 // --- TODO 5: window builder + guard + unfixable ------------------------------
 
-// Two-row fixture from testCheckerTargetOverrideSeedsViolation: anchor cell
-// 102 [10,14) row0, bridge filler 203 [9,11) row1.
+// Two-row fixture (ScenarioA): anchor std cell 102 [10,14) row0; the VT2
+// bridge filler 203 [9,11) row1 sits under it. When opto changes 102 to VT2,
+// their VT2 shapes overlap by 1 site -> inter-row MW; the fix swaps 203 back.
+//
+// Vt Type: 1=vt type 1, 2=vt type 2  |  Widths: {2, 3, 4, 8}
+// cell type: 1=std cell, 0=filler    |  Format: (vt type, width, cell type)
+// Row 0: (1,8,0) (1,2,0) (1,4,1) (1,2,0)
+//   ids:   100     101     102*    103          (* = anchor std cell)
+// Row 1: (1,3,0) (1,3,0) (1,3,0) (2,2,0) (1,2,0) (1,3,0)
+//   ids:   200     201     202     203     204     205
 fr::FakeDesign makeTwoRowDesign()
 {
   fr::FakeDesign design = makeLibrary();
@@ -991,10 +1002,15 @@ void testEngineSolvesSingleSwap()
   CHECK_EQ(checker2.requestCount(), checker.requestCount());
 }
 
-// Scenario B (MW-style pair, non-monotone): anchor C4 VT2 [0,4) and fixed
-// cell C4 VT2 [8,12) with msIntra=5. Originals: VT2 MS across [4,8) and the
-// VT1 MS between [4,8) and [12,16). No single swap is clean; recoloring both
-// gap fillers 110+111 to VT2 fixes everything.
+// Scenario B (MW-style pair, non-monotone), single row, msIntra=5. Two VT2
+// std cells straddle a VT1 gap; the VT2-VT2 spacing and the VT1-VT1 spacing
+// both violate. No single swap is clean; recoloring both gap fillers
+// 110+111 to VT2 fixes everything.
+//
+// Vt Type: 1=vt type 1, 2=vt type 2  |  Widths: {2, 4}
+// cell type: 1=std cell, 0=filler    |  Format: (vt type, width, cell type)
+// Row 0: (2,4,1) (1,2,0) (1,2,0) (2,4,1) (1,4,0)
+//   ids:   102*    110     111     112      113     (* = anchor std cell)
 void testEngineSolvesPairNonMonotone()
 {
   fr::FakeDesign design = makeLibrary();
@@ -1366,7 +1382,11 @@ namespace grid {
 fr::MasterId filler(int w, int vt) { return static_cast<fr::MasterId>(w * 10 + vt); }
 fr::MasterId cell(int w, int vt) { return static_cast<fr::MasterId>(900 + w * 10 + vt); }
 
-// (vt, width, isCell) rows exactly as supplied.
+// Vt Type: 0=vt type 0, 1=vt type 1  |  Widths: {2, 3, 4, 8}
+// cell type: 1=std cell, 0=filler    |  Format: (vt type, width, cell type)
+// Instance id = row*1000 + column index (Row 0 col 0 -> 0, Row 2 col 4 ->
+// 2004, ...). Std cells: 1008=(1,3,1), 1011=(1,2,1), 2004=(1,4,1),
+// 2011=(0,8,1). Rows exactly as supplied:
 const std::vector<std::vector<std::tuple<int, int, int>>> kRows = {
     {{1,3,0},{1,8,0},{1,4,0},{1,2,0},{1,8,0},{0,2,0},{0,2,0},{0,2,0},{1,4,0},{0,4,0},{1,3,0},{1,3,0},{1,2,0},{0,3,0},{1,4,0},{1,2,0},{0,3,0},{1,3,0},{1,2,0}},
     {{1,2,0},{1,3,0},{1,3,0},{1,4,0},{0,2,0},{0,4,0},{0,2,0},{0,8,0},{1,3,1},{1,3,0},{0,2,0},{1,2,1},{0,4,0},{1,3,0},{0,3,0},{0,2,0},{1,2,0},{0,2,0},{1,4,0},{1,2,0},{1,4,0}},
