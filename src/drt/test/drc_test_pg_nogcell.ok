@@ -95,10 +95,6 @@ Number of nets:           3
 [INFO DRT-0033] via9 shape region query size = 0.
 [INFO DRT-0033] metal10 shape region query size = 0.
 
-Number of guides:     0
-
-[INFO DRT-0169] Post process guides.
-[WARNING DRT-0170] No GCELLGRID and no guides; synthesized gcell pitch 4200 for check_drc tiling.
 [INFO DRT-0176] GCELLGRID X 0 DO 88 STEP 4200 ;
 [INFO DRT-0177] GCELLGRID Y 0 DO 30 STEP 4200 ;
 [INFO DRT-0618] check_drc found 20 violations.

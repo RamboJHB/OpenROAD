@@ -766,11 +766,10 @@ void io::Parser::buildGCellPatterns_getWidth(frCoord& GCELLGRIDX,
       tmpGCELLGRIDY = mapIt->first;
     }
   }
-  // Fallback for check_drc on a design with no GCELLGRID and no route guides
-  // (e.g. an odb-only / pre-global-route design): synthesize a gcell pitch from
-  // the routing track pitch (else from the die). The gcell grid is only GC
-  // worker-tiling scaffold (getDRCMarkers bloats tiles + dedups markers), so
-  // the exact pitch does not change DRC results.
+  // Fallback for check_drc on a design with no GCELLGRID/guide-derived pitch:
+  // synthesize a gcell pitch from the routing track pitch (else from the die).
+  // The gcell grid is only GC worker-tiling scaffold (getDRCMarkers bloats
+  // tiles + dedups markers), so the exact pitch does not change DRC results.
   if (tmpGCELLGRIDX == -1 || tmpGCELLGRIDY == -1) {
     frCoord defPitch = -1;
     for (auto tp : design_->getTopBlock()->getTrackPatterns()) {
@@ -792,11 +791,6 @@ void io::Parser::buildGCellPatterns_getWidth(frCoord& GCELLGRIDX,
     if (tmpGCELLGRIDY == -1) {
       tmpGCELLGRIDY = defPitch;
     }
-    logger_->warn(DRT,
-                  170,
-                  "No GCELLGRID and no guides; synthesized gcell pitch {} for "
-                  "check_drc tiling.",
-                  defPitch);
   }
   GCELLGRIDX = tmpGCELLGRIDX;
   GCELLGRIDY = tmpGCELLGRIDY;
