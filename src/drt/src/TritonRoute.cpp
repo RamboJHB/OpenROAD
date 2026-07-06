@@ -30,6 +30,8 @@
 
 #include <boost/asio/post.hpp>
 #include <boost/bind/bind.hpp>
+#include <algorithm>
+#include <array>
 #include <fstream>
 #include <iostream>
 
@@ -59,6 +61,42 @@
 using namespace std;
 using namespace fr;
 using namespace triton_route;
+
+namespace {
+frCoord getDrcGCellSpacing(frDesign* design)
+{
+  auto tech = design->getTech();
+  frLayer* layer = tech->getLayer(BOTTOM_ROUTING_LAYER);
+  if (layer == nullptr || layer->getType() != odb::dbTechLayerType::ROUTING
+      || layer->getPitch() <= 0) {
+    layer = nullptr;
+    for (const auto& candidate : tech->getLayers()) {
+      if (candidate->getType() == odb::dbTechLayerType::ROUTING
+          && candidate->getPitch() > 0) {
+        layer = candidate.get();
+        break;
+      }
+    }
+  }
+
+  frCoord spacing = layer != nullptr ? layer->getPitch() * 15
+                                     : tech->getManufacturingGrid();
+  return std::max<frCoord>(spacing, 1);
+}
+
+frUInt4 getDrcGCellCount(frCoord low, frCoord high, frCoord spacing)
+{
+  const frCoord span = std::max<frCoord>(high - low, 1);
+  return std::max<frUInt4>(1, (span + spacing - 1) / spacing);
+}
+
+bool hasValidDrcGCellPatterns(const std::vector<frGCellPattern>& patterns)
+{
+  return patterns.size() >= 2 && patterns[0].getCount() > 0
+         && patterns[1].getCount() > 0 && patterns[0].getSpacing() > 0
+         && patterns[1].getSpacing() > 0;
+}
+}  // namespace
 
 namespace sta {
 // Tcl files encoded into strings.
@@ -718,6 +756,60 @@ void TritonRoute::endFR()
   }
 }
 
+void TritonRoute::ensureGCellPatternsForDRC()
+{
+  auto top_block = design_->getTopBlock();
+  if (hasValidDrcGCellPatterns(top_block->getGCellPatterns())) {
+    return;
+  }
+
+  auto db_block = db_->getChip()->getBlock();
+  auto gcell_grid = db_block->getGCellGrid();
+  if (gcell_grid != nullptr && gcell_grid->getNumGridPatternsX() == 1
+      && gcell_grid->getNumGridPatternsY() == 1) {
+    frCoord offset_x;
+    frCoord offset_y;
+    frCoord count_x;
+    frCoord count_y;
+    frCoord spacing_x;
+    frCoord spacing_y;
+    gcell_grid->getGridPatternX(0, offset_x, count_x, spacing_x);
+    gcell_grid->getGridPatternY(0, offset_y, count_y, spacing_y);
+    if (count_x > 0 && count_y > 0 && spacing_x > 0 && spacing_y > 0) {
+      frGCellPattern xgp;
+      xgp.setHorizontal(false);
+      xgp.setStartCoord(offset_x);
+      xgp.setSpacing(spacing_x);
+      xgp.setCount(count_x);
+
+      frGCellPattern ygp;
+      ygp.setHorizontal(true);
+      ygp.setStartCoord(offset_y);
+      ygp.setSpacing(spacing_y);
+      ygp.setCount(count_y);
+
+      top_block->setGCellPatterns({xgp, ygp});
+      return;
+    }
+  }
+
+  const Rect die_box = top_block->getDieBox();
+  const frCoord spacing = getDrcGCellSpacing(design_.get());
+  frGCellPattern xgp;
+  xgp.setHorizontal(false);
+  xgp.setStartCoord(die_box.xMin());
+  xgp.setSpacing(spacing);
+  xgp.setCount(getDrcGCellCount(die_box.xMin(), die_box.xMax(), spacing));
+
+  frGCellPattern ygp;
+  ygp.setHorizontal(true);
+  ygp.setStartCoord(die_box.yMin());
+  ygp.setSpacing(spacing);
+  ygp.setCount(getDrcGCellCount(die_box.yMin(), die_box.yMax(), spacing));
+
+  top_block->setGCellPatterns({xgp, ygp});
+}
+
 void TritonRoute::reportConstraints()
 {
   getDesign()->getTech()->printAllConstraints(logger_);
@@ -947,10 +1039,12 @@ void TritonRoute::getDRCMarkers(frList<std::unique_ptr<frMarker>>& markers,
           continue;
         auto layerNum = marker->getLayerNum();
         auto con = marker->getConstraint();
-        std::vector<frBlockObject*> srcs(2, nullptr);
+        std::array<frBlockObject*, 2> srcs = {nullptr, nullptr};
         int i = 0;
         for (auto& src : marker->getSrcs()) {
-          srcs.at(i) = src;
+          if (i < static_cast<int>(srcs.size())) {
+            srcs[i] = src;
+          }
           i++;
         }
         if (mapMarkers.find({bbox, layerNum, con, srcs[0], srcs[1]})
@@ -974,9 +1068,7 @@ void TritonRoute::checkDRC(const char* filename, int x1, int y1, int x2, int y2)
 {
   GC_IGNORE_PDN_LAYER = -1;
   initDesign();
-  if (design_->getTopBlock()->getGCellPatterns().empty()) {
-    initGuide();
-  }
+  ensureGCellPatternsForDRC();
   Rect requiredDrcBox(x1, y1, x2, y2);
   if (requiredDrcBox.area() == 0) {
     requiredDrcBox = design_->getTopBlock()->getBBox();

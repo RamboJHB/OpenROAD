@@ -206,6 +206,7 @@ class TritonRoute
   void ta();
   void dr();
   void applyUpdates(const std::vector<std::vector<fr::drUpdate>>& updates);
+  void ensureGCellPatternsForDRC();
   void getDRCMarkers(std::list<std::unique_ptr<fr::frMarker>>& markers,
                      const odb::Rect& requiredDrcBox);
   friend class fr::FlexDR;
