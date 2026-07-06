@@ -614,7 +614,7 @@ void TritonRoute::initDesign()
     if (layer) {
       BOTTOM_ROUTING_LAYER = layer->getLayerNum();
     } else {
-      logger_->warn(utl::DRT,
+      warnIfNotCheckingPG(logger_, utl::DRT,
                     272,
                     "bottomRoutingLayer {} not found.",
                     BOTTOM_ROUTING_LAYER_NAME);
@@ -626,7 +626,7 @@ void TritonRoute::initDesign()
     if (layer) {
       TOP_ROUTING_LAYER = layer->getLayerNum();
     } else {
-      logger_->warn(utl::DRT,
+      warnIfNotCheckingPG(logger_, utl::DRT,
                     273,
                     "topRoutingLayer {} not found.",
                     TOP_ROUTING_LAYER_NAME);
@@ -638,7 +638,7 @@ void TritonRoute::initDesign()
     if (layer) {
       VIAINPIN_BOTTOMLAYERNUM = layer->getLayerNum();
     } else {
-      logger_->warn(utl::DRT,
+      warnIfNotCheckingPG(logger_, utl::DRT,
                     606,
                     "via in pin bottom layer {} not found.",
                     VIAINPIN_BOTTOMLAYER_NAME);
@@ -650,7 +650,7 @@ void TritonRoute::initDesign()
     if (layer) {
       VIAINPIN_TOPLAYERNUM = layer->getLayerNum();
     } else {
-      logger_->warn(utl::DRT,
+      warnIfNotCheckingPG(logger_, utl::DRT,
                     607,
                     "via in pin top layer {} not found.",
                     VIAINPIN_TOPLAYER_NAME);
@@ -662,7 +662,7 @@ void TritonRoute::initDesign()
     if (layer) {
       GC_IGNORE_PDN_LAYER = layer->getLayerNum();
     } else {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           utl::DRT, 617, "PDN layer {} not found.", REPAIR_PDN_LAYER_NAME);
     }
   }
@@ -1129,7 +1129,7 @@ void TritonRoute::checkDRC(const char* filename,
 
 void TritonRoute::readParams(const string& fileName)
 {
-  logger_->warn(utl::DRT, 252, "params file is deprecated. Use tcl arguments.");
+  warnIfNotCheckingPG(logger_, utl::DRT, 252, "params file is deprecated. Use tcl arguments.");
 
   ifstream fin(fileName.c_str());
   string line;
@@ -1143,22 +1143,22 @@ void TritonRoute::readParams(const string& fileName)
         string value = line.substr(pos + 1);
         stringstream ss(value);
         if (field == "lef") {
-          logger_->warn(utl::DRT, 148, "Deprecated lef param in params file.");
+          warnIfNotCheckingPG(logger_, utl::DRT, 148, "Deprecated lef param in params file.");
         } else if (field == "def") {
-          logger_->warn(utl::DRT, 227, "Deprecated def param in params file.");
+          warnIfNotCheckingPG(logger_, utl::DRT, 227, "Deprecated def param in params file.");
         } else if (field == "guide") {
-          logger_->warn(
+          warnIfNotCheckingPG(logger_,
               utl::DRT,
               309,
               "Deprecated guide param in params file. use read_guide instead.");
         } else if (field == "outputTA") {
-          logger_->warn(
+          warnIfNotCheckingPG(logger_,
               utl::DRT, 266, "Deprecated outputTA param in params file.");
         } else if (field == "output") {
-          logger_->warn(
+          warnIfNotCheckingPG(logger_,
               utl::DRT, 205, "Deprecated output param in params file.");
         } else if (field == "outputguide") {
-          logger_->warn(utl::DRT,
+          warnIfNotCheckingPG(logger_, utl::DRT,
                         310,
                         "Deprecated outputguide param in params file. use "
                         "write_guide instead.");
@@ -1171,7 +1171,7 @@ void TritonRoute::readParams(const string& fileName)
         } else if (field == "outputCMap") {
           CMAP_FILE = value;
         } else if (field == "threads") {
-          logger_->warn(utl::DRT,
+          warnIfNotCheckingPG(logger_, utl::DRT,
                         274,
                         "Deprecated threads param in params file."
                         " Use 'set_thread_count'.");
@@ -1317,7 +1317,7 @@ void TritonRoute::reportDRC(const string& file_name,
       cout << "Error: Fail to open DRC report file\n";
     }
   } else if (VERBOSE > 0) {
-    logger_->warn(
+    warnIfNotCheckingPG(logger_,
         DRT,
         290,
         "Warning: no DRC report specified, skipped writing DRC report");

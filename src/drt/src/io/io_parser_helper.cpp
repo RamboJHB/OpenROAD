@@ -115,7 +115,7 @@ void io::Parser::initDefaultVias()
         string viaDefName
             = tech_->getLayer(techDefautlViaDef->getCutLayerNum())->getName();
         viaDefName += string("_FR");
-        logger_->warn(DRT,
+        warnIfNotCheckingPG(logger_, DRT,
                       160,
                       "Warning: {} does not have viaDef aligned with layer "
                       "direction, generating new viaDef {}.",
@@ -186,7 +186,7 @@ void io::Parser::initConstraintLayerIdx()
          layer->getInterLayerCutSpacingConstraintMap(false)) {
       auto secondLayer = design_->getTech()->getLayer(secondLayerName);
       if (secondLayer == nullptr) {
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             DRT, 235, "Second layer {} does not exist.", secondLayerName);
         continue;
       }
@@ -211,7 +211,7 @@ void io::Parser::initConstraintLayerIdx()
          layer->getInterLayerCutSpacingConstraintMap(true)) {
       auto secondLayer = design_->getTech()->getLayer(secondLayerName);
       if (secondLayer == nullptr) {
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             DRT, 237, "Second layer {} does not exist.", secondLayerName);
         continue;
       }
@@ -282,14 +282,14 @@ void io::Parser::initCutLayerWidth()
         layer->setWidth(viaWidth);
         if (viaDef->getNumCut() == 1) {
           if (cutRect->width() != cutRect->length()) {
-            logger_->warn(DRT,
+            warnIfNotCheckingPG(logger_, DRT,
                           240,
                           "CUT layer {} does not have square single-cut via, "
                           "cut layer width may be set incorrectly.",
                           layer->getName());
           }
         } else {
-          logger_->warn(DRT,
+          warnIfNotCheckingPG(logger_, DRT,
                         241,
                         "CUT layer {} does not have single-cut via, cut layer "
                         "width may be set incorrectly.",
@@ -314,7 +314,7 @@ void io::Parser::initCutLayerWidth()
         auto cutRect = static_cast<frRect*>(cutFig);
         int viaWidth = cutRect->width();
         if (cutLayerWidth < viaWidth) {
-          logger_->warn(
+          warnIfNotCheckingPG(logger_,
               DRT,
               244,
               "CUT layer {} has smaller width defined in LEF compared "
@@ -666,7 +666,7 @@ void io::Parser::initRPin_rpin()
         }
 
         if (prefAp == nullptr) {
-          logger_->warn(DRT,
+          warnIfNotCheckingPG(logger_, DRT,
                         246,
                         "{}/{} from {} has nullptr as prefAP.",
                         instTerm->getInst()->getName(),

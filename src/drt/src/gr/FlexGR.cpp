@@ -38,6 +38,7 @@
 #include "db/grObj/grVia.h"
 #include "db/infra/frTime.h"
 #include "db/obj/frGuide.h"
+#include "global.h"
 #include "odb/db.h"
 #include "utl/exception.h"
 
@@ -630,7 +631,7 @@ void FlexGR::updateDbCongestion(odb::dbDatabase* db, FlexGRCMap* cmap)
   if (gcell == nullptr)
     gcell = odb::dbGCellGrid::create(block);
   else {
-    logger_->warn(
+    warnIfNotCheckingPG(logger_,
         utl::DRT,
         203,
         "dbGcellGrid already exists in db. Clearing existing dbGCellGrid.");
@@ -651,7 +652,7 @@ void FlexGR::updateDbCongestion(odb::dbDatabase* db, FlexGRCMap* cmap)
     string layerName(design_->getTech()->getLayer(layerNum)->getName());
     auto layer = tech->findLayer(layerName.c_str());
     if (layer == nullptr) {
-      logger_->warn(utl::DRT,
+      warnIfNotCheckingPG(logger_, utl::DRT,
                     202,
                     "Skipping layer {} not found in db for congestion map.",
                     layerName);

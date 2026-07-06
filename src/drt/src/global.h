@@ -34,6 +34,7 @@
 
 #include "db/obj/frMarker.h"
 #include "frBaseTypes.h"
+#include "utl/Logger.h"
 
 extern std::string DBPROCESSNODE;
 extern std::string OUT_MAZE_FILE;
@@ -114,6 +115,18 @@ extern fr::frLayerNum GC_IGNORE_PDN_LAYER;
 // and checks power/ground (PG) objects, completely excluding signal, clock
 // and any other non-PG objects. See docs/agents/drc_check_pg.md.
 extern bool DRC_CHECK_PG;
+
+template <typename... Args>
+inline void warnIfNotCheckingPG(utl::Logger* logger,
+                                utl::ToolId tool,
+                                int id,
+                                const std::string& message,
+                                const Args&... args)
+{
+  if (!DRC_CHECK_PG) {
+    logger->warn(tool, id, message, args...);
+  }
+}
 
 #define DIRBITSIZE 3
 #define WAVEFRONTBUFFERSIZE 2

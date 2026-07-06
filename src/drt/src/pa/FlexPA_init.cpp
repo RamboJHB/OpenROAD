@@ -33,6 +33,7 @@
 #include "FlexPA.h"
 #include "db/infra/frTime.h"
 #include "gc/FlexGC.h"
+#include "global.h"
 
 using namespace std;
 using namespace fr;
@@ -96,7 +97,7 @@ void FlexPA::initUniqueInstance_master2PinLayerRange(
     }
     if (minLayerNum < getDesign()->getTech()->getBottomLayerNum()
         || maxLayerNum > getDesign()->getTech()->getTopLayerNum()) {
-      logger_->warn(DRT,
+      warnIfNotCheckingPG(logger_, DRT,
                     66,
                     "instAnalysis skips {} due to no pin shapes.",
                     master->getName());

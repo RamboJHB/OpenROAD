@@ -31,6 +31,7 @@
 
 #include "frProfileTask.h"
 #include "gc/FlexGC_impl.h"
+#include "global.h"
 
 using namespace std;
 using namespace fr;
@@ -147,7 +148,7 @@ frCoord FlexGCWorker::Impl::checkMetalSpacing_getMaxSpcVal(frLayerNum layerNum,
         maxSpcVal = static_cast<frSpacingTableTwConstraint*>(con)->findMax();
         break;
       default:
-        logger_->warn(DRT, 41, "Unsupported metSpc rule.");
+        warnIfNotCheckingPG(logger_, DRT, 41, "Unsupported metSpc rule.");
     }
     if (checkNDRs)
       return max(maxSpcVal,
@@ -297,7 +298,7 @@ frCoord FlexGCWorker::Impl::checkMetalSpacing_prl_getReqSpcVal(
         minSpcVal = static_cast<frSpacingTableTwConstraint*>(con)->findMin();
         break;
       default:
-        logger_->warn(DRT, 43, "Unsupported metSpc rule.");
+        warnIfNotCheckingPG(logger_, DRT, 43, "Unsupported metSpc rule.");
     }
     if (con->typeId() == frConstraintTypeEnum::frcSpacingTablePrlConstraint
         || con->typeId() == frConstraintTypeEnum::frcSpacingTableTwConstraint) {
@@ -1803,28 +1804,28 @@ void FlexGCWorker::Impl::checkMetalShape_lef58Area(gcPin* pin)
       // rectWidth value on constraint
       checkMetalShape_addPatch(pin, min_area);
     } else if (db_rule->getExceptMinWidth() != 0) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT,
           311,
           "Unsupported branch EXCEPTMINWIDTH in PROPERTY LEF58_AREA.");
     } else if (db_rule->getExceptEdgeLength() != 0
                || db_rule->getExceptEdgeLengths()
                       != std::pair<int, int>(0, 0)) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT,
           312,
           "Unsupported branch EXCEPTEDGELENGTH in PROPERTY LEF58_AREA.");
     } else if (db_rule->getExceptMinSize() != std::pair<int, int>(0, 0)) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT, 313, "Unsupported branch EXCEPTMINSIZE in PROPERTY LEF58_AREA.");
     } else if (db_rule->getExceptStep() != std::pair<int, int>(0, 0)) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT, 314, "Unsupported branch EXCEPTSTEP in PROPERTY LEF58_AREA.");
     } else if (db_rule->getMask() != 0) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT, 315, "Unsupported branch MASK in PROPERTY LEF58_AREA.");
     } else if (db_rule->getTrimLayer() != nullptr) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT, 316, "Unsupported branch LAYER in PROPERTY LEF58_AREA.");
     } else {
       checkMetalShape_addPatch(pin, min_area);
@@ -2395,7 +2396,7 @@ void FlexGCWorker::Impl::checkLef58CutSpacing_main(
   } else if (con->hasAdjacentCuts()) {
     checkLef58CutSpacing_spc_adjCut(rect1, rect2, markerRect, con);
   } else {
-    logger_->warn(
+    warnIfNotCheckingPG(logger_,
         DRT, 44, "Unsupported LEF58_SPACING rule for cut layer, skipped.");
   }
 }
@@ -2572,49 +2573,49 @@ void FlexGCWorker::Impl::checkLef58CutSpacing_spc_adjCut(
   }
 
   if (con->hasExactAligned()) {
-    logger_->warn(
+    warnIfNotCheckingPG(logger_,
         DRT,
         45,
         " Unsupported branch EXACTALIGNED in checkLef58CutSpacing_spc_adjCut.");
     return;
   }
   if (con->isExceptSamePGNet()) {
-    logger_->warn(DRT,
+    warnIfNotCheckingPG(logger_, DRT,
                   46,
                   " Unsupported branch EXCEPTSAMEPGNET in "
                   "checkLef58CutSpacing_spc_adjCut.");
     return;
   }
   if (con->hasExceptAllWithin()) {
-    logger_->warn(DRT,
+    warnIfNotCheckingPG(logger_, DRT,
                   47,
                   " Unsupported branch EXCEPTALLWITHIN in "
                   "checkLef58CutSpacing_spc_adjCut.");
     return;
   }
   if (con->isToAll()) {
-    logger_->warn(
+    warnIfNotCheckingPG(logger_,
         DRT,
         48,
         " Unsupported branch TO ALL in checkLef58CutSpacing_spc_adjCut.");
     return;
   }
   if (con->hasEnclosure()) {
-    logger_->warn(
+    warnIfNotCheckingPG(logger_,
         DRT,
         50,
         " Unsupported branch ENCLOSURE in checkLef58CutSpacing_spc_adjCut.");
     return;
   }
   if (con->isSideParallelOverlap()) {
-    logger_->warn(DRT,
+    warnIfNotCheckingPG(logger_, DRT,
                   51,
                   " Unsupported branch SIDEPARALLELOVERLAP in "
                   "checkLef58CutSpacing_spc_adjCut.");
     return;
   }
   if (con->isSameMask()) {
-    logger_->warn(
+    warnIfNotCheckingPG(logger_,
         DRT,
         52,
         " Unsupported branch SAMEMASK in checkLef58CutSpacing_spc_adjCut.");
@@ -2705,11 +2706,11 @@ void FlexGCWorker::Impl::checkLef58CutSpacing_spc_layer(
 
   // skip unsupported rule branch
   if (con->isStack()) {
-    logger_->warn(
+    warnIfNotCheckingPG(logger_,
         DRT, 54, "Unsupported branch STACK in checkLef58CutSpacing_spc_layer.");
     return;
   } else if (con->hasOrthogonalSpacing()) {
-    logger_->warn(DRT,
+    warnIfNotCheckingPG(logger_, DRT,
                   55,
                   "Unsupported branch ORTHOGONALSPACING in "
                   "checkLef58CutSpacing_spc_layer.");
@@ -2717,47 +2718,47 @@ void FlexGCWorker::Impl::checkLef58CutSpacing_spc_layer(
   } else if (con->hasCutClass()) {
     ;
     if (con->isShortEdgeOnly()) {
-      logger_->warn(DRT,
+      warnIfNotCheckingPG(logger_, DRT,
                     56,
                     "Unsupported branch SHORTEDGEONLY in "
                     "checkLef58CutSpacing_spc_layer.");
       return;
     } else if (con->isConcaveCorner()) {
       if (con->hasWidth()) {
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             DRT,
             57,
             "Unsupported branch WIDTH in checkLef58CutSpacing_spc_layer.");
       } else if (con->hasParallel()) {
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             DRT,
             58,
             "Unsupported branch PARALLEL in checkLef58CutSpacing_spc_layer.");
       } else if (con->hasEdgeLength()) {
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             DRT,
             59,
             "Unsupported branch EDGELENGTH in checkLef58CutSpacing_spc_layer.");
       }
     } else if (con->hasExtension()) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT,
           60,
           "Unsupported branch EXTENSION in checkLef58CutSpacing_spc_layer.");
     } else if (con->hasNonEolConvexCorner()) {
       ;
     } else if (con->hasAboveWidth()) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT,
           61,
           "Unsupported branch ABOVEWIDTH in checkLef58CutSpacing_spc_layer.");
     } else if (con->isMaskOverlap()) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT,
           62,
           "Unsupported branch MASKOVERLAP in checkLef58CutSpacing_spc_layer.");
     } else if (con->isWrongDirection()) {
-      logger_->warn(DRT,
+      warnIfNotCheckingPG(logger_, DRT,
                     63,
                     "Unsupported branch WRONGDIRECTION in "
                     "checkLef58CutSpacing_spc_layer.");

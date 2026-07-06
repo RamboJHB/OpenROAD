@@ -33,6 +33,7 @@
 #include <limits>
 
 #include "FlexPA.h"
+#include "global.h"
 
 namespace fr {
 
@@ -83,7 +84,7 @@ FlexPAGraphics::FlexPAGraphics(frDebugSettings* settings,
     } else {
       inst_ = design->getTopBlock()->getInst(inst_name);
       if (!inst_)
-        logger_->warn(DRT, 5000, "INST NOT FOUND!");
+        warnIfNotCheckingPG(logger_, DRT, 5000, "INST NOT FOUND!");
     }
   }
 
@@ -340,7 +341,7 @@ void FlexPAGraphics::setObjsAndMakers(
       auto seg = static_cast<frPathSeg*>(obj);
       pa_segs_.push_back(seg);
     } else {
-      logger_->warn(DRT, 280, "Unknown type {} in setObjAP", obj->typeId());
+      warnIfNotCheckingPG(logger_, DRT, 280, "Unknown type {} in setObjAP", obj->typeId());
     }
   }
   pa_markers_ = &markers;

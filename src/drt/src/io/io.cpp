@@ -171,7 +171,7 @@ void io::Parser::setObstructions(odb::dbBlock* block)
   for (auto blockage : block->getObstructions()) {
     string layerName = blockage->getBBox()->getTechLayer()->getName();
     if (tech_->name2layer.find(layerName) == tech_->name2layer.end()) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT, 282, "Skipping blockage. Cannot find layer {}.", layerName);
       continue;
     }
@@ -352,7 +352,7 @@ void io::Parser::setVias(odb::dbBlock* block)
 void io::Parser::createNDR(odb::dbTechNonDefaultRule* ndr)
 {
   if (design_->tech_->getNondefaultRule(ndr->getName())) {
-    logger_->warn(DRT,
+    warnIfNotCheckingPG(logger_, DRT,
                   256,
                   "Skipping NDR {} because another rule with the same name "
                   "already exists.",
@@ -1116,7 +1116,7 @@ void io::Parser::setRoutingLayerProperties(odb::dbTechLayer* layer,
   }
   for (auto rule : layer->getTechLayerSpacingEolRules()) {
     if (rule->isExceptExactWidthValid()) {
-      logger_->warn(utl::DRT,
+      warnIfNotCheckingPG(logger_, utl::DRT,
                     400,
                     "Unsupported LEF58_SPACING rule with option "
                     "EXCEPTEXACTWIDTH for layer {}.",
@@ -1124,7 +1124,7 @@ void io::Parser::setRoutingLayerProperties(odb::dbTechLayer* layer,
       continue;
     }
     if (rule->isFillConcaveCornerValid()) {
-      logger_->warn(utl::DRT,
+      warnIfNotCheckingPG(logger_, utl::DRT,
                     401,
                     "Unsupported LEF58_SPACING rule with option "
                     "FILLCONCAVECORNER for layer {}.",
@@ -1132,7 +1132,7 @@ void io::Parser::setRoutingLayerProperties(odb::dbTechLayer* layer,
       continue;
     }
     if (rule->isEqualRectWidthValid()) {
-      logger_->warn(utl::DRT,
+      warnIfNotCheckingPG(logger_, utl::DRT,
                     403,
                     "Unsupported LEF58_SPACING rule with option EQUALRECTWIDTH "
                     "for layer {}.",
@@ -1392,49 +1392,49 @@ void io::Parser::setCutLayerProperties(odb::dbTechLayer* layer,
         break;
       }
       case odb::dbTechLayerCutSpacingRule::CutSpacingType::AREA:
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             utl::DRT,
             258,
             "Unsupported LEF58_SPACING rule for layer {} of type AREA.",
             layer->getName());
         break;
       case odb::dbTechLayerCutSpacingRule::CutSpacingType::MAXXY:
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             utl::DRT,
             161,
             "Unsupported LEF58_SPACING rule for layer {} of type MAXXY.",
             layer->getName());
         break;
       case odb::dbTechLayerCutSpacingRule::CutSpacingType::SAMEMASK:
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             utl::DRT,
             259,
             "Unsupported LEF58_SPACING rule for layer {} of type SAMEMASK.",
             layer->getName());
         break;
       case odb::dbTechLayerCutSpacingRule::CutSpacingType::PARALLELOVERLAP:
-        logger_->warn(utl::DRT,
+        warnIfNotCheckingPG(logger_, utl::DRT,
                       260,
                       "Unsupported LEF58_SPACING rule for layer {} of type "
                       "PARALLELOVERLAP.",
                       layer->getName());
         break;
       case odb::dbTechLayerCutSpacingRule::CutSpacingType::PARALLELWITHIN:
-        logger_->warn(utl::DRT,
+        warnIfNotCheckingPG(logger_, utl::DRT,
                       261,
                       "Unsupported LEF58_SPACING rule for layer {} of type "
                       "PARALLELWITHIN.",
                       layer->getName());
         break;
       case odb::dbTechLayerCutSpacingRule::CutSpacingType::SAMEMETALSHAREDEDGE:
-        logger_->warn(utl::DRT,
+        warnIfNotCheckingPG(logger_, utl::DRT,
                       262,
                       "Unsupported LEF58_SPACING rule for layer {} of type "
                       "SAMEMETALSHAREDEDGE.",
                       layer->getName());
         break;
       default:
-        logger_->warn(utl::DRT,
+        warnIfNotCheckingPG(logger_, utl::DRT,
                       263,
                       "Unsupported LEF58_SPACING rule for layer {}.",
                       layer->getName());
@@ -1445,7 +1445,7 @@ void io::Parser::setCutLayerProperties(odb::dbTechLayer* layer,
     if (rule->isLayerValid() && tmpLayer->getLayerNum() == 1)
       continue;
     if (rule->isSameMask()) {
-      logger_->warn(utl::DRT,
+      warnIfNotCheckingPG(logger_, utl::DRT,
                     279,
                     "SAMEMASK unsupported for cut LEF58_SPACINGTABLE rule");
       continue;
@@ -1523,7 +1523,7 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
 
   tmpLayer->setWidth(layer->getWidth());
   if (layer->getMinWidth() > layer->getWidth())
-    logger_->warn(
+    warnIfNotCheckingPG(logger_,
         DRT,
         210,
         "Layer {} minWidth is larger than width. Using width as minWidth.",
@@ -1608,7 +1608,7 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
     frUInt4 _minEnclosedWidth = -1;
     bool hasMinenclosedareaWidth = rule->getEnclosureWidth(_minEnclosedWidth);
     if (hasMinenclosedareaWidth) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT,
           139,
           "minEnclosedArea constraint with width is not supported, skipped.");
@@ -1638,13 +1638,13 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
     frCoord eolWidth(_eolWidth), eolWithin(_eolWithin), parSpace(_parSpace),
         parWithin(_parWithin);
     if (rule->hasRange()) {
-      logger_->warn(DRT, 140, "SpacingRange unsupported.");
+      warnIfNotCheckingPG(logger_, DRT, 140, "SpacingRange unsupported.");
     } else if (rule->hasLengthThreshold()) {
-      logger_->warn(DRT, 141, "SpacingLengthThreshold unsupported.");
+      warnIfNotCheckingPG(logger_, DRT, 141, "SpacingLengthThreshold unsupported.");
     } else if (rule->hasSpacingNotchLength()) {
-      logger_->warn(DRT, 142, "SpacingNotchLength unsupported.");
+      warnIfNotCheckingPG(logger_, DRT, 142, "SpacingNotchLength unsupported.");
     } else if (rule->hasSpacingEndOfNotchWidth()) {
-      logger_->warn(DRT, 143, "SpacingEndOfNotchWidth unsupported.");
+      warnIfNotCheckingPG(logger_, DRT, 143, "SpacingEndOfNotchWidth unsupported.");
     } else if (hasSpacingEndOfLine) {
       unique_ptr<frConstraint> uCon
           = make_unique<frSpacingEndOfLineConstraint>();
@@ -1666,7 +1666,7 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
       auto rptr = uCon.get();
       tech_->addUConstraint(std::move(uCon));
       if (tmpLayer->hasSpacingSamenet()) {
-        logger_->warn(DRT,
+        warnIfNotCheckingPG(logger_, DRT,
                       138,
                       "New SPACING SAMENET overrides old"
                       "SPACING SAMENET rule.");
@@ -1682,7 +1682,7 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
       auto rptr = static_cast<frSpacingTablePrlConstraint*>(uCon.get());
       tech_->addUConstraint(std::move(uCon));
       if (tmpLayer->getMinSpacing())
-        logger_->warn(DRT,
+        warnIfNotCheckingPG(logger_, DRT,
                       144,
                       "New SPACING SAMENET overrides old"
                       "SPACING SAMENET rule.");
@@ -1736,7 +1736,7 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
     auto rptr = static_cast<frSpacingTablePrlConstraint*>(uCon.get());
     tech_->addUConstraint(std::move(uCon));
     if (tmpLayer->getMinSpacing())
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT,
           145,
           "New SPACINGTABLE PARALLELRUNLENGTH overrides old SPACING rule.");
@@ -1765,7 +1765,7 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
     rptr->setLayer(tmpLayer);
     tech_->addUConstraint(std::move(uCon));
     if (tmpLayer->getMinSpacing())
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT, 146, "New SPACINGTABLE TWOWIDTHS overrides old SPACING rule.");
     tmpLayer->setMinSpacing(rptr);
   }
@@ -1791,7 +1791,7 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
   }
   for (auto rule : layer->getTechLayerMinCutRules()) {
     if (rule->isAreaValid()) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT,
           317,
           "LEF58_MINIMUMCUT AREA is not supported. Skipping for layer {}",
@@ -1799,7 +1799,7 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
       continue;
     }
     if (rule->isSameMetalOverlap()) {
-      logger_->warn(DRT,
+      warnIfNotCheckingPG(logger_, DRT,
                     318,
                     "LEF58_MINIMUMCUT SAMEMETALOVERLAP is not supported. "
                     "Skipping for layer {}",
@@ -1807,7 +1807,7 @@ void io::Parser::addRoutingLayer(odb::dbTechLayer* layer)
       continue;
     }
     if (rule->isFullyEnclosed()) {
-      logger_->warn(DRT,
+      warnIfNotCheckingPG(logger_, DRT,
                     319,
                     "LEF58_MINIMUMCUT FULLYENCLOSED is not supported. Skipping "
                     "for layer {}",
@@ -1887,7 +1887,7 @@ void io::Parser::addCutLayer(odb::dbTechLayer* layer)
     adjacentCuts = (adjacentCuts == 0) ? -1 : adjacentCuts;
 
     if (cutWithin != -1 && cutWithin < cutSpacing) {
-      logger_->warn(DRT,
+      warnIfNotCheckingPG(logger_, DRT,
                     147,
                     "cutWithin is smaller than cutSpacing for ADJACENTCUTS on "
                     "layer {}, please check your rule definition.",
@@ -1998,7 +1998,7 @@ void io::Parser::setMacros(odb::dbDatabase* db)
             auto layer = box->getTechLayer();
             if (!layer) {
               if (!warned) {
-                logger_->warn(DRT,
+                warnIfNotCheckingPG(logger_, DRT,
                               323,
                               "Via(s) in pin {} of {} will be ignored",
                               _term->getName(),
@@ -2012,7 +2012,7 @@ void io::Parser::setMacros(odb::dbDatabase* db)
               auto type = box->getTechLayer()->getType();
               if (type == odb::dbTechLayerType::ROUTING
                   || type == odb::dbTechLayerType::CUT)
-                logger_->warn(DRT,
+                warnIfNotCheckingPG(logger_, DRT,
                               122,
                               "Layer {} is skipped for {}/{}.",
                               layer_name,
@@ -2047,7 +2047,7 @@ void io::Parser::setMacros(odb::dbDatabase* db)
         if (tech_->name2layer.find(layer_name) == tech_->name2layer.end()) {
           if (layer_type == odb::dbTechLayerType::ROUTING
               || layer_type == odb::dbTechLayerType::CUT)
-            logger_->warn(DRT,
+            warnIfNotCheckingPG(logger_, DRT,
                           123,
                           "Layer {} is skipped for {}/OBS.",
                           layer_name,
@@ -2163,7 +2163,7 @@ void io::Parser::setTechViaRules(odb::dbTech* db_tech)
             viaRuleGen->setLayer1Enc(enc);
             break;
           case 2:
-            logger_->warn(DRT,
+            warnIfNotCheckingPG(logger_, DRT,
                           131,
                           "cutLayer cannot have overhangs in viarule {}, "
                           "skipping enclosure.",
@@ -2184,7 +2184,7 @@ void io::Parser::setTechViaRules(odb::dbTech* db_tech)
         Rect box(xl, yl, xh, yh);
         switch (lNum2Int[layerNum]) {
           case 1:
-            logger_->warn(
+            warnIfNotCheckingPG(logger_,
                 DRT,
                 132,
                 "botLayer cannot have rect in viarule {}, skipping rect.",
@@ -2194,7 +2194,7 @@ void io::Parser::setTechViaRules(odb::dbTech* db_tech)
             viaRuleGen->setCutRect(box);
             break;
           default:
-            logger_->warn(
+            warnIfNotCheckingPG(logger_,
                 DRT,
                 133,
                 "topLayer cannot have rect in viarule {}, skipping rect.",
@@ -2209,7 +2209,7 @@ void io::Parser::setTechViaRules(odb::dbTech* db_tech)
         Point pt(x, y);
         switch (lNum2Int[layerNum]) {
           case 1:
-            logger_->warn(
+            warnIfNotCheckingPG(logger_,
                 DRT,
                 134,
                 "botLayer cannot have spacing in viarule {}, skipping spacing.",
@@ -2219,7 +2219,7 @@ void io::Parser::setTechViaRules(odb::dbTech* db_tech)
             viaRuleGen->setCutSpacing(pt);
             break;
           default:
-            logger_->warn(
+            warnIfNotCheckingPG(logger_,
                 DRT,
                 135,
                 "botLayer cannot have spacing in viarule {}, skipping spacing.",
@@ -2240,7 +2240,7 @@ void io::Parser::setTechVias(odb::dbTech* db_tech)
     for (auto box : via->getBoxes()) {
       string layerName = box->getTechLayer()->getName();
       if (tech_->name2layer.find(layerName) == tech_->name2layer.end()) {
-        logger_->warn(DRT,
+        warnIfNotCheckingPG(logger_, DRT,
                       124,
                       "Via {} with unused layer {} will be ignored.",
                       layerName,
@@ -2453,7 +2453,7 @@ void io::Writer::fillConnFigs_net(frNet* net, bool isTA)
           connFigs_[netName].push_back(
               make_shared<frVia>(*static_cast<frVia*>(connFig)));
         } else {
-          logger_->warn(
+          warnIfNotCheckingPG(logger_,
               DRT,
               247,
               "io::Writer::fillConnFigs_net does not support this type.");

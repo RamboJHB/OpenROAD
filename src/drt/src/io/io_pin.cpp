@@ -28,6 +28,8 @@
 
 #include "io.h"
 
+#include "global.h"
+
 using namespace std;
 using namespace fr;
 
@@ -69,7 +71,7 @@ void io::Parser::instAnalysis()
             minLayerNum = min(minLayerNum, lNum);
             maxLayerNum = max(maxLayerNum, lNum);
           } else {
-            logger_->warn(DRT, 248, "instAnalysis unsupported pinFig.");
+            warnIfNotCheckingPG(logger_, DRT, 248, "instAnalysis unsupported pinFig.");
           }
         }
       }

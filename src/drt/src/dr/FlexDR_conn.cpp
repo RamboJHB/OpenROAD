@@ -32,6 +32,7 @@
 
 #include "dr/FlexDR.h"
 #include "frProfileTask.h"
+#include "global.h"
 #include "io/io.h"
 #include "utl/exception.h"
 
@@ -1004,7 +1005,7 @@ void FlexDRConnectivityChecker::merge_perform_helper(
       if (ps->isBeginTruncated()
           && ((currEnd < ps->high() && currEndPs->isEndTruncated())
               || (currEnd > ps->high() && ps->isEndTruncated()))) {
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             DRT, 6001, "Path segs were not split: {} and {}", *ps, *currEndPs);
       }
       hasOverlap = true;

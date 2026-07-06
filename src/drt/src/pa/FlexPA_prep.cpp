@@ -37,6 +37,7 @@
 #include "db/infra/frTime.h"
 #include "frProfileTask.h"
 #include "gc/FlexGC.h"
+#include "global.h"
 #include "utl/exception.h"
 
 using namespace std;
@@ -765,7 +766,7 @@ bool FlexPA::prepPoint_pin_checkPoint_planar_ep(
   if (isBlock) {
     gtl::extents(rect, layerPolys[0]);
     if (layerPolys.size() > 1)
-      logger_->warn(DRT, 6000, "Macro pin has more than 1 polygon");
+      warnIfNotCheckingPG(logger_, DRT, 6000, "Macro pin has more than 1 polygon");
   }
   switch (dir) {
     case (frDirEnum::W):
@@ -927,7 +928,7 @@ void FlexPA::getViasFromMetalWidthMap(
     }
 
     if (entry->isViaCutClass()) {
-      logger_->warn(
+      warnIfNotCheckingPG(logger_,
           DRT,
           519,
           "Via cut classes in LEF58_METALWIDTHVIAMAP are not supported.");
@@ -1525,7 +1526,7 @@ void FlexPA::prepPattern()
         // and sorting in X works poorly.  So we try again sorting in Y.
         numValidPattern = prepPattern_inst(inst, currUniqueInstIdx, 0.0);
         if (numValidPattern == 0) {
-          logger_->warn(
+          warnIfNotCheckingPG(logger_,
               DRT,
               87,
               "No valid pattern for unique instance {}, master is {}.",
@@ -2253,7 +2254,7 @@ bool FlexPA::genPatterns_gc(std::set<frBlockObject*> targetObjs,
   gcCallCnt++;
   if (objs.empty()) {
     if (VERBOSE > 1) {
-      logger_->warn(DRT, 89, "genPattern_gc objs empty.");
+      warnIfNotCheckingPG(logger_, DRT, 89, "genPattern_gc objs empty.");
     }
     return false;
   }

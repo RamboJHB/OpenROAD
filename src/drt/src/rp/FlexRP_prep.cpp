@@ -36,6 +36,7 @@
 #include "db/infra/frTime.h"
 #include "frProfileTask.h"
 #include "gc/FlexGC.h"
+#include "global.h"
 #include "odb/db.h"
 using namespace std;
 using namespace fr;
@@ -1465,7 +1466,7 @@ void FlexRP::prep_via2viaForbiddenLen_cutSpc(const frLayerNum& lNum,
     if (getDesign()->getTech()->getLayer(layerNum2)->hasInterLayerCutSpacing(
             layerNum1, true)) {
       if (samenetCon) {
-        logger_->warn(DRT,
+        warnIfNotCheckingPG(logger_, DRT,
                       92,
                       "Duplicate diff layer samenet cut spacing, skipping cut "
                       "spacing from {} to {}.",
@@ -1489,7 +1490,7 @@ void FlexRP::prep_via2viaForbiddenLen_cutSpc(const frLayerNum& lNum,
       if (getDesign()->getTech()->getLayer(layerNum2)->hasInterLayerCutSpacing(
               layerNum1, false)) {
         if (samenetCon) {
-          logger_->warn(DRT,
+          warnIfNotCheckingPG(logger_, DRT,
                         93,
                         "Duplicate diff layer diffnet cut spacing, skipping "
                         "cut spacing from {} to {}.",

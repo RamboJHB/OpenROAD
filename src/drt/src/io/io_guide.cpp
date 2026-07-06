@@ -28,6 +28,7 @@
 
 #include <queue>
 
+#include "global.h"
 #include "io/io.h"
 
 using namespace std;
@@ -148,7 +149,7 @@ void io::Parser::patchGuides(frNet* net,
     }
   }
   if (candidateGuides.empty()) {
-    logger_->warn(DRT, 1001, "No guide in the pin neighborhood");
+    warnIfNotCheckingPG(logger_, DRT, 1001, "No guide in the pin neighborhood");
     return;
   }
   // get the guide that is closer to the gCell
@@ -579,7 +580,7 @@ void io::Parser::genGuides_gCell2TermMap(
                 frString name = (origTerm->typeId() == frcInstTerm)
                                     ? ((frInstTerm*) origTerm)->getName()
                                     : term->getName();
-                logger_->warn(DRT,
+                warnIfNotCheckingPG(logger_, DRT,
                               230,
                               "genGuides_gCell2TermMap avoid condition2, may "
                               "result in guide open: {}.",
@@ -595,7 +596,7 @@ void io::Parser::genGuides_gCell2TermMap(
                 frString name = (origTerm->typeId() == frcInstTerm)
                                     ? ((frInstTerm*) origTerm)->getName()
                                     : term->getName();
-                logger_->warn(DRT,
+                warnIfNotCheckingPG(logger_, DRT,
                               231,
                               "genGuides_gCell2TermMap avoid condition3, may "
                               "result in guide open: {}.",
@@ -875,7 +876,7 @@ void io::Parser::genGuides(frNet* net, vector<frRect>& rects)
     // filter pin2GCellMap with aps
 
     if (pin2GCellMap.empty()) {
-      logger_->warn(DRT, 214, "genGuides empty pin2GCellMap.");
+      warnIfNotCheckingPG(logger_, DRT, 214, "genGuides empty pin2GCellMap.");
       debugPrint(
           logger_, DRT, "io", 1, "gcell2pin.size() = {}", gCell2PinMap.size());
     }
@@ -884,7 +885,7 @@ void io::Parser::genGuides(frNet* net, vector<frRect>& rects)
         switch (obj->typeId()) {
           case frcInstTerm: {
             auto ptr = static_cast<frInstTerm*>(obj);
-            logger_->warn(DRT,
+            warnIfNotCheckingPG(logger_, DRT,
                           215,
                           "Pin {}/{} not covered by guide.",
                           ptr->getInst()->getName(),
@@ -893,12 +894,12 @@ void io::Parser::genGuides(frNet* net, vector<frRect>& rects)
           }
           case frcBTerm: {
             auto ptr = static_cast<frBTerm*>(obj);
-            logger_->warn(
+            warnIfNotCheckingPG(logger_,
                 DRT, 216, "Pin PIN/{} not covered by guide.", ptr->getName());
             break;
           }
           default: {
-            logger_->warn(DRT, 217, "genGuides unknown type.");
+            warnIfNotCheckingPG(logger_, DRT, 217, "genGuides unknown type.");
             break;
           }
         }
@@ -983,7 +984,7 @@ void io::Parser::genGuides_final(
                  != pin2GCellMap[obj].end()) {
         pinIdx2GCellUpdated[pinIdx].push_back(make_pair(box.ur(), lNum));
       } else {
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             DRT, 220, "genGuides_final net {} error 1.", net->getName());
       }
       guideIdx2Pins[guideIdx].push_back(pinIdx);
@@ -1002,7 +1003,7 @@ void io::Parser::genGuides_final(
                  != pin2GCellMap[obj].end()) {
         pinIdx2GCellUpdated[pinIdx].push_back(make_pair(box.ur(), lNum));
       } else {
-        logger_->warn(
+        warnIfNotCheckingPG(logger_,
             DRT, 221, "genGuides_final net {} error 2.", net->getName());
       }
       guideIdx2Pins[guideIdx].push_back(pinIdx);
@@ -1010,7 +1011,7 @@ void io::Parser::genGuides_final(
   }
   for (auto& guides : pinIdx2GCellUpdated) {
     if (guides.empty()) {
-      logger_->warn(DRT,
+      warnIfNotCheckingPG(logger_, DRT,
                     222,
                     "genGuides_final net {} pin not in any guide.",
                     net->getName());
@@ -1264,7 +1265,7 @@ bool io::Parser::genGuides_astar(
   // true error when allowing feedthrough
   if (pinVisited != nCnt - gCnt
       && (ALLOW_PIN_AS_FEEDTHROUGH || forceFeedThrough) && retry) {
-    logger_->warn(DRT,
+    warnIfNotCheckingPG(logger_, DRT,
                   224,
                   "{} {} pin not visited, number of guides = {}.",
                   net->getName(),
@@ -1274,7 +1275,7 @@ bool io::Parser::genGuides_astar(
   // fallback to feedthrough in next iter
   if (pinVisited != nCnt - gCnt && !ALLOW_PIN_AS_FEEDTHROUGH
       && !forceFeedThrough && retry) {
-    logger_->warn(DRT,
+    warnIfNotCheckingPG(logger_, DRT,
                   225,
                   "{} {} pin not visited, fall back to feedthrough mode.",
                   net->getName(),
