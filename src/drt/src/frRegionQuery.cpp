@@ -40,6 +40,17 @@ using namespace fr;
 using utl::enumerate;
 namespace gtl = boost::polygon;
 
+namespace {
+// Guard against an object that carries an out-of-range layer number. For
+// valid data every layer is in [0, numLayers) so this never triggers; it
+// only prevents a hard crash (vector::at range error) on malformed input,
+// e.g. a reduced check_drc design that dropped some layers/vias.
+inline bool layerInRange(frLayerNum layerNum, std::size_t numLayers)
+{
+  return layerNum >= 0 && static_cast<std::size_t>(layerNum) < numLayers;
+}
+}  // namespace
+
 struct frRegionQuery::Impl
 {
   template <typename T>
@@ -112,6 +123,9 @@ void frRegionQuery::Impl::add(frShape* shape,
                               ObjectsByLayer<frBlockObject>& allShapes)
 {
   if (shape->typeId() == frcPathSeg || shape->typeId() == frcRect) {
+    if (!layerInRange(shape->getLayerNum(), allShapes.size())) {
+      return;
+    }
     Rect frb = shape->getBBox();
     allShapes.at(shape->getLayerNum()).push_back(make_pair(frb, shape));
   } else {
@@ -367,6 +381,9 @@ void frRegionQuery::Impl::add(frVia* via,
   for (auto& uShape : via->getViaDef()->getLayer1Figs()) {
     auto shape = uShape.get();
     if (shape->typeId() == frcRect) {
+      if (!layerInRange(via->getViaDef()->getLayer1Num(), allShapes.size())) {
+        continue;
+      }
       Rect frb = shape->getBBox();
       xform.apply(frb);
       allShapes.at(via->getViaDef()->getLayer1Num())
@@ -378,6 +395,9 @@ void frRegionQuery::Impl::add(frVia* via,
   for (auto& uShape : via->getViaDef()->getLayer2Figs()) {
     auto shape = uShape.get();
     if (shape->typeId() == frcRect) {
+      if (!layerInRange(via->getViaDef()->getLayer2Num(), allShapes.size())) {
+        continue;
+      }
       Rect frb = shape->getBBox();
       xform.apply(frb);
       allShapes.at(via->getViaDef()->getLayer2Num())
@@ -389,6 +409,9 @@ void frRegionQuery::Impl::add(frVia* via,
   for (auto& uShape : via->getViaDef()->getCutFigs()) {
     auto shape = uShape.get();
     if (shape->typeId() == frcRect) {
+      if (!layerInRange(via->getViaDef()->getCutLayerNum(), allShapes.size())) {
+        continue;
+      }
       Rect frb = shape->getBBox();
       xform.apply(frb);
       allShapes.at(via->getViaDef()->getCutLayerNum())
@@ -437,6 +460,10 @@ void frRegionQuery::Impl::add(frInstTerm* instTerm,
     for (auto& uFig : pin->getFigs()) {
       auto shape = uFig.get();
       if (shape->typeId() == frcPathSeg || shape->typeId() == frcRect) {
+        if (!layerInRange(static_cast<frShape*>(shape)->getLayerNum(),
+                          allShapes.size())) {
+          continue;
+        }
         Rect frb = shape->getBBox();
         xform.apply(frb);
         allShapes.at(static_cast<frShape*>(shape)->getLayerNum())
@@ -455,6 +482,10 @@ void frRegionQuery::Impl::add(frBTerm* term,
     for (auto& uFig : pin->getFigs()) {
       auto shape = uFig.get();
       if (shape->typeId() == frcPathSeg || shape->typeId() == frcRect) {
+        if (!layerInRange(static_cast<frShape*>(shape)->getLayerNum(),
+                          allShapes.size())) {
+          continue;
+        }
         Rect frb = shape->getBBox();
         allShapes.at(static_cast<frShape*>(shape)->getLayerNum())
             .push_back(make_pair(frb, term));
@@ -474,11 +505,19 @@ void frRegionQuery::Impl::add(frInstBlockage* instBlk,
   for (auto& uFig : pin->getFigs()) {
     auto shape = uFig.get();
     if (shape->typeId() == frcPathSeg || shape->typeId() == frcRect) {
+      if (!layerInRange(static_cast<frShape*>(shape)->getLayerNum(),
+                        allShapes.size())) {
+        continue;
+      }
       Rect frb = shape->getBBox();
       xform.apply(frb);
       allShapes.at(static_cast<frShape*>(shape)->getLayerNum())
           .push_back(make_pair(frb, instBlk));
     } else if (shape->typeId() == frcPolygon) {
+      if (!layerInRange(static_cast<frShape*>(shape)->getLayerNum(),
+                        allShapes.size())) {
+        continue;
+      }
       // Decompose the polygon to rectangles and store those
       // Convert the frPolygon to a Boost polygon
       vector<gtl::point_data<frCoord>> points;
@@ -519,6 +558,10 @@ void frRegionQuery::Impl::add(frBlockage* blk,
   for (auto& uFig : pin->getFigs()) {
     auto shape = uFig.get();
     if (shape->typeId() == frcPathSeg || shape->typeId() == frcRect) {
+      if (!layerInRange(static_cast<frShape*>(shape)->getLayerNum(),
+                        allShapes.size())) {
+        continue;
+      }
       Rect frb = shape->getBBox();
       allShapes.at(static_cast<frShape*>(shape)->getLayerNum())
           .push_back(make_pair(frb, blk));

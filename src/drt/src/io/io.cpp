@@ -445,7 +445,9 @@ void io::Parser::getSBoxCoords(odb::dbSBox* box,
   int y2 = box->yMax();
   uint dx = box->getDX();
   uint dy = box->getDY();
-  uint w;
+  // default to the smaller dimension so a malformed box still yields a sane
+  // width instead of an uninitialized value in reduced DRC mode
+  uint w = std::min(dx, dy);
   switch (box->getDirection()) {
     case odb::dbSBox::UNDEFINED: {
       bool dx_even = ((dx & 1) == 0);
@@ -476,7 +478,7 @@ void io::Parser::getSBoxCoords(odb::dbSBox* box,
         y1 += dw;
         y2 -= dw;
         assert(y1 == y2);
-      } else
+      } else if (!drcOnly_)
         logger_->error(DRT, 102, "Odd dimension in both directions.");
       break;
     }
@@ -506,7 +508,8 @@ void io::Parser::getSBoxCoords(odb::dbSBox* box,
       break;
     }
     default:
-      logger_->error(DRT, 103, "Unknown direction.");
+      if (!drcOnly_)
+        logger_->error(DRT, 103, "Unknown direction.");
       break;
   }
   beginX = x1;
@@ -728,7 +731,7 @@ void io::Parser::setNets(odb::dbBlock* block)
           tmpP->addToNet(netIn);
           tmpP->setLayerNum(layerNum);
 
-          width = (width) ? width : tech_->name2layer[layerName]->getWidth();
+          width = (width) ? width : layerIt->second->getWidth();
           auto defaultBeginExt = width / 2;
           auto defaultEndExt = width / 2;
 
@@ -764,7 +767,10 @@ void io::Parser::setNets(odb::dbBlock* block)
           netIn->addShape(std::move(tmpP));
         }
         if (viaName != "") {
-          if (tech_->name2via.find(viaName) == tech_->name2via.end()) {
+          auto viaIt = tech_->name2via.find(viaName);
+          // viaIt->second may be null if the via was skipped while reading the
+          // db (reduced DRC mode); never build a frVia with a null viaDef
+          if (viaIt == tech_->name2via.end() || viaIt->second == nullptr) {
             if (!drcOnly_)
               logger_->error(DRT, 108, "Unsupported via in db.");
           } else {
@@ -774,7 +780,7 @@ void io::Parser::setNets(odb::dbBlock* block)
             } else {
               p = {beginX, beginY};
             }
-            auto viaDef = tech_->name2via[viaName];
+            auto viaDef = viaIt->second;
             auto tmpP = make_unique<frVia>(viaDef);
             tmpP->setOrigin(p);
             tmpP->addToNet(netIn);
@@ -788,20 +794,28 @@ void io::Parser::setNets(odb::dbBlock* block)
       for (auto swire : net->getSWires()) {
         for (auto box : swire->getWires()) {
           if (!box->isVia()) {
-            if (drcOnly_
-                && tech_->name2layer.find(box->getTechLayer()->getName())
-                       == tech_->name2layer.end()) {
-              // silently skip shapes on unknown layers (reduced DRC mode)
+            auto layerIt
+                = tech_->name2layer.find(box->getTechLayer()->getName());
+            if (layerIt == tech_->name2layer.end()) {
+              // unknown layer: skip the whole shape. In reduced DRC mode this
+              // is expected and silent; otherwise it is an error.
+              if (!drcOnly_)
+                logger_->error(DRT,
+                               618,
+                               "Unsupported layer {} in special net {}.",
+                               box->getTechLayer()->getName(),
+                               net->getName());
               continue;
             }
+            frLayer* layer = layerIt->second;
+            auto layerNum = layer->getLayerNum();
             getSBoxCoords(box, beginX, beginY, endX, endY, width);
-            auto layerNum = tech_->name2layer[box->getTechLayer()->getName()]
-                                ->getLayerNum();
             auto tmpP = make_unique<frPathSeg>();
             tmpP->setPoints(Point(beginX, beginY), Point(endX, endY));
             tmpP->addToNet(netIn);
             tmpP->setLayerNum(layerNum);
-            width = (width) ? width : tech_->name2layer[layerName]->getWidth();
+            // use this shape's own layer width, not a stale layerName
+            width = (width) ? width : layer->getWidth();
             auto defaultExt = width / 2;
 
             frEndStyleEnum tmpBeginEnum;
@@ -834,14 +848,17 @@ void io::Parser::setNets(odb::dbBlock* block)
             else if (box->getBlockVia())
               viaName = box->getBlockVia()->getName();
 
-            if (tech_->name2via.find(viaName) == tech_->name2via.end()) {
+            auto viaIt = tech_->name2via.find(viaName);
+            // never build a frVia with a null viaDef (via may have been
+            // skipped while reading the db in reduced DRC mode)
+            if (viaIt == tech_->name2via.end() || viaIt->second == nullptr) {
               if (!drcOnly_)
                 logger_->error(DRT, 109, "Unsupported via in db.");
             } else {
               int x, y;
               box->getViaXY(x, y);
               Point p(x, y);
-              auto viaDef = tech_->name2via[viaName];
+              auto viaDef = viaIt->second;
               auto tmpP = make_unique<frVia>(viaDef);
               tmpP->setOrigin(p);
               tmpP->addToNet(netIn);
@@ -965,7 +982,11 @@ void io::Parser::setBTerms(odb::dbBlock* block)
       }
     }
     auto pa = make_unique<frPinAccess>();
-    if (!term->getSigType().isSupply() && term->getBPins().size() == 1) {
+    // access points are not needed to check short/spacing rules and may
+    // reference vias skipped in reduced DRC mode, so build them only in the
+    // full flow
+    if (!drcOnly_ && !term->getSigType().isSupply()
+        && term->getBPins().size() == 1) {
       auto db_pin = (odb::dbBPin*) *term->getBPins().begin();
       for (auto& db_ap : db_pin->getAccessPoints()) {
         auto ap = make_unique<frAccessPoint>();
