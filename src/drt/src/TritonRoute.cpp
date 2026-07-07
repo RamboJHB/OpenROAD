@@ -120,7 +120,8 @@ TritonRoute::TritonRoute()
       dist_port_(0),
       results_sz_(0),
       cloud_sz_(0),
-      dist_pool_(1)
+      dist_pool_(1),
+      design_reduced_for_drc_(false)
 {
 }
 
@@ -553,8 +554,13 @@ bool TritonRoute::initGuide()
 void TritonRoute::initDesign()
 {
   if (getDesign()->getTopBlock() != nullptr) {
-    getDesign()->getTopBlock()->removeDeletedInsts();
-    return;
+    if (!design_reduced_for_drc_) {
+      getDesign()->getTopBlock()->removeDeletedInsts();
+      return;
+    }
+    // the design was loaded in reduced DRC-only mode; reload it fully
+    clearDesign();
+    design_reduced_for_drc_ = false;
   }
   io::Parser parser(db_, getDesign(), logger_);
   parser.readDb();
@@ -620,6 +626,40 @@ void TritonRoute::initDesign()
   if (db_ != nullptr && db_->getChip() != nullptr
       && db_->getChip()->getBlock() != nullptr)
     db_callback_->addOwner(db_->getChip()->getBlock());
+  design_reduced_for_drc_ = false;
+}
+
+// Silent, reduced version of initDesign() used by checkDRC(). Only the data
+// needed to check simple short/spacing rules is loaded (no tracks, access
+// points, NDRs, via generate rules or LEF58 properties) and no logging is
+// emitted. If a fully loaded design already exists it is reused as-is.
+void TritonRoute::initDesignForDRC()
+{
+  if (getDesign()->getTopBlock() != nullptr) {
+    getDesign()->getTopBlock()->removeDeletedInsts();
+    return;
+  }
+  io::Parser parser(db_, getDesign(), logger_);
+  parser.readDbForDRC();
+  if (getDesign()->getTopBlock() == nullptr) {
+    // no design loaded; checkDRC() will silently do nothing
+    return;
+  }
+  auto tech = getDesign()->getTech();
+  if (!BOTTOM_ROUTING_LAYER_NAME.empty()) {
+    frLayer* layer = tech->getLayer(BOTTOM_ROUTING_LAYER_NAME);
+    if (layer) {
+      BOTTOM_ROUTING_LAYER = layer->getLayerNum();
+    }
+  }
+  if (!TOP_ROUTING_LAYER_NAME.empty()) {
+    frLayer* layer = tech->getLayer(TOP_ROUTING_LAYER_NAME);
+    if (layer) {
+      TOP_ROUTING_LAYER = layer->getLayerNum();
+    }
+  }
+  parser.postProcessForDRC();
+  design_reduced_for_drc_ = true;
 }
 
 void TritonRoute::prep()
@@ -1067,7 +1107,16 @@ void TritonRoute::getDRCMarkers(frList<std::unique_ptr<frMarker>>& markers,
 void TritonRoute::checkDRC(const char* filename, int x1, int y1, int x2, int y2)
 {
   GC_IGNORE_PDN_LAYER = -1;
-  initDesign();
+  // silence any log gated by VERBOSE (e.g. region query init) during the
+  // reduced design initialization
+  const int saved_verbose = VERBOSE;
+  VERBOSE = 0;
+  initDesignForDRC();
+  VERBOSE = saved_verbose;
+  if (design_->getTopBlock() == nullptr) {
+    // nothing to check; stay silent
+    return;
+  }
   ensureGCellPatternsForDRC();
   Rect requiredDrcBox(x1, y1, x2, y2);
   if (requiredDrcBox.area() == 0) {

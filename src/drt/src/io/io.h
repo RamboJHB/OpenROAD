@@ -65,8 +65,13 @@ class Parser
 
   // others
   void readDb();
+  // reduced, silent db reading for standalone DRC (check_drc): loads only
+  // the data needed to check simple short/spacing rules and never logs
+  void readDbForDRC();
   bool readGuide();
   void postProcess();
+  // reduced, silent post process matching readDbForDRC
+  void postProcessForDRC();
   void postProcessGuide();
   void initDefaultVias();
   void initRPin();
@@ -100,6 +105,7 @@ class Parser
   void addDefaultMasterSliceLayer();
   void addDefaultCutLayer();
   void addRoutingLayer(odb::dbTechLayer*);
+  void addRoutingLayerBasicSpacing(odb::dbTechLayer* layer, frLayer* tmpLayer);
   void addCutLayer(odb::dbTechLayer*);
   void addMasterSliceLayer(odb::dbTechLayer*);
   void setRoutingLayerProperties(odb::dbTechLayer* layer, frLayer* tmpLayer);
@@ -223,6 +229,9 @@ class Parser
   frTechObject* tech_;
   Logger* logger_;
   std::unique_ptr<frBlock> tmpBlock_;
+  // reduced DRC-only parsing: skip data not needed for simple short/spacing
+  // checks (LEF58 rules, tracks, access points, NDRs, ...) and stay silent
+  bool drcOnly_;
   // temporary variables
   int readLayerCnt_;
   odb::dbTechLayer* masterSliceLayer_;

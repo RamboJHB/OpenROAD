@@ -198,8 +198,14 @@ class TritonRoute
   int results_sz_;
   unsigned int cloud_sz_;
   boost::asio::thread_pool dist_pool_;
+  // true when design_ holds the reduced data loaded by initDesignForDRC();
+  // a full initDesign() reloads it from scratch in that case
+  bool design_reduced_for_drc_;
 
   void initDesign();
+  // silent, reduced version of initDesign() used by checkDRC(): loads only
+  // the data needed to check simple short/spacing rules
+  void initDesignForDRC();
   bool initGuide();
   void prep();
   void gr();

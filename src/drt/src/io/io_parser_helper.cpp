@@ -186,18 +186,20 @@ void io::Parser::initConstraintLayerIdx()
          layer->getInterLayerCutSpacingConstraintMap(false)) {
       auto secondLayer = design_->getTech()->getLayer(secondLayerName);
       if (secondLayer == nullptr) {
-        logger_->warn(
-            DRT, 235, "Second layer {} does not exist.", secondLayerName);
+        if (!drcOnly_)
+          logger_->warn(
+              DRT, 235, "Second layer {} does not exist.", secondLayerName);
         continue;
       }
       auto secondLayerNum
           = design_->getTech()->getLayer(secondLayerName)->getLayerNum();
       con->setSecondLayerNum(secondLayerNum);
-      logger_->info(DRT,
-                    236,
-                    "Updating diff-net cut spacing rule between {} and {}.",
-                    design_->getTech()->getLayer(layerNum)->getName(),
-                    design_->getTech()->getLayer(secondLayerNum)->getName());
+      if (!drcOnly_)
+        logger_->info(DRT,
+                      236,
+                      "Updating diff-net cut spacing rule between {} and {}.",
+                      design_->getTech()->getLayer(layerNum)->getName(),
+                      design_->getTech()->getLayer(secondLayerNum)->getName());
       interLayerCutSpacingConstraints[secondLayerNum] = con;
     }
     // same-net
@@ -211,18 +213,20 @@ void io::Parser::initConstraintLayerIdx()
          layer->getInterLayerCutSpacingConstraintMap(true)) {
       auto secondLayer = design_->getTech()->getLayer(secondLayerName);
       if (secondLayer == nullptr) {
-        logger_->warn(
-            DRT, 237, "Second layer {} does not exist.", secondLayerName);
+        if (!drcOnly_)
+          logger_->warn(
+              DRT, 237, "Second layer {} does not exist.", secondLayerName);
         continue;
       }
       auto secondLayerNum
           = design_->getTech()->getLayer(secondLayerName)->getLayerNum();
       con->setSecondLayerNum(secondLayerNum);
-      logger_->info(DRT,
-                    238,
-                    "Updating same-net cut spacing rule between {} and {}.",
-                    design_->getTech()->getLayer(layerNum)->getName(),
-                    design_->getTech()->getLayer(secondLayerNum)->getName());
+      if (!drcOnly_)
+        logger_->info(DRT,
+                      238,
+                      "Updating same-net cut spacing rule between {} and {}.",
+                      design_->getTech()->getLayer(layerNum)->getName(),
+                      design_->getTech()->getLayer(secondLayerNum)->getName());
       interLayerCutSpacingSamenetConstraints[secondLayerNum] = con;
     }
     // reset same-net if diff-net does not exist
@@ -563,6 +567,17 @@ void io::Parser::postProcess()
   design_->getRegionQuery()->init();
   design_->getRegionQuery()->print();
   design_->getRegionQuery()->initDRObj();  // second init from FlexDR.cpp
+}
+
+// Reduced, silent post process used by check_drc. Default via selection,
+// instance analysis and LEF58 constraint conversion are not needed to check
+// simple short/spacing rules; only the constraint layer indexes and the
+// fixed-object region query are required by the GC engine.
+void io::Parser::postProcessForDRC()
+{
+  drcOnly_ = true;
+  initConstraintLayerIdx();
+  design_->getRegionQuery()->init();
 }
 
 void io::Parser::postProcessGuide()
