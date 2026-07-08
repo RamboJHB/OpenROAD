@@ -3251,5 +3251,65 @@ std::string Violation::toString(DbCoord siteWidth) const
     return ss.str();
 }
 
+// ===========================================================================
+// Filler VT overlay repair — spec section 5.2 overlay API (STUB).
+// -----------------------------------------------------------------------------
+// These are intentionally fake, per the current task: they lock the request /
+// result protocol the filler repair engine depends on, without wiring the
+// real DRC. A later change will route these through the actual implant check
+// (reusing checkDirect / the merged-shape machinery above) so that each
+// OverlayCheckRequest is applied as an atomic overlay and re-checked.
+//
+// Protocol honored here (spec 5.2):
+//   - every CheckResult echoes its request's requestId;
+//   - a request whose fillerChanges are malformed (here: the same instance
+//     twice) becomes InvalidOverlay and only affects its own result;
+//   - the batch form evaluates each request independently and returns results
+//     in input order (repair correctness must not depend on the order).
+// The stub always reports "clean" (isLegal = true, no violations) for a valid
+// overlay -- it does NOT run any real rule check yet.
+// ===========================================================================
+
+CheckResult ImplantLayerChecker::checkPlaceWithOverlay(
+    const OverlayCheckRequest& request) const
+{
+    CheckResult result;
+    result.requestId = request.requestId;  // echo, always
+
+    // Minimal validation so the InvalidOverlay path is exercised. The real
+    // checker will additionally verify same-size / orientation compatibility.
+    std::set<InstanceId> seen;
+    for (const FillerChange& change : request.fillerChanges) {
+        if (!seen.insert(change.instanceId).second) {
+            result.status = CheckStatus::InvalidOverlay;
+            result.isLegal = false;
+            result.diagnostics.push_back(
+                {"InvalidOverlay",
+                 makeMessage("duplicate filler instance in overlay: ",
+                             change.instanceId)});
+            return result;
+        }
+    }
+
+    // STUB: no real rule evaluation yet -> report the overlay as clean.
+    result.status = CheckStatus::Checked;
+    result.isLegal = true;
+    result.diagnostics.push_back(
+        {"Stub", "checkPlaceWithOverlay stub: no real DRC performed"});
+    return result;
+}
+
+std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
+    const std::vector<OverlayCheckRequest>& requests) const
+{
+    std::vector<CheckResult> results;
+    results.reserve(requests.size());
+    // Each request is independent; a bad one only affects its own result.
+    for (const OverlayCheckRequest& request : requests) {
+        results.push_back(checkPlaceWithOverlay(request));
+    }
+    return results;
+}
+
 } // namespace ipl
 } // namespace dpl2

@@ -26,6 +26,44 @@ struct CheckerRect
 enum class Relationship { IntraInstance, IntraRow, InterRow };
 enum class OutcomeStatus { Satisfied, Violated, NotApplicable, Skipped };
 
+// ===========================================================================
+// Filler VT overlay repair — spec section 5 interface (added).
+// -----------------------------------------------------------------------------
+// These types are the wire contract between the checker and the filler repair
+// engine (docs/filler_vt_overlay_repair_spec.md, section 5). They are ADDED
+// alongside the existing checker types; nothing here is removed. The struct
+// Violation and struct CheckResult below are EVOLVED (extra fields added,
+// old fields kept) so the legacy checkPlace/checkDirect/commitPlace path and
+// the new overlay path can share them.
+// ===========================================================================
+
+// spec 5.1: MW/MS as a stable enum so the repair side never depends on
+// RuleSource string/kind mapping.
+enum class ViolationKind { MinWidth, MinSpacing };
+
+// spec 5.1: intra-instance / intra-row / inter-row as a stable enum. Mirrors
+// the legacy Relationship enum but is the repair-facing name.
+enum class ViolationRelation { IntraInstance, IntraRow, InterRow };
+
+// spec 5.1: a participant of a violation. rowId distinguishes same-x /
+// different-row participants; isFiller / isTarget tag the role.
+struct ViolationParticipant
+{
+  InstanceId instanceId = 0;
+  MasterId masterId = 0;
+  RowId rowId = 0;  // row containing this participant instance/shape
+  XInterval xRange;
+  bool isFiller = false;
+  bool isTarget = false;
+};
+
+// spec 5.2: one filler master swap. Repair engine's V1 wire format.
+struct FillerChange
+{
+  InstanceId instanceId = 0;  // filler instance only
+  MasterId newMasterId = 0;   // same w/h/orient-compatible filler master
+};
+
 struct Violation
 {
   int ruleId = 0;
@@ -43,6 +81,16 @@ struct Violation
   std::string layerName;
   XInterval targetInterval;
   XInterval neighborInterval;
+
+  // --- spec 5.1 fields (added for the repair engine) -----------------------
+  // kind/relation mirror ruleSource/relationship in the repair-facing enums.
+  // primaryLayer/secondaryLayer above already carry the implant layer(s) that
+  // the repair signature uses to tell P-band from N-band at the same x gap.
+  ViolationKind kind = ViolationKind::MinWidth;
+  ViolationRelation relation = ViolationRelation::IntraRow;
+  // Sorted unique. Inter-row reports all touched rows; intra-row reports one.
+  std::vector<RowId> rowIds;
+  std::vector<ViolationParticipant> participants;
 
   std::string toString(DbCoord siteWidth = 1) const;
 };
@@ -62,9 +110,36 @@ struct CheckRequest
   PhysOrientation orientation = PhysOrientationE::R0;
 };
 
+// spec 5.1: the changed std-cell anchor. Same fields as CheckRequest, which
+// the spec explicitly allows keeping as the implementation name. Aliased so
+// the overlay API reads as the spec does.
+using TargetPlace = CheckRequest;
+
 struct CommitRequest
 {
   CheckRequest place;
+};
+
+// spec 5.2: status of one overlay check.
+enum class CheckStatus
+{
+  Checked,        // check completed; isLegal/violations are meaningful
+  InvalidOverlay, // request malformed (bad fillerChange, dup instance, ...)
+  Unsupported,    // overlay shape not supported by this checker
+  CheckerError    // internal failure
+};
+
+using OverlayRequestId = int;
+
+// spec 5.2: one atomic overlay candidate. All fillerChanges are applied
+// together, then re-checked; violations are collected at least within
+// guardRegion (the repair window expanded by a two-cell guard halo).
+struct OverlayCheckRequest
+{
+  OverlayRequestId requestId = -1;  // repair-engine generated, unique per batch
+  TargetPlace targetPlace;
+  CheckerRect guardRegion;  // spec's `Rect`; DbCoord to avoid UvDist coupling
+  std::vector<FillerChange> fillerChanges;
 };
 
 struct CheckResult
@@ -72,6 +147,13 @@ struct CheckResult
   bool isLegal = true;
   std::vector<Violation> violations;
   std::vector<Diagnostic> diagnostics;
+
+  // --- spec 5.2 fields (added for the overlay API) -------------------------
+  // requestId MUST echo the OverlayCheckRequest.requestId; status reports
+  // whether the check completed. Legacy checkPlace/checkDirect leave these at
+  // their defaults (requestId = -1, status = Checked).
+  OverlayRequestId requestId = -1;
+  CheckStatus status = CheckStatus::Checked;
 };
 
 struct UpdateResult
@@ -98,6 +180,19 @@ class ImplantLayerChecker final : public DRCChecker
   CheckResult checkPlace(const CheckRequest& request) const;
   CheckResult checkDirect(const CheckRequest& request) const;
   UpdateResult commitPlace(const CommitRequest& request);
+
+  // spec 5.2: non-mutating overlay DRC verify for the filler repair engine.
+  // checkPlaceWithOverlay applies one atomic overlay (all fillerChanges
+  // together) and returns one CheckResult echoing requestId. The batch form
+  // takes a vector of independent requests; one invalid request only affects
+  // its own result, and correctness does not depend on return order.
+  //
+  // NOTE: these are currently STUB implementations (see .cpp) -- the real DRC
+  // is not wired through them yet. They exist so the repair engine can be
+  // built against the spec 5 interface.
+  CheckResult checkPlaceWithOverlay(const OverlayCheckRequest& request) const;
+  std::vector<CheckResult> checkPlaceWithOverlays(
+      const std::vector<OverlayCheckRequest>& requests) const;
 
   const std::vector<Diagnostic>& initDiagnostics() const;
   const std::vector<PlacedInst>& placedInsts() const;
