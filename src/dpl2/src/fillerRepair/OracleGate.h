@@ -37,7 +37,7 @@ namespace dpl2::fillerRepair {
 struct DeltaSummary
 {
   bool usable = false;
-  bool inconsistent = false;   // Checked && isLegal && violations non-empty
+  bool inconsistent = false;   // isLegal disagrees with violations-empty (#1)
   int residualOriginals = 0;   // originals still matched in the result
   int newInWindow = 0;
   int relatedInHalo = 0;
@@ -56,9 +56,14 @@ class OracleGate
              const RepairConfig& config,
              const DebugLog& log);
 
-  // Baseline for `guard`; consumes budget only on a cache miss. False when
-  // the baseline is unusable (checker error) -- the window cannot be gated.
-  bool runBaseline(const Region& guard, int& budget);
+  // Baseline for `window.guardRegion`; consumes budget only on a cache miss.
+  // False when the baseline is unusable (checker error) OR fails the baseline
+  // consistency gate (spec 6.8, V2.1 #2+#4): the baseline must reproduce every
+  // original that lies inside the guard, and must not carry an unexpected
+  // in-window violation that was not in the input snapshot. A false return is
+  // fatal for the window -- either a checker error or a stale/inconsistent
+  // snapshot, both of which the engine must not silently treat as "repaired".
+  bool runBaseline(const RepairWindow& window, int& budget);
 
   struct SearchResult
   {
@@ -101,6 +106,10 @@ class OracleGate
   DeltaSummary classify(const CheckResult& result,
                         const Overlay& overlay,
                         const RepairWindow& window) const;
+  // Baseline consistency gate (spec 6.8, V2.1 #2+#4). Uses the already-fetched
+  // baseline_, spends no budget. Pushes a fatal BaselineMismatch diagnostic and
+  // returns false when the snapshot is stale/inconsistent.
+  bool checkBaselineConsistency(const RepairWindow& window);
 
   ImplantOverlayChecker& checker_;
   const TargetPlace& anchor_;

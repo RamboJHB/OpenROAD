@@ -1078,19 +1078,18 @@ void testEngineIgnoresUnrelatedHaloViolation()
   request.targetPlace = anchorPlace(design, 102);
   request.targetPlace.masterId = cellMaster(kVt2);
 
-  // Target-local initial snapshot: only the anchor-caused MW (the far VT3
-  // pre-existing violation is out of the checker's target-local scope).
-  fr::Violation v = makeViolation(3, fr::ViolationKind::MinWidth,
-                                  fr::ViolationRelation::InterRow, {0, 1},
-                                  {10, 11});
-  fr::ViolationParticipant pf;
-  pf.instanceId = 203;
-  pf.rowId = 1;
-  pf.xRange = {9, 11};
-  pf.isFiller = true;
-  v.participants = {pf};
-  v.requiredValue = 2;
-  request.violations = {v};
+  // Target-local initial snapshot derived from the checker (as production does,
+  // so signatures/layers match the baseline): a narrow guard around the anchor
+  // captures only the anchor-caused MW and excludes the far VT3 pre-existing
+  // violation at x=[2,3). That pre-existing MW then appears only in the engine's
+  // wider baseline -- exactly the unrelated-halo case under test.
+  fr::FakeImplantChecker snapshotChecker(design, rules);
+  auto snapReq = baselineRequest(design, 102, 0);
+  snapReq.targetPlace.masterId = cellMaster(kVt2);  // the opto change
+  snapReq.guardRegion = fr::Region{fr::XInterval{8, 16}, 0, 1};
+  request.violations =
+      snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
+  CHECK_EQ(request.violations.size(), 1u);  // only the anchor-caused MW
 
   fr::FakeImplantChecker checker(design, rules);
   fr::FakeCandidateProvider provider(design);
@@ -1172,8 +1171,8 @@ void testGateCacheSingleEvaluation()
   const fr::Overlay o1 = {swap};
 
   int budget = 100;
-  CHECK(gate.runBaseline(window.guardRegion, budget));
-  CHECK(gate.runBaseline(window.guardRegion, budget));  // cache hit
+  CHECK(gate.runBaseline(window, budget));
+  CHECK(gate.runBaseline(window, budget));  // cache hit
   (void) gate.search({o1}, window, window.guardRegion, budget);
   (void) gate.search({o1}, window, window.guardRegion, budget);  // cache hit
   CHECK_EQ(checker.requestCount(), 2);  // baseline + o1, each exactly once
@@ -1351,7 +1350,7 @@ void testGateDeltaClassificationBranches()
                       /*ruleDistance=*/2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window.guardRegion, budget));
+  CHECK(gate.runBaseline(window, budget));
   const auto sr = gate.search({o1, o2, o3}, window, window.guardRegion, budget);
 
   // o1/o2 rejected for the pinned reasons; o3 accepted despite the unrelated
@@ -1362,6 +1361,260 @@ void testGateDeltaClassificationBranches()
   CHECK_EQ(sr.cleanOverlay[0].newMasterId, fillerMaster(2, kVt3));
   CHECK(sr.hasBest);
   CHECK_EQ(sr.bestSummary.newInWindow, 1);  // o1 was the best-tracked reject
+}
+
+// --- V2.1 batch-1 correctness regressions ----------------------------------
+
+// Returns an unexplained-illegal result (Checked, isLegal=false, no violations)
+// for any candidate overlay; the baseline honestly reproduces the original.
+// This is the shape the real checker returns for a blocking overlap / off-grid
+// / polarity mismatch, which the fake checker never produces.
+class IllegalEmptyChecker : public fr::ImplantOverlayChecker
+{
+ public:
+  fr::Violation original;
+  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& r) override
+  {
+    fr::CheckResult res;
+    res.requestId = r.requestId;
+    res.status = fr::CheckStatus::Checked;
+    if (r.fillerChanges.empty()) {
+      res.violations = {original};  // baseline: original present
+      res.isLegal = false;
+    } else {
+      res.isLegal = false;  // candidate: original cleared but result is illegal
+    }
+    return res;
+  }
+  std::vector<fr::CheckResult> checkPlaceWithOverlays(
+      const std::vector<fr::OverlayCheckRequest>& rs) override
+  {
+    std::vector<fr::CheckResult> out;
+    for (const auto& r : rs) {
+      out.push_back(checkPlaceWithOverlay(r));
+    }
+    return out;
+  }
+};
+
+// V2.1 #1: an unexplained illegal result (isLegal=false with no violations)
+// must be rejected, not accepted as clean just because no violation is listed.
+void testGateRejectsUnexplainedIllegal()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+
+  IllegalEmptyChecker checker;
+  checker.original = original;
+
+  fr::RepairWindow window;
+  window.rows = {0};
+  window.x = {0, 10};
+  window.guardRegion = fr::Region{{0, 20}, 0, 0};
+  const fr::TargetPlace anchor{};
+  const std::vector<fr::Violation> originals = {original};
+  fr::RepairConfig config;
+  fr::DebugLog log(verbose());
+  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+
+  int budget = 100;
+  CHECK(gate.runBaseline(window, budget));
+  const fr::Overlay o = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
+  const auto sr = gate.search({o}, window, window.guardRegion, budget);
+  CHECK(!sr.foundClean);               // NOT accepted
+  CHECK(sr.hasBest);
+  CHECK(sr.bestSummary.inconsistent);  // rejected for self-inconsistency
+}
+
+// V2.1 #2: a baseline that fails to reproduce an in-guard original means the
+// input snapshot is stale -- the gate must refuse to search (BaselineMismatch),
+// not silently treat "not observed" as "repaired".
+void testGateBaselineMismatchAbortsSearch()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+
+  ScriptedChecker checker;
+  checker.byKey[ScriptedChecker::keyOf({})] = {};  // baseline missing the original
+
+  fr::RepairWindow window;
+  window.rows = {0};
+  window.x = {0, 10};
+  window.guardRegion = fr::Region{{0, 20}, 0, 0};
+  const fr::TargetPlace anchor{};
+  const std::vector<fr::Violation> originals = {original};
+  fr::RepairConfig config;
+  fr::DebugLog log(verbose());
+  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+
+  int budget = 100;
+  CHECK(!gate.runBaseline(window, budget));  // consistency gate fails
+  bool sawMismatch = false;
+  for (const auto& d : gate.diagnostics()) {
+    sawMismatch |= d.code == "BaselineMismatch";
+  }
+  CHECK(sawMismatch);
+}
+
+// V2.1 #3: two candidate violations of the same signature must not both be
+// absorbed by a single baseline finding. One baseline H, two candidate H ->
+// the second H is genuinely new (here related-in-halo -> reject).
+void testGateMultisetNewViolationNotAbsorbed()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 20)
+      .place(500, fillerMaster(2, kVt1), 0, 4)
+      .place(501, fillerMaster(2, kVt1), 0, 14);
+  const fr::Violation O = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation H = makeViolation(  // halo finding, touches 501's span
+      9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {15, 16});
+
+  const fr::Overlay o = {*fr::makeSwap(design, 501, fillerMaster(2, kVt2))};
+  ScriptedChecker checker;
+  checker.byKey[ScriptedChecker::keyOf({})] = {O, H};  // baseline: original + one H
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o))] = {H, H};  // O gone, two H
+
+  fr::RepairWindow window;
+  window.rows = {0};
+  window.x = {0, 10};
+  window.guardRegion = fr::Region{{0, 20}, 0, 0};
+  const fr::TargetPlace anchor{};
+  const std::vector<fr::Violation> originals = {O};
+  fr::RepairConfig config;
+  fr::DebugLog log(verbose());
+  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+
+  int budget = 100;
+  CHECK(gate.runBaseline(window, budget));  // H is out-of-window -> baseline consistent
+  const auto sr = gate.search({o}, window, window.guardRegion, budget);
+  CHECK(!sr.foundClean);                     // the second H is not absorbed
+  CHECK_EQ(sr.bestSummary.relatedInHalo, 1);
+}
+
+// V2.1 #5: relatedness of a NEW violation uses max(originalRuleDistance, its
+// own requiredValue). A new violation from a larger-distance rule must be seen
+// as related (and reject), not mislabeled unrelated and let through.
+void testGatePerViolationRuleDistance()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
+  const fr::Violation O = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  fr::Violation N = makeViolation(  // new, 5 sites from the swap span [4,6)
+      9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {11, 12});
+  N.requiredValue = 6;  // larger-distance rule than the originals
+
+  const fr::Overlay o = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
+  ScriptedChecker checker;
+  checker.byKey[ScriptedChecker::keyOf({})] = {O};
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o))] = {N};  // O gone, N appears
+
+  fr::RepairWindow window;
+  window.rows = {0};
+  window.x = {0, 10};
+  window.guardRegion = fr::Region{{0, 20}, 0, 0};
+  const fr::TargetPlace anchor{};
+  const std::vector<fr::Violation> originals = {O};
+  fr::RepairConfig config;
+  fr::DebugLog log(verbose());
+  // Original rule distance is small (2); only max(2, N.requiredValue=6)=6 makes
+  // N (5 away) count as related.
+  fr::OracleGate gate(checker, anchor, originals, 1, /*ruleDistance=*/2, config, log);
+
+  int budget = 100;
+  CHECK(gate.runBaseline(window, budget));
+  const auto sr = gate.search({o}, window, window.guardRegion, budget);
+  CHECK(!sr.foundClean);
+  CHECK_EQ(sr.bestSummary.relatedInHalo, 1);
+  CHECK_EQ(sr.bestSummary.unrelatedInHalo, 0);
+}
+
+// A checker for which no overlay is ever clean: it returns the original
+// violation for the baseline AND for every candidate. Lets an engine test
+// drive the window/definitive control flow without the fake rule model.
+class AlwaysUnsolvedChecker : public fr::ImplantOverlayChecker
+{
+ public:
+  fr::Violation original;
+  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& r) override
+  {
+    fr::CheckResult res;
+    res.requestId = r.requestId;
+    res.status = fr::CheckStatus::Checked;
+    res.violations = {original};  // baseline and every candidate stay unsolved
+    res.isLegal = false;
+    return res;
+  }
+  std::vector<fr::CheckResult> checkPlaceWithOverlays(
+      const std::vector<fr::OverlayCheckRequest>& rs) override
+  {
+    std::vector<fr::CheckResult> out;
+    for (const auto& r : rs) {
+      out.push_back(checkPlaceWithOverlay(r));
+    }
+    return out;
+  }
+};
+
+// V2.1 #10: "definitive no solution" must reflect the LAST searched window.
+// A single contiguous filler run: L0 is just the anchor-touching participant
+// filler (space 2, fully enumerated) while L1's sideways sweep pulls in the
+// whole run (7 fillers, space 3^7 -> budget-truncated). The failure must read
+// "truncated", not "definitively" -- the old OR-accumulator latched L0's
+// completeness and would have mislabeled it definitive.
+void testEngineDefinitiveReflectsLastWindow()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 18)
+      .place(102, cellMaster(kVt2), 0, 0)   // anchor [0,4)
+      .place(140, fillerMaster(2, kVt1), 0, 4)   // touches anchor -> in L0
+      .place(141, fillerMaster(2, kVt1), 0, 6)
+      .place(142, fillerMaster(2, kVt1), 0, 8)
+      .place(143, fillerMaster(2, kVt1), 0, 10)
+      .place(144, fillerMaster(2, kVt1), 0, 12)
+      .place(145, fillerMaster(2, kVt1), 0, 14)
+      .place(146, fillerMaster(2, kVt1), 0, 16);
+
+  fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {4, 6});
+  fr::ViolationParticipant pf;
+  pf.instanceId = 140;
+  pf.rowId = 0;
+  pf.xRange = {4, 6};
+  pf.isFiller = true;
+  original.participants = {pf};
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  request.targetPlace.masterId = cellMaster(kVt2);
+  request.violations = {original};
+
+  AlwaysUnsolvedChecker checker;
+  checker.original = original;
+  fr::FakeCandidateProvider provider(design);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  // L0 (1 filler, space 2) fits and is complete; L1 (7 fillers) far exceeds 50.
+  config.checkerCallBudgetPerWindow = 50;
+  fr::FillerRepairEngine engine(design, checker, provider, config);
+
+  const auto result = engine.repair(request);
+  CHECK(!result.hasSolution);
+  bool sawTruncated = false;
+  bool sawDefinitive = false;
+  for (const auto& d : result.diagnostics) {
+    if (d.code == "NoCleanOverlay") {
+      sawTruncated |= d.message.find("truncated") != std::string::npos;
+      sawDefinitive |= d.message.find("definitively") != std::string::npos;
+    }
+  }
+  CHECK(sawTruncated);
+  CHECK(!sawDefinitive);
 }
 
 // --- User-provided realistic grid ------------------------------------------
@@ -1521,6 +1774,13 @@ int main(int argc, char** argv)
       {"engine_detects_protocol_error", testEngineDetectsProtocolError},
       {"engine_order_independent_batches", testEngineOrderIndependentBatches},
       {"gate_delta_classification_branches", testGateDeltaClassificationBranches},
+      {"gate_rejects_unexplained_illegal", testGateRejectsUnexplainedIllegal},
+      {"gate_baseline_mismatch_aborts_search", testGateBaselineMismatchAbortsSearch},
+      {"gate_multiset_new_violation_not_absorbed",
+       testGateMultisetNewViolationNotAbsorbed},
+      {"gate_per_violation_rule_distance", testGatePerViolationRuleDistance},
+      {"engine_definitive_reflects_last_window",
+       testEngineDefinitiveReflectsLastWindow},
       {"engine_user_grid_mw_ms_1", testEngineUserGridMwMs1},
   };
 

@@ -5,11 +5,11 @@ Development is confined to `src/dpl2`; the checker integrates into the
 infrastructure side, so until the real checker / infrastructure APIs land the
 planner is built and tested against the fakes in `fake/`.
 
-> **Spec is at V2.1; this code is still at V2 semantics.** A reviewer pass
-> (spec §0) pinned 12 engine-scope revisions — OracleGate correctness, window
-> simplification, search-domain modeling. The rollout plan (three batches,
-> correctness first) is in `src/dpl2/HandOff.md`. Read that before changing the
-> engine.
+> **V2.1 rollout (spec §0), three batches:** **batch 1 (OracleGate correctness,
+> #1/#2/#3/#4/#5/#10) is DONE** (40 tests). **Batches 2 (window/pipeline
+> simplification, #6/#7/#8/#11) and 3 (search-domain modeling, #9/#12) are
+> pending.** The plan and file:line pointers are in `src/dpl2/HandOff.md`. Read
+> that before changing the engine.
 
 ## Layout
 
@@ -81,7 +81,7 @@ folding the 12 revisions into this code is tracked as three batches in
 | 6 | Swap generator (atomic swaps only) | done |
 | 7 | Ranker (5 features, third-VT demotion) | done (V2.1 #9: rank fillers, keep per-filler domain) |
 | 8 | Subset searcher (ordered enumeration, complete-space rule) | done (V2.1 #9: caps on filler count) |
-| 9 | Oracle gate (batch, cache, baseline-delta, protocol validation) | done (V2.1 #1–#5: correctness fixes) |
-| 10 | Window escalation + diagnostics | done (V2.1 #10/#11: definitive-per-window, drop final check) |
-| 11 | Full spec test set | done for fake-checker scope (35 tests) |
+| 9 | Oracle gate (batch, cache, baseline-delta, protocol validation) | done; V2.1 #1–#5 correctness fixes applied (batch 1) |
+| 10 | Window escalation + diagnostics | done; V2.1 #10 definitive-per-window applied (batch 1); #11 drop-final-check pending (batch 2) |
+| 11 | Full spec test set | done for fake-checker scope (40 tests) |
 | 12 | Real checker adapter + CMake integration | pending |

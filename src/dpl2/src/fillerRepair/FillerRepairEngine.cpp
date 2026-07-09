@@ -98,7 +98,10 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
   // Stages 3..7 under the window escalation loop (spec 6.3/6.7/6.8):
   // L0 -> L1 -> L2, with the expansion cutoff when a level adds nothing new.
   OracleGate::SearchResult best;   // best non-clean across levels (diagnostics)
-  bool anyDefinitive = false;      // some level was exhausted completely
+  // Definitive iff the LAST window we actually searched was fully enumerated
+  // (V2.1 #10): an earlier smaller window being complete does not prove the
+  // later truncated window has no solution.
+  bool lastSearchedDefinitive = false;
   std::vector<InstanceId> previousEditable;
 
   for (int level = 0; level <= 2; ++level) {
@@ -140,15 +143,16 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
         generated.swaps, request.targetPlace, violations, window, view_, log_);
 
     int budget = config_.checkerCallBudgetPerWindow;
-    if (!gate.runBaseline(window.guardRegion, budget)) {
+    if (!gate.runBaseline(window, budget)) {
       result.hasSolution = false;
       result.diagnostics.insert(result.diagnostics.end(),
                                 gate.diagnostics().begin(),
                                 gate.diagnostics().end());
       result.diagnostics.push_back(makeDiag(
-          Severity::Fatal, "CheckerError",
-          cat("baseline check unusable at window L", level)));
-      log_.msg("engine", "baseline unusable -> abort");
+          Severity::Fatal, "BaselineGateFailed",
+          cat("baseline gate failed at window L", level,
+              " (see BaselineUnusable/BaselineMismatch above)")));
+      log_.msg("engine", "baseline gate failed -> abort");
       return result;
     }
 
@@ -202,7 +206,9 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
                          + best.bestSummary.relatedInHalo)) {
       best = sr;
     }
-    anyDefinitive |= plan.complete && !sr.budgetExhausted;
+    // This window was actually searched; its completeness is what a later
+    // "definitive" claim rests on (V2.1 #10).
+    lastSearchedDefinitive = plan.complete && !sr.budgetExhausted;
     result.diagnostics.push_back(makeDiag(
         Severity::Info, "WindowExhausted",
         cat("window L", level, ": ", plan.overlays.size(), " candidate(s), ",
@@ -220,7 +226,7 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
   result.diagnostics.push_back(makeDiag(
       Severity::Error, "NoCleanOverlay",
       cat("no baseline-delta clean overlay found; ",
-          anyDefinitive ? "window space exhausted definitively" : "budget/caps truncated",
+          lastSearchedDefinitive ? "window space exhausted definitively" : "budget/caps truncated",
           "; checker requests=", gate.requestsSent(), " batches=",
           gate.batchesSent(), " cacheHits=", gate.cacheHits())));
   if (best.hasBest) {
@@ -233,7 +239,7 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
             " unrelatedInHalo=", best.bestSummary.unrelatedInHalo)));
   }
   log_.msg("engine",
-           cat("NO SOLUTION (", anyDefinitive ? "definitive" : "truncated",
+           cat("NO SOLUTION (", lastSearchedDefinitive ? "definitive" : "truncated",
                "), requests=", gate.requestsSent(),
                " cacheHits=", gate.cacheHits()));
   return result;

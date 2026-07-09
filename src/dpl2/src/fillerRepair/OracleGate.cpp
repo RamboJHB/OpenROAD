@@ -8,6 +8,47 @@
 
 namespace dpl2::fillerRepair {
 
+namespace {
+
+// A violation falls inside the repair window when its x overlaps the editable
+// span and at least one of its rows is editable (spec 6.8 rule 3). Empty rows
+// -> not in-window, matching the checker-provided-rows fallback.
+bool inRepairWindow(const Violation& v, const RepairWindow& window)
+{
+  if (!v.xWindow.overlaps(window.x)) {
+    return false;
+  }
+  for (const RowId row : v.rowIds) {
+    if (std::find(window.rows.begin(), window.rows.end(), row)
+        != window.rows.end()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// A violation is observable in a baseline collected within `guard` when it
+// overlaps the guard geometrically. Used to scope the baseline-reproduces-
+// originals check: an original outside the current guard is simply not this
+// window's responsibility (it is covered once the window grows).
+bool inGuardRegion(const Violation& v, const Region& guard)
+{
+  if (!v.xWindow.overlaps(guard.x)) {
+    return false;
+  }
+  if (v.rowIds.empty()) {
+    return true;  // no row info -> conservative: treat as in-guard by x
+  }
+  for (const RowId row : v.rowIds) {
+    if (row >= guard.rowLo && row <= guard.rowHi) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
 OracleGate::OracleGate(ImplantOverlayChecker& checker,
                        const TargetPlace& anchor,
                        const std::vector<Violation>& originals,
@@ -33,8 +74,9 @@ std::string OracleGate::cacheKey(const Region& guard, const Overlay& overlay) co
              guard.rowHi, '|', canonicalKey(overlay));
 }
 
-bool OracleGate::runBaseline(const Region& guard, int& budget)
+bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
 {
+  const Region& guard = window.guardRegion;
   const std::string key = cacheKey(guard, {});
   auto it = cache_.find(key);
   if (it != cache_.end()) {
@@ -70,6 +112,80 @@ bool OracleGate::runBaseline(const Region& guard, int& budget)
   log_.msg("gate",
            cat("baseline for guard ", show(guard), ": ",
                baseline_->violations.size(), " violation(s)"));
+
+  // Baseline consistency gate: refuse to search on a stale/inconsistent
+  // snapshot (spec 6.8, V2.1 #2+#4).
+  if (!checkBaselineConsistency(window)) {
+    baseline_ = nullptr;
+    return false;
+  }
+  return true;
+}
+
+bool OracleGate::checkBaselineConsistency(const RepairWindow& window)
+{
+  // One-to-one bookkeeping so a single baseline finding cannot satisfy two
+  // originals (and, below, cannot be double-counted as unexpected).
+  std::vector<char> consumed(baseline_->violations.size(), 0);
+
+  // (a) Every original inside the guard must reproduce in the baseline. If it
+  //     does not, the input snapshot is stale/inconsistent and a candidate
+  //     that merely "does not observe" it would be mistaken for a repair.
+  int inGuardOriginals = 0;
+  for (const Violation& original : originals_) {
+    if (!inGuardRegion(original, window.guardRegion)) {
+      continue;  // outside this window's scope; a larger window will cover it
+    }
+    ++inGuardOriginals;
+    bool matched = false;
+    for (size_t i = 0; i < baseline_->violations.size(); ++i) {
+      if (!consumed[i]
+          && sameSignature(original, baseline_->violations[i], site_width_)) {
+        consumed[i] = 1;
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      diagnostics_.push_back(makeDiag(
+          Severity::Fatal, "BaselineMismatch",
+          cat("original rule=", original.ruleId, ' ', show(original.xWindow),
+              " lies in the guard but is absent from the baseline; input "
+              "snapshot is stale/inconsistent -- refusing to search")));
+      log_.msg("gate",
+               cat("baseline MISMATCH: original ", show(original.xWindow),
+                   " not reproduced -> abort window"));
+      return false;
+    }
+  }
+
+  // (b) No unexpected in-window violation may pre-exist in the baseline: by the
+  //     §2.3 assumption the input snapshot is clean apart from the originals,
+  //     so an unmatched baseline finding inside the repair window signals an
+  //     inconsistent snapshot. Unmatched findings OUTSIDE the window are the
+  //     allowed unrelated pre-existing halo (spec 6.8 rule 5).
+  for (size_t i = 0; i < baseline_->violations.size(); ++i) {
+    if (consumed[i]) {
+      continue;
+    }
+    const Violation& b = baseline_->violations[i];
+    if (inRepairWindow(b, window)) {
+      diagnostics_.push_back(makeDiag(
+          Severity::Fatal, "BaselineMismatch",
+          cat("baseline carries an in-window violation rule=", b.ruleId, ' ',
+              show(b.xWindow), " that is not among the original snapshot; "
+              "input is inconsistent -- refusing to search")));
+      log_.msg("gate",
+               cat("baseline MISMATCH: unexpected in-window ", show(b.xWindow),
+                   " -> abort window"));
+      return false;
+    }
+  }
+
+  log_.msg("gate",
+           cat("baseline consistent: ", inGuardOriginals,
+               " in-guard original(s) all reproduced, no unexpected in-window "
+               "violation"));
   return true;
 }
 
@@ -85,24 +201,42 @@ DeltaSummary OracleGate::classify(const CheckResult& result,
   if (!summary.usable) {
     return summary;
   }
-  summary.inconsistent = result.isLegal && !result.violations.empty();
+  // Self-consistency both ways (V2.1 #1): isLegal must agree with whether the
+  // result reports violations. `isLegal && violations non-empty` AND
+  // `!isLegal && violations empty` (an unexplained illegal result, which the
+  // real checker returns for blocking overlaps / off-grid / polarity) are both
+  // rejected as not clean.
+  summary.inconsistent = (result.isLegal != result.violations.empty());
 
-  // Rule: every original must be gone (signature match, spec 6.2).
-  for (const Violation& original : originals_) {
-    for (const Violation& v : result.violations) {
-      if (sameSignature(original, v, site_width_)) {
-        ++summary.residualOriginals;
-        break;
+  // Residual originals: match each original to a DISTINCT result finding, so
+  // two originals cannot both claim the same one (V2.1 #3, one-to-one).
+  {
+    std::vector<char> consumed(result.violations.size(), 0);
+    for (const Violation& original : originals_) {
+      for (size_t i = 0; i < result.violations.size(); ++i) {
+        if (!consumed[i]
+            && sameSignature(original, result.violations[i], site_width_)) {
+          consumed[i] = 1;
+          ++summary.residualOriginals;
+          break;
+        }
       }
     }
   }
 
-  // New violations = not matched in the baseline. Inside the repair window
-  // they always reject; in the guard halo only when related to this overlay.
+  // New violations = result findings not matched one-to-one against the
+  // baseline (V2.1 #3): one baseline finding absorbs at most one candidate
+  // finding, so a second same-signature finding is correctly counted as new
+  // (P/N bands + the one-site signature tolerance make duplicates real). Inside
+  // the repair window a new violation always rejects; in the guard halo only
+  // when related to this overlay.
+  std::vector<char> baselineConsumed(baseline_->violations.size(), 0);
   for (const Violation& v : result.violations) {
     bool preExisting = false;
-    for (const Violation& b : baseline_->violations) {
-      if (sameSignature(v, b, site_width_)) {
+    for (size_t i = 0; i < baseline_->violations.size(); ++i) {
+      if (!baselineConsumed[i]
+          && sameSignature(v, baseline_->violations[i], site_width_)) {
+        baselineConsumed[i] = 1;
         preExisting = true;
         break;
       }
@@ -110,18 +244,12 @@ DeltaSummary OracleGate::classify(const CheckResult& result,
     if (preExisting) {
       continue;
     }
-    bool inWindow = v.xWindow.overlaps(window.x);
-    if (inWindow) {
-      bool rowInWindow = false;
-      for (const RowId row : v.rowIds) {
-        rowInWindow |= std::find(window.rows.begin(), window.rows.end(), row)
-                       != window.rows.end();
-      }
-      inWindow = rowInWindow;
-    }
-    if (inWindow) {
+    if (inRepairWindow(v, window)) {
       ++summary.newInWindow;
-    } else if (isRelatedToOverlay(v, overlay, rule_distance_)) {
+    } else if (isRelatedToOverlay(v, overlay,
+                                  std::max(rule_distance_, v.requiredValue))) {
+      // Per-violation rule distance (V2.1 #5): a new violation from a
+      // larger-distance rule must not be mislabeled unrelated and let through.
       ++summary.relatedInHalo;
     } else {
       ++summary.unrelatedInHalo;

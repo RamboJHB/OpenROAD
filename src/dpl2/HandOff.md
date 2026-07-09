@@ -36,7 +36,15 @@ engine 从 V2 收敛到 V2.1。V1 存档 spec(`spec_v1` / `addendum_v1`)已删�
 优先级:**OracleGate 正确性 > 窗口简化 > 搜索域建模**。这三处比再加 ranking 特征
 更有价值。每条都标了 spec §0 的修订号、file:line 依据和验证方式。
 
-### 批 1 — OracleGate 正确性(先做,都是小改动)
+### 批 1 — OracleGate 正确性 ✅ 已完成(commit 见 git log,40 个测试全绿)
+
+> 全部落地。5 个新回归测试:`gate_rejects_unexplained_illegal`(#1)、
+> `gate_baseline_mismatch_aborts_search`(#2+#4)、
+> `gate_multiset_new_violation_not_absorbed`(#3)、
+> `gate_per_violation_rule_distance`(#5)、
+> `engine_definitive_reflects_last_window`(#10:L0 完备 + L1 截断 ⇒ 报 truncated)。
+> `runBaseline` 签名改为收 `RepairWindow`(baseline 一致性门需要 window)。
+> 下面保留每条的实现说明,供审阅与回溯。
 
 **1.1 双向自洽拒绝(#1)** — `OracleGate.cpp:88`
 现在 `summary.inconsistent = result.isLegal && !result.violations.empty();` 只捕获
