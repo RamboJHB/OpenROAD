@@ -47,30 +47,24 @@ VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
   return majority;
 }
 
-struct RankKey
+// Filler-level ordering key (V2.1 #9): which fillers the searcher combines
+// first. VT-choice features (anchor vote, third-VT demotion) do NOT belong
+// here -- they order options WITHIN a domain, below.
+struct FillerKey
 {
-  bool thirdVt = false;      // demoted band last
-  int direct = 0;            // descending
-  int bridge = 0;            // descending
-  int anchorVote = 0;        // descending
-  DbCoord width = 0;         // ascending
-  DbCoord x = 0;             // ascending
-  RowId row = 0;             // ascending
-  MasterId newMaster = 0;    // ascending
+  int direct = 0;      // descending
+  int bridge = 0;      // descending
+  DbCoord width = 0;   // ascending
+  DbCoord x = 0;       // ascending
+  RowId row = 0;       // ascending
 
-  bool operator<(const RankKey& o) const
+  bool operator<(const FillerKey& o) const
   {
-    if (thirdVt != o.thirdVt) {
-      return !thirdVt;
-    }
     if (direct != o.direct) {
       return direct > o.direct;
     }
     if (bridge != o.bridge) {
       return bridge > o.bridge;
-    }
-    if (anchorVote != o.anchorVote) {
-      return anchorVote > o.anchorVote;
     }
     if (width != o.width) {
       return width < o.width;
@@ -78,21 +72,19 @@ struct RankKey
     if (x != o.x) {
       return x < o.x;
     }
-    if (row != o.row) {
-      return row < o.row;
-    }
-    return newMaster < o.newMaster;
+    return row < o.row;
   }
 };
 
 }  // namespace
 
-std::vector<Swap> rankSwaps(std::vector<Swap> swaps,
-                            const TargetPlace& anchor,
-                            const std::vector<NormalizedViolation>& violations,
-                            const RepairWindow& window,
-                            const PlacementView& view,
-                            const DebugLog& log)
+std::vector<FillerDomain> rankFillers(
+    const std::vector<Swap>& swaps,
+    const TargetPlace& anchor,
+    const std::vector<NormalizedViolation>& violations,
+    const RepairWindow& window,
+    const PlacementView& view,
+    const DebugLog& log)
 {
   const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);
   const VtId anchorVt = anchorMaster != nullptr ? anchorMaster->vt : kUnknownVt;
@@ -104,44 +96,64 @@ std::vector<Swap> rankSwaps(std::vector<Swap> swaps,
   std::set<InstanceId> bridge(window.bridgeFillers.begin(),
                               window.bridgeFillers.end());
 
-  // Per-filler neighbor majority, computed once.
-  std::map<InstanceId, VtId> majority;
+  // Group swaps into per-filler domains, keyed for deterministic grouping.
+  std::map<InstanceId, FillerDomain> byFiller;
   for (const Swap& swap : swaps) {
-    if (majority.count(swap.instanceId) == 0) {
-      majority[swap.instanceId] =
-          neighborMajorityVt(view, *view.instance(swap.instanceId));
-    }
+    FillerDomain& domain = byFiller[swap.instanceId];
+    domain.instanceId = swap.instanceId;
+    domain.options.push_back(swap);
   }
 
-  const auto keyOf = [&](const Swap& swap) {
-    RankKey key;
-    key.thirdVt = swap.newVt != anchorVt
-                  && swap.newVt != majority[swap.instanceId];
-    key.direct = direct.count(swap.instanceId) > 0 ? 1 : 0;
-    key.bridge = bridge.count(swap.instanceId) > 0 ? 1 : 0;
-    key.anchorVote = swap.newVt == anchorVt ? 1 : 0;
-    key.width = swap.span.length();
-    key.x = swap.span.xl;
-    key.row = swap.rowId;
-    key.newMaster = swap.newMasterId;
+  std::vector<FillerDomain> ranked;
+  ranked.reserve(byFiller.size());
+  int demoted = 0;
+  for (auto& [id, domain] : byFiller) {
+    // Domain order: anchor's new VT -> neighbor majority -> stable master id;
+    // the third VT (neither) last -- demoted within THIS domain only, so it
+    // stays reachable in every subset the filler joins (V2.1 #9).
+    const VtId majorityVt = neighborMajorityVt(view, *view.instance(id));
+    const auto optionKey = [&](const Swap& s) {
+      const bool third = s.newVt != anchorVt && s.newVt != majorityVt;
+      const int anchorVote = s.newVt == anchorVt ? 0 : 1;
+      const int majorityVote = s.newVt == majorityVt ? 0 : 1;
+      return std::make_tuple(third, anchorVote, majorityVote, s.newMasterId);
+    };
+    std::stable_sort(domain.options.begin(), domain.options.end(),
+                     [&](const Swap& a, const Swap& b) {
+                       return optionKey(a) < optionKey(b);
+                     });
+    for (const Swap& s : domain.options) {
+      demoted += std::get<0>(optionKey(s)) ? 1 : 0;
+    }
+    ranked.push_back(std::move(domain));
+  }
+
+  const auto fillerKey = [&](const FillerDomain& domain) {
+    const Swap& any = domain.options.front();  // geometry is per-filler
+    FillerKey key;
+    key.direct = direct.count(domain.instanceId) > 0 ? 1 : 0;
+    key.bridge = bridge.count(domain.instanceId) > 0 ? 1 : 0;
+    key.width = any.span.length();
+    key.x = any.span.xl;
+    key.row = any.rowId;
     return key;
   };
+  std::stable_sort(ranked.begin(), ranked.end(),
+                   [&](const FillerDomain& a, const FillerDomain& b) {
+                     return fillerKey(a) < fillerKey(b);
+                   });
 
-  std::stable_sort(swaps.begin(),
-                   swaps.end(),
-                   [&](const Swap& a, const Swap& b) { return keyOf(a) < keyOf(b); });
-
-  if (log.enabled() && !swaps.empty()) {
-    int demoted = 0;
-    for (const Swap& swap : swaps) {
-      demoted += keyOf(swap).thirdVt ? 1 : 0;
+  if (log.enabled() && !ranked.empty()) {
+    std::string top;
+    for (const Swap& s : ranked[0].options) {
+      top += cat(top.empty() ? "" : ",", "vt", s.newVt);
     }
     log.msg("rank",
-            cat(swaps.size(), " swap(s), anchorVt=", anchorVt, ", demoted(thirdVt)=",
-                demoted, "; top: filler ", swaps[0].instanceId, " -> vt",
-                swaps[0].newVt, " (master ", swaps[0].newMasterId, ")"));
+            cat(ranked.size(), " filler domain(s) over ", swaps.size(),
+                " swap(s), anchorVt=", anchorVt, ", demoted(thirdVt)=", demoted,
+                "; top: filler ", ranked[0].instanceId, " domain=[", top, "]"));
   }
-  return swaps;
+  return ranked;
 }
 
 }  // namespace dpl2::fillerRepair

@@ -143,7 +143,10 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
       continue;
     }
 
-    const std::vector<Swap> ranked = rankSwaps(
+    // V2.1 #9: rank fillers, keep each filler's full candidate domain -- the
+    // searcher combines fillers and assigns per-domain options, so member caps
+    // cannot crowd a key filler (or its third VT) out of the enumeration.
+    const std::vector<FillerDomain> ranked = rankFillers(
         generated.swaps, request.targetPlace, violations, window, view_, log_);
 
     int budget = config_.checkerCallBudgetPerWindow;

@@ -38,14 +38,15 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 | 部分 | 状态 |
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
-| planner(`src/fillerRepair/`) | TODO 1–11 实现;V2.1 **批 1 全部落地**、**批 2 落地 #6/#7/#11**;**#8/#9/#12 未做** |
-| 测试 | 40 个,`-Werror` + ASan 全绿(`test/run_tests.sh`) |
+| planner(`src/fillerRepair/`) | TODO 1–11 实现;V2.1 **批 1 全落地**、**批 2 落地 #6/#7/#11**、**批 3 落地 #9(filler-domain 枚举)**;**#8/#12 未做** |
+| 测试 | 41 个,`-Werror` + ASan 全绿(`test/run_tests.sh`) |
 | checker(`src/drc/`) | 真实源码已导入 + spec §5 类型脚手架;**overlay API 是 stub,永远报 clean,严禁接给 engine**(engine 现在只接 fake) |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 
-关键 commit(倒序):`a7de6f0` 批 2 部分(#6/#7/#11)→ `c1bafce` 批 1(6 个
-正确性修复 + 5 回归测试)→ `df18536` spec V2.1 + 删 V1 存档 → `b5dd6b2` HandOff
-初版 → `b7b72ab` checker 脚手架 → 更早为 planner 实现史。
+关键 commit(倒序):#9 filler-domain(见 git log 最新)→ `d293265` AGENTS/TestPlan
+→ `a7de6f0` 批 2 部分(#6/#7/#11)→ `c1bafce` 批 1(6 个正确性修复 + 5 回归测试)
+→ `df18536` spec V2.1 + 删 V1 存档 → `b5dd6b2` HandOff 初版 → `b7b72ab` checker
+脚手架 → 更早为 planner 实现史。
 
 ## 3. 演进时间线(为什么会走到 V2.1)
 
@@ -173,6 +174,21 @@ partial 模式 / C 结构化残留违例字段。**我推荐 C,用户尚未回�
 第三 VT 降权(降权不剔除,犄角场景仍可达)、3^k ≤ 预算时完备枚举("窗口内
 无解"成为确定性结论)。算法不 hard-code 这张表,一切以 provider 运行时返回为准。
 
+### D14. #9 落地:filler-domain 接口与枚举顺序语义(实现时决策)
+**决策**:`rankFillers` 返回 `std::vector<FillerDomain>`——filler 级排序键只留
+{direct, bridge, width, position},VT 选择特征(anchorVote/第三 VT 降级)下沉为
+**domain 内排序**(anchor VT → 邻接 majority → 稳定 id,第三 VT 垫底);
+`enumerateOverlays` 按 (size, filler 组合字典序, domain 笛卡尔积・末位变最快)
+枚举,memberCap 数 filler。
+**顺序语义变化(有意为之)**:size-1 从旧的"全体主选 → 全体第三 VT"变为
+"逐 filler 展开完整 domain"(f1 的第三 VT 先于 f2 的主选)。这正是 spec §6.6
+V2.1 文本的定义;代价是个别多解 case 的"首个 clean"换人——用户 5 行 grid 的
+首解从 3013→vt1 变为 2012→vt0,**两者都是 oracle 验证的 delta-clean**,engine
+契约是"钉死枚举序中的第一个 clean",测试已更新并注明。
+**否决备选**:保留扁平 swap 列表、只把 cap 换算成 filler 数——不行,那仍无法
+表达"入选 filler 带完整 domain",第三 VT 仍可能被前缀挤出。
+**附带简化**:同 filler 冲突按构造不可能,枚举里的 dup 检查删除。
+
 ## 5. 实现要点与陷阱(接手前必读)
 
 - **stub 陷阱**:`drc/ImplantLayerChecker.cpp` 的 `checkPlaceWithOverlay[s]`
@@ -202,25 +218,22 @@ partial 模式 / C 结构化残留违例字段。**我推荐 C,用户尚未回�
 3. **R/L/UL 含义未经 library 团队确认**(见 D13);影响仅注释/文档,不影响算法。
 4. **#8 未做期间的已知次优**:L1 sweep 可吞整条 filler run → 完备枚举退化为
    截断枚举(spec §6.3 已写明目标行为,代码还是老实现,`Window.h` 头注释有
-   显式 NOTE)。
-5. `enumerate_member_cap_semantics` 类测试(若 TestPlan 执行)锁的是**将被 #9
-   替换的行为**,注释里已要求标注"预期随 #9 改",避免成为重构阻力。
+   显式 NOTE)。#9 落地后此项影响减半(截断时 cap 按 filler、domain 不丢),
+   但"完备性丢失"本身仍在,#8 仍值得做。
 
 ## 7. 下一步(优先级序)
 
-1. **#9 filler-domain 枚举**(批 3,解质量最大杠杆):rank filler、保留
-   per-filler 完整 master domain、cap 按 filler 数;第三 VT 降级变 domain 内
-   排序。动 `Ranker`/`SubsetSearch` 接口。
-2. **#8 adaptive-L1**(批 2 收尾):每轮向 best 非-clean candidate 的 blocking
-   violation 所在侧扩 K≈2 个 filler,重算完备性;取代 L1 的边界 sweep。
-   engine 的 `best` 已在追踪扩窗方向所需信息。
-3. **测试拓展**(与 1/2 并行,另一 AI 负责):按
-   `src/fillerRepair/test/TestPlan.md` 执行。
-4. **TODO 12 对接**(等真 checker overlay 实现):adapter 层
+1. **#8 adaptive-L1**(批 2 收尾,最后一个算法项):每轮向 best 非-clean
+   candidate 的 blocking violation 所在侧扩 K≈2 个 filler,重算完备性;取代 L1
+   的边界 sweep。engine 的 `best` 已在追踪扩窗方向所需信息。
+2. **测试拓展**(可并行,另一 AI 负责):按
+   `src/fillerRepair/test/TestPlan.md` 执行(#9 已落地,P1 的
+   SubsetSearch/Ranker 测试直接按 filler-domain 语义写)。
+3. **TODO 12 对接**(等真 checker overlay 实现):adapter 层
    (`fillerRepair/adapter/`,可含 UDM)+ CMake + 用真 checker 重放 spec §10。
-5. **#12 precheck 上收**:随 adapter 一起(infra 按 design revision 缓存
+4. **#12 precheck 上收**:随 adapter 一起(infra 按 design revision 缓存
    full-utility;planner 留 O(window) 防御复核)。
-6. **问用户拍板 D12 输出格式**,再动 `FillerRepairResult`。
+5. **问用户拍板 D12 输出格式**,再动 `FillerRepairResult`。
 
 ## 8. 工作方式(硬约束)
 

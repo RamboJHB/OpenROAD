@@ -935,26 +935,41 @@ void testRankerOrder()
   const auto generated = fr::generateSwaps(window, sc.design, provider,
                                            fr::DebugLog(verbose()));
   const auto ranked =
-      fr::rankSwaps(generated.swaps, sc.request.targetPlace, normalized,
-                    window, sc.design, fr::DebugLog(verbose()));
+      fr::rankFillers(generated.swaps, sc.request.targetPlace, normalized,
+                      window, sc.design, fr::DebugLog(verbose()));
 
-  // 203 is the only direct participant -> its swaps rank first; the
+  // V2.1 #9: the ranker returns filler DOMAINS. 203 is the only direct
+  // participant -> its domain ranks first; within the domain the
   // neighbor-majority (VT1) target beats the demoted third VT (VT3).
   CHECK_EQ(ranked[0].instanceId, 203);
-  CHECK_EQ(ranked[0].newVt, kVt1);
-  // Third-VT swaps are demoted to the tail but never removed.
-  CHECK_EQ(ranked.back().newVt, kVt3);
-  CHECK_EQ(ranked.size(), generated.swaps.size());
+  CHECK_EQ(ranked[0].options.front().newVt, kVt1);
+  // Third-VT options are demoted to the domain tail but never removed.
+  CHECK_EQ(ranked[0].options.back().newVt, kVt3);
+  // Grouping preserves every generated swap and never truncates a domain.
+  size_t optionTotal = 0;
+  for (const auto& domain : ranked) {
+    CHECK(!domain.options.empty());
+    for (const auto& option : domain.options) {
+      CHECK_EQ(option.instanceId, domain.instanceId);
+    }
+    optionTotal += domain.options.size();
+  }
+  CHECK_EQ(optionTotal, generated.swaps.size());
 }
 
 void testEnumerationOrderAndCompleteness()
 {
   RowFixture f = makeCoveredRow();
-  auto s1 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt2));
-  auto s2 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3));
-  auto s3 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
-  auto s4 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt3));
-  const std::vector<fr::Swap> ranked = {s1, s2, s3, s4};
+  // V2.1 #9: enumeration input is ranked filler domains.
+  fr::FillerDomain d100;
+  d100.instanceId = 100;
+  d100.options = {*fr::makeSwap(f.design, 100, fillerMaster(4, kVt2)),
+                  *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3))};
+  fr::FillerDomain d101;
+  d101.instanceId = 101;
+  d101.options = {*fr::makeSwap(f.design, 101, fillerMaster(2, kVt2)),
+                  *fr::makeSwap(f.design, 101, fillerMaster(2, kVt3))};
+  const std::vector<fr::FillerDomain> ranked = {d100, d101};
 
   fr::RepairConfig config;
   const auto plan =
@@ -962,19 +977,82 @@ void testEnumerationOrderAndCompleteness()
   // Space = (1+2)(1+2)-1 = 8: 4 singles + 4 cross-filler pairs.
   CHECK(plan.complete);
   CHECK_EQ(plan.overlays.size(), 8u);
+  // Size 1 walks fillers in rank order, each full domain in domain order.
   CHECK_EQ(plan.overlays[0].size(), 1u);
   CHECK_EQ(plan.overlays[0][0].instanceId, 100);
-  // First pair = ranks (0,2): same-filler combos (0,1) are skipped.
+  CHECK_EQ(plan.overlays[1][0].instanceId, 100);
+  CHECK_EQ(plan.overlays[1][0].newMasterId, fillerMaster(4, kVt3));
+  CHECK_EQ(plan.overlays[2][0].instanceId, 101);
+  // First pair = both fillers' first choices (anchor-follow leads); the last
+  // filler's option varies fastest across the Cartesian product.
   CHECK_EQ(plan.overlays[4].size(), 2u);
   CHECK_EQ(plan.overlays[4][0].instanceId, 100);
   CHECK_EQ(plan.overlays[4][1].instanceId, 101);
   CHECK_EQ(plan.overlays[4][1].newMasterId, fillerMaster(2, kVt2));
+  CHECK_EQ(plan.overlays[5][1].newMasterId, fillerMaster(2, kVt3));
 
   // Tiny budget truncates and clears the completeness claim.
   const auto truncated =
       fr::enumerateOverlays(ranked, config, 3, fr::DebugLog(verbose()));
   CHECK(!truncated.complete);
   CHECK_EQ(truncated.overlays.size(), 3u);
+}
+
+// V2.1 #9 regression: member caps count FILLERS, not options. Three ranked
+// domains, truncated mode, memberCapSize2=2: size-2 subsets draw from the
+// first TWO fillers with their FULL domains. Under the old flat-swap-prefix
+// semantics a cap of 2 covered only filler 100's two options, so no valid
+// size-2 subset existed at all and fillers were crowded out by options.
+void testEnumerationFillerDomainNotCrowdedOut()
+{
+  RowFixture f = makeCoveredRow();
+  fr::FillerDomain d100;
+  d100.instanceId = 100;
+  d100.options = {*fr::makeSwap(f.design, 100, fillerMaster(4, kVt2)),
+                  *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3))};
+  fr::FillerDomain d101;
+  d101.instanceId = 101;
+  d101.options = {*fr::makeSwap(f.design, 101, fillerMaster(2, kVt2)),
+                  *fr::makeSwap(f.design, 101, fillerMaster(2, kVt3))};
+  fr::FillerDomain d104;
+  d104.instanceId = 104;
+  d104.options = {*fr::makeSwap(f.design, 104, fillerMaster(4, kVt2)),
+                  *fr::makeSwap(f.design, 104, fillerMaster(4, kVt3))};
+  const std::vector<fr::FillerDomain> ranked = {d100, d101, d104};
+
+  fr::RepairConfig config;
+  config.memberCapSize2 = 2;
+  config.memberCapSize3 = 2;  // size 3 needs 3 fillers -> none emitted
+  // Space = 3*3*3-1 = 26 > budget 20 -> truncated mode, caps active.
+  const auto plan =
+      fr::enumerateOverlays(ranked, config, 20, fr::DebugLog(verbose()));
+  CHECK(!plan.complete);
+
+  // Size 1 is never capped: all three fillers' full domains appear --
+  // including the last-ranked filler 104 and its second (demoted) option.
+  int singles = 0;
+  bool saw104Second = false;
+  for (const auto& overlay : plan.overlays) {
+    if (overlay.size() == 1) {
+      ++singles;
+      saw104Second |= overlay[0].instanceId == 104
+                      && overlay[0].newMasterId == fillerMaster(4, kVt3);
+    }
+  }
+  CHECK_EQ(singles, 6);
+  CHECK(saw104Second);
+
+  // Size 2: exactly the (100,101) cross-filler products -- 4 of them, every
+  // domain option reachable; filler 104 is excluded by the FILLER cap.
+  int pairs = 0;
+  for (const auto& overlay : plan.overlays) {
+    if (overlay.size() == 2) {
+      ++pairs;
+      CHECK_EQ(overlay[0].instanceId, 100);
+      CHECK_EQ(overlay[1].instanceId, 101);
+    }
+  }
+  CHECK_EQ(pairs, 4);
 }
 
 void testEngineSolvesSingleSwap()
@@ -1716,11 +1794,16 @@ void testEngineUserGridMwMs1()
   request.violations = snapshot;
   const auto result = engine.repair(request);
 
-  // Deterministic solution: swap the row3 width-8 vt0 filler 3013 to vt1.
+  // Deterministic solution: this layout has several oracle-clean single
+  // swaps; the engine returns the FIRST in the pinned enumeration order.
+  // Under the V2.1 #9 filler-domain order that is the row2 width-4 vt1
+  // filler 2012 -> vt0 (the pre-#9 flat-swap order surfaced 3013 -> vt1,
+  // an equally clean alternative). Oracle-verified: residual=0,
+  // newInWindow=0, relatedInHalo=0.
   CHECK(result.hasSolution);
   CHECK_EQ(result.changes.size(), 1u);
-  CHECK_EQ(result.changes[0].instanceId, 3013);
-  CHECK_EQ(result.changes[0].newMasterId, grid::filler(8, 1));
+  CHECK_EQ(result.changes[0].instanceId, 2012);
+  CHECK_EQ(result.changes[0].newMasterId, grid::filler(4, 0));
 
   // Same input -> identical result (planner determinism).
   fr::FakeImplantChecker checker2(design, rules);
@@ -1728,7 +1811,7 @@ void testEngineUserGridMwMs1()
   const auto result2 = engine2.repair(request);
   CHECK(result2.hasSolution);
   CHECK_EQ(result2.changes.size(), 1u);
-  CHECK_EQ(result2.changes[0].instanceId, 3013);
+  CHECK_EQ(result2.changes[0].instanceId, 2012);
 }
 
 }  // namespace
@@ -1769,6 +1852,8 @@ int main(int argc, char** argv)
       {"swap_generator_no_usable_master", testSwapGeneratorNoUsableMaster},
       {"ranker_order", testRankerOrder},
       {"enumeration_order_and_completeness", testEnumerationOrderAndCompleteness},
+      {"enumeration_filler_domain_not_crowded_out",
+       testEnumerationFillerDomainNotCrowdedOut},
       {"engine_solves_single_swap", testEngineSolvesSingleSwap},
       {"engine_solves_pair_non_monotone", testEngineSolvesPairNonMonotone},
       {"engine_ignores_unrelated_halo_violation",

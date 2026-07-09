@@ -111,16 +111,20 @@ buildWindow + 诊断噪音。已删;level 循环结构保留给 rewrite 阶段�
 已删:`sr.foundClean` 后直接 `result.changes = toFillerChanges(...)` 返回,
 `OracleGate::finalCheck` 方法及声明一并移除。
 
-### 批 3 — 搜索域建模(#9 动接口;#12 随 adapter)
+### 批 3 — 搜索域建模(#12 随 adapter)
 
-**3.1 filler-domain 枚举(#9)** — `Ranker.*`、`SubsetSearch.cpp:56-64`
-现在 memberCap 是 rank index 前缀上限,作用在扁平 swap 列表上(`SubsetSearch.cpp:56`)。
-高排名 filler 每个占 2 个候选位,12 个 filler 就占满前 24,后面关键 filler 整体出局;
-第三 VT 全局垫底更是必进不了前缀。改成:**先 rank filler**,每个入选 filler 保留
-**全部候选 master 作为 domain**;`enumerateOverlays` 枚举 "filler 子集 × 各自 domain
-赋值";memberCap 作用在 filler 数上。现有 Ranker 特征全部兼容(从 swap 级聚合到
-filler 级);第三 VT 降级从"全局垫底"变成"domain 内排最后"。这是三批里对解质量
-影响最大的一处。
+**3.1 filler-domain 枚举(#9)✅ 已完成** — `Ranker.*` 返回
+`std::vector<FillerDomain>`(filler 按 direct/bridge/width/position 排序,每个
+filler 保留**完整** master domain,domain 内按 anchor VT → 邻接 majority → 稳定
+master id 排序、第三 VT 在 **domain 内**垫底);`enumerateOverlays` 枚举
+"filler 组合(字典序)× domain 赋值(末位 filler 变最快)",memberCap 按
+**filler 数**;同 filler 冲突按构造不可能(dup 检查删除)。回归测试
+`enumeration_filler_domain_not_crowded_out` 锁住"cap 按 filler 后跨 filler
+size-2 组合存在"(旧语义下 cap=2 只覆盖 f1 的两个 option,size-2 一个都出不来)。
+**注意枚举顺序语义变化**:size-1 从"全体主选先于全体第三 VT"变为"逐 filler
+展开完整 domain"(f1.third 先于 f2.best)——spec §6.6 V2.1 文本本就如此定义;
+用户 5 行 grid 测试因此换了一个同样 oracle-clean 的首解(2012→vt0,原 3013→vt1),
+测试已更新并注明原因。
 
 **3.2 precheck 上收(#12)** — `PreCheck.*`、`FillerRepairEngine.cpp:42`
 现在每次 repair 全设计逐行扫(O(design))。改:full-utility 权威结果由 infrastructure

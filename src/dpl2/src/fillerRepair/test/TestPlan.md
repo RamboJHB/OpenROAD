@@ -2,8 +2,11 @@
 
 > 写给负责测试拓展的 AI。背景:真实 checker 尚未接入,等待期间把纯 planner 各
 > 子模块(PreCheck / Signature / Window / SwapGenerator / Ranker / SubsetSearch /
-> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 40 个测试全绿
+> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 41 个测试全绿
 > (`test/run_tests.sh`,`-Wall -Wextra -Werror`)。
+> **V2.1 #9(filler-domain 枚举)已落地**:Ranker 返回 `FillerDomain`、
+> SubsetSearch 枚举 filler 组合 × domain 赋值、cap 按 filler 数——本计划中
+> Ranker/SubsetSearch 的测试一律按该语义写。
 >
 > 先读:`src/dpl2/AGENTS.md`(项目记忆与红线)→ spec §0/§6/§10
 > (`docs/filler_vt_overlay_repair_spec.md`)→ 本文。
@@ -28,7 +31,7 @@
    (拆分时保持单二进制、单注册表,run_tests.sh 一并更新)。
 7. 定期跑 ASan 版本(见 §5 命令);新测试合入前至少跑一次。
 
-## 1. 现有覆盖(40 个,勿重复)
+## 1. 现有覆盖(41 个,勿重复)
 
 - Swap 构造/校验、canonicalKey、wire 转换(3)
 - PreCheck:全覆盖 OK、gap、overlap/offgrid/illegal、engine fatal 短路(4)
@@ -36,7 +39,8 @@
   guard 过滤、target override(6)
 - Signature:normalize、匹配、relatedness(3)
 - Window:L0、L1 扩到 fixed 边界、guard 两圈 ring(3)
-- 生成器:basic、no usable master(2);Ranker 顺序(1);枚举顺序/完备性(1)
+- 生成器:basic、no usable master(2);Ranker 顺序(filler-domain)(1);
+  枚举顺序/完备性(1);#9 回归 filler cap 不挤出(1)
 - Engine E2E:单 swap、非单调 pair、unrelated halo、definitive 无解、
   unfixable hint、空 snapshot、协议错误、批序无关、用户 5 行 grid(9)
 - Gate:cache 单次评估、delta 分类分支(2)
@@ -106,18 +110,20 @@
 - `unfixable_ring_boundary`:filler 恰在 ring 内第 2 个 instance(true)/
   第 3 个(false);行方向 ±2(true)/±3(false)。
 
-**SubsetSearch**
+**SubsetSearch**(#9 已落地,按 filler-domain 语义写)
 - `enumerate_complete_budget_boundary`:space == budget(complete)与
   space == budget+1(truncated)两侧。
-- `enumerate_overflow_clamp`:几十个 filler 时 fullSpaceSize 不溢出、
+- `enumerate_overflow_clamp`:几十个 domain 时 fullSpaceSize 不溢出、
   直接 truncated。
-- `enumerate_member_cap_semantics`:锁定当前"cap 作用在 swap 前缀"的行为
-  (注意:批 3 #9 会把 cap 语义改成按 filler;届时这个测试**预期要改**,
-  在注释里写明,别写成阻碍重构的化石)。
+- `enumerate_size3_cap_and_products`:size-3 的 filler cap 与笛卡尔积展开
+  (`enumeration_filler_domain_not_crowded_out` 已覆盖 size-1/2,补 size-3
+  组合数与顺序:末位 filler 的 option 变最快)。
 
-**Ranker**
-- `ranker_each_key_isolated`:每个排序键单独构造一对 swap 验证先后
-  (third-VT 降级、direct、bridge、anchorVote、width、position)。
+**Ranker**(#9 已落地:filler 级键 + domain 内序分开测)
+- `ranker_filler_key_isolated`:filler 级排序键逐个验证(direct、bridge、
+  width、position)。
+- `ranker_domain_order_isolated`:domain 内序逐个验证(anchor VT 第一、
+  majority 第二、第三 VT 垫底但不剔除)。
 - `ranker_majority_per_band`:构造上下行 band 多数与同行多数不同的布局,
   验证按 band 计数。
 
@@ -145,8 +151,8 @@
 - 不给 stub 的 `ImplantLayerChecker::checkPlaceWithOverlay` 写行为测试
   (它会被真实现替换;checker 实现不是本模块责任)。
 - 不写依赖 fake 规则模型细节的"伪 DRC 正确性"断言(见总原则 2)。
-- 不为 #8 adaptive-L1 / #9 filler-domain 预写行为测试(接口未定,写了也是
-  猜;等重构落地后按 spec §6.3/§6.7 补)。
+- 不为 #8 adaptive-L1 预写行为测试(接口未定,写了也是猜;等重构落地后按
+  spec §6.3 补。#9 已落地,不受此限)。
 
 ## 4. 工作流
 
