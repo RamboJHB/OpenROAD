@@ -84,13 +84,6 @@ class OracleGate
                       const Region& guard,
                       int& budget);
 
-  // Final full-overlay check (spec 6.4): same overlay + guard; served from
-  // the cache when identical to the winning search request.
-  bool finalCheck(const Overlay& overlay,
-                  const RepairWindow& window,
-                  const Region& guard,
-                  int& budget);
-
   int requestsSent() const { return requests_sent_; }
   int batchesSent() const { return batches_sent_; }
   int cacheHits() const { return cache_hits_; }

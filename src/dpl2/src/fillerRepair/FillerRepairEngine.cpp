@@ -72,21 +72,23 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
   const std::vector<NormalizedViolation> violations =
       normalizeViolations(request, view_, log_);
 
-  // Stage 2b (spec 6.2): swap-unfixable fast check -- zero checker calls, so
-  // upstream can tell "structurally unrepairable" from "search exhausted".
+  // Stage 2b (spec 6.2): swap-unfixable HINT. V2.1 #6 downgraded this from a
+  // fast-fail to a warning: "no filler in the two-instance ring" has no oracle
+  // backing (it does not prove a farther filler can't matter through a
+  // contiguous implant run), and the payoff was tiny -- with no nearby filler
+  // the search itself reports NoEditableFiller with zero checker calls anyway.
+  // Keep the hint for upstream triage; let the normal search reach the verdict.
   for (size_t i = 0; i < violations.size(); ++i) {
     if (!hasFillerNearViolation(violations[i], view_)) {
-      result.hasSolution = false;
       result.diagnostics.push_back(makeDiag(
-          Severity::Error,
+          Severity::Warning,
           "UnfixableByTypeSwap",
           cat("violation#", i, " rule=", violations[i].raw.ruleId,
               " footprint=", show(violations[i].xRange),
-              " has no filler within its two-instance ring")));
+              " has no filler within its two-instance ring (hint only)")));
       log_.msg("engine",
                cat("violation#", i, " has no nearby filler -> "
-                   "UnfixableByTypeSwap, abort before search, 0 checker calls"));
-      return result;
+                   "UnfixableByTypeSwap hint (search continues)"));
     }
   }
 
@@ -96,7 +98,9 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
                   view_.siteWidth(), ruleDistance, config_, log_);
 
   // Stages 3..7 under the window escalation loop (spec 6.3/6.7/6.8):
-  // L0 -> L1 -> L2, with the expansion cutoff when a level adds nothing new.
+  // L0 -> L1, with the expansion cutoff when a level adds nothing new. V2.1 #7
+  // dropped L2 (it was identical to L1 for the single cluster and only ever
+  // tripped the cutoff).
   OracleGate::SearchResult best;   // best non-clean across levels (diagnostics)
   // Definitive iff the LAST window we actually searched was fully enumerated
   // (V2.1 #10): an earlier smaller window being complete does not prove the
@@ -104,7 +108,7 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
   bool lastSearchedDefinitive = false;
   std::vector<InstanceId> previousEditable;
 
-  for (int level = 0; level <= 2; ++level) {
+  for (int level = 0; level <= 1; ++level) {
     const RepairWindow window =
         buildWindow(level, request.targetPlace, violations, view_, ruleDistance, log_);
 
@@ -174,15 +178,10 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
     }
 
     if (sr.foundClean) {
-      // Stage 8 (spec 6.4): final full-overlay check under the same guard.
-      // Identical single-window request -> served from the gate cache.
-      if (!gate.finalCheck(sr.cleanOverlay, window, window.guardRegion, budget)) {
-        result.diagnostics.push_back(makeDiag(
-            Severity::Error, "FinalCheckFailed",
-            cat("winning overlay failed the final re-check at window L", level)));
-        log_.msg("engine", "final check failed -> continue escalation");
-        continue;
-      }
+      // The winning overlay already passed the baseline-delta gate under this
+      // window's guard (spec 6.8). V2.1 #11: no separate final full-overlay
+      // check -- it would reuse the identical cacheKey, hit the cache, and add
+      // no verification.
       result.hasSolution = true;
       result.changes = toFillerChanges(sr.cleanOverlay);
       result.diagnostics.push_back(makeDiag(

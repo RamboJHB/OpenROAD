@@ -1,14 +1,18 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Repair window builder: L0/L1/L2 ladder, guardRegion, bridge fillers and
-// the swap-unfixable fast check (spec sections 6.2/6.3, TODO 5).
+// Repair window builder: L0/L1 ladder, guardRegion, bridge fillers and the
+// swap-unfixable hint (spec sections 6.2/6.3, TODO 5).
 //
-// Levels (V1 runs a single cluster, spec 6.4, so L2 == the merged L1):
+// Levels (V2.1 #7 dropped L2 -- it was the merged form of L1 and identical for
+// the single cluster the engine solves):
 //   L0  violation participants ∪ anchor-adjacent fillers ∪ bridge fillers
 //   L1  L0 snapped to whole instances, extended sideways to the nearest
 //       non-filler boundary (fixed cell / row edge), rows ±1
-//   L2  merge of overlapping L1 windows -- identical to L1 for one cluster
+//
+// NOTE: spec V2.1 #8 further refines L1 into an "adaptive" step that grows K
+// fillers toward the blocking side instead of sweeping a whole run; that
+// refinement is not yet implemented here (L1 still does the boundary sweep).
 //
 // guardRegion = expandByCellRing(window, 2): two placed instances beyond the
 // window on each side, rows ±2. Guard-only fillers may never be edited; the
@@ -60,11 +64,10 @@ RepairWindow buildWindow(int level,
                          DbCoord ruleDistance,
                          const DebugLog& log);
 
-// Swap-unfixable fast check (spec 6.2, adopted from DAC'23): true when at
-// least one filler lies within a two-instance ring of the violation's
-// footprint on its rows ±2. When false for any original violation, no swap
-// overlay can possibly affect it -- the engine fails fast with
-// UnfixableByTypeSwap and zero checker calls.
+// Swap-unfixable hint (spec 6.2, adopted from DAC'23): true when at least one
+// filler lies within a two-instance ring of the violation's footprint on its
+// rows ±2. When false, a swap is unlikely to help -- but V2.1 #6 uses this only
+// as a warning hint, not a fast-fail (the ring argument has no oracle backing).
 bool hasFillerNearViolation(const NormalizedViolation& violation,
                             const PlacementView& view);
 

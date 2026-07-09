@@ -144,11 +144,11 @@ RepairWindow buildWindow(int level,
     }
   }
 
-  // --- L1+ (spec 6.3): rows ±1; per row, extend x outward across contiguous
+  // --- L1 (spec 6.3): rows ±1; per row, extend x outward across contiguous
   // fillers up to the nearest non-filler boundary (fixed cell / row edge);
-  // then sweep every filler overlapping the extended x into the editable
-  // set, whole instances. L2 is the merged form of L1 windows -- identical
-  // for the single cluster V1 solves (spec 6.4).
+  // then sweep every filler overlapping the extended x into the editable set,
+  // whole instances. (V2.1 #7 dropped L2; #8's adaptive per-K-filler growth is
+  // a pending refinement of this sweep.)
   if (level >= 1) {
     const RowId lo = *rowSet.begin() - 1;
     const RowId hi = *rowSet.rbegin() + 1;

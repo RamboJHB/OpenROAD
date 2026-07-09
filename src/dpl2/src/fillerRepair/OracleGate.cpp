@@ -389,24 +389,4 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
   return sr;
 }
 
-bool OracleGate::finalCheck(const Overlay& overlay,
-                            const RepairWindow& window,
-                            const Region& guard,
-                            int& budget)
-{
-  bool protocolError = false;
-  if (resolve({overlay}, guard, budget, protocolError) == nullptr && protocolError) {
-    return false;
-  }
-  const auto it = cache_.find(cacheKey(guard, overlay));
-  if (it == cache_.end()) {
-    return false;  // out of budget -- cannot certify
-  }
-  const DeltaSummary summary = classify(it->second, overlay, window);
-  log_.msg("gate",
-           cat("final full-overlay check: ", overlay.size(), " swap(s) -> ",
-               summary.clean ? "clean" : "NOT clean"));
-  return summary.clean;
-}
-
 }  // namespace dpl2::fillerRepair

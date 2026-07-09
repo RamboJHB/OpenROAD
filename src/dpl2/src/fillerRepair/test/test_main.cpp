@@ -775,6 +775,10 @@ void testGuardRegionTwoCellRing()
 void testEngineUnfixableFastFail()
 {
   // A row of std cells only: a violation there has no filler in its ring.
+  // V2.1 #6: this is now a warning hint, not a fast-fail. The engine still
+  // returns no solution and makes zero checker calls -- but because the search
+  // finds no editable filler, not because of an early abort. The
+  // UnfixableByTypeSwap diagnostic is still emitted (now as a hint).
   fr::FakeDesign design = makeLibrary();
   design.addRow(0, 0, 16)
       .place(100, cellMaster(kVt1), 0, 0)

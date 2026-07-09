@@ -6,10 +6,11 @@ infrastructure side, so until the real checker / infrastructure APIs land the
 planner is built and tested against the fakes in `fake/`.
 
 > **V2.1 rollout (spec §0), three batches:** **batch 1 (OracleGate correctness,
-> #1/#2/#3/#4/#5/#10) is DONE** (40 tests). **Batches 2 (window/pipeline
-> simplification, #6/#7/#8/#11) and 3 (search-domain modeling, #9/#12) are
-> pending.** The plan and file:line pointers are in `src/dpl2/HandOff.md`. Read
-> that before changing the engine.
+> #1/#2/#3/#4/#5/#10) DONE.** **Batch 2 partly done: #6/#7/#11 DONE**
+> (unfixable→warning, dropped L2, dropped final check); **#8 adaptive-L1
+> pending** (L1 still does the boundary sweep). **Batch 3 (search-domain
+> modeling, #9/#12) pending.** 40 tests green. Plan and file:line pointers in
+> `src/dpl2/HandOff.md`.
 
 ## Layout
 

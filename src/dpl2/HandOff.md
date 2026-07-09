@@ -87,10 +87,13 @@ complete 标志;ExpansionCutoff 提前 break 时沿用 break 前那轮的值。
 
 ### 批 2 — 窗口/管线简化(减代码)
 
-**2.1 删 L2(#7)** — `FillerRepairEngine.cpp:104`(`for level 0..2`)、`Window.*`、
-spec §6.3。单 cluster 下 L2==L1,`:108` 的 ExpansionCutoff 必然触发,白付一次
-buildWindow + 诊断噪音。改窗口模型为 **L0 + adaptive-L1**;保留 level 循环结构给
-rewrite 阶段留口。
+> 状态:**#6 / #7 / #11 已完成**(loop 改为 `level<=1`,unfixable 降级 Warning,
+> 删 finalCheck + `OracleGate::finalCheck`)。**#8 adaptive-L1 仍待做**(下面 2.2)——
+> L1 目前仍是"sweep 到边界"的老实现。
+
+**2.1 删 L2(#7)✅** — `FillerRepairEngine.cpp` loop 改为 `level<=1`、`Window.*`
+注释、spec §6.3。单 cluster 下 L2==L1,ExpansionCutoff 必然触发,白付一次
+buildWindow + 诊断噪音。已删;level 循环结构保留给 rewrite 阶段留口。
 
 **2.2 adaptive-L1(#8)** — `Window.cpp` buildWindow(L1 分支)、`FillerRepairEngine.cpp`
 主循环。现在 L1 横向 snap 到 fixed/core 边界可吞整条 filler run → `fullSpaceSize`
@@ -99,18 +102,14 @@ rewrite 阶段留口。
 重算 `plan.complete`,循环到预算尽或扩窗截止。engine 现有的 `best`(`:196-204`)已经
 在追踪 best 非-clean summary,扩窗方向从它的 blocking violation 取。
 
-**2.3 swap-unfixable 降级(#6)** — `FillerRepairEngine.cpp:77-91`
-现在 `hasFillerNearViolation` 失败会提前 `return`(hard fail,`UnfixableByTypeSwap`
-Error)。改为:不提前 return,只 push 一条 **Warning** 诊断,继续正常搜索。理由见
-spec §6.2:ring 论证无 oracle 佐证、与 checker-as-oracle 有张力,且收益极小(此种
-case L0 本就 `NoEditableFiller` 跳过、零 checker call)。`hasFillerNearViolation` 保留
-作 hint。
+**2.3 swap-unfixable 降级(#6)✅** — `FillerRepairEngine.cpp` stage 2b。原来
+`hasFillerNearViolation` 失败会提前 `return`(hard fail)。已改为:不提前 return,
+只 push 一条 **Warning** 诊断,继续正常搜索。`hasFillerNearViolation` 保留作 hint。
 
-**2.4 删 finalCheck(#11)** — `FillerRepairEngine.cpp:172-181` + `OracleGate::finalCheck`
-(`OracleGate.cpp:264-282`)。finalCheck 用相同 cacheKey → 必然 cache 命中 → 相同
-classify 输出,零验证增益(engine 注释 `:174` 自己承认了)。改:`sr.foundClean` 后
-直接 `result.changes = toFillerChanges(sr.cleanOverlay)` 返回,删掉 finalCheck 调用和
-`OracleGate::finalCheck` 方法。
+**2.4 删 finalCheck(#11)✅** — `FillerRepairEngine.cpp` foundClean 分支 +
+`OracleGate::finalCheck`。finalCheck 用相同 cacheKey → 必然 cache 命中 → 零验证增益。
+已删:`sr.foundClean` 后直接 `result.changes = toFillerChanges(...)` 返回,
+`OracleGate::finalCheck` 方法及声明一并移除。
 
 ### 批 3 — 搜索域建模(#9 动接口;#12 随 adapter)
 
