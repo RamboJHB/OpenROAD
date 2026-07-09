@@ -1,9 +1,15 @@
 # fillerRepair — Filler VT Overlay Repair Planner
 
-Implements the pure repair planner from `docs/filler_vt_overlay_repair_spec.md`
-(V2). Development is confined to `src/dpl2`; the checker integrates into the
+Implements the pure repair planner from `docs/filler_vt_overlay_repair_spec.md`.
+Development is confined to `src/dpl2`; the checker integrates into the
 infrastructure side, so until the real checker / infrastructure APIs land the
 planner is built and tested against the fakes in `fake/`.
+
+> **Spec is at V2.1; this code is still at V2 semantics.** A reviewer pass
+> (spec §0) pinned 12 engine-scope revisions — OracleGate correctness, window
+> simplification, search-domain modeling. The rollout plan (three batches,
+> correctness first) is in `src/dpl2/HandOff.md`. Read that before changing the
+> engine.
 
 ## Layout
 
@@ -16,11 +22,11 @@ planner is built and tested against the fakes in `fake/`.
 | `Swap.h/.cpp` | `Swap` (the stage's atomic operation: FillerChange + geometry metadata), overlay cache key (spec §4) |
 | `PreCheck.h/.cpp` | 100% utility pre-check (spec §6.1) |
 | `Signature.h/.cpp` | Violation normalization, pinned signature matching, change-relatedness (spec §6.2) |
-| `Window.h/.cpp` | L0/L1/L2 window builder, guardRegion two-cell ring, bridge fillers, swap-unfixable fast check (spec §6.2/6.3) |
+| `Window.h/.cpp` | Window builder (currently L0/L1/L2; V2.1 → L0 + adaptive-L1, spec §6.3), guardRegion two-cell ring, bridge fillers, swap-unfixable check (spec §6.2/6.3) |
 | `SwapGenerator.h/.cpp` | Swap generator: atomic swaps only, no group/seed machinery (spec §6.5) |
-| `Ranker.h/.cpp` | 5-feature lexicographic ordering + third-VT demotion; realizes anchor-follow (spec §6.6) |
-| `SubsetSearch.h/.cpp` | Ordered per-filler subset enumeration, complete-space rule (spec §6.7) |
-| `OracleGate.h/.cpp` | Baseline + batched checker calls, protocol validation, result cache, baseline-delta gate (spec §6.8) |
+| `Ranker.h/.cpp` | 5-feature lexicographic ordering + third-VT demotion; realizes anchor-follow (spec §6.6). V2.1: ranks fillers, keeps full per-filler master domain (#9) |
+| `SubsetSearch.h/.cpp` | Ordered per-filler subset enumeration, complete-space rule (spec §6.7). V2.1: member caps count fillers not swaps (#9) |
+| `OracleGate.h/.cpp` | Baseline + batched checker calls, protocol validation, result cache, baseline-delta gate (spec §6.8). V2.1 batch-1 target: two-way self-consistency, BaselineMismatch gate, multiset delta, per-violation ruleDistance (#1–#5) |
 | `FillerRepairEngine.h/.cpp` | Planner entry + pipeline skeleton (spec §3.2) |
 | `fake/FakeDesign.h` | In-memory `PlacementView` with fluent builders |
 | `fake/FakeCandidateProvider.h` | Same-size replacement lookup over the fake library |
@@ -60,17 +66,22 @@ FR_VERBOSE=1 test/run_tests.sh # with the [fr] debug transcript
 
 ## Status vs spec §11 TODO
 
+TODO 1–11 are implemented at **V2 semantics** (35 deterministic tests green).
+TODO 12 (real checker/infra adapter + CMake) is pending. The spec is at **V2.1**;
+folding the 12 revisions into this code is tracked as three batches in
+`src/dpl2/HandOff.md`.
+
 | # | Item | Status |
 |---|---|---|
 | 1 | Planner API, `Swap` struct, overlay cache key | done |
 | 2 | Fake checker + fake candidate provider, protocol locked by tests | done |
-| 3 | 100% utility pre-check with fatal short-circuit | done |
+| 3 | 100% utility pre-check with fatal short-circuit | done (V2.1 #12: move authority to infra cache) |
 | 4 | Violation normalization + signature matching | done |
-| 5 | L0/L1/L2 window builder + guardRegion + unfixable fast check | done |
+| 5 | Window builder + guardRegion + unfixable check | done (V2.1 #6/#7/#8: warning-only, drop L2, adaptive-L1) |
 | 6 | Swap generator (atomic swaps only) | done |
-| 7 | Ranker (5 features, third-VT demotion) | done |
-| 8 | Subset searcher (ordered enumeration, complete-space rule) | done |
-| 9 | Oracle gate (batch, cache, baseline-delta, protocol validation) | done |
-| 10 | Window escalation + final check + diagnostics | done |
-| 11 | Full spec test set | done for fake-checker scope (34 tests) |
+| 7 | Ranker (5 features, third-VT demotion) | done (V2.1 #9: rank fillers, keep per-filler domain) |
+| 8 | Subset searcher (ordered enumeration, complete-space rule) | done (V2.1 #9: caps on filler count) |
+| 9 | Oracle gate (batch, cache, baseline-delta, protocol validation) | done (V2.1 #1–#5: correctness fixes) |
+| 10 | Window escalation + diagnostics | done (V2.1 #10/#11: definitive-per-window, drop final check) |
+| 11 | Full spec test set | done for fake-checker scope (35 tests) |
 | 12 | Real checker adapter + CMake integration | pending |

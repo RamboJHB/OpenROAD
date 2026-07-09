@@ -1,13 +1,13 @@
-# 功能规格 — Filler VT Overlay 修复 V2(checker-guided,本阶段 swap-only)
+# 功能规格 — Filler VT Overlay 修复 V2.1(checker-guided,本阶段 swap-only)
 
-状态:**V2 定稿**。分支:`claude/wizardly-carson-secahu`。基线:`2023-base`。
-最后更新 2026-07-02。对齐本地 `src/dpl2` header draft(并行开发中)。
+状态:**V2.1 定稿**。分支:`claude/wizardly-carson-secahu`。基线:`2023-base`。
+最后更新 2026-07-09。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
+checker 源码。
 
-历史版本:
-- `docs/filler_vt_overlay_repair_spec_v1.md`(V1 存档,greedy+beam 内核)
-- `docs/filler_vt_overlay_repair_addendum_v1.md`(V1 实现评估补充,存档)
-
-V2 相对 V1 的完整差异清单见 [§12](#12-与-v1-的差异清单)。
+V2.1 相对 V2 是一次 reviewer 驱动的修订,聚焦三处高价值改动:**OracleGate 正确性、
+窗口模型简化、搜索域建模**。完整修订记录见 [§0](#0-v21-修订记录);V2 相对 V1 的
+差异清单见 [§12](#12-与-v1-的差异清单)。V1 存档文件(`spec_v1` / `addendum_v1`)
+已作为冗余文档移除,其内容被 §12 差异表完整覆盖。
 
 **一句话**:design 已 100% utility(无空 site);opto/ECO 一次改一个 std cell 的
 VT/type 后产生 implant MW/MS 违例。checker 把 violation snapshot 交给 filler repair
@@ -16,6 +16,40 @@ engine;repair engine 通过 utility precheck 后,在局部窗口内生成 **swap
 成批交给 checker overlay API 验证**,用同一 `guardRegion` 下的 baseline-delta clean 作为
 唯一 accept 标准。找到 clean 解返回 `FillerRepairResult`,由上游 commit;修不了则返回
 diagnostics,不动 DB。
+
+---
+
+## 0. V2.1 修订记录
+
+V2 定稿并完成 planner 实现(TODO 1–11,35 个确定性测试)后,拿到真实 checker
+源码,做了一次 reviewer 复审。以下 12 项修订都在 **repair engine 范围内**
+(checker 实现不属本 feature 责任);优先级排序为 **OracleGate 正确性 > 窗口简化
+> 搜索域建模**。
+
+| # | 类别 | 问题 | 处置 | 落点 |
+|---|---|---|---|---|
+| 1 | 正确性 | `classify()` 未拒绝 `Checked && !isLegal && violations 空`,可能把未解释的非法结果判 clean | result 自洽性双向判定:`isLegal` 与 `violations 空否` 必须一致 | §5.2、§6.8 |
+| 2 | 正确性 | baseline 只查 `status==Checked`,不验证 original 是否复现,可能把"没观察到"误当"已修好" | 搜索前增加 `BaselineMismatch` 门:baseline 必须复现全部 original | §6.8 |
+| 3 | 正确性 | delta 匹配非一对一,两条同 signature 的新违例可被一条 baseline finding 一起吸收 | baseline/candidate 作 multiset,消耗式一对一匹配 | §6.8 |
+| 4 | 正确性 | pre-existing 的窗口内/相关 violation 被无条件 `continue` 忽略,比 spec 宽松 | 并入 #2 baseline 一致性门(而非在 classify 里对 pre-existing 重判 relatedness) | §6.8 |
+| 5 | 正确性 | halo relatedness 的 `ruleDistance` 只取 original 最大 requiredValue,新违例规则更大时被误判 unrelated 放行 | 判新违例时取 `max(原始最大, 该违例 requiredValue)` | §6.2、§6.8 |
+| 10 | 正确性 | `anyDefinitive` 用 OR 累积,L0 完备 + L1 截断仍会宣称 definitive | definitive 只按**最后实际搜索窗口**的完备性断言 | §6.7、§6.9 |
+| 6 | 简化 | `UnfixableByTypeSwap` 用无 oracle 的 ring 论证做 hard abort,与 checker-as-oracle 有张力,收益极小 | 降级为 Warning 提示,不提前终止,仍走正常搜索 | §6.2 |
+| 7 | 简化 | 单 cluster 下 L2 恒等于 L1、ExpansionCutoff 必触发,名义三级实际两级 | 删 L2,窗口模型改为 L0 + adaptive-L1 | §3.2、§6.3、§7 |
+| 8 | 简化 | L1 一次扩到 fixed/core 边界可吞整条 filler run,`3^k>预算` 立即退化为截断枚举 | 改渐进扩窗:每步向 blocking 侧扩 K≈2 个 filler,尽量维持完备枚举 | §6.3 |
+| 11 | 简化 | final full-overlay check 用相同 cacheKey,必然 cache 命中,零验证增益 | 删除该步;clean 一经 §6.8 判定即返回 | §6.4、§6.9 |
+| 9 | 建模 | 成员上限作用在扁平 swap 列表上,高排名 filler 占满前缀,关键 filler / 第三 VT 可能整体出局 | 先 rank filler、每 filler 保留全部 master domain,再枚举 per-filler 赋值;上限按 filler 数 | §6.6、§6.7 |
+| 12 | 建模 | 每次 repair 全设计逐行扫描过重;`rowLegalSpan` 单区间表达不了多段 legal segment | full-utility 状态由 infrastructure 按 design revision 缓存下发,planner 只做窗口局部 O(window) 防御性复核 | §5.4、§6.1 |
+
+落地分三批(实施顺序,详见 `src/dpl2/HandOff.md`):
+**批 1 正确性** #1/#2/#3/#4/#5/#10 —— 都是小改动、现有 harness + ScriptedChecker
+可造回归;**批 2 简化** #6/#7/#8/#11 —— 减代码,改动集中在窗口相关 case;
+**批 3 建模** #9/#12 —— #9 动 Ranker/SubsetSearcher 接口,#12 随 adapter 对接。
+
+保留不采纳原文的一处:#4 的原始处方(对 related pre-existing 也否决)会让那条
+连 baseline 都有的违例在每个 candidate 里都出现、导致 repair 恒失败;正确修法是把
+它并入 #2 的 baseline 一致性门——按 §2.3 假设,窗口内/相关的 pre-existing violation
+本就不该存在,发现即报输入异常。
 
 ---
 
@@ -129,18 +163,18 @@ opto 改动次数,所以"好排序让首批候选命中"比"搜索策略高级"�
 repair engine 内部是五层管线,每层单独可测、单独可替换:
 
 ```text
-┌─ 窗口控制外环(L0 → L1 → L2,预算耗尽则升级,§6.3)─────────────┐
+┌─ 窗口控制外环(L0 → adaptive-L1,预算尽/近边界则渐进扩窗,§6.3)──┐
 │                                                                  │
 │  ① SwapGenerator   窗口内生成候选 swap                           │
 │                    本阶段:仅 swap;未来:+RewriteGenerator       │
-│  ② Ranker          启发式排序(5 特征起步,只影响评估顺序,       │
-│                    不判合法性,§6.6)                             │
-│  ③ SubsetSearcher  按 rank 序枚举 size-1/2/3… 的 swap 子集       │
-│                    (按 filler 分组,无冲突),分批产出(§6.7)    │
+│  ② Ranker          按 filler 排序(启发式,只影响评估顺序,不判   │
+│                    合法性,§6.6);每 filler 保留全部候选 domain   │
+│  ③ SubsetSearcher  按 filler rank 序枚举 filler 子集 × 各自       │
+│                    domain 赋值组合,分批产出(§6.7)              │
 │  ④ OracleGate      canonical cache + batch checker call +        │
-│                    baseline-delta clean 判定(§6.8)              │
-│  ⑤ Result/Diag     首个 clean 即返回;预算尽扩窗;仍无解则       │
-│                    diagnostics(§6.9)                            │
+│                    baseline 一致性门 + baseline-delta clean(§6.8) │
+│  ⑤ Result/Diag     首个 clean 即返回;预算尽/近边界渐进扩窗;     │
+│                    仍无解则 diagnostics(§6.9)                    │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -319,8 +353,11 @@ id 分配流程等契约细节仍依赖未定稿的设计,现在拍板是投机�
   correctness 不依赖顺序。result 缺失、重复/未知 `requestId`、single API echo 错误,
   一律视为 checker protocol error,repair 拒绝该 batch。
 - 单个 invalid/unsupported request 只影响自己的 `CheckResult`。
-- `status != Checked` 必须给 diagnostics;`Checked && !isLegal` 尽量给 violations 或
-  diagnostics;`Checked && isLegal && violations 非空` repair 仍按不 clean 拒绝。
+- `status != Checked` 必须给 diagnostics。result 的两种自相矛盾形态 repair 都按不
+  clean 拒绝:`Checked && isLegal && violations 非空`,以及 `Checked && !isLegal &&
+  violations 空`(未解释的非法结果,V2.1 修订 #1);后者要求 checker 尽量补
+  violations,或以 diagnostics 说明为何非法(如 blocking overlap、site 不对齐、
+  polarity mismatch)。
 - checker 不需要维护 violation 历史,也不做 original/residual/new/spillover 分类;
   分类由 repair 侧用同一 `guardRegion` 的 baseline/overlay delta 完成(§6.8)。
 
@@ -374,8 +411,11 @@ struct FillerRepairResult
 };
 ```
 
-100% utility precheck 由 repair engine 自己基于 DB/placement adapter 完成,不要求
-checker/infrastructure 提供 API。结构与 V1 相同:
+100% utility 的**权威全量结果建议由 infrastructure 按 design revision 缓存一次并
+下发**给 planner 消费(每次 repair 全设计逐行扫描过重,V2.1 修订 #12);planner
+侧只在 repair window 内做一次 O(window) 的防御性复核。`rowLegalSpan` 单区间无法
+表达 macro/blockage 造成的多段 legal segment,adapter 需按段提供(或在窗口内以
+多段返回)。数据结构与 V1 相同:
 
 ```cpp
 enum class CoverageIssueKind { Gap, Overlap, OffGrid, IllegalOccupant };
@@ -406,8 +446,10 @@ struct SiteCoverageResult
 
 每个合法 std-cell site 必须被 std cell 或 filler 精确覆盖一次;gap / overlap /
 off-grid / illegal occupant 都是 precondition failure。macro、blockage、core cutout
-等非法 site 由 DB adapter 排除。实现上可维护 occupancy cache + dirty range,语义上
-必须等价于全量检查。
+等非法 site 由 DB adapter 排除。**全设计全量扫描的权威结果由 infrastructure 按
+design revision 缓存并下发**(每次 repair 重扫太重,V2.1 修订 #12);planner 消费
+该结果,并只在 repair window 内做一次 O(window) 的防御性复核(窗口内单段假设成立;
+真遇 macro/blockage 多段由 adapter 报 issue,§5.4)。语义上必须等价于全量检查。
 
 失败语义:不生成 move、不调 checker、`hasSolution=false`、`changes` 为空、
 diagnostics 带 fatal/error 级 `NonFullUtility`(或等价 code)并报告至少一个 gap 的
@@ -443,35 +485,43 @@ no-op,不影响行为。
 
 **"与本次改动相关"的定义(钉死)**:violation 的 participants 触及任一 changed
 span,或其 xWindow 距任一 changed span ≤ 1 个 rule distance。以 span 几何为锚而非
-instanceId,保证 merge/split 时代 instance 被销毁后判定依然成立。
+instanceId,保证 merge/split 时代 instance 被销毁后判定依然成立。判定**新** violation
+的 relatedness 时,rule distance 取 `max(原始违例最大 requiredValue, 该 violation
+自身 requiredValue)`——新违例可能来自 requiredValue 更大的规则,只用原始值会把它
+误判成 unrelated 而放行(V2.1 修订 #5)。
 
-**swap-unfixable 快速判定**(借鉴 DAC'23 [Zou et al.] 的 unsolvable violation
-分类思想,弱化为保守充分条件):若某条 original violation 的 xWindow 外扩
-two-cell ring 内不存在任何 editable filler,则任何 swap move 都不可能影响它——
-直接 fast-fail:`hasSolution=false`,diagnostics 记 `UnfixableByTypeSwap`,
-不进入搜索、不调 checker(0 次 call)。判定只用几何与 participant 信息,不依赖
-规则语义,不越 checker-as-oracle 边界。这类 case 通常意味着需要 merge/split
-(§8.1)或上游回退该 opto 改动;明确的失败码让上游能区分"搜索无解"与
-"结构性不可修"。
+**swap-unfixable 提示**(借鉴 DAC'23 [Zou et al.] 的 unsolvable violation 分类
+思想,弱化为保守启发):若某条 original violation 的 xWindow 外扩 two-cell ring 内
+不存在任何 editable filler,则它很可能无法被 swap 影响。**V2.1 修订 #6:此判定
+降级为 Warning 诊断提示(`UnfixableByTypeSwap`),不再 fast-fail 提前终止**——
+"ring 内无 filler ⇏ 更远 filler 经连续 implant run 一定无法影响"这一推断在 planner
+侧没有 oracle 佐证,与 checker-as-oracle 有张力;而它的实际收益极小(此种 case 下
+L0 本就 `NoEditableFiller` 跳过、零 checker call)。因此保留提示帮助上游区分
+"结构性大概率不可修"与"搜索无解",但仍进入正常搜索路径,由 ④OracleGate 作终判。
+这类 case 通常意味着需要 merge/split(§8.1)或上游回退该 opto 改动。
 
-### 6.3 开窗:L0 → L1 → L2 与 guardRegion
+### 6.3 开窗:L0 → adaptive-L1 与 guardRegion
 
 窗口用于圈定 candidate filler、限制搜索、和 delta 分类;它不是 `targetPlace`。
-三级窗口,从小到大:
+两级模型(V2.1 修订 #7,删去了 V2 的 L2):
 
 | 级别 | 内容 |
 |---|---|
-| L0 | violation participants ∪ anchor std cell 左右相邻 filler ∪ bridge filler(见下) |
-| L1 | L0 基础上:横向 snap 到完整 filler instance 并扩到最近 fixed cell/blockage/core 边界;纵向包含耦合相邻行(±1) |
-| L2 | 合并所有 overlap/相邻且距离小于一个 rule distance 的 L1 窗口 |
+| L0 | violation participants ∪ anchor std cell 左右相邻 filler ∪ bridge filler(见下)——最小 participant/bridge 窗口 |
+| adaptive-L1 | 受控渐进扩窗:每步向"当前 best 非-clean candidate 的 blocking violation 所在侧"扩入固定 K 个相邻 filler(K≈2,纵向含耦合相邻行 ±1),重算完备枚举判定;循环到预算尽或扩窗截止 |
 
 - intra-row violation 从 L0 入,inter-row 从含 ±1 行的 L0 入(bridge 集合天然覆盖)。
-- 升级触发:result 非 clean 且 remaining violation 的 xWindow/participants 靠近当前
-  窗口边界;或当前窗口枚举预算耗尽仍无 clean。
-- **扩窗截止**(借鉴 DAC'23 contour refinement 的终止准则):若升级后的窗口没有
-  引入任何新的 editable filler/move,或(完备枚举前提下)升级后 remaining
-  violation 集合与上一级完全相同,则违例与更远的 filler 无关——停止扩窗,直接
-  进入失败路径,不烧剩余预算。
+- 扩窗触发:result 非 clean 且 remaining violation 的 xWindow/participants 靠近当前
+  窗口边界;或当前窗口枚举/预算耗尽仍无 clean——每步只向 blocking 侧扩 K 个 filler。
+- **为什么渐进扩窗而非一次吞整段 filler run(V2.1 修订 #8)**:早期 L1 会横向 snap
+  到最近 fixed cell/blockage/core 边界,可能一次把整条 filler run 拉进窗口——editable
+  filler 一多,`3^k > 预算`,完备枚举立刻退化成 size≤4 的截断枚举,"窗口更大"反而
+  "更难找到解"。按 best-residual 的 blocking 侧逐步扩,让窗口只在确需的方向增长,
+  尽量维持完备枚举区间。
+- **扩窗截止**(借鉴 DAC'23 contour refinement 的终止准则):若扩窗后没有引入任何
+  新的 editable filler/move,或(完备枚举前提下)扩窗后 remaining violation 集合与
+  上一步完全相同,则违例与更远的 filler 无关——停止扩窗,直接进入失败路径,不烧
+  剩余预算。
 - multi-height 预留规则:窗口按行扩展时,跨行 instance 把它占用的所有行拉进同一窗口。
 
 **bridge filler 默认必选**(不是兜底):与 anchor std cell 左右接触的 filler、上下行
@@ -499,11 +549,12 @@ opto 一次只改一个 cell,本次 snapshot 的所有 violation 都在同一 an
 从合并窗口起步,但删去了"cluster 独立求解 → final merge → conflict-graph retry"
 整套机制。该机制在 batch opto(多 anchor)时代再引入(§8.4)。
 
-最终返回前仍保留一道 **final full-overlay check**:用覆盖所有 changed span 的
-`guardRegion`(≥ merged window 外扩 two-cell halo)对完整 changes 做一次
-single-overlay(或单元素 batch)check,仍以 baseline-delta clean 判定。单 cluster
-下该检查通常与搜索中最后一次 clean check 相同,可由 cache 直接命中;保留它是为了
-守住"返回值一定经过整体验证"的公理,且在扩窗/多窗口合并路径下不可省略。
+**V2.1 修订 #11:删除单独的 final full-overlay check**。单 cluster、单 guardRegion
+下,该检查与搜索中判定为 clean 的那一次 overlay 用完全相同的 cacheKey,必然 cache
+命中、classify 输出相同,零验证增益。因此获胜 overlay 一经 §6.8 的 baseline-delta
+门判为 clean 即作为解返回,不再重复一次。真正有增益的"扩大 guard 的独立认证"需要
+为新 guard 重跑 baseline(每次 +2 call),留到 batch opto / 多窗口合并(§8.4)真正
+引入多 guard 时,按实测预算决定是否加回。
 
 ### 6.5 Swap 生成器(本阶段唯一的 move 生成器)
 
@@ -534,15 +585,23 @@ size-1/2 子集就等价于 anchor-follow 组合,不需要独立的种子注入�
 | 4 | `width` | 更窄优先 |
 | 5 | `position` | x 更小优先,再 row 更小,保证 deterministic |
 
-target VT 顺序:① anchor 的新 VT;② 邻接 majority VT(**按 band-slot 分别计数**,
-不能按 cell 整体数);③ 稳定 type id。所有顺序都只在
+**排序作用在 filler 上,不是扁平的 swap 上(V2.1 修订 #9)**:先按上表对窗口内
+editable filler 排序,得到 filler 优先序;每个入选 filler **保留其全部候选 master
+作为 domain**(当前库恒 2 个,附录 A)。③层枚举的是"filler 子集 × 各自 domain 的
+赋值",成员上限(§6.7)因此作用在 filler 数而非候选数上——不会再出现"高排名
+filler 的两个 master 占满 rank 前缀,导致某个关键 filler 或它的第三 VT 完全不进入
+组合"的问题。
+
+target VT 顺序(决定各 filler domain 内的排序):① anchor 的新 VT;② 邻接 majority
+VT(**按 band-slot 分别计数**,不能按 cell 整体数);③ 稳定 type id。所有顺序都只在
 candidate provider 实际返回的 master 中取值(防御库变化;当前库各宽度 VT 齐全,
 附录 A)。
 
-**第三 VT 强降权**:三档 VT 下,每个 filler 的两个候选中总有一个"既非 anchor 新
-VT、也非邻接 majority"的第三色,几乎不可能是解的一部分——固定排到 move 列表
-队尾(降权,**不剔除**,三 VT 相邻的犄角场景仍可达)。有效分支因子由此从 2 降到
-~1,有效搜索空间从 3^k 缩到 ~2^k;配合 §6.7 的完备枚举,正确性完全不依赖该启发。
+**第三 VT 强降权(V2.1 修订 #9:改为 domain 内排序)**:三档 VT 下,每个 filler 的
+两个候选中总有一个"既非 anchor 新 VT、也非邻接 majority"的第三色,几乎不可能是解
+的一部分。它不再作用在扁平的全局 swap 列表上,而是**在该 filler 自己的候选 domain
+内排到最后**(降权,**不剔除**,三 VT 相邻的犄角场景仍可达)。有效分支因子由此从
+2 降到 ~1;配合 §6.7 的完备枚举,正确性完全不依赖该启发。
 
 fixed cell 是投票和约束,不是禁改理由(贴着 fixed cell 的 filler 往往最该先试)。
 V1 的其余特征(`fillerVote`/`diffEdgesRemoved`/`multiViolationTouch`/`islandScore`/
@@ -565,15 +624,18 @@ forced-assignment 思想:用近似局部规则模型推导"该 filler 必须是�
   (k ≤ 5 对应 243 ≤ 512),**完整枚举全部非冲突子集**,仍按 rank 序分批、首
   clean 早停。此时"窗口内无解"是**确定性结论**——扩窗触发精确、不可能漏解,
   排序只影响速度不影响完备性,`hasSolution=false` 的诊断含义从"预算耗尽"升级为
-  "窗口内确定无解"。
-- **成员限制(仅大窗口)**:`3^k > 剩余预算` 时启用截断——size 1 允许全部 M 个;
-  size ≥ 2 限制在 rank 前 `N_s` 的 move 中(建议 `N_2 = 24`,`N_3 = 12`,
-  `N_4 = 8`;size > 4 不枚举,直接扩窗)。
+  "窗口内确定无解"。**但完备只对当前窗口成立(V2.1 修订 #10)**:L0 完备只证明
+  L0 无解,不能证明后续被截断的扩窗窗口无解;因此"definitive no solution"必须以
+  **最后一个实际搜索过的窗口**是否完备为准,而不是"任一较小窗口曾完备"(见 §6.9)。
+- **成员限制(仅大窗口,V2.1 修订 #9)**:`3^k > 剩余预算` 时启用截断——size 1
+  允许全部 filler;size ≥ 2 限制在 rank 前 `N_s` 个 **filler**(不是 swap)中组合
+  (建议 `N_2 = 24`,`N_3 = 12`,`N_4 = 8`;size > 4 不枚举,渐进扩窗);每个入选
+  filler 仍展开其完整 domain。
 - 跳过含冲突 move 的子集;canonical key 去重、查 cache(§4.2)。
 - **分批验证**:每批 16-32 个候选发 batch checker;批内按枚举序取第一个
   delta-clean 作为解(保证确定性),命中立即停止。
 - **预算**:每窗口 checker call 上限 512(含 baseline)。预算耗尽或枚举完仍无
-  clean → 窗口升级(L0→L1→L2);窗口耗尽 → 失败路径(§6.9)。
+  clean → 渐进扩窗(L0 → adaptive-L1,§6.3);扩窗截止 → 失败路径(§6.9)。
 
 MW"必须多 filler 联动、单改不改善甚至更差"的非单调 case,在这里只是一个普通的
 size-2/3 子集,不需要任何特殊机制;好排序下通常出现在首批。
@@ -581,19 +643,37 @@ size-2/3 子集,不需要任何特殊机制;好排序下通常出现在首批。
 ### 6.8 accept gate:baseline-delta clean(唯一 accept 标准)
 
 对每个窗口/guardRegion,先发一次 **baseline request**(同 `targetPlace`、同
-`guardRegion`、空 `fillerChanges`),再比较 candidate overlay result。candidate 判
-**delta-clean** 当且仅当:
+`guardRegion`、空 `fillerChanges`)。
 
-1. `status == CheckStatus::Checked` 且无 checker fatal/protocol diagnostics;
+**baseline 一致性门(V2.1 修订 #2+#4,搜索前必过)**:baseline 必须能复现输入
+snapshot——每条 original violation 都应在 baseline result 中按 signature 出现;且
+baseline 的 repairWindow 内 / 与 anchor 相关的 violation 不能多于这些 original
+(§2.3 假设:输入快照除待修 original 外是干净的)。任一条不满足 → 输入 snapshot
+已过期 / guard 不一致 / checker 字段漂移,repair 以 `BaselineMismatch` fatal 中止
+并请上游重出快照,而不是把"没观察到 original"误当成"已修好"。halo 内 baseline
+已有且与本次改动无关的历史违例不触发此门(它们本就允许存在)。
+
+过门后,candidate 判 **delta-clean** 当且仅当:
+
+1. `status == CheckStatus::Checked`、无 checker fatal/protocol diagnostics,且结果
+   自洽——`isLegal` 与 `violations 是否为空` 必须一致(V2.1 修订 #1:`isLegal &&
+   violations 非空` 与 `!isLegal && violations 空` 两种矛盾形态都判不 clean);
 2. 初始 snapshot 的 original violations 在 overlay result 中全部消失
    (signature 匹配,§6.2);
 3. `repairWindow` 内没有新增 violation(overlay 有、baseline 无);
-4. guard halo 内没有"与本次改动相关"(§6.2 定义)的新增或迁移 violation;
+4. guard halo 内没有"与本次改动相关"(§6.2 定义,rule distance 取 per-violation
+   max)的新增或迁移 violation;
 5. guard halo 内 baseline 已有且与本次改动无关的 violation **不导致失败**,只进
    diagnostics。
 
-辅助规则(与 V1 相同):`Checked && isLegal && violations 非空` 按不 clean 拒绝;
-`status != Checked` 的 request 只保留 diagnostics,不参与成功候选。
+**"新增" = baseline↔candidate 一对一 multiset delta(V2.1 修订 #3)**:判断
+candidate 里哪些 violation 是新增时,把 baseline 与 candidate 的 violation 各视为
+multiset,按 signature 做**消耗式一对一匹配**——一条 baseline finding 只能抵消一条
+candidate violation。否则两条同 signature 的 candidate violation 会被同一条 baseline
+finding 一起"吸收",其中真正新增的那条被漏计(signature 带一个 site 的容差,同
+signature 多条是现实场景)。
+
+辅助规则:`status != Checked` 的 request 只保留 diagnostics,不参与成功候选。
 
 失败时为 diagnostics 挑选 best overlay 用的比较序(lexicographic,不用加权
 magic number):
@@ -605,13 +685,16 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 
 ### 6.9 final check、输出与失败路径
 
-- `hasSolution=true`:`changes` 已通过 final full-overlay check 的 baseline-delta
-  clean(§6.4)。
+- `hasSolution=true`:`changes` 是搜索中首个通过 §6.8 baseline-delta clean 门的
+  overlay(不再有单独的 final full-overlay check,V2.1 修订 #11)。
 - `hasSolution=false`:`changes` 为空(不返回 partial repair,避免把违例挪走但未清
   干净;explicit partial mode 未来可加,不默认开启),diagnostics 说明失败原因:
-  swap-unfixable(§6.2,结构性不可修)、无合法 master、fixed-cell 冲突、
-  枚举/call 预算耗尽、窗口到顶(含扩窗截止,§6.3)、所有 overlay 均未
-  delta-clean;附 best overlay、remaining violations、窗口与预算统计。
+  无合法 master、fixed-cell 冲突、枚举/call 预算耗尽、窗口到顶(含扩窗截止,§6.3)、
+  所有 overlay 均未 delta-clean;附 best overlay、remaining violations、窗口与预算
+  统计;若命中 swap-unfixable 提示(§6.2,已降级为 Warning)一并附上。**definitive
+  语义(V2.1 修订 #10)**:仅当**最后一个实际搜索过的窗口**完成了完备枚举(未被
+  size 上限或预算截断)才可标注"window space exhausted definitively";任一较早窗口
+  曾完备不足以据此断言。
 - utility precheck 失败:`hasSolution=false`、changes 为空、fatal diagnostics,
   语义是 placement precondition 不满足,不是搜索无解。
 
@@ -623,10 +706,11 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 |---|---|---|
 | 每窗口 checker call 上限 | 512 | 含 baseline;与 V1 持平 |
 | batch 大小 | 16-32 | 批内枚举序定序 |
-| 完备枚举阈值 | 3^k ≤ 剩余预算(k ≤ 5) | 满足则完整枚举,无解结论确定(§6.7) |
-| size-2/3/4 成员上限 N_s | 24 / 12 / 8 | 仅大窗口截断时启用;超出则依赖扩窗 |
-| 最大子集 size | 4 | 更大组合交给扩窗后的 L1/L2 |
-| 窗口级数 | L0/L1/L2 | 到顶即失败路径 |
+| 完备枚举阈值 | 3^k ≤ 剩余预算(k ≤ 5) | 满足则完整枚举,无解结论对**当前窗口**确定(§6.7/§6.9 #10) |
+| size-2/3/4 成员上限 N_s(按 filler 计) | 24 / 12 / 8 | 仅大窗口截断时启用,作用在 filler 数上(V2.1 #9);超出则渐进扩窗 |
+| 最大子集 size | 4 | 更大组合交给渐进扩窗 |
+| 渐进扩窗步长 K | 2 | adaptive-L1 每步向 blocking 侧扩入的 filler 数(§6.3) |
+| 窗口模型 | L0 + adaptive-L1 | L2 已删(V2.1 #7);扩窗截止即失败路径 |
 
 所有参数进 config,diagnostics 打印实际取值。
 
@@ -709,6 +793,12 @@ gate 语义:
 - overlay 修掉 original 但 repairWindow 内新增 violation,拒绝。
 - overlay 修掉 original 但 guard halo 出现相关新增/迁移 violation,拒绝。
 - guard halo 中 baseline 已有且无关的 violation,不导致 candidate 失败。
+- **baseline 一致性门**:baseline 复现不出某条 original,或 baseline 窗口内/相关
+  violation 多于 original,判 `BaselineMismatch` fatal,不进入搜索(V2.1 #2+#4)。
+- **multiset 一对一匹配**:两条同 signature 的 candidate violation,只有一条能被
+  同 signature 的 baseline finding 抵消,另一条计为新增导致拒绝(V2.1 #3)。
+- **新违例 rule distance**:candidate 新增违例来自 requiredValue 大于原始最大值的
+  规则时,按 per-violation max 判为 related-in-halo 而拒绝,不被误放行(V2.1 #5)。
 
 搜索行为:
 
@@ -720,14 +810,14 @@ gate 语义:
 - 三 VT:邻居 majority 不是正确的 anchor VT(验证 target VT 顺序)。
 - 缺 same-size replacement master(fake provider 构造;当前真实库 VT 齐全,
   此 case 为防御性,附录 A),返回 no usable master diagnostics;fixed cell 约束冲突。
-- 必须扩窗(L0 不够,L1 修好);枚举预算耗尽触发扩窗;窗口到顶返回 no solution
-  且 diagnostics 带 best overlay 与 remaining violations。
-- swap-unfixable 快速判定:violation 外扩 ring 内无 editable filler,0 次
-  checker call 直接 fail,diagnostics 带 `UnfixableByTypeSwap`。
-- 扩窗截止:升级窗口无新增 editable filler/move 时停止扩窗,不烧剩余预算。
+- 必须扩窗(L0 不够,渐进扩窗后修好);枚举预算耗尽触发扩窗;扩窗到顶返回 no
+  solution 且 diagnostics 带 best overlay 与 remaining violations。
+- swap-unfixable 提示:violation 外扩 ring 内无 editable filler,diagnostics 带
+  `UnfixableByTypeSwap` Warning,但仍进入正常搜索(不再 fast-fail,V2.1 #6)。
+- 扩窗截止:扩窗后无新增 editable filler/move 时停止扩窗,不烧剩余预算。
 - anchor-follow 首发:典型单/双 filler case 在首个 batch 内 clean。
-- 小窗口完备枚举:窗口内确无解时,枚举完 3^k 空间后**确定性**扩窗(诊断区分
-  "确定无解"与"预算耗尽")。
+- 小窗口完备枚举:窗口内确无解时,枚举完 3^k 空间后**确定性**扩窗;definitive 只
+  按最后搜索窗口的完备性断言(L0 完备 + L1 截断 ⇒ 非 definitive,V2.1 #10)。
 - 第三 VT 降权但可达:正解需要第三色的犄角 case 仍能被找到。
 - 确定性:同输入两次运行,产出完全相同的 changes/diagnostics/call 序列。
 
@@ -751,6 +841,12 @@ gate 语义:
 12. 等 `ImplantOverlayChecker::checkPlaceWithOverlays` 稳定后接真实 checker;
     `src/dpl2` CMake 接入后纳入 build/test。
 
+状态(2026-07-09):TODO 1–11 已实现,`src/dpl2/src/fillerRepair/` 下 35 个确定性
+测试全绿。TODO 12(真实 checker/infra 对接 + CMake)未做,checker 源码已导入
+`src/dpl2/src/drc`。V2.1 修订(§0)分三批落地,详见 `src/dpl2/HandOff.md`:
+批 1 = OracleGate 正确性(#1/#2/#3/#4/#5/#10),批 2 = 窗口/管线简化
+(#6/#7/#8/#11),批 3 = 搜索域建模(#9/#12,随 adapter 对接)。
+
 ---
 
 ## 12. 与 V1 的差异清单
@@ -759,7 +855,7 @@ gate 语义:
 |---|---|---|---|---|
 | 1 | 原子操作 | `FillerChange{instanceId, newMasterId}` | 本阶段内外统一 swap/`FillerChange`(`Swap` 带 row/span 几何元数据);无通用 Move 抽象层;rewrite 与 primitive-op API 全部列入 future work(§4.3/§5.2/§8.1) | 操作演进钉死为两步:swap → rewrite;merge/split 的抽象与 API 升级同批设计,避免投机 |
 | 2 | 搜索内核 | greedy prefix + beam(N/K/D、survivor 配额、partial 打分) | 排序枚举 move 子集 + batch 验证,首 clean 即停 | 一条代码路径;无 partial 打分噪声与 magic knob;MW 非单调 case 是普通 size-2 子集;批并行友好 |
-| 3 | 窗口 | W0-W5 六级,按类型选入口 | L0/L1/L2 三级 | 规则尺度 ~1 site,六级状态过多;语义等价、测试面减半 |
+| 3 | 窗口 | W0-W5 六级,按类型选入口 | L0 + adaptive-L1(V2.1;V2 曾为 L0/L1/L2) | 规则尺度 ~1 site,多级状态过多;渐进扩窗避免一次吞整段 run 后退化为截断枚举(V2.1 #7/#8) |
 | 4 | cluster | 划分 + 独立求解 + final merge + conflict-graph retry | 单 cluster(opto 单 cell),final check 保留 | 单 anchor 下所有 violation 同邻域;merge retry 机制移到 batch opto 时代 |
 | 5 | 排序 | 12 特征 + 6 级 tie-break | 5 特征起步,其余 backlog;per band-slot 计数 | 排序只影响 call 数;先测命中率再加特征 |
 | 6 | signature | "至少 ruleId+kind+relation+rowIds,尽量加…" | 匹配键与"相关性"定义钉死(§6.2) | delta 分类是最脆一环,不能留自由度 |
@@ -770,8 +866,9 @@ gate 语义:
 
 保留不变的 V1 决策:checker-as-oracle(不复刻 DRC)、只在 checker 结果上 accept、
 baseline-delta gate 与 guard halo 语义、two-cell guardRegion、canonical cache、batch
-协议(requestId echo 等)、100% utility precheck 归属 repair、pure planner + fake
-adapter 先行、失败不返回 partial、diagnostics 要求。
+协议(requestId echo 等)、pure planner + fake adapter 先行、失败不返回 partial、
+diagnostics 要求。(V2.1 收窄:full-utility 权威结果改由 infrastructure 缓存下发,
+planner 只做窗口局部防御性复核,§5.4/§6.1 #12。)
 
 ---
 
