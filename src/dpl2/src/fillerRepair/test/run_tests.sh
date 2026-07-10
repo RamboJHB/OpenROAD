@@ -15,6 +15,7 @@ g++ -std=c++17 -Wall -Wextra -Werror -g \
   Ranker.cpp SubsetSearch.cpp OracleGate.cpp \
   FillerRepairEngine.cpp \
   fake/FakeImplantChecker.cpp \
+  fake/FakeUdmCandidateProvider.cpp \
   test/test_main.cpp \
   -o "$BUILD_DIR/fillerRepair_tests"
 

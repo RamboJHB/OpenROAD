@@ -30,6 +30,7 @@
 #include "../fake/FakeCandidateProvider.h"
 #include "../fake/FakeDesign.h"
 #include "../fake/FakeImplantChecker.h"
+#include "../fake/FakeUdmCandidateProvider.h"
 
 namespace fr = dpl2::fillerRepair;
 
@@ -309,6 +310,199 @@ void testCandidateProvider()
   const auto cellResult = provider.getUsableMasterCandidates({103});
   CHECK(cellResult.candidates.empty());
   CHECK(!cellResult.diagnostics.empty());
+}
+
+// --- Fake-UDM candidate provider (adapter rehearsal) --------------------------
+//
+// Derivation must match the checker's buildMasters/parseLayerName path: VT is
+// the FAMILY of the implant layers under the master's shapes (VTS=0 VTL=1
+// VTH=2 VTUL=3), never the master name; width is DBU, site-aligned.
+
+// Appendix-A library: widths and VTs for every master id, derived from the
+// band shapes' layers. Master names are decoration.
+void testUdmProviderDescribeWidthsAndVts()
+{
+  fr::FakeDesign design;  // only needed to satisfy the provider's view
+  fr::FakeUdmCandidateProvider provider(design, /*siteWidth=*/1,
+                                        /*rowHeight=*/2);
+  provider.addAppendixALibrary();
+
+  // Batch query in a fixed order; input order must be preserved.
+  std::vector<fr::MasterId> ids;
+  for (const int w : {2, 3, 4, 8}) {
+    for (const int fam : {0, 1, 3}) {  // VTS, VTL, VTUL
+      ids.push_back(w * 10 + fam);
+    }
+  }
+  ids.push_back(999);  // unknown
+
+  const auto described = provider.describeMasters(ids);
+  CHECK_EQ(described.size(), 13u);
+  for (size_t i = 0; i + 1 < described.size(); ++i) {
+    const auto& d = described[i];
+    CHECK_EQ(d.masterId, ids[i]);
+    CHECK(d.usable);
+    CHECK(d.isFiller);
+    CHECK_EQ(d.width, static_cast<fr::DbCoord>(ids[i] / 10));  // sites*1
+    CHECK_EQ(d.vt, static_cast<fr::VtId>(ids[i] % 10));        // family index
+    CHECK_EQ(d.heightRows, 1);
+  }
+  CHECK(!described.back().usable);
+  CHECK(described.back().reason == "unknown_master");
+
+  // Name is carried through but never drives the derivation.
+  const auto* w8ul = provider.describeMaster(83);
+  CHECK(w8ul != nullptr);
+  CHECK(w8ul->name == "F_FILL8_63S6T9UL_1");
+  CHECK_EQ(w8ul->vt, 3);  // VTUL family, from the layers
+}
+
+// Malformed masters are described but unusable, with the checker-style
+// reason codes from buildMasters.
+void testUdmProviderRejectsMalformedMasters()
+{
+  fr::FakeDesign design;
+  fr::FakeUdmCandidateProvider provider(design, /*siteWidth=*/2,
+                                        /*rowHeight=*/2);
+  provider.addLayer(1, "VTS_N");
+  provider.addLayer(2, "VTS_P");
+  provider.addLayer(3, "VTL_N");
+
+  // Width 3 not aligned to siteWidth 2.
+  provider.addMaster({901, "BAD_WIDTH", 3, 2, true,
+                      {{0, 1, 0, 0, 3, 1}, {1, 2, 0, 1, 3, 2}}});
+  // Shapes on two different families.
+  provider.addMaster({902, "MIXED_FAMILY", 4, 2, true,
+                      {{0, 1, 0, 0, 4, 1}, {1, 3, 0, 1, 4, 2}}});
+  // Shape on a layer the catalog does not know.
+  provider.addMaster({903, "UNKNOWN_LAYER", 4, 2, true,
+                      {{0, 99, 0, 0, 4, 2}}});
+  // Implant shape narrower than the master width.
+  provider.addMaster({904, "PARTIAL_SPAN", 4, 2, true,
+                      {{0, 1, 0, 0, 2, 2}}});
+  // No shapes at all.
+  provider.addMaster({905, "NO_SHAPES", 4, 2, true, {}});
+
+  const auto d = provider.describeMasters({901, 902, 903, 904, 905});
+  CHECK(!d[0].usable);
+  CHECK(d[0].reason == "master_width_not_site_aligned");
+  CHECK(!d[1].usable);
+  CHECK(d[1].reason == "master_implant_family_mismatch");
+  CHECK(!d[2].usable);
+  CHECK(d[2].reason == "skipped_missing_rule_parameter");
+  CHECK(!d[3].usable);
+  CHECK(d[3].reason == "implant_shape_width_mismatch");
+  CHECK(!d[4].usable);
+  CHECK(d[4].reason == "no_implant_shape");
+  // Width is still reported even when unusable (it comes from the master
+  // input, not the derivation).
+  CHECK_EQ(d[1].width, 4);
+  CHECK_EQ(d[1].vt, fr::kUnknownVt);
+}
+
+// Candidate query contract (spec 5.3) on the appendix-A library, plus the
+// design sync via registerInto.
+void testUdmProviderCandidatesContract()
+{
+  fr::FakeDesign design;
+  design.setSiteWidth(1);
+  fr::FakeUdmCandidateProvider provider(design, 1, /*rowHeight=*/2);
+  provider.addAppendixALibrary();
+  // A non-filler master in the same catalog (same size as w4 fillers).
+  provider.addLayer(7, "VTH_N");
+  provider.addLayer(8, "VTH_P");
+  provider.addBandMaster(942, "CELL4_VTH", 4, /*isFiller=*/false, "VTH");
+
+  provider.registerInto(design);
+  design.addRow(0, 0, 8)
+      .place(500, 40, 0, 0)    // filler w4 VTS
+      .place(501, 942, 0, 4);  // std cell w4 VTH
+
+  // Filler: exactly the two other w4 filler VTs, ascending id; the same-size
+  // NON-filler master 942 must not appear.
+  const auto result = provider.getUsableMasterCandidates({500});
+  CHECK_EQ(result.candidates.size(), 2u);
+  CHECK_EQ(result.candidates[0].masterId, 41);  // w4 VTL
+  CHECK_EQ(result.candidates[1].masterId, 43);  // w4 VTUL
+
+  // Std cell input: empty + warning, not an error.
+  const auto cellResult = provider.getUsableMasterCandidates({501});
+  CHECK(cellResult.candidates.empty());
+  CHECK(!cellResult.diagnostics.empty());
+
+  // Unknown instance: error diagnostic.
+  const auto unknown = provider.getUsableMasterCandidates({777});
+  CHECK(unknown.candidates.empty());
+  CHECK(!unknown.diagnostics.empty());
+
+  // registerInto synced width/height/vt into the PlacementView.
+  const fr::MasterInfo* info = design.masterInfo(43);
+  CHECK(info != nullptr);
+  CHECK_EQ(info->width, 4);
+  CHECK_EQ(info->vt, 3);
+  CHECK(info->isFiller);
+}
+
+// E2E smoke: the engine solves a single-swap case with the appendix-A
+// catalog driving both the PlacementView master table and the candidates.
+//
+// Vt Type: 0=VTS, 1=VTL, 3=VTUL  |  Widths: {2, 4}
+// cell type: 1=std cell, 0=filler  |  Format: (vt type, width, cell type)
+// Row 0: (1,4,1) (0,2,0) (1,4,0) (1,4,0) (1,2,0)
+//   ids:  600*    601     602     603     604     (* = anchor std cell)
+// With mwIntra=msIntra=5 the snapshot carries three violations: MS between
+// the VTL runs [0,4) and [6,16) (gap 2), MW on the VTS run [4,6) (len 2),
+// and MW on the VTL run [0,4) (len 4). The ONLY single swap clearing all
+// three is 601 -> VTL (master 21): the whole row merges into one VTL run.
+// (602 -> VTS would fix the first two but leaves the VTL[0,4) MW residual.)
+void testEngineSolvesWithUdmProvider()
+{
+  fr::FakeDesign design;
+  design.setSiteWidth(1);
+  fr::FakeUdmCandidateProvider provider(design, 1, /*rowHeight=*/2);
+  provider.addAppendixALibrary();
+  provider.addBandMaster(941, "CELL4_VTL", 4, /*isFiller=*/false, "VTL");
+  provider.registerInto(design);
+
+  design.addRow(0, 0, 16)
+      .place(600, 941, 0, 0)   // anchor std cell, VTL
+      .place(601, 20, 0, 4)    // filler w2 VTS -- the one to swap
+      .place(602, 41, 0, 6)    // filler w4 VTL
+      .place(603, 41, 0, 10)   // filler w4 VTL
+      .place(604, 21, 0, 14);  // filler w2 VTL
+
+  fr::FakeImplantRules rules;
+  rules.mwIntra = 5;
+  rules.msIntra = 5;
+
+  fr::TargetPlace anchor;
+  anchor.instanceId = 600;
+  anchor.masterId = 941;
+  anchor.rowId = 0;
+  anchor.x = 0;
+
+  // Snapshot from the checker, as production does.
+  fr::FakeImplantChecker snapshotChecker(design, rules);
+  fr::OverlayCheckRequest snapReq;
+  snapReq.requestId = 0;
+  snapReq.targetPlace = anchor;
+  snapReq.guardRegion = fr::Region{fr::XInterval{0, 16}, 0, 0};
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchor;
+  request.violations =
+      snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
+  CHECK_EQ(request.violations.size(), 3u);
+
+  fr::FakeImplantChecker checker(design, rules);
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(design, checker, provider, config);
+
+  const auto result = engine.repair(request);
+  CHECK(result.hasSolution);
+  CHECK_EQ(result.changes.size(), 1u);
+  CHECK_EQ(result.changes[0].instanceId, 601);
+  CHECK_EQ(result.changes[0].newMasterId, 21);  // w2 VTL
 }
 
 // --- TODO 2: fake checker protocol -------------------------------------------
@@ -2327,6 +2521,11 @@ int main(int argc, char** argv)
       {"engine_fatal_on_gap_without_checker_calls",
        testEngineFatalOnGapWithoutCheckerCalls},
       {"candidate_provider", testCandidateProvider},
+      {"udm_provider_describe_widths_and_vts", testUdmProviderDescribeWidthsAndVts},
+      {"udm_provider_rejects_malformed_masters",
+       testUdmProviderRejectsMalformedMasters},
+      {"udm_provider_candidates_contract", testUdmProviderCandidatesContract},
+      {"engine_solves_with_udm_provider", testEngineSolvesWithUdmProvider},
       {"checker_echo_and_order", testCheckerEchoAndOrder},
       {"checker_invalid_isolated", testCheckerInvalidIsolated},
       {"checker_intra_ms_detect_and_clear", testCheckerIntraMsDetectAndClear},

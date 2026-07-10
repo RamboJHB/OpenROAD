@@ -1,0 +1,253 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2026, The OpenROAD Authors
+
+#include "FakeUdmCandidateProvider.h"
+
+#include <algorithm>
+
+namespace dpl2::fillerRepair {
+
+void parseFakeUdmLayerName(const std::string& name,
+                           int& familyIndex,
+                           bool& polarityP)
+{
+  familyIndex = -1;
+  polarityP = false;
+
+  const auto pos = name.rfind('_');
+  if (pos == std::string::npos) {
+    return;
+  }
+  const std::string famStr = name.substr(0, pos);
+  const std::string polStr = name.substr(pos + 1);
+
+  polarityP = (polStr == "P" || polStr == "p");
+
+  if (famStr == "VTS" || famStr == "vts") {
+    familyIndex = 0;
+  } else if (famStr == "VTL" || famStr == "vtl") {
+    familyIndex = 1;
+  } else if (famStr == "VTH" || famStr == "vth") {
+    familyIndex = 2;
+  } else if (famStr == "VTUL" || famStr == "vtul") {
+    familyIndex = 3;
+  }
+}
+
+void FakeUdmCandidateProvider::addLayer(LayerId id, const std::string& name)
+{
+  LayerInfo info;
+  info.id = id;
+  info.name = name;
+  parseFakeUdmLayerName(name, info.familyIndex, info.polarityP);
+  layers_[id] = info;
+}
+
+const FakeUdmCandidateProvider::LayerInfo* FakeUdmCandidateProvider::layer(
+    LayerId id) const
+{
+  const auto it = layers_.find(id);
+  return it != layers_.end() ? &it->second : nullptr;
+}
+
+// Derivation mirror of ImplantLayerChecker::buildMasters: width alignment,
+// per-shape layer lookup, single-family requirement, full-width span. The
+// first failed rule is recorded as the checker-style reason.
+MasterDescription FakeUdmCandidateProvider::derive(
+    const FakeUdmMaster& master) const
+{
+  MasterDescription d;
+  d.masterId = master.masterId;
+  d.name = master.name;
+  d.width = master.width;
+  d.isFiller = master.isFiller;
+  d.heightRows = row_height_ > 0
+                     ? static_cast<int>((master.height + row_height_ - 1)
+                                        / row_height_)
+                     : 0;
+
+  if (site_width_ <= 0 || master.width <= 0
+      || master.width % site_width_ != 0) {
+    d.reason = "master_width_not_site_aligned";
+    return d;
+  }
+  if (master.shapes.empty()) {
+    d.reason = "no_implant_shape";
+    return d;
+  }
+
+  int familyIndex = -1;
+  for (const FakeUdmShape& shape : master.shapes) {
+    const LayerInfo* info = layer(shape.layer);
+    if (info == nullptr || info->familyIndex < 0) {
+      d.reason = "skipped_missing_rule_parameter";  // unknown implant layer
+      return d;
+    }
+    if (familyIndex < 0) {
+      familyIndex = info->familyIndex;
+    } else if (familyIndex != info->familyIndex) {
+      d.reason = "master_implant_family_mismatch";
+      return d;
+    }
+    if (shape.xl != 0 || shape.xh != master.width) {
+      d.reason = "implant_shape_width_mismatch";
+      return d;
+    }
+  }
+
+  d.vt = familyIndex;
+  d.usable = true;
+  return d;
+}
+
+void FakeUdmCandidateProvider::addMaster(const FakeUdmMaster& master)
+{
+  masters_[master.masterId] = master;
+  described_[master.masterId] = derive(master);
+}
+
+void FakeUdmCandidateProvider::addBandMaster(MasterId id,
+                                             const std::string& name,
+                                             DbCoord width,
+                                             bool isFiller,
+                                             const std::string& family)
+{
+  // Find the family's N and P layers (rebuildMasterShapes needs both).
+  int familyIndex = -1;
+  bool polarityP = false;
+  parseFakeUdmLayerName(family + "_N", familyIndex, polarityP);
+  LayerId nLayer = -1;
+  LayerId pLayer = -1;
+  for (const auto& [layerId, info] : layers_) {
+    if (familyIndex >= 0 && info.familyIndex == familyIndex) {
+      (info.polarityP ? pLayer : nLayer) = layerId;
+    }
+  }
+
+  FakeUdmMaster master;
+  master.masterId = id;
+  master.name = name;
+  master.width = width;
+  master.height = row_height_;
+  master.isFiller = isFiller;
+  const DbCoord halfRow = row_height_ / 2;
+  // Canonical single-row band pair: bottom band on the N layer, top band on
+  // the P layer, both spanning the full width (rebuildMasterShapes).
+  master.shapes.push_back(FakeUdmShape{0, nLayer, 0, 0, width, halfRow});
+  master.shapes.push_back(
+      FakeUdmShape{1, pLayer, 0, halfRow, width, row_height_});
+  addMaster(master);
+}
+
+const MasterDescription* FakeUdmCandidateProvider::describeMaster(
+    MasterId id) const
+{
+  const auto it = described_.find(id);
+  return it != described_.end() ? &it->second : nullptr;
+}
+
+std::vector<MasterDescription> FakeUdmCandidateProvider::describeMasters(
+    const std::vector<MasterId>& ids) const
+{
+  std::vector<MasterDescription> result;
+  result.reserve(ids.size());
+  for (const MasterId id : ids) {
+    if (const MasterDescription* d = describeMaster(id)) {
+      result.push_back(*d);
+    } else {
+      MasterDescription missing;
+      missing.masterId = id;
+      missing.reason = "unknown_master";
+      result.push_back(missing);
+    }
+  }
+  return result;
+}
+
+MasterCandidateResult FakeUdmCandidateProvider::getUsableMasterCandidates(
+    const MasterCandidateRequest& request) const
+{
+  MasterCandidateResult result;
+
+  const PlacedInstance* inst = view_.instance(request.fillerInstanceId);
+  if (inst == nullptr) {
+    result.diagnostics.push_back(
+        makeDiag(Severity::Error, "UnknownInstance",
+                 cat("instance ", request.fillerInstanceId, " not found")));
+    return result;
+  }
+  if (!inst->isFiller) {
+    result.diagnostics.push_back(
+        makeDiag(Severity::Warning, "NotAFiller",
+                 cat("instance ", request.fillerInstanceId,
+                     " is not a filler")));
+    return result;
+  }
+  const MasterDescription* current = describeMaster(inst->masterId);
+  if (current == nullptr) {
+    result.diagnostics.push_back(
+        makeDiag(Severity::Error, "UnknownMaster",
+                 cat("master ", inst->masterId, " of instance ",
+                     request.fillerInstanceId, " not in the catalog")));
+    return result;
+  }
+
+  // Same width + height, usable filler masters, other id, ascending order
+  // (described_ is an ordered map). Width/height come from the master input
+  // directly, so an unusable CURRENT master still gets size-matched
+  // candidates; the candidates themselves must be usable (derivable VT).
+  for (const auto& [id, d] : described_) {
+    if (id != inst->masterId && d.usable && d.isFiller
+        && d.width == current->width && d.heightRows == current->heightRows) {
+      result.candidates.push_back(MasterCandidate{id});
+    }
+  }
+  if (result.candidates.empty()) {
+    result.diagnostics.push_back(
+        makeDiag(Severity::Info, "NoUsableMaster",
+                 cat("no same-size replacement for instance ",
+                     request.fillerInstanceId)));
+  }
+  return result;
+}
+
+void FakeUdmCandidateProvider::registerInto(FakeDesign& design) const
+{
+  for (const auto& [id, d] : described_) {
+    if (d.usable) {
+      design.addMaster(id, d.width, d.heightRows, d.isFiller, d.vt);
+    }
+  }
+}
+
+void FakeUdmCandidateProvider::addAppendixALibrary()
+{
+  // Layers first: {VTS, VTL, VTUL} x {N, P} with deterministic ids.
+  addLayer(1, "VTS_N");
+  addLayer(2, "VTS_P");
+  addLayer(3, "VTL_N");
+  addLayer(4, "VTL_P");
+  addLayer(5, "VTUL_N");
+  addLayer(6, "VTUL_P");
+
+  // F_FILL{8,4,3,2}_63S6T9{R,L,UL}_1; master id = width-in-sites * 10 +
+  // family index (VTS=0, VTL=1, VTUL=3) -- deterministic and readable.
+  const std::pair<const char*, const char*> suffixToFamily[] = {
+      {"R", "VTS"}, {"L", "VTL"}, {"UL", "VTUL"}};
+  for (const int widthSites : {2, 3, 4, 8}) {
+    for (const auto& [suffix, family] : suffixToFamily) {
+      int familyIndex = -1;
+      bool polarityP = false;
+      parseFakeUdmLayerName(std::string(family) + "_N", familyIndex,
+                            polarityP);
+      const MasterId id = widthSites * 10 + familyIndex;
+      addBandMaster(id,
+                    cat("F_FILL", widthSites, "_63S6T9", suffix, "_1"),
+                    widthSites * site_width_,
+                    /*isFiller=*/true,
+                    family);
+    }
+  }
+}
+
+}  // namespace dpl2::fillerRepair

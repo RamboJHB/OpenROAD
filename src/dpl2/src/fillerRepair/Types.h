@@ -33,6 +33,7 @@ using ipl::InstanceId;
 using ipl::LayerId;
 using ipl::MasterId;
 using ipl::RowId;
+using ipl::ShapeId;
 using ipl::XInterval;
 
 // VT family identity. The planner only compares VT ids; it never interprets
