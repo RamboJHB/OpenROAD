@@ -10,8 +10,10 @@ planner is built and tested against the fakes in `fake/`.
 > dropped L2, dropped final check); **#8 adaptive-L1 pending** (L1 still does
 > the boundary sweep). **Batch 3: #9 filler-domain enumeration DONE** (ranker
 > returns `FillerDomain`s; caps count fillers); **#12 precheck upstreaming
-> pending** (goes with the adapter). 56 tests green. Plan and pointers in
-> `src/dpl2/HandOff.md`.
+> pending** (goes with the adapter). 60 tests green. Plan and pointers in
+> `src/dpl2/HandOff.md`. Dependency topology (checker calls engine, engine
+> calls checker through its own abstract oracle — no cycle) is pinned in spec
+> §3.3.
 
 ## Layout
 
@@ -32,6 +34,7 @@ planner is built and tested against the fakes in `fake/`.
 | `FillerRepairEngine.h/.cpp` | Planner entry + pipeline skeleton (spec §3.2) |
 | `fake/FakeDesign.h` | In-memory `PlacementView` with fluent builders |
 | `fake/FakeCandidateProvider.h` | Same-size replacement lookup over the fake library |
+| `fake/FakeUdmCandidateProvider.h/.cpp` | Adapter rehearsal: UDM-style master catalog (layers named `FAMILY_POLARITY`, band shapes) with the checker's derivation rules — VT = implant-layer family, never the master name; `describeMasters(ids)` -> width/VT per id; implements the spec §5.3 provider; ships the appendix-A 12-master library |
 | `fake/FakeImplantChecker.h/.cpp` | Rule-parameterized oracle locking the request/result protocol |
 | `test/` | Unit tests + runner |
 
@@ -85,5 +88,5 @@ folding the 12 revisions into this code is tracked as three batches in
 | 8 | Subset searcher (filler combos × domain assignments) | done; V2.1 #9 applied (caps count fillers) |
 | 9 | Oracle gate (batch, cache, baseline-delta, protocol validation) | done; V2.1 #1–#5 correctness fixes applied (batch 1) |
 | 10 | Window escalation + diagnostics | done; V2.1 #10 applied; #11 final check dropped (batch 2) |
-| 11 | Full spec test set | done for fake-checker scope (56 tests) |
+| 11 | Full spec test set | done for fake-checker scope (60 tests) |
 | 12 | Real checker adapter + CMake integration | pending |

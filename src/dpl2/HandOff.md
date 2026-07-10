@@ -157,6 +157,12 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
    `x = columnId*siteWidth_`)、`Region`(row-based)↔`CheckerRect`(y-based,
    `y = rowId*rowHeight`)。建议放 `src/dpl2/src/fillerRepair/adapter/`(可含 UDM 头,
    planner 本体保持 UDM-free),重点单测这三个转换。
+4. **依赖拓扑已钉死(spec §3.3 / AGENTS D15)**:checker 调 engine(具体、单向
+   编译依赖),engine 调 checker 只经自己的抽象 oracle 接口——无编译环;
+   `checkPlaceWithOverlay[s]` 是纯查询、禁止内部触发 repair——无运行时递归。
+   repair 入口建议加不可重入 assert。candidate provider 的真实实现坐在 checker
+   的 master 表上,数据通路已由 `fake/FakeUdmCandidateProvider`(AGENTS D16)
+   预演:VT = implant layer family(parseLayerName),绝不解析 master 名。
 
 ## 5. 红线(违反任一 = 返工)
 

@@ -39,7 +39,7 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 实现;V2.1 **批 1 全落地**、**批 2 落地 #6/#7/#11**、**批 3 落地 #9(filler-domain 枚举)**;**#8/#12 未做** |
-| 测试 | 56 个,`-Werror` + ASan 全绿(`test/run_tests.sh`);TestPlan 第一批拓展(`a1a0750`,tester 提交,15 个)已 review 合入 |
+| 测试 | 60 个,`-Werror` + ASan 全绿(`test/run_tests.sh`);TestPlan 第一批拓展(`a1a0750`,tester,15 个)已 review 合入;fake-UDM provider 4 个 |
 | checker(`src/drc/`) | 真实源码已导入 + spec §5 类型脚手架;**overlay API 是 stub,永远报 clean,严禁接给 engine**(engine 现在只接 fake) |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 
@@ -188,6 +188,36 @@ V2.1 文本的定义;代价是个别多解 case 的"首个 clean"换人——用
 **否决备选**:保留扁平 swap 列表、只把 cap 换算成 filler 数——不行,那仍无法
 表达"入选 filler 带完整 domain",第三 VT 仍可能被前缀挤出。
 **附带简化**:同 filler 冲突按构造不可能,枚举里的 dup 检查删除。
+
+### D15. checker↔engine"互相依赖"的消解(spec §3.3)
+**问题**:checker 调 engine 生成 solution,engine 调 checker 验证 overlay。
+**裁定**:依赖倒置,engine 是底层,编译依赖恒为 checker→engine 单向:engine
+只认自己的抽象 `ImplantOverlayChecker`(CheckerApi.h)+ 自有 UDM-free wire
+类型;checker 的 repair 入口构造 engine 并把自己包进 `CheckerOracleAdapter`
+注入(adapter 兼做类型换皮,checker 侧持有)。运行时无递归的保障是协议红线:
+overlay API 是纯查询(const),**禁止内部触发 repair**;repair 入口加不可重入
+assert。构建:libfillerRepair 零依赖 ← checker;adapter 随 checker 目标。
+**否决备选**:并入 checker(毁独立测试)、双向抽象(空转)、std::function
+(类型面弱)、orchestrator 拥有两者(最干净但当前集成事实是 checker 驱动;
+engine 对谁驱动不敏感,future option)、再拆共享库(ImplantBaseTypes.h 已够)。
+
+### D16. Fake-UDM candidate provider(adapter 预演,`fake/FakeUdmCandidateProvider.*`)
+**目的**:真 provider 将坐在 checker 的 master 表上(buildMasters 从 UDM 构建),
+先把那条数据通路 UDM-free 地预演一遍,给 adapter 定型。
+**关键忠实点**(参考 `ImplantLayerChecker.cpp buildMasters` + helper):VT =
+master 的 implant shape 所在 layer 的 **family**(`parseLayerName`:按最后一个
+'_' 拆,VTS/VTL/VTH/VTUL + N/P),**绝不解析 master 名字**;单 master 混族 →
+unusable(`master_implant_family_mismatch`);宽度 DBU 必须 site 对齐;shape 必须
+铺满 master 宽;每行两个 half-row band shape(极性不影响 VT 推导)。
+**VtId 映射钉死**:family 枚举序 VTS=0/VTL=1/VTH=2/VTUL=3,推导失败 kUnknownVt。
+**API**:`describeMasters(ids)`(逐 id 宽度/VT/usable/reason,输入序保持)+
+engine 的 `getUsableMasterCandidates`(同宽高、usable、filler、非当前,id 升序)
++ `registerInto(FakeDesign)`(保证 view 与 provider 的 master 数据一致——engine
+构造 Swap 时会对 view.masterInfo 校验)。附录 A 12-master 库内置
+(`addAppendixALibrary`,R→VTS/L→VTL/UL→VTUL 为待 library 确认的假定映射)。
+**教训(测试)**:E2E 场景要么把解做成唯一(用规则约束排除掉其他 clean),
+要么按 D14 锁"枚举序第一个 clean"并注明——第一版场景里 602→VTS 也是合法解,
+被 engine 先找到,不是 bug。
 
 ## 5. 实现要点与陷阱(接手前必读)
 

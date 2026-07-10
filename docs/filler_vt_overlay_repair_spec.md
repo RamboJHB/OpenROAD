@@ -189,6 +189,55 @@ repair engine 内部是五层管线,每层单独可测、单独可替换:
   span 锚(§4.3),③④⑤层的结构与语义不变。
 - beam 保留为 escape hatch(§8.3),第一版不实现。
 
+### 3.3 依赖方向与调用拓扑(checker↔engine"互相依赖"的裁定)
+
+集成事实:**checker 调用 engine** 生成 fix solution,**engine 调用 checker**
+验证 overlay——表面上是循环依赖。裁定:用依赖倒置消解,**engine 是底层,
+方向恒为 checker → engine,无环**。
+
+**编译/链接层(无环)**:
+
+- fillerRepair 是纯底层库,**不 include 任何 checker 头**。它调用的"checker"
+  是它自己定义的抽象接口 `fillerRepair::ImplantOverlayChecker`(CheckerApi.h);
+  wire 类型是自有的 UDM-free 副本(§5.2 决策);与 checker 共享的只有零依赖的
+  `drc/ImplantBaseTypes.h`。
+- checker → engine 单向依赖:checker 侧的 repair 入口 include fillerRepair 头,
+  构造 engine,并把**自己**包进 `CheckerOracleAdapter :
+  public fillerRepair::ImplantOverlayChecker` 注入(adapter 同时做 ipl↔
+  fillerRepair 的类型换皮:Orient↔PhysOrientation、columnId·siteWidth↔DBU、
+  Region↔CheckerRect)。candidate provider 的真实实现同理:基于 checker 的
+  master 表,adapter 实现 engine 的 `FillerMasterCandidateProvider`。
+- 构建目标:libfillerRepair(零依赖)← checker/drc。adapter 文件放
+  `fillerRepair/adapter/`(允许 UDM 头)或 drc/ 侧,随 checker 目标链接。
+
+**运行时(无递归)**:
+
+```text
+checkPlace(检测) → checker 的 repair 入口
+    → engine.repair(snapshot)                  [checker→engine,具体调用]
+        → oracleAdapter.checkPlaceWithOverlay  [engine→接口,抽象调用]
+            → checker 的 overlay 查询(const,纯查询)
+    → engine 返回 FillerRepairResult
+→ checker/infra commit
+```
+
+协议红线(并入 §5.2):`checkPlaceWithOverlay[s]` 是**纯查询**,禁止在内部
+触发 repair;repair 只能从检测/修复入口进入。防御:repair 入口加不可重入
+assert(in-repair flag)。overlay API 本身 const、不 mutate DB,不会再进
+commit/检测路径,递归按构造不可能。
+
+**生命周期**:engine 纯 planner、per-request 状态自隔离,checker 每次修复调用
+就地构造(便宜);adapter 无状态(包 this)。
+
+**否决的备选**:(a) 把 engine 并进 checker 类——毁掉纯 planner 的独立
+编译/测试(当前全部单测不依赖 UDM/CMake 的能力就没了);(b) checker 也只认
+engine 的抽象接口(双向抽象)——checker→engine 是具体的单向调用,无环,
+再抽象是空转;(c) `std::function` 回调注入——与现有抽象接口等价但类型面更弱;
+(d) 第三方 orchestrator 拥有两者(flow: check→repair→commit)——架构上最
+干净,但当前集成事实是 checker 驱动;engine 对"谁驱动"不敏感,将来切
+orchestrator 零改动,记为 future option;(e) 再拆一个共享 wire 库——
+ImplantBaseTypes.h 已承担共享 id,wire 结构二元是 §5.2 的既定决策,不加库。
+
 ---
 
 ## 4. 核心操作:Swap(本阶段唯一操作)
@@ -360,6 +409,9 @@ id 分配流程等契约细节仍依赖未定稿的设计,现在拍板是投机�
   polarity mismatch)。
 - checker 不需要维护 violation 历史,也不做 original/residual/new/spillover 分类;
   分类由 repair 侧用同一 `guardRegion` 的 baseline/overlay delta 完成(§6.8)。
+- `checkPlaceWithOverlay[s]` 是**纯查询**(const、不 mutate DB),禁止在内部
+  触发 repair——repair 只从检测/修复入口进入,否则 checker→engine→checker 的
+  调用会成环(依赖拓扑见 §3.3)。
 
 ### 5.3 Infrastructure 候选 API
 

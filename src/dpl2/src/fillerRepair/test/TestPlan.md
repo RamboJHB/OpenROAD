@@ -2,7 +2,7 @@
 
 > 写给负责测试拓展的 AI。背景:真实 checker 尚未接入,等待期间把纯 planner 各
 > 子模块(PreCheck / Signature / Window / SwapGenerator / Ranker / SubsetSearch /
-> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 56 个测试全绿
+> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 60 个测试全绿
 > (`test/run_tests.sh`,`-Wall -Wextra -Werror`)。
 > **进度**:第一批拓展(commit `a1a0750`,15 个)已合入并通过 review——
 > **P0 全部完成**;P1 完成 Signature 3 个与 SubsetSearch 3 个。
@@ -50,6 +50,8 @@
 - V2.1 批 1 回归:unexplained illegal、baseline mismatch、multiset、
   per-violation ruleDistance、definitive-last-window(5)
 - 杂项(candidate provider 等)(1)
+- fake-UDM provider(adapter 预演):derivation、malformed、候选契约、
+  engine E2E(4)
 
 ## 2. 待补测试(按优先级;名字用建议的 case 名)
 
