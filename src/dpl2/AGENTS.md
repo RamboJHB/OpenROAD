@@ -39,7 +39,7 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 实现;V2.1 **批 1 全落地**、**批 2 落地 #6/#7/#11**、**批 3 落地 #9(filler-domain 枚举)**;**#8/#12 未做** |
-| 测试 | 41 个,`-Werror` + ASan 全绿(`test/run_tests.sh`) |
+| 测试 | 56 个,`-Werror` + ASan 全绿(`test/run_tests.sh`);TestPlan 第一批拓展(`a1a0750`,tester 提交,15 个)已 review 合入 |
 | checker(`src/drc/`) | 真实源码已导入 + spec §5 类型脚手架;**overlay API 是 stub,永远报 clean,严禁接给 engine**(engine 现在只接 fake) |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 

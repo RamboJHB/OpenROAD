@@ -2,8 +2,11 @@
 
 > 写给负责测试拓展的 AI。背景:真实 checker 尚未接入,等待期间把纯 planner 各
 > 子模块(PreCheck / Signature / Window / SwapGenerator / Ranker / SubsetSearch /
-> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 41 个测试全绿
+> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 56 个测试全绿
 > (`test/run_tests.sh`,`-Wall -Wextra -Werror`)。
+> **进度**:第一批拓展(commit `a1a0750`,15 个)已合入并通过 review——
+> **P0 全部完成**;P1 完成 Signature 3 个与 SubsetSearch 3 个。
+> 剩余:P1 的 PreCheck / Window / Ranker / SwapGenerator 各组,及 P2 全部。
 > **V2.1 #9(filler-domain 枚举)已落地**:Ranker 返回 `FillerDomain`、
 > SubsetSearch 枚举 filler 组合 × domain 赋值、cap 按 filler 数——本计划中
 > Ranker/SubsetSearch 的测试一律按该语义写。
@@ -50,7 +53,7 @@
 
 ## 2. 待补测试(按优先级;名字用建议的 case 名)
 
-### P0 — 正确性关键路径(先做)
+### P0 — 正确性关键路径 ✅ 全部完成(a1a0750)
 
 **OracleGate / baseline 一致性门**
 - `gate_baseline_unexpected_inwindow_aborts`:baseline 里出现 originals 之外的
@@ -81,16 +84,12 @@
 
 ### P1 — 子模块单元补强
 
-**Signature**
-- `signature_field_mismatch_each`:逐字段翻转(ruleId/kind/relation/
-  primaryLayer/secondaryLayer/rowIds)各自导致不匹配。
-- `signature_xwindow_tolerance_edges`:重叠恰好 = 短窗一半(边界取整)、
-  零长窗口、距离恰好 = siteWidth(匹配)与 siteWidth+1(不匹配)。
-- `signature_secondary_layer_nullopt_vs_set`:一边 nullopt 一边有值 → 不匹配;
-  双 nullopt → 匹配(layer-agnostic checker 的 no-op 承诺)。
-- `relatedness_row_and_distance_edges`:row 差恰 1(相关)/恰 2(不相关);
-  x 距离恰 = ruleDistance(相关)/+1(不相关)。
+**Signature**(✅ a1a0750 完成前四项,nullopt 分支并入 field_mismatch)
+- ~~`signature_field_mismatch_each`~~ ✅
+- ~~`signature_xwindow_tolerance_edges`~~ ✅
+- ~~`relatedness_row_and_distance_edges`~~ ✅
 - `rule_distance_fallback`:violations 全零 requiredValue → 退回 siteWidth。
+  (仍待做)
 
 **PreCheck**
 - `precheck_multi_row_issues_deterministic`:多行多 issue,顺序与两次运行
@@ -110,14 +109,8 @@
 - `unfixable_ring_boundary`:filler 恰在 ring 内第 2 个 instance(true)/
   第 3 个(false);行方向 ±2(true)/±3(false)。
 
-**SubsetSearch**(#9 已落地,按 filler-domain 语义写)
-- `enumerate_complete_budget_boundary`:space == budget(complete)与
-  space == budget+1(truncated)两侧。
-- `enumerate_overflow_clamp`:几十个 domain 时 fullSpaceSize 不溢出、
-  直接 truncated。
-- `enumerate_size3_cap_and_products`:size-3 的 filler cap 与笛卡尔积展开
-  (`enumeration_filler_domain_not_crowded_out` 已覆盖 size-1/2,补 size-3
-  组合数与顺序:末位 filler 的 option 变最快)。
+**SubsetSearch** ✅ 全部完成(a1a0750:complete/budget 边界、overflow clamp、
+size-3 cap 与笛卡尔积顺序)。
 
 **Ranker**(#9 已落地:filler 级键 + domain 内序分开测)
 - `ranker_filler_key_isolated`:filler 级排序键逐个验证(direct、bridge、
