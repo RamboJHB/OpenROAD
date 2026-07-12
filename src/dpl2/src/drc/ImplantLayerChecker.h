@@ -298,6 +298,15 @@ class ImplantLayerChecker final : public DRCChecker
       const CheckRequest& request,
       const Rect& guardRegion,
       const std::vector<std::vector<FillerChange>>& fillerChanges) const;
+  // [fillerRepair-fix] Raw guard-region violations per candidate overlay,
+  // WITHOUT the blocking filter (touchesInstance / containsViolation). Every
+  // guard-clipped violation is returned as-is; the caller (the filler-repair
+  // engine) owns the baseline-delta decision. Pass an empty change-list entry
+  // to obtain the baseline. Per-candidate validation/isolation is unchanged.
+  std::vector<CheckResult> checkPlaceWithOverlaysRaw(
+      const CheckRequest& request,
+      const Rect& guardRegion,
+      const std::vector<std::vector<FillerChange>>& fillerChanges) const;
   UpdateResult commitPlace(const CommitRequest& request);
 
   const std::vector<Diagnostic>& initDiagnostics() const;
@@ -571,9 +580,11 @@ class ImplantLayerChecker final : public DRCChecker
   bool slotPolarityOk(const PlacedInterval& interval) const;
   bool isFillerInstance(const PlacedInst& instance) const;
   bool isFillerMaster(MasterId masterId) const;
+  // [fillerRepair-fix] Declaration mismatched the definition (extra unused
+  // `const Rect& guardRegion`); both callers pass 2 args and the body does not
+  // use a guard region. Matched the header to the definition so it compiles.
   std::vector<Diagnostic> validateOverlayRequest(
       const CheckRequest& request,
-      const Rect& guardRegion,
       const std::vector<FillerChange>& fillerChanges) const;
   bool touchesInstance(const Violation& violation,
                        InstanceId instanceId) const;

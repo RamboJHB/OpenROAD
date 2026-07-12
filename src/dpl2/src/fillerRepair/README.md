@@ -16,11 +16,14 @@ planner is built and tested against the fakes in `fake/`.
 > §3.3.
 >
 > **Checker status (2026-07-12 drop):** the real overlay API landed in
-> `drc/ImplantLayerChecker.{h,cpp}` (helper folded in). Two open contract
-> items block wiring the engine to it — the blocking filter hides residual
-> originals that don't touch the target, and `Violation.rowIds` is never
-> populated (spec §5.2.1, AGENTS D17). Until resolved the engine stays on the
-> fakes.
+> `drc/ImplantLayerChecker.{h,cpp}` (helper folded in). Two contract items (a
+> blocking filter that hid residual originals not touching the target, and an
+> unpopulated `Violation.rowIds`) plus one header/impl compile mismatch have
+> been **fixed checker-side** (all `[fillerRepair-fix]`-tagged; see
+> `drc/CHECKER_REPAIR_CONTRACT.md`) — a new `checkPlaceWithOverlaysRaw` and
+> rowIds population. Pending the checker RD's review and a build in their full
+> UDM/Grid environment, the engine stays on the fakes; wire it to the raw API,
+> not the blocking-filter one (spec §5.2.1, AGENTS D17).
 
 ## Layout
 

@@ -40,7 +40,7 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 实现;V2.1 **批 1 全落地**、**批 2 落地 #6/#7/#11**、**批 3 落地 #9(filler-domain 枚举)**;**#8/#12 未做** |
 | 测试 | 60 个,`-Werror` + ASan 全绿(`test/run_tests.sh`);TestPlan 第一批拓展(`a1a0750`,tester,15 个)已 review 合入;fake-UDM provider 4 个 |
-| checker(`src/drc/`) | **2026-07-12 更新版已合入**(helper 并入本体、`Dbu`/`colId`、接 dpl2 Grid/DRCChecker):**overlay API 已是真实现**,但 wire 形态与 spec 草案不同(顺序关联、无 status、batch=单 target+N 变更),且有两条**未决契约项**(blocking 过滤吞非 target 触及的残留 original = false accept 风险;rowIds 从未填充)——见 spec §5.2.1 / D17。**契约项解决前 engine 仍只接 fake** |
+| checker(`src/drc/`) | **2026-07-12 更新版已合入**(helper 并入本体、`Dbu`/`colId`、接 dpl2 Grid/DRCChecker):overlay API 真实现。两条契约项 + 一个编译 bug **已在 checker 侧改好**(带 `[fillerRepair-fix]` 标记,说明文档 `drc/CHECKER_REPAIR_CONTRACT.md`,待 RD review):新增 `checkPlaceWithOverlaysRaw`(不做 blocking 过滤)、填充 `Violation.rowIds`、对齐 `validateOverlayRequest` 头/实现。wire 仍是顺序关联、无 status、batch=单 target+N 变更。**RD 确认前 engine 仍只接 fake** |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 
 关键 commit(倒序):#9 filler-domain(见 git log 最新)→ `d293265` AGENTS/TestPlan
@@ -228,12 +228,15 @@ colId)、接入 dpl2 legalizer(DRCChecker/Grid)、**overlay API 真实现**:
 isLegal=false,per-candidate 隔离)、全设计快照 + guard 内规则评估限定 + guard
 裁剪,`Violation` 带签名 hash(= 我们 §6.2 的键,好消息)。结构上正是 HandOff
 §3.2 推荐的路线。**按原样合入,未改他们一行代码。**
-**两条未决契约项(engine 对接的 blocker,已写进 spec §5.2.1)**:
+**两条契约项(engine 对接的 blocker,已在 checker 侧改好——见
+`drc/CHECKER_REPAIR_CONTRACT.md`,均带 `[fillerRepair-fix]` 标记;待 RD review)**:
 (1) blocking 过滤(touchesInstance ∪ 非 old)会吞掉"未修好但不触及 target"的
 original——§1.2 bridge-MW 类必踩;xWindow 包含判 old 还会隐藏"缩小未消除"。
-建议公开现成的 `checkOverlayRegion`(raw 模式)或 tag-不-drop。
-(2) `Violation.rowIds` 从未填充(`ScanOutcome.rowIds` 死字段)→ guard 裁剪只按
-x、hash 无行;adapter 可从 instances 反查行号兜底,但建议 checker 补填。
+**改法**:新增 `checkPlaceWithOverlaysRaw`——复用 `checkOverlayRegion` 返回 guard
+内全量违例、不过滤,delta 归 engine;原 blocking 形态保留给 legalizer。
+(2) `Violation.rowIds` 从未填充。**改法**:`scanRule`×2 + `scanViolations` +
+`makeViolations` 补填。附带修 `validateOverlayRequest` 头/实现不一致(编译 bug)。
+我改的是 RD 的文件,只保住两条语义,形态他们可换。
 **连带决策**:新 header 在 `ipl` 命名空间重定义了全部基础 id + XInterval,不再
 include `ImplantBaseTypes.h` → 该头现在是 **planner 专用**(同 TU 同时 include
 两边会 ODR 冲突)。后续做 adapter 前,planner 应改为完全自持基础类型(Types.h
@@ -244,9 +247,11 @@ violation.instances + placedInsts 合成。
 
 ## 5. 实现要点与陷阱(接手前必读)
 
-- **对接 blocker(D17)**:checker overlay API 已是真实现(不再是 stub),但
-  blocking 过滤会吞非 target 触及的残留 original(false accept 风险)、rowIds
-  恒空——两条契约项解决前 **engine 只接 `fake/FakeImplantChecker`**。
+- **对接 blocker(D17)**:两条契约项已在 checker 侧改好(raw API + rowIds,
+  `drc/CHECKER_REPAIR_CONTRACT.md`),但**待 checker RD review 并在其完整环境
+  编译通过**前,engine 仍只接 `fake/FakeImplantChecker`(本仓无 UDM/Grid 头,
+  checker 无法在此独立编译)。对接时用 `checkPlaceWithOverlaysRaw`,不用
+  blocking 形态的 `checkPlaceWithOverlay[s]`。
 - **checker 字段契约(D17 后)**:新版 `Violation` 带 rowIds 字段与签名 hash,
   但 rowIds **从未填充**;participants 不存在,adapter 从 `violation.instances`
   + `placedInsts` 合成;kind 从 ruleSource 推导,relation = relationship。

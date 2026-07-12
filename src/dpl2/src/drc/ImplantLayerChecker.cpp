@@ -1976,6 +1976,9 @@ std::vector<Violation> ImplantLayerChecker::makeViolations(
         violation.requiredValue = outcome.requiredValue;
         violation.xWindow = outcome.context.xWindow;
         violation.relationship = outcome.context.relationship;
+        // [fillerRepair-fix] rowIds was never populated; the target row is in
+        // the rule context, the neighbor row is added below.
+        violation.rowIds.push_back(outcome.context.rowId);
         if (const MergedShape* target =
                 findShape(outcome.context.targetMergedShapeId)) {
             violation.instances = target->ownerInstanceIds;
@@ -1999,6 +2002,7 @@ std::vector<Violation> ImplantLayerChecker::makeViolations(
                 }
                 violation.mergedShapeIds.push_back(neighbor->mergedShapeId);
                 violation.neighborInterval = neighbor->x;
+                violation.rowIds.push_back(neighbor->rowId);  // [fillerRepair-fix]
                 hasNeighbor = true;
             }
         }
@@ -2302,6 +2306,10 @@ ImplantLayerChecker::scanRule(
                 outcome.primaryLayer = rule.primaryLayer;
                 outcome.secondaryLayer = rule.secondaryLayer;
                 outcome.relationship = relationship;
+                // [fillerRepair-fix] rowIds was never populated; fill from the
+                // (intra-row) target shape so guard clipping and the violation
+                // signature carry rows.
+                outcome.rowIds = {checkTarget.rowId};
                 outcome.targetShapeId = checkTarget.shapeId;
                 outcome.xWindow = xOf(checkTarget.bbox);
                 outcome.measuredValue =
@@ -2323,6 +2331,9 @@ ImplantLayerChecker::scanRule(
                 outcome.primaryLayer = rule.primaryLayer;
                 outcome.secondaryLayer = rule.secondaryLayer;
                 outcome.relationship = relationship;
+                // [fillerRepair-fix] rowIds was never populated; fill from the
+                // target + neighbor shapes (finishViolation sorts/uniques).
+                outcome.rowIds = {checkTarget.rowId, neighbor.rowId};
                 outcome.targetShapeId = checkTarget.shapeId;
                 outcome.neighborShapeId = neighbor.shapeId;
                 outcome.xWindow =
@@ -2587,6 +2598,8 @@ std::vector<Violation> ImplantLayerChecker::scanViolations(
         violation.requiredValue = outcome.requiredValue;
         violation.xWindow = outcome.xWindow;
         violation.relationship = outcome.relationship;
+        // [fillerRepair-fix] carry rowIds through (finishViolation sorts them).
+        violation.rowIds = outcome.rowIds;
         violation.targetInterval = outcome.xWindow;
         violation.neighborInterval = outcome.xWindow;
         // Look up layer name
@@ -3514,6 +3527,49 @@ std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
     for (const std::vector<FillerChange>& changes : fillerChanges) {
         results.push_back(
             checkPlaceWithOverlay(request, guardRegion, changes, oldViolations));
+    }
+    return results;
+}
+
+// [fillerRepair-fix] Like checkPlaceWithOverlays, but returns EVERY
+// guard-clipped violation for each candidate without the blocking filter.
+// The blocking filter (touchesInstance / containsViolation) is correct for
+// the legalizer's place-accept decision but wrong for the repair flow: it
+// hides residual "original" violations whose merged run no longer includes
+// the target instance (the bridge-MW class), which the repair engine must
+// still see to know the overlay is not clean. The engine classifies
+// original/new/halo itself from the raw baseline vs candidate delta, so no
+// per-batch baseline is computed here -- pass an empty change-list entry to
+// get the baseline. Per-candidate validation and isolation are unchanged.
+std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlaysRaw(
+    const CheckRequest& request,
+    const Rect& guardRegion,
+    const std::vector<std::vector<FillerChange>>& fillerChanges) const
+{
+    std::vector<CheckResult> results;
+    results.reserve(fillerChanges.size());
+    for (const std::vector<FillerChange>& changes : fillerChanges) {
+        CheckResult result;
+        result.diagnostics = diagnostics_;
+        const std::vector<Diagnostic> requestDiagnostics =
+            validateOverlayRequest(request, changes);
+        result.diagnostics.insert(result.diagnostics.end(),
+                                  requestDiagnostics.begin(),
+                                  requestDiagnostics.end());
+        if (!requestDiagnostics.empty()) {
+            result.isLegal = false;
+            results.push_back(std::move(result));
+            continue;
+        }
+        const CheckResult overlay =
+            checkOverlayRegion(request, guardRegion, changes, true);
+        result.diagnostics.insert(result.diagnostics.end(),
+                                  overlay.diagnostics.begin(),
+                                  overlay.diagnostics.end());
+        result.violations = overlay.violations;  // raw: no blocking filter
+        result.isLegal =
+            result.violations.empty() && overlay.diagnostics.empty();
+        results.push_back(std::move(result));
     }
     return results;
 }

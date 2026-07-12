@@ -143,12 +143,13 @@ size-2 组合存在"(旧语义下 cap=2 只覆盖 f1 的两个 option,size-2 一
 engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此仅为让 engine 侧
 知道边界、并在集成时能验证。
 
-1. **checker 已交付真实 overlay API(2026-07-12,helper 已删)**,但有**两条
-   未决契约项(对接 blocker,spec §5.2.1 / AGENTS D17)**:
-   (a) blocking 过滤吞掉"未修好但不触及 target instance"的 original(§1.2
-   bridge-MW 类)→ repair 流 false accept;建议 checker 公开现成的
-   `checkOverlayRegion`(raw 模式)或 tag-不-drop。(b) `Violation.rowIds`
-   从未填充。**两条解决前 engine 仍只接 `fake/FakeImplantChecker`。**
+1. **checker 已交付真实 overlay API(2026-07-12,helper 已删)**;两条契约项 +
+   一个编译 bug **已在 checker 侧改好**(带 `[fillerRepair-fix]` 标记,说明文档
+   `drc/CHECKER_REPAIR_CONTRACT.md`):新增 `checkPlaceWithOverlaysRaw`(不做
+   blocking 过滤,复用 `checkOverlayRegion`)、填充 `Violation.rowIds`、对齐
+   `validateOverlayRequest` 头/实现。**待 checker RD review 并在其完整环境
+   (UDM+Grid)编译通过前,engine 仍只接 `fake/FakeImplantChecker`**;对接时
+   用 raw API,不用 blocking 形态。
 2. **新 wire 形态(以实物为准)**:`checkPlaceWithOverlays(request, guard,
    vector<vector<FillerChange>>)`——单 target/guard + N 候选,结果按输入顺序
    关联(无 requestId/status;invalid 候选 = 诊断 + isLegal=false,逐候选隔离)。

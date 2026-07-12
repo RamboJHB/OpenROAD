@@ -392,21 +392,22 @@ struct CheckResult {                  // 没有 status 枚举
   baseline 违例"包含"的(`containsViolation` = hash 相等 + xWindow 包含 +
   instances 子集)。
 
-**未决契约项(阻塞 engine 对接,需 checker RD 拍板)**:
+**契约项(已在 checker 侧改好,待 checker RD review 接管)**——完整改动说明见
+`src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`,checker 内改动均带
+`[fillerRepair-fix]` 标记:
 
 1. **blocking 过滤会吞掉"未修好但不触及 target instance"的 original**——
-   §1.2 的 bridge-MW 类正是这种:cell 换色后**离开**原 run,残宽 MW 的
-   participants 只有 filler,不含 target;它在 baseline 里存在,任何候选里都被
-   判 old 而过滤 → checker 报 isLegal=true → repair 流的 **false accept**。
-   `containsViolation` 用 xWindow **包含**判 old,还会把"缩小但未消除"的
-   违例也隐藏(非单调场景)。建议二选一:公开内部已有的
-   `checkOverlayRegion`(guard 内全量违例、无过滤;delta 判定仍归 engine
-   §6.8)——实现已在,成本最低;或 tag-不-drop(违例保留,`status` 字段标
-   "preexisting")。blocking 过滤形态可保留给 legalizer 自己的 place-accept 用。
-2. **`Violation.rowIds` 声明了但从未填充**(`ScanOutcome.rowIds` 是死字段):
-   guard 裁剪退化为只按 x、签名 hash 不含行、engine 需要 adapter 从
-   `instances` 反查 `placedInsts` 行号兜底。建议 checker 补填(`ScanShape`
-   已带 rowId,target/neighbor 各一行赋值)。
+   §1.2 的 bridge-MW 类正是这种(cell 换色后离开原 run,残宽 MW 的 participants
+   只有 filler),它在 baseline 里存在,任何候选都被判 old 过滤 → isLegal=true →
+   **false accept**。`containsViolation` 用 xWindow 包含判 old 还会隐藏"缩小
+   未消除"。**改法**:新增 `checkPlaceWithOverlaysRaw`——复用 `checkOverlayRegion`
+   返回 guard 内**全量**违例、不过滤,delta 判定归 engine §6.8;原
+   `checkPlaceWithOverlay[s]`(blocking 形态)保留给 legalizer。
+2. **`Violation.rowIds` 从未填充**。**改法**:`scanRule` 两处 + `scanViolations`
+   + `makeViolations` 补填(源自 `ScanShape.rowId` / `RuleContext.rowId` /
+   `MergedShape.rowId`)。
+3. 附带修一个**头/实现不一致**(`validateOverlayRequest` 头声明多一个未用的
+   `guardRegion` 参,与 2 参定义不符 → 编译不过),已把头对齐到定义。
 
 **future work(merge/split 前置条件)与职责归属(决策记录)**:届时 API
 需要一次版本化升级。"在 overlay context 里删除/实例化 filler"拆成两半,归属
