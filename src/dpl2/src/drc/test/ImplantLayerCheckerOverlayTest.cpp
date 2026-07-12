@@ -4,6 +4,8 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
+#include <iostream>
 #include <vector>
 
 namespace dpl2 {
@@ -415,7 +417,22 @@ std::vector<CheckResult> check(
   ImplantLayerChecker checker(nullptr);
   EXPECT_TRUE(checker.initialize(input()));
   EXPECT_TRUE(checker.initDiagnostics().empty());
-  return checker.checkPlaceWithOverlays(request, guard(), changes);
+  std::vector<CheckResult> results
+      = checker.checkPlaceWithOverlays(request, guard(), changes);
+  if (std::getenv("DPL2_CHECKER_TEST_DEBUG") != nullptr) {
+    for (size_t index = 0; index < results.size(); ++index) {
+      std::cerr << "candidate " << index << " legal=" << results[index].isLegal
+                << " violations=" << results[index].violations.size() << '\n';
+      for (const Violation& violation : results[index].violations) {
+        std::cerr << violation.toString(SITE_WIDTH) << " rows=";
+        for (RowId rowId : violation.rowIds) {
+          std::cerr << rowId << ',';
+        }
+        std::cerr << '\n';
+      }
+    }
+  }
+  return results;
 }
 
 TEST(ImplantCheckerOverlayTest, DenseCaseIntraRowWidth)
@@ -553,6 +570,36 @@ TEST(ImplantCheckerOverlayTest, DenseCaseInterRowSpacing)
       {instId(NEW_INTER_SPACING_TOP_ROW, NEW_INTER_SPACING_COL),
        instId(NEW_INTER_SPACING_BOTTOM_ROW, NEW_INTER_SPACING_COL + 4)}));
   expectOldUnrelatedFiltered(results[0]);
+}
+
+TEST(ImplantCheckerOverlayTest, RawKeepsUnrelatedBaselineWithRows)
+{
+  SCOPED_TRACE(denseOverlaySchematic());
+  ImplantLayerChecker checker(nullptr);
+  EXPECT_TRUE(checker.initialize(input()));
+
+  const CheckRequest target = request(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const std::vector<CheckResult> results = checker.checkPlaceWithOverlaysRaw(
+      target,
+      guard(),
+      {{FillerChange{instId(INTRA_WIDTH_ROW, 11), F1_FILL_MASTER}}});
+
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_FALSE(results[0].isLegal);
+  size_t oldUnrelatedCount = 0;
+  for (const Violation& violation : results[0].violations) {
+    if (violation.ruleId == F1_WIDTH_RULE
+        && violation.relationship == Relationship::IntraRow
+        && std::find(violation.instances.begin(),
+                     violation.instances.end(),
+                     instId(OLD_UNRELATED_ROW, OLD_UNRELATED_COL))
+               != violation.instances.end()) {
+      ++oldUnrelatedCount;
+      ASSERT_EQ(violation.rowIds.size(), 1u);
+      EXPECT_TRUE(violation.rowIds.front() == OLD_UNRELATED_ROW);
+    }
+  }
+  EXPECT_TRUE(oldUnrelatedCount >= 1u);
 }
 
 }  // namespace

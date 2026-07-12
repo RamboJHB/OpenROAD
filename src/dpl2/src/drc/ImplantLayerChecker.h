@@ -444,7 +444,8 @@ class ImplantLayerChecker final : public DRCChecker
     OutcomeStatus status = OutcomeStatus::NotApplicable;
     Dbu measuredValue = 0;
     Dbu requiredValue = 0;
-    std::vector<InstanceId> instances;
+    // [fillerRepair-fix] Match the implementation's participant field name.
+    std::vector<InstanceId> instanceIds;
     std::vector<ShapeId> shapeIds;
     std::vector<RowId> rowIds;
   };
@@ -501,9 +502,9 @@ class ImplantLayerChecker final : public DRCChecker
       const Rule& rule,
       Relationship relationship,
       CheckMode mode,
-      const std::vector<MergedShape>& targetShapes,
       const std::set<InstanceId>& excludedInstances) const;
-  std::vector<RuleOutcome> evaluate(
+  // [fillerRepair-fix] Match the implementation and its call sites.
+  std::vector<RuleOutcome> evalRule(
       const Rule& rule,
       const std::vector<MergedShape>& targetShapes,
       CheckMode mode,

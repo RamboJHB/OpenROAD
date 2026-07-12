@@ -319,12 +319,16 @@ bool ImplantLayerChecker::GroupKey::operator<(
 
 ImplantLayerChecker::ImplantLayerChecker(Grid* grid) : DRCChecker(grid)
 {
+    // [fillerRepair-fix] Standalone checker tests inject ImplantInput and do
+    // not have a live UDM Session.
+#ifndef DPL2_FAKE_UDM
     eUNL::Session& sess = eUNL::Session::getSession();
     eUNL::Design* design = sess.getCurrentDesign();
     if (design) {
         DePlace* dePlace = DePlace::get();
         initFromUDM(*dePlace->getDesMgr());
     }
+#endif
 }
 
 ImplantLayerChecker::~ImplantLayerChecker()
@@ -451,8 +455,9 @@ bool ImplantLayerChecker::dump(const std::string& filePath) const
     }
 
     out << "rows " << rows_.size() << "\n";
-    for (const RowInput& row : rows_) {
-        out << row.rowId << "\n";
+    // [fillerRepair-fix] rows_ stores RowId values, not RowInput objects.
+    for (RowId rowId : rows_) {
+        out << rowId << "\n";
     }
 
     out << "slot_layers " << tracks_.layerBySlot.size() << "\n";
@@ -629,11 +634,12 @@ bool ImplantLayerChecker::load(const std::string& filePath)
     }
     input.rows.reserve(count);
     for (size_t i = 0; i < count; ++i) {
-        RowInput row;
-        if (!(in >> row.rowId)) {
+        // [fillerRepair-fix] ImplantInput::rows is vector<RowId>.
+        RowId rowId = 0;
+        if (!(in >> rowId)) {
             return false;
         }
-        input.rows.push_back(row);
+        input.rows.push_back(rowId);
     }
 
     if (!(in >> section >> count) || section != "slot_layers") {
@@ -2031,6 +2037,19 @@ std::vector<Violation> ImplantLayerChecker::makeViolations(
                   }
                   return lessXInterval(left.xWindow, right.xWindow);
               });
+    // [fillerRepair-fix] Guard-wide scans visit a physical pair in both
+    // directions. Collapse the direction-only duplicate so raw baseline-delta
+    // consumers receive one finding per physical violation.
+    violations.erase(
+        std::unique(violations.begin(),
+                    violations.end(),
+                    [](const Violation& left, const Violation& right) {
+                        return left.hash == right.hash &&
+                               left.xWindow.xl == right.xWindow.xl &&
+                               left.xWindow.xh == right.xWindow.xh &&
+                               left.instances == right.instances;
+                    }),
+        violations.end());
     return violations;
 }
 
@@ -2082,11 +2101,20 @@ ImplantLayerChecker::scanOverlaySnapshot(
             continue;
         }
         std::vector<ScanRect> rects = scanInst(instance, false);
-        for (ScanRect& rect : rects) {
-            if (isInGuard(xOf(rect.rect), {rect.rowId}, guardRegion)) {
-                rect.isCandidate = true;
-            }
-        }
+        // [fillerRepair-fix] Keep only committed guard context, and keep it
+        // non-candidate. scanRule selects actual target/changed geometry via
+        // containsCandidate, while scanNeighbors deliberately skips candidate
+        // shapes. Marking all guard context as candidate made every committed
+        // neighbor disappear, suppressing inter-row width and all spacing.
+        rects.erase(
+            std::remove_if(rects.begin(),
+                           rects.end(),
+                           [&guardRegion, this](const ScanRect& rect) {
+                               return !isInGuard(xOf(rect.rect),
+                                                 {rect.rowId},
+                                                 guardRegion);
+                           }),
+            rects.end());
         snapshot.insert(snapshot.end(), rects.begin(), rects.end());
     }
 
@@ -2224,7 +2252,6 @@ ImplantLayerChecker::scanShapes(const std::vector<ScanRect>& rects) const
             shapes.back().rowId != rect.rowId ||
             shapes.back().bandSlot != rect.bandSlot ||
             shapes.back().layer != rect.layer ||
-            shapes.back().containsCandidate != rect.isCandidate ||
             x.xl > shapes.back().bbox.xh) {
             ScanShape shape;
             shape.shapeId = nextId++;
@@ -2243,6 +2270,9 @@ ImplantLayerChecker::scanShapes(const std::vector<ScanRect>& rects) const
         active.bbox = uniteRect(active.bbox, rect.rect);
         appendUnique(active.ownerInstanceIds, rect.instanceId);
         appendUnique(active.ownerShapeIds, rect.shapeId);
+        // [fillerRepair-fix] Candidate and committed intervals on the same
+        // layer form one physical implant run. Preserve candidate provenance
+        // as metadata instead of using it to split touching geometry.
         active.containsCandidate = active.containsCandidate || rect.isCandidate;
     }
     return shapes;
@@ -2264,7 +2294,11 @@ ImplantLayerChecker::scanRule(
     }
 
     for (const ScanShape& target : shapes) {
-        if (!target.containsCandidate || target.layer != rule.primaryLayer) {
+        // [fillerRepair-fix] Overlay checking is guard-wide. A filler change
+        // can leave a violation on committed residual geometry that no longer
+        // contains any candidate interval, so candidate ownership must not be
+        // used to suppress rule targets.
+        if (target.layer != rule.primaryLayer) {
             continue;
         }
         for (Relationship relationship : {Relationship::IntraRow,
@@ -2509,7 +2543,9 @@ ImplantLayerChecker::scanNeighbors(
     }
 
     for (const ScanShape& shape : shapes) {
-        if (shape.shapeId == target.shapeId || shape.containsCandidate) {
+        // [fillerRepair-fix] Candidate shapes are valid rule neighbors. Only
+        // the target shape itself is excluded.
+        if (shape.shapeId == target.shapeId) {
             continue;
         }
         if (shape.layer != queryLayer) {
@@ -3056,6 +3092,7 @@ bool ImplantLayerChecker::isInGuard(const XInterval& xWindow,
 
 void ImplantLayerChecker::finishViolation(Violation& violation) const
 {
+    sortUnique(violation.instances);
     sortUnique(violation.shapeIds);
     sortUnique(violation.mergedShapeIds);
     sortUnique(violation.rowIds);
@@ -3397,8 +3434,7 @@ bool ImplantLayerChecker::scanSameRowTouchingShape(
 {
     const LayerId queryLayer = rule.secondaryLayer.value_or(rule.primaryLayer);
     for (const ScanShape& shape : shapes) {
-        if (shape.containsCandidate || shape.shapeId == target.shapeId ||
-            shape.rowId != target.rowId ||
+        if (shape.shapeId == target.shapeId || shape.rowId != target.rowId ||
             shape.bandSlot != target.bandSlot ||
             shape.layer != queryLayer) {
             continue;
@@ -3888,10 +3924,17 @@ void ImplantLayerChecker::rebuildMasterShapes()
 
 bool ImplantLayerChecker::initFromUDM(const PhysDesMgr& desMgr)
 {
+#ifdef DPL2_FAKE_UDM
+    // [fillerRepair-fix] Test-only boundary: the normalized ImplantInput path
+    // exercises the real checker core without the unavailable UDM helper.
+    (void) desMgr;
+    return false;
+#else
     ImplantLayerCheckerHelper helper;
     helper.init(desMgr);
     const ImplantInput& input = helper.getImplantInput();
     return initialize(input);
+#endif
 }
 
 std::string ImplantLayerChecker::inputToString(const ImplantInput& data)
