@@ -14,6 +14,13 @@ planner is built and tested against the fakes in `fake/`.
 > `src/dpl2/HandOff.md`. Dependency topology (checker calls engine, engine
 > calls checker through its own abstract oracle — no cycle) is pinned in spec
 > §3.3.
+>
+> **Checker status (2026-07-12 drop):** the real overlay API landed in
+> `drc/ImplantLayerChecker.{h,cpp}` (helper folded in). Two open contract
+> items block wiring the engine to it — the blocking filter hides residual
+> originals that don't touch the target, and `Violation.rowIds` is never
+> populated (spec §5.2.1, AGENTS D17). Until resolved the engine stays on the
+> fakes.
 
 ## Layout
 
@@ -41,12 +48,13 @@ planner is built and tested against the fakes in `fake/`.
 ## Conventions
 
 - Base ids (`DbCoord`, `InstanceId`, `MasterId`, `RowId`, `LayerId`) and
-  `XInterval` are the checker's own types, shared through
-  `src/dpl2/src/drc/ImplantBaseTypes.h` (extracted from
-  `ImplantLayerCheckerHelper.h`, extended in place). `PlacedInstance` /
-  `MasterInfo` are adapter-side projections of the infrastructure `Node` /
-  `Master` classes (UDM-typed, hence not directly reusable in the pure
-  planner).
+  `XInterval` come from `src/dpl2/src/drc/ImplantBaseTypes.h`, which is now
+  **planner-only**: the 2026-07-12 checker defines its own copies of these
+  names inside `ImplantLayerChecker.h` (same `ipl` namespace — never include
+  both in one TU). Follow-up per AGENTS D17: move the planner to self-owned
+  base types before the adapter is written. `PlacedInstance` / `MasterInfo`
+  are adapter-side projections of the infrastructure `Node` / `Master`
+  classes (UDM-typed, hence not directly reusable in the pure planner).
 - The operation vocabulary is **swap** (this stage) and **rewrite** (future).
   There is no generic "Move" abstraction.
 

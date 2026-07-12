@@ -40,7 +40,7 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 实现;V2.1 **批 1 全落地**、**批 2 落地 #6/#7/#11**、**批 3 落地 #9(filler-domain 枚举)**;**#8/#12 未做** |
 | 测试 | 60 个,`-Werror` + ASan 全绿(`test/run_tests.sh`);TestPlan 第一批拓展(`a1a0750`,tester,15 个)已 review 合入;fake-UDM provider 4 个 |
-| checker(`src/drc/`) | 真实源码已导入 + spec §5 类型脚手架;**overlay API 是 stub,永远报 clean,严禁接给 engine**(engine 现在只接 fake) |
+| checker(`src/drc/`) | **2026-07-12 更新版已合入**(helper 并入本体、`Dbu`/`colId`、接 dpl2 Grid/DRCChecker):**overlay API 已是真实现**,但 wire 形态与 spec 草案不同(顺序关联、无 status、batch=单 target+N 变更),且有两条**未决契约项**(blocking 过滤吞非 target 触及的残留 original = false accept 风险;rowIds 从未填充)——见 spec §5.2.1 / D17。**契约项解决前 engine 仍只接 fake** |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 
 关键 commit(倒序):#9 filler-domain(见 git log 最新)→ `d293265` AGENTS/TestPlan
@@ -219,17 +219,44 @@ engine 的 `getUsableMasterCandidates`(同宽高、usable、filler、非当前,i
 要么按 D14 锁"枚举序第一个 clean"并注明——第一版场景里 602→VTS 也是合法解,
 被 engine 先找到,不是 bug。
 
+### D17. 2026-07-12 checker 更新版的审查结论(commit 见 git log)
+**事实**:checker RD 交付新版 `ImplantLayerChecker.{h,cpp}`,helper 删除、类型
+内联(`Dbu` 替代 `DbCoord`、新增 `ColId`,CheckRequest/PlacedInst 改用 site 单位
+colId)、接入 dpl2 legalizer(DRCChecker/Grid)、**overlay API 真实现**:
+`checkPlaceWithOverlays(request, guard, vector<vector<FillerChange>>)`,batch 内部
+先算一次 baseline(旧 filler),逐候选 validate(dup/非 filler/尺寸不符 → 诊断 +
+isLegal=false,per-candidate 隔离)、全设计快照 + guard 内规则评估限定 + guard
+裁剪,`Violation` 带签名 hash(= 我们 §6.2 的键,好消息)。结构上正是 HandOff
+§3.2 推荐的路线。**按原样合入,未改他们一行代码。**
+**两条未决契约项(engine 对接的 blocker,已写进 spec §5.2.1)**:
+(1) blocking 过滤(touchesInstance ∪ 非 old)会吞掉"未修好但不触及 target"的
+original——§1.2 bridge-MW 类必踩;xWindow 包含判 old 还会隐藏"缩小未消除"。
+建议公开现成的 `checkOverlayRegion`(raw 模式)或 tag-不-drop。
+(2) `Violation.rowIds` 从未填充(`ScanOutcome.rowIds` 死字段)→ guard 裁剪只按
+x、hash 无行;adapter 可从 instances 反查行号兜底,但建议 checker 补填。
+**连带决策**:新 header 在 `ipl` 命名空间重定义了全部基础 id + XInterval,不再
+include `ImplantBaseTypes.h` → 该头现在是 **planner 专用**(同 TU 同时 include
+两边会 ODR 冲突)。后续做 adapter 前,planner 应改为完全自持基础类型(Types.h
+不再 alias ipl),adapter 在两套独立类型间显式转换——这比"共享头"更干净,
+也与 D5/D15 的方向一致。requestId 取消 → 关联按顺序,engine 协议校验届时改
+size+order,adapter 按 index 合成 id。participants 缺失 → adapter 从
+violation.instances + placedInsts 合成。
+
 ## 5. 实现要点与陷阱(接手前必读)
 
-- **stub 陷阱**:`drc/ImplantLayerChecker.cpp` 的 `checkPlaceWithOverlay[s]`
-  是占位,除协议 echo 外恒报 clean。engine 的 accept 是 delta 全干净 → 接上
-  stub 第一个 candidate 就"通过"。真实现没到位前 engine 只接
-  `fake/FakeImplantChecker`。
-- **checker 需填 spec §5 新字段**:`makeViolations`/`scanViolations` 目前只填
-  legacy 字段;`kind/relation/rowIds/participants` 缺失时 engine 会 rowId
-  fallback 降精度(inter-row 违例可能误并)。这是对 checker 侧的输入契约要求。
-- **单位**:planner 全 DBU、半开区间 `[xl,xh)`;`ipl::PlacedInst.columnId` 是
-  site 单位。adapter 换算是头号 bug 温床。
+- **对接 blocker(D17)**:checker overlay API 已是真实现(不再是 stub),但
+  blocking 过滤会吞非 target 触及的残留 original(false accept 风险)、rowIds
+  恒空——两条契约项解决前 **engine 只接 `fake/FakeImplantChecker`**。
+- **checker 字段契约(D17 后)**:新版 `Violation` 带 rowIds 字段与签名 hash,
+  但 rowIds **从未填充**;participants 不存在,adapter 从 `violation.instances`
+  + `placedInsts` 合成;kind 从 ruleSource 推导,relation = relationship。
+  rowIds 缺失时 engine rowId fallback 降精度(inter-row 违例可能误并)。
+- **单位**:planner 全 DBU、半开区间 `[xl,xh)`;checker 的
+  `PlacedInst.colId` / `CheckRequest.colId` 是 **site 单位**
+  (`x = colId * siteWidth`)。adapter 换算是头号 bug 温床。
+- **ODR 警告(D17)**:`drc/ImplantBaseTypes.h` 现为 planner 专用;checker 新
+  header 在同一 `ipl` 命名空间自定义了同名类型,同一 TU include 两边会重定义
+  冲突。adapter 动工前先让 planner 自持基础类型。
 - **fake checker 语义是简化**(run-based):用户 5 行 grid 在 MW=MS=1 下 fake
   报的违例与用户预期的不同——这不是 bug,是 oracle 边界;测试锁"对给定
   oracle 的确定性行为"。

@@ -358,6 +358,56 @@ checker 实现 overlay 的语义与 V1 相同:把每个 `fillerChanges` 中的 f
 按 `newMasterId` 换 master 后,在 target-local 规则下重查。planner 的 `Swap`
 直接携带 `FillerChange` 语义,无转换层。
 
+#### 5.2.1 checker 实际交付形态(2026-07-12)与差异裁定
+
+checker 已交付真实 overlay 实现(helper 并入 checker 本体),wire 形态与上面的
+V2 草案不同,**对接以实物为准**,上面的草案保留作 engine 内部抽象的语义参照:
+
+```cpp
+// batch = 单 target + 单 guardRegion + N 个候选;结果按输入顺序一一对应
+// (没有 requestId:顺序即关联)。CheckRequest 用 colId(site 单位)。
+std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
+    const CheckRequest& request,
+    const Rect& guardRegion,          // eUTL::Rect(UDM 类型)
+    const std::vector<std::vector<FillerChange>>& fillerChanges) const;
+
+struct CheckResult {                  // 没有 status 枚举
+  bool isLegal;                       // = violations 空 && diagnostics 干净
+  std::vector<Violation> violations;  // 仅 "blocking"(见下)
+  std::vector<Diagnostic> diagnostics;  // invalid 候选 → 诊断 + isLegal=false
+};
+```
+
+差异与裁定:
+
+- **requestId/CheckStatus 取消**:关联按顺序(结果数 == 输入数、序一致),
+  engine 的协议校验改为 size+order;invalid 候选以 diagnostics 表达,
+  per-candidate 隔离语义保持(逐候选 validate)。adapter 可按 index 合成 id。
+- **batch 形态收敛**为"单 target/guard + N 变更列表"——与 engine 每窗口的
+  实际用法一致(engine 每批本就同 anchor 同 guard)。
+- **checker 内部已做 per-batch baseline**(旧 filler master、target 按新 master
+  以 candidate 注入)+ guard 裁剪 + guard 内规则评估限定;`Violation` 带
+  签名 hash(rule/kind/relation/layers/rows——与 §6.2 钉死的签名键一致)。
+- 对每个候选只返回 **blocking** 违例 = 触及 target instance 的 ∪ 不被
+  baseline 违例"包含"的(`containsViolation` = hash 相等 + xWindow 包含 +
+  instances 子集)。
+
+**未决契约项(阻塞 engine 对接,需 checker RD 拍板)**:
+
+1. **blocking 过滤会吞掉"未修好但不触及 target instance"的 original**——
+   §1.2 的 bridge-MW 类正是这种:cell 换色后**离开**原 run,残宽 MW 的
+   participants 只有 filler,不含 target;它在 baseline 里存在,任何候选里都被
+   判 old 而过滤 → checker 报 isLegal=true → repair 流的 **false accept**。
+   `containsViolation` 用 xWindow **包含**判 old,还会把"缩小但未消除"的
+   违例也隐藏(非单调场景)。建议二选一:公开内部已有的
+   `checkOverlayRegion`(guard 内全量违例、无过滤;delta 判定仍归 engine
+   §6.8)——实现已在,成本最低;或 tag-不-drop(违例保留,`status` 字段标
+   "preexisting")。blocking 过滤形态可保留给 legalizer 自己的 place-accept 用。
+2. **`Violation.rowIds` 声明了但从未填充**(`ScanOutcome.rowIds` 是死字段):
+   guard 裁剪退化为只按 x、签名 hash 不含行、engine 需要 adapter 从
+   `instances` 反查 `placedInsts` 行号兜底。建议 checker 补填(`ScanShape`
+   已带 rowId,target/neighbor 各一行赋值)。
+
 **future work(merge/split 前置条件)与职责归属(决策记录)**:届时 API
 需要一次版本化升级。"在 overlay context 里删除/实例化 filler"拆成两半,归属
 不同:

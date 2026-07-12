@@ -5,9 +5,10 @@
 //
 // Purpose: rehearse the REAL adapter's data path before the real checker/infra
 // APIs land. The real provider will sit on the checker's master tables, which
-// are built from UDM by ImplantLayerChecker::buildMasters and
-// ImplantLayerCheckerHelper (parseLayerName / rebuildMasterShapes). This fake
-// replicates that derivation UDM-free, with the same rules:
+// are built from UDM by ImplantLayerChecker::buildMasters, parseLayerName and
+// rebuildMasterShapes (formerly in the helper, folded into the checker by the
+// 2026-07-12 update). This fake replicates that derivation UDM-free, with the
+// same rules:
 //
 //   - implant layers are named "<FAMILY>_<POLARITY>"; family is one of
 //     VTS/VTL/VTH/VTUL (case-insensitive), polarity P/p -> P, anything else N

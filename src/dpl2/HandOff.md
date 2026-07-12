@@ -143,20 +143,25 @@ size-2 组合存在"(旧语义下 cap=2 只覆盖 f1 的两个 option,size-2 一
 engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此仅为让 engine 侧
 知道边界、并在集成时能验证。
 
-1. **overlay API 目前是 stub,永远报 clean**(`ImplantLayerChecker.cpp:3273`)——
-   在真实现到位前,**engine 只能继续用 `fake/FakeImplantChecker`**。别把 engine 接到
-   stub,否则第一个 candidate 直接"通过"(engine accept 标准是 delta 全干净)。
-2. **checker 需填 spec §5 新字段** `kind/relation/rowIds/participants`——
-   `makeViolations`(`:1885`)/`scanViolations`(`:2454`)现在只填 legacy 字段。缺
-   rowIds 时 engine 会 fallback 到 anchor row 并降精度(`Signature.cpp:61-65`),
-   inter-row violation 会被误并。这是 engine 依赖的输入契约。
+1. **checker 已交付真实 overlay API(2026-07-12,helper 已删)**,但有**两条
+   未决契约项(对接 blocker,spec §5.2.1 / AGENTS D17)**:
+   (a) blocking 过滤吞掉"未修好但不触及 target instance"的 original(§1.2
+   bridge-MW 类)→ repair 流 false accept;建议 checker 公开现成的
+   `checkOverlayRegion`(raw 模式)或 tag-不-drop。(b) `Violation.rowIds`
+   从未填充。**两条解决前 engine 仍只接 `fake/FakeImplantChecker`。**
+2. **新 wire 形态(以实物为准)**:`checkPlaceWithOverlays(request, guard,
+   vector<vector<FillerChange>>)`——单 target/guard + N 候选,结果按输入顺序
+   关联(无 requestId/status;invalid 候选 = 诊断 + isLegal=false,逐候选隔离)。
+   engine 协议校验届时改 size+order;participants 由 adapter 从
+   `violation.instances` + `placedInsts` 合成;kind 从 ruleSource 推导。
 3. **adapter 层**(engine 侧要写,属我方):`ipl::` ↔ `fillerRepair::` 类型转换。
-   `ipl::CheckRequest` 内嵌 UDM 的 `PhysOrientation`,进不了 UDM-free planner,所以
-   `Types.h` 持有结构同构的 wire 类型是**故意的**,对接靠薄 adapter。三处易埋 bug 的
-   转换:`Orient`↔`PhysOrientation`、`x`(DBU)↔`PlacedInst.columnId`(**site 单位**,
-   `x = columnId*siteWidth_`)、`Region`(row-based)↔`CheckerRect`(y-based,
-   `y = rowId*rowHeight`)。建议放 `src/dpl2/src/fillerRepair/adapter/`(可含 UDM 头,
-   planner 本体保持 UDM-free),重点单测这三个转换。
+   三处易埋 bug 的转换:`Orient`↔`PhysOrientation`、`x`(DBU)↔
+   `CheckRequest.colId`/`PlacedInst.colId`(**site 单位**,`x = colId*siteWidth`)、
+   `Region`(row-based)↔ guard `eUTL::Rect`(y-based,`y = rowId*rowHeight`)。
+   建议放 `src/dpl2/src/fillerRepair/adapter/`(可含 UDM 头,planner 本体保持
+   UDM-free),重点单测这三个转换。**前置**:planner 先自持基础类型(Types.h
+   停止 alias `ipl`)——checker 新 header 已在 `ipl` 命名空间自定义同名类型,
+   `ImplantBaseTypes.h` 现为 planner 专用,同 TU include 两边会 ODR 冲突。
 4. **依赖拓扑已钉死(spec §3.3 / AGENTS D15)**:checker 调 engine(具体、单向
    编译依赖),engine 调 checker 只经自己的抽象 oracle 接口——无编译环;
    `checkPlaceWithOverlay[s]` 是纯查询、禁止内部触发 repair——无运行时递归。

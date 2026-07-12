@@ -1,13 +1,17 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// UDM-free base types shared by the implant checker (dpl2::ipl) and the
-// filler repair planner (dpl2::fillerRepair).
+// UDM-free base types for the filler repair planner (dpl2::fillerRepair).
 //
-// Extracted from ImplantLayerCheckerHelper.h so pure components can reuse
-// the exact same ids and interval type without pulling the UDM headers.
-// XInterval keeps its original aggregate layout (brace init unchanged for
-// existing checker code); only convenience methods were added.
+// HISTORY / WARNING: originally extracted from the (now removed)
+// ImplantLayerCheckerHelper.h to share ids with the checker. The 2026-07-12
+// checker update defines its own copies of these names (Dbu, LayerId,
+// XInterval, ...) directly inside ImplantLayerChecker.h in the same ipl
+// namespace and no longer includes this header -- so this header is now
+// PLANNER-ONLY. Never include it and ImplantLayerChecker.h in the same
+// translation unit (ODR clash on XInterval etc.). Follow-up (AGENTS D17):
+// move the planner to fully self-owned base types in the fillerRepair
+// namespace and retire this file before the real adapter is written.
 //
 // Convention: intervals are half-open [xl, xh).
 
