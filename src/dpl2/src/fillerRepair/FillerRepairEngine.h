@@ -13,12 +13,12 @@
 //   [x] 2  fake checker / fake candidate provider (see fake/)
 //   [x] 3  100% utility pre-check with fatal short-circuit
 //   [x] 4  violation normalization + signature matching (Signature.h)
-//   [x] 5  L0/L1/L2 window builder + guardRegion + unfixable fast check
+//   [x] 5  L0 + adaptive-L1, guardRegion, unfixable warning (#6/#7/#8)
 //   [x] 6  swap generator: atomic swap moves only (SwapGenerator.h)
 //   [x] 7  ranker (Ranker.h)
 //   [x] 8  subset searcher (SubsetSearch.h)
 //   [x] 9  oracle gate: batch, cache, baseline-delta (OracleGate.h)
-//   [x] 10 window escalation + final check + diagnostics
+//   [x] 10 adaptive window escalation + diagnostics (final check dropped #11)
 
 #pragma once
 
@@ -40,6 +40,7 @@ struct RepairConfig
   int memberCapSize2 = 24;        // N_2
   int memberCapSize3 = 12;        // N_3
   int memberCapSize4 = 8;         // N_4
+  int adaptiveStepFillers = 2;    // K per relevant row/side (spec 6.3 #8)
   bool verbose = false;           // enables the [fr] debug transcript
 };
 

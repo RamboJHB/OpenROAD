@@ -70,6 +70,49 @@ std::vector<RowId> clampRows(const PlacementView& view, RowId lo, RowId hi)
   return result;
 }
 
+RepairWindow finalizeWindow(int level,
+                            const std::set<RowId>& rowSet,
+                            const std::set<InstanceId>& editable,
+                            const std::set<InstanceId>& bridge,
+                            XInterval x,
+                            const PlacementView& view,
+                            const DebugLog& log)
+{
+  RepairWindow window;
+  window.level = level;
+  window.rows.assign(rowSet.begin(), rowSet.end());
+  window.x = x;
+  for (const RowId rowId : window.rows) {
+    for (const PlacedInstance& inst : view.instancesInRow(rowId)) {
+      if (editable.count(inst.id) > 0) {
+        window.editableFillers.push_back(inst.id);
+      }
+    }
+  }
+  window.bridgeFillers.assign(bridge.begin(), bridge.end());
+
+  const std::vector<RowId> guardRows =
+      clampRows(view, window.rows.front() - 2, window.rows.back() + 2);
+  XInterval guardX = x;
+  for (const RowId rowId : guardRows) {
+    for (const PlacedInstance& inst : instancesInRing(view, rowId, x, 2)) {
+      const XInterval span = instanceSpan(view, inst);
+      guardX.xl = std::min(guardX.xl, span.xl);
+      guardX.xh = std::max(guardX.xh, span.xh);
+    }
+  }
+  window.guardRegion = Region{guardX, guardRows.front(), guardRows.back()};
+
+  log.msg("window",
+          cat(level == 0 ? "L0" : cat("adaptive-L1 step ", level),
+              " rows=[", window.rows.front(), ",", window.rows.back(),
+              "] x=", show(window.x), " editable=",
+              window.editableFillers.size(), " bridge=",
+              window.bridgeFillers.size(), " -> guard=",
+              show(window.guardRegion)));
+  return window;
+}
+
 }  // namespace
 
 bool RepairWindow::containsEditable(InstanceId id) const
@@ -85,8 +128,7 @@ RepairWindow buildWindow(int level,
                          DbCoord ruleDistance,
                          const DebugLog& log)
 {
-  RepairWindow window;
-  window.level = level;
+  (void) level;  // adaptive-L1 growth is stateful; this builder always makes L0.
 
   const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);
   const DbCoord anchorWidth = anchorMaster != nullptr ? anchorMaster->width : 0;
@@ -144,87 +186,126 @@ RepairWindow buildWindow(int level,
     }
   }
 
-  // --- L1 (spec 6.3): rows ±1; per row, extend x outward across contiguous
-  // fillers up to the nearest non-filler boundary (fixed cell / row edge);
-  // then sweep every filler overlapping the extended x into the editable set,
-  // whole instances. (V2.1 #7 dropped L2; #8's adaptive per-K-filler growth is
-  // a pending refinement of this sweep.)
-  if (level >= 1) {
-    const RowId lo = *rowSet.begin() - 1;
-    const RowId hi = *rowSet.rbegin() + 1;
-    for (const RowId row : clampRows(view, lo, hi)) {
-      rowSet.insert(row);
-    }
-    for (const RowId rowId : rowSet) {
-      const std::vector<PlacedInstance> all = view.instancesInRow(rowId);
-      DbCoord xl = x.xl;
-      for (int i = static_cast<int>(all.size()) - 1; i >= 0; --i) {
-        const XInterval span = instanceSpan(view, all[i]);
-        if (span.xh > xl) {
-          continue;  // not yet left of the current edge
-        }
-        if (!all[i].isFiller) {
-          break;  // fixed boundary stops the extension
-        }
-        xl = span.xl;
+  return finalizeWindow(0, rowSet, editable, bridge, x, view, log);
+}
+
+RepairWindow expandWindowAdaptive(const RepairWindow& current,
+                                  const TargetPlace& anchor,
+                                  const std::vector<Violation>& blocking,
+                                  const PlacementView& view,
+                                  int fillersPerRow,
+                                  const DebugLog& log)
+{
+  std::set<RowId> rowSet(current.rows.begin(), current.rows.end());
+  std::set<InstanceId> editable(current.editableFillers.begin(),
+                                current.editableFillers.end());
+  std::set<InstanceId> bridge(current.bridgeFillers.begin(),
+                              current.bridgeFillers.end());
+  XInterval x = current.x;
+
+  bool growLeft = false;
+  bool growRight = false;
+  for (const Violation& violation : blocking) {
+    for (const RowId rowId : violation.rowIds) {
+      for (const RowId coupled : clampRows(view, rowId - 1, rowId + 1)) {
+        rowSet.insert(coupled);
       }
-      DbCoord xh = x.xh;
-      for (const PlacedInstance& inst : all) {
-        const XInterval span = instanceSpan(view, inst);
-        if (span.xl < xh) {
+    }
+    if (violation.xWindow.xl <= current.x.xl) {
+      growLeft = true;
+    }
+    if (violation.xWindow.xh >= current.x.xh) {
+      growRight = true;
+    }
+    if (violation.xWindow.xl > current.x.xl
+        && violation.xWindow.xh < current.x.xh) {
+      const DbCoord leftDistance = violation.xWindow.xl - current.x.xl;
+      const DbCoord rightDistance = current.x.xh - violation.xWindow.xh;
+      growLeft |= leftDistance <= rightDistance;
+      growRight |= rightDistance <= leftDistance;
+    }
+  }
+  if (!growLeft && !growRight) {
+    growLeft = true;
+    growRight = true;
+  }
+
+  const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);
+  const XInterval anchorSpan{
+      anchor.x,
+      anchor.x + (anchorMaster != nullptr ? anchorMaster->width : 0)};
+  const int step = std::max(1, fillersPerRow);
+
+  for (const RowId rowId : rowSet) {
+    const std::vector<PlacedInstance> all = view.instancesInRow(rowId);
+    DbCoord leftFrontier = current.x.xl;
+    DbCoord rightFrontier = current.x.xh;
+    bool hasSeed = false;
+    if (rowId == anchor.rowId) {
+      leftFrontier = anchorSpan.xl;
+      rightFrontier = anchorSpan.xh;
+      hasSeed = true;
+    }
+    for (const InstanceId id : current.editableFillers) {
+      const PlacedInstance* inst = view.instance(id);
+      if (inst == nullptr || inst->rowId != rowId) {
+        continue;
+      }
+      const XInterval span = instanceSpan(view, *inst);
+      leftFrontier = hasSeed ? std::min(leftFrontier, span.xl) : span.xl;
+      rightFrontier = hasSeed ? std::max(rightFrontier, span.xh) : span.xh;
+      hasSeed = true;
+    }
+    if (!hasSeed) {
+      leftFrontier = current.x.xl;
+      rightFrontier = current.x.xh;
+    }
+
+    if (growLeft) {
+      int added = 0;
+      for (int i = static_cast<int>(all.size()) - 1; i >= 0 && added < step;
+           --i) {
+        const XInterval span = instanceSpan(view, all[i]);
+        if (span.xh > leftFrontier || editable.count(all[i].id) > 0) {
           continue;
         }
-        if (!inst.isFiller) {
+        if (!all[i].isFiller || span.xh < leftFrontier) {
           break;
         }
-        xh = span.xh;
+        editable.insert(all[i].id);
+        leftFrontier = span.xl;
+        x.xl = std::min(x.xl, span.xl);
+        ++added;
       }
-      x.xl = std::min(x.xl, xl);
-      x.xh = std::max(x.xh, xh);
     }
-    for (const RowId rowId : rowSet) {
-      for (const PlacedInstance& inst : view.instancesInRow(rowId)) {
-        if (inst.isFiller && instanceSpan(view, inst).overlaps(x)) {
-          include(inst, /*isBridge=*/false);
+    if (growRight) {
+      int added = 0;
+      for (const PlacedInstance& inst : all) {
+        if (added >= step) {
+          break;
         }
+        const XInterval span = instanceSpan(view, inst);
+        if (span.xl < rightFrontier || editable.count(inst.id) > 0) {
+          continue;
+        }
+        if (!inst.isFiller || span.xl > rightFrontier) {
+          break;
+        }
+        editable.insert(inst.id);
+        rightFrontier = span.xh;
+        x.xh = std::max(x.xh, span.xh);
+        ++added;
       }
     }
   }
 
-  // --- Finalize: deterministic (row, x) order for the editable set.
-  window.rows.assign(rowSet.begin(), rowSet.end());
-  window.x = x;
-  for (const RowId rowId : window.rows) {
-    for (const PlacedInstance& inst : view.instancesInRow(rowId)) {
-      if (editable.count(inst.id) > 0) {
-        window.editableFillers.push_back(inst.id);
-      }
-    }
-  }
-  window.bridgeFillers.assign(bridge.begin(), bridge.end());
-
-  // --- guardRegion = expandByCellRing(window, 2): rows ±2 clamped to the
-  // design, x widened to cover two placed instances beyond each side on
-  // every guard row. Conservative (never smaller than the two-cell ring).
-  const std::vector<RowId> guardRows =
-      clampRows(view, window.rows.front() - 2, window.rows.back() + 2);
-  XInterval guardX = x;
-  for (const RowId rowId : guardRows) {
-    for (const PlacedInstance& inst : instancesInRing(view, rowId, x, 2)) {
-      const XInterval span = instanceSpan(view, inst);
-      guardX.xl = std::min(guardX.xl, span.xl);
-      guardX.xh = std::max(guardX.xh, span.xh);
-    }
-  }
-  window.guardRegion = Region{guardX, guardRows.front(), guardRows.back()};
-
-  log.msg("window",
-          cat("L", level, " rows=[", window.rows.front(), ",",
-              window.rows.back(), "] x=", show(window.x), " editable=",
-              window.editableFillers.size(), " bridge=",
-              window.bridgeFillers.size(), " -> guard=",
-              show(window.guardRegion)));
-  return window;
+  return finalizeWindow(current.level + 1,
+                        rowSet,
+                        editable,
+                        bridge,
+                        x,
+                        view,
+                        log);
 }
 
 bool hasFillerNearViolation(const NormalizedViolation& violation,

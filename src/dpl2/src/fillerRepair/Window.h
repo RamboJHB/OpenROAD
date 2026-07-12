@@ -1,18 +1,14 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Repair window builder: L0/L1 ladder, guardRegion, bridge fillers and the
-// swap-unfixable hint (spec sections 6.2/6.3, TODO 5).
+// Repair window builder: L0 + adaptive-L1, guardRegion, bridge fillers and
+// the swap-unfixable hint (spec sections 6.2/6.3, TODO 5, V2.1 #8).
 //
-// Levels (V2.1 #7 dropped L2 -- it was the merged form of L1 and identical for
-// the single cluster the engine solves):
+// Levels (V2.1 #7 dropped L2):
 //   L0  violation participants ∪ anchor-adjacent fillers ∪ bridge fillers
-//   L1  L0 snapped to whole instances, extended sideways to the nearest
-//       non-filler boundary (fixed cell / row edge), rows ±1
-//
-// NOTE: spec V2.1 #8 further refines L1 into an "adaptive" step that grows K
-// fillers toward the blocking side instead of sweeping a whole run; that
-// refinement is not yet implemented here (L1 still does the boundary sweep).
+//   adaptive-L1  each step adds at most K contiguous fillers per relevant row
+//       toward the best non-clean candidate's blocking side; coupled rows ±1
+//       are included, and a non-filler boundary stops growth on that row.
 //
 // guardRegion = expandByCellRing(window, 2): two placed instances beyond the
 // window on each side, rows ±2. Guard-only fillers may never be edited; the
@@ -54,15 +50,28 @@ struct RepairWindow
   bool containsEditable(InstanceId id) const;
 };
 
-// Builds the window at `level` for the (single) violation cluster around the
-// anchor. `ruleDistance` widens bridge detection margins only. Deterministic;
-// logs the resulting rows/x/filler counts and the guard region.
+// Builds L0 for the (single) violation cluster around the anchor.
+// `ruleDistance` widens bridge detection margins only. `level` is retained for
+// source compatibility and must be 0; adaptive growth uses the API below.
 RepairWindow buildWindow(int level,
                          const TargetPlace& anchor,
                          const std::vector<NormalizedViolation>& violations,
                          const PlacementView& view,
                          DbCoord ruleDistance,
                          const DebugLog& log);
+
+// One adaptive-L1 step (spec 6.3, V2.1 #8). `blocking` is the best non-clean
+// candidate's residual/new-related violation set. Direction is derived from
+// those x windows relative to `current`; when no directional finding exists,
+// both sides are tried. The step is deterministic and never sweeps an entire
+// filler run: each selected side adds at most `fillersPerRow` adjacent fillers
+// per relevant row, stopping at a non-filler boundary.
+RepairWindow expandWindowAdaptive(const RepairWindow& current,
+                                  const TargetPlace& anchor,
+                                  const std::vector<Violation>& blocking,
+                                  const PlacementView& view,
+                                  int fillersPerRow,
+                                  const DebugLog& log);
 
 // Swap-unfixable hint (spec 6.2, adopted from DAC'23): true when at least one
 // filler lies within a two-instance ring of the violation's footprint on its

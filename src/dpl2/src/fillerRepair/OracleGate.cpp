@@ -218,6 +218,7 @@ DeltaSummary OracleGate::classify(const CheckResult& result,
             && sameSignature(original, result.violations[i], site_width_)) {
           consumed[i] = 1;
           ++summary.residualOriginals;
+          summary.blockingViolations.push_back(result.violations[i]);
           break;
         }
       }
@@ -246,11 +247,13 @@ DeltaSummary OracleGate::classify(const CheckResult& result,
     }
     if (inRepairWindow(v, window)) {
       ++summary.newInWindow;
+      summary.blockingViolations.push_back(v);
     } else if (isRelatedToOverlay(v, overlay,
                                   std::max(rule_distance_, v.requiredValue))) {
       // Per-violation rule distance (V2.1 #5): a new violation from a
       // larger-distance rule must not be mislabeled unrelated and let through.
       ++summary.relatedInHalo;
+      summary.blockingViolations.push_back(v);
     } else {
       ++summary.unrelatedInHalo;
     }

@@ -42,6 +42,9 @@ struct DeltaSummary
   int newInWindow = 0;
   int relatedInHalo = 0;
   int unrelatedInHalo = 0;     // reported, never blocking
+  // Actual residual/new-related findings that prevented acceptance. Adaptive
+  // L1 uses their rows/x windows to choose the next growth side (V2.1 #8).
+  std::vector<Violation> blockingViolations;
   bool clean = false;
 };
 
@@ -71,7 +74,7 @@ class OracleGate
     Overlay cleanOverlay;
     bool protocolError = false;
     bool budgetExhausted = false;
-    // Best non-clean candidate, for diagnostics only.
+    // Best non-clean candidate, also used to steer adaptive-L1 growth.
     bool hasBest = false;
     Overlay bestOverlay;
     DeltaSummary bestSummary;

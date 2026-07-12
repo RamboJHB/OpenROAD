@@ -914,7 +914,7 @@ void testWindowL0()
   CHECK_EQ(window.rows.size(), 2u);
 }
 
-void testWindowL1ExtendsToFixedBoundary()
+void testWindowAdaptiveAddsKOnBlockingSide()
 {
   fr::FakeDesign design = makeTwoRowDesign();
   fr::FillerRepairRequest request;
@@ -926,13 +926,66 @@ void testWindowL1ExtendsToFixedBoundary()
   const auto normalized =
       fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
 
-  const auto window = fr::buildWindow(1, request.targetPlace, normalized,
-                                      design, 1, fr::DebugLog(verbose()));
-  // Row0 left of x=8 is filler 100 -> extension reaches the row edge; row1 is
-  // all fillers -> whole row. L1 window covers [0,16) and pulls in 100/200s.
+  const auto l0 = fr::buildWindow(0, request.targetPlace, normalized,
+                                  design, 1, fr::DebugLog(verbose()));
+  // Blocking lies closer to L0's left edge. One adaptive step grows left by
+  // K=2 fillers per relevant row, not to the fixed/row boundary.
+  const auto window = fr::expandWindowAdaptive(
+      l0, request.targetPlace, {v}, design, 2, fr::DebugLog(verbose()));
   CHECK(window.x == (fr::XInterval{0, 16}));
-  CHECK(window.containsEditable(100));
-  CHECK(window.containsEditable(200));
+  CHECK(window.containsEditable(100));  // row0: only one filler before boundary
+  CHECK(window.containsEditable(201));  // row1: second filler added
+  CHECK(window.containsEditable(202));  // row1: nearest filler added
+  CHECK(!window.containsEditable(200));  // third filler: proves no whole-run sweep
+}
+
+void testWindowAdaptiveCoupledRowsAndFixedBoundary()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 20)
+      .place(100, fillerMaster(8, kVt1), 0, 0)
+      .place(101, fillerMaster(4, kVt1), 0, 8)
+      .place(102, fillerMaster(2, kVt1), 0, 12)
+      .place(103, cellMaster(kVt1), 0, 14)  // fixed boundary
+      .place(104, fillerMaster(2, kVt1), 0, 18)
+      .addRow(1, 0, 20)
+      .place(200, fillerMaster(8, kVt1), 1, 0)
+      .place(201, cellMaster(kVt2), 1, 8)  // anchor
+      .place(202, fillerMaster(2, kVt1), 1, 12)
+      .place(203, fillerMaster(2, kVt1), 1, 14)
+      .place(204, fillerMaster(4, kVt1), 1, 16)
+      .addRow(2, 0, 20)
+      .place(300, fillerMaster(8, kVt1), 2, 0)
+      .place(301, fillerMaster(4, kVt1), 2, 8)
+      .place(302, fillerMaster(2, kVt1), 2, 12)
+      .place(303, fillerMaster(2, kVt1), 2, 14)
+      .place(304, fillerMaster(4, kVt1), 2, 16);
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 201);
+  const fr::Violation original = makeViolation(
+      7,
+      fr::ViolationKind::MinSpacing,
+      fr::ViolationRelation::InterRow,
+      {1},
+      {11, 14});
+  request.violations = {original};
+  const auto normalized =
+      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+  const fr::RepairWindow l0 = fr::buildWindow(
+      0, request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+  const fr::RepairWindow expanded = fr::expandWindowAdaptive(
+      l0,
+      request.targetPlace,
+      {original},
+      design,
+      1,
+      fr::DebugLog(verbose()));
+
+  CHECK(expanded.containsEditable(203));  // anchor row, first right filler
+  CHECK(expanded.containsEditable(303));  // coupled row +1
+  CHECK(!expanded.containsEditable(304)); // K=1, no run sweep
+  CHECK(!expanded.containsEditable(104)); // row -1 stopped at fixed cell 103
 }
 
 void testGuardRegionTwoCellRing()
@@ -1894,10 +1947,147 @@ class AlwaysUnsolvedChecker : public fr::ImplantOverlayChecker
   }
 };
 
+// Scripted oracle for adaptive-L1: every overlay remains blocked until it
+// changes `solutionInstance`. This isolates window-growth control flow from
+// the fake DRC model while preserving the real baseline-delta protocol.
+class AdaptiveSolutionChecker : public fr::ImplantOverlayChecker
+{
+ public:
+  fr::Violation original;
+  fr::InstanceId solutionInstance = 0;
+
+  fr::CheckResult checkPlaceWithOverlay(
+      const fr::OverlayCheckRequest& request) override
+  {
+    fr::CheckResult result;
+    result.requestId = request.requestId;
+    result.status = fr::CheckStatus::Checked;
+    const bool solved = std::any_of(
+        request.fillerChanges.begin(),
+        request.fillerChanges.end(),
+        [&](const fr::FillerChange& change) {
+          return change.instanceId == solutionInstance;
+        });
+    if (!solved) {
+      result.violations = {original};
+    }
+    result.isLegal = result.violations.empty();
+    return result;
+  }
+
+  std::vector<fr::CheckResult> checkPlaceWithOverlays(
+      const std::vector<fr::OverlayCheckRequest>& requests) override
+  {
+    std::vector<fr::CheckResult> results;
+    for (const auto& request : requests) {
+      results.push_back(checkPlaceWithOverlay(request));
+    }
+    return results;
+  }
+};
+
+void testEngineAdaptiveL1FindsFarFiller()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 20)
+      .place(100, fillerMaster(4, kVt1), 0, 0)
+      .place(101, fillerMaster(4, kVt1), 0, 4)
+      .place(102, cellMaster(kVt2), 0, 8)       // anchor [8,12)
+      .place(140, fillerMaster(2, kVt1), 0, 12) // L0 adjacent [12,14)
+      .place(141, fillerMaster(2, kVt1), 0, 14) // adaptive solution
+      .place(142, fillerMaster(4, kVt1), 0, 16);
+
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {11, 14});
+  fr::ViolationParticipant participant;
+  participant.instanceId = 140;
+  participant.masterId = fillerMaster(2, kVt1);
+  participant.rowId = 0;
+  participant.xRange = {12, 14};
+  participant.isFiller = true;
+  original.participants = {participant};
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  request.violations = {original};
+
+  AdaptiveSolutionChecker checker;
+  checker.original = original;
+  checker.solutionInstance = 141;
+  fr::FakeCandidateProvider provider(design);
+  fr::RepairConfig config;
+  config.adaptiveStepFillers = 1;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(design, checker, provider, config);
+
+  const fr::FillerRepairResult result = engine.repair(request);
+  CHECK(result.hasSolution);
+  CHECK_EQ(result.changes.size(), 1u);
+  CHECK_EQ(result.changes.front().instanceId, 141);
+  bool sawAdaptiveSolution = false;
+  for (const fr::Diagnostic& diagnostic : result.diagnostics) {
+    sawAdaptiveSolution |= diagnostic.code == "Solution"
+                           && diagnostic.message.find("adaptive-L1 step 1")
+                                  != std::string::npos;
+  }
+  CHECK(sawAdaptiveSolution);
+}
+
+void testEngineAdaptiveCutoffUnchangedBlocking()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 20)
+      .place(100, fillerMaster(4, kVt1), 0, 0)
+      .place(101, fillerMaster(4, kVt1), 0, 4)
+      .place(102, cellMaster(kVt2), 0, 8)
+      .place(140, fillerMaster(2, kVt1), 0, 12)
+      .place(141, fillerMaster(2, kVt1), 0, 14)
+      .place(142, fillerMaster(4, kVt1), 0, 16);
+
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {11, 14});
+  fr::ViolationParticipant participant;
+  participant.instanceId = 140;
+  participant.rowId = 0;
+  participant.xRange = {12, 14};
+  participant.isFiller = true;
+  original.participants = {participant};
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  request.violations = {original};
+
+  AlwaysUnsolvedChecker checker;
+  checker.original = original;
+  fr::FakeCandidateProvider provider(design);
+  fr::RepairConfig config;
+  config.adaptiveStepFillers = 1;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(design, checker, provider, config);
+
+  const fr::FillerRepairResult result = engine.repair(request);
+  CHECK(!result.hasSolution);
+  bool sawUnchangedCutoff = false;
+  for (const fr::Diagnostic& diagnostic : result.diagnostics) {
+    sawUnchangedCutoff |= diagnostic.code == "ExpansionCutoff"
+                          && diagnostic.message.find("unchanged blocking")
+                                 != std::string::npos;
+  }
+  CHECK(sawUnchangedCutoff);
+}
+
 // V2.1 #10: "definitive no solution" must reflect the LAST searched window.
 // A single contiguous filler run: L0 is just the anchor-touching participant
-// filler (space 2, fully enumerated) while L1's sideways sweep pulls in the
-// whole run (7 fillers, space 3^7 -> budget-truncated). The failure must read
+// filler (space 2, fully enumerated) while one configured adaptive step pulls
+// in six more fillers (7 fillers, space 3^7 -> budget-truncated). The failure must read
 // "truncated", not "definitively" -- the old OR-accumulator latched L0's
 // completeness and would have mislabeled it definitive.
 void testEngineDefinitiveReflectsLastWindow()
@@ -1932,8 +2122,9 @@ void testEngineDefinitiveReflectsLastWindow()
   fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  // L0 (1 filler, space 2) fits and is complete; L1 (7 fillers) far exceeds 50.
+  // L0 (1 filler, space 2) fits; adaptive step (7 fillers) far exceeds 50.
   config.checkerCallBudgetPerWindow = 50;
+  config.adaptiveStepFillers = 6;
   fr::FillerRepairEngine engine(design, checker, provider, config);
 
   const auto result = engine.repair(request);
@@ -2537,7 +2728,10 @@ int main(int argc, char** argv)
       {"signature_matching", testSignatureMatching},
       {"relatedness", testRelatedness},
       {"window_L0", testWindowL0},
-      {"window_L1_extends_to_fixed_boundary", testWindowL1ExtendsToFixedBoundary},
+      {"window_adaptive_adds_k_on_blocking_side",
+       testWindowAdaptiveAddsKOnBlockingSide},
+      {"window_adaptive_coupled_rows_and_fixed_boundary",
+       testWindowAdaptiveCoupledRowsAndFixedBoundary},
       {"guard_region_two_cell_ring", testGuardRegionTwoCellRing},
       {"engine_unfixable_fast_fail", testEngineUnfixableFastFail},
       {"engine_empty_snapshot_is_success", testEngineEmptySnapshotIsSuccess},
@@ -2563,6 +2757,10 @@ int main(int argc, char** argv)
       {"gate_per_violation_rule_distance", testGatePerViolationRuleDistance},
       {"engine_definitive_reflects_last_window",
        testEngineDefinitiveReflectsLastWindow},
+      {"engine_adaptive_l1_finds_far_filler",
+       testEngineAdaptiveL1FindsFarFiller},
+      {"engine_adaptive_cutoff_unchanged_blocking",
+       testEngineAdaptiveCutoffUnchangedBlocking},
       {"gate_baseline_unexpected_inwindow_aborts",
        testGateBaselineUnexpectedInWindowAborts},
       {"gate_baseline_halo_extra_allowed", testGateBaselineHaloExtraAllowed},
