@@ -6,11 +6,11 @@ infrastructure side, so until the real checker / infrastructure APIs land the
 planner is built and tested against the fakes in `fake/`.
 
 > **V2.1 rollout (spec §0), three batches:** **batch 1 (OracleGate correctness,
-> #1/#2/#3/#4/#5/#10) DONE.** **Batch 2: #6/#7/#11 DONE** (unfixable→warning,
-> dropped L2, dropped final check); **#8 adaptive-L1 pending** (L1 still does
-> the boundary sweep). **Batch 3: #9 filler-domain enumeration DONE** (ranker
+> #1/#2/#3/#4/#5/#10) DONE.** **Batch 2: #6/#7/#8/#11 DONE**
+> (unfixable→warning, dropped L2, adaptive-L1, dropped final check).
+> **Batch 3: #9 filler-domain enumeration DONE** (ranker
 > returns `FillerDomain`s; caps count fillers); **#12 precheck upstreaming
-> pending** (goes with the adapter). 60 tests green. Plan and pointers in
+> pending** (goes with the adapter). 63 tests green. Plan and pointers in
 > `src/dpl2/HandOff.md`. Dependency topology (checker calls engine, engine
 > calls checker through its own abstract oracle — no cycle) is pinned in spec
 > §3.3.
@@ -40,7 +40,7 @@ planner is built and tested against the fakes in `fake/`.
 | `Swap.h/.cpp` | `Swap` (the stage's atomic operation: FillerChange + geometry metadata), overlay cache key (spec §4) |
 | `PreCheck.h/.cpp` | 100% utility pre-check (spec §6.1) |
 | `Signature.h/.cpp` | Violation normalization, pinned signature matching, change-relatedness (spec §6.2) |
-| `Window.h/.cpp` | Window builder (currently L0/L1/L2; V2.1 → L0 + adaptive-L1, spec §6.3), guardRegion two-cell ring, bridge fillers, swap-unfixable check (spec §6.2/6.3) |
+| `Window.h/.cpp` | L0 builder + adaptive-L1: grow K contiguous fillers per blocking side/relevant row, coupled rows ±1, fixed-boundary and unchanged-blocking cutoffs; guardRegion two-cell ring (spec §6.2/6.3) |
 | `SwapGenerator.h/.cpp` | Swap generator: atomic swaps only, no group/seed machinery (spec §6.5) |
 | `Ranker.h/.cpp` | Ranks fillers (direct/bridge/width/position) and returns `FillerDomain`s — each filler's full master domain, VT-preference ordered with the third VT demoted within the domain; realizes anchor-follow (spec §6.6, V2.1 #9) |
 | `SubsetSearch.h/.cpp` | Enumerates filler combinations × per-domain assignments in pinned order; member caps count fillers; complete-space rule (spec §6.7, V2.1 #9) |
@@ -90,7 +90,7 @@ SANITIZE=address ./run_tests.sh
 
 ## Status vs spec §11 TODO
 
-TODO 1–11 are implemented at **V2 semantics** (35 deterministic tests green).
+TODO 1–11 and all V2.1 engine revisions are implemented (63 deterministic tests green).
 TODO 12 (real checker/infra adapter + CMake) is pending. The spec is at **V2.1**;
 folding the 12 revisions into this code is tracked as three batches in
 `src/dpl2/HandOff.md`.
@@ -107,5 +107,5 @@ folding the 12 revisions into this code is tracked as three batches in
 | 8 | Subset searcher (filler combos × domain assignments) | done; V2.1 #9 applied (caps count fillers) |
 | 9 | Oracle gate (batch, cache, baseline-delta, protocol validation) | done; V2.1 #1–#5 correctness fixes applied (batch 1) |
 | 10 | Window escalation + diagnostics | done; V2.1 #10 applied; #11 final check dropped (batch 2) |
-| 11 | Full spec test set | done for fake-checker scope (60 tests) |
+| 11 | Full spec test set | done for fake-checker scope (63 tests) |
 | 12 | Real checker adapter + CMake integration | pending |

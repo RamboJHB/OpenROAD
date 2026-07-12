@@ -152,14 +152,15 @@ UDM extraction/helper,实际 overlay/index/rule/violation 代码仍直接编译�
 - `src/dpl2/src/drc/test/run_tests.sh`:`-Werror`,4 个 dense overlay + 1 个
   raw/baseline/rowIds 回归,5/5 全绿。
 - `SANITIZE=address ./run_tests.sh`:5/5 全绿。
-- fillerRepair planner:`src/fillerRepair/test/run_tests.sh`,60/60 全绿。
+- fillerRepair planner:`src/fillerRepair/test/run_tests.sh`,63/63 全绿（含
+  adaptive-L1 #8 的逐步扩窗、耦合行与 cutoff 回归）。
 - 完整 UDM extraction 与全 dpl2 build 仍需真实 UDM/其余 infrastructure 文件;
   当前 harness 明确只 fake DB boundary。
 - 建议加两个用例:(a) bridge-MW false-accept——cell 换色后残留一条不触及
   target 的 MW,`checkPlaceWithOverlaysRaw` 应报出该违例、`isLegal=false`
   (旧 `checkPlaceWithOverlay` 会 isLegal=true);(b) 同 x 间隙不同行的两条违例,
   填 rowIds 后签名 hash 不同、`isInGuard` 能按行裁剪。
-- filler-repair 纯 planner 测试(`src/fillerRepair/test/run_tests.sh`,60 个)不
+- filler-repair 纯 planner 测试(`src/fillerRepair/test/run_tests.sh`,63 个)不
   依赖 checker,已确认不受影响。
 
 ## 后续(engine 侧,非本文)

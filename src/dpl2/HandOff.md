@@ -24,7 +24,7 @@ rewrite(merge/split)**。代码里不允许出现 Move / FillerRewrite 抽象。
 | 部分 | 位置 | 状态 |
 |---|---|---|
 | Spec **V2.1**(含 §0 修订记录) | `docs/filler_vt_overlay_repair_spec.md` | 定稿 |
-| 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | V2.1 已落地批次见 §3;60 个确定性测试全绿 |
+| 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | V2.1 三批 engine 项全部落地;63 个确定性测试全绿 |
 | checker + standalone harness | `src/dpl2/src/drc/` | 真实 overlay core 已以 fake-UDM boundary 直接编译;dense 4 例 + raw/rowIds 1 例,5/5 + ASan 全绿;详见 `CHECKER_REPAIR_CONTRACT.md` |
 | fake checker / design / candidate provider | `src/dpl2/src/fillerRepair/fake/` | 继续用于单元测试 |
 
@@ -87,20 +87,20 @@ complete 标志;ExpansionCutoff 提前 break 时沿用 break 前那轮的值。
 
 ### 批 2 — 窗口/管线简化(减代码)
 
-> 状态:**#6 / #7 / #11 已完成**(loop 改为 `level<=1`,unfixable 降级 Warning,
-> 删 finalCheck + `OracleGate::finalCheck`)。**#8 adaptive-L1 仍待做**(下面 2.2)——
-> L1 目前仍是"sweep 到边界"的老实现。
+> 状态:**#6 / #7 / #8 / #11 全部完成**:unfixable 降级 Warning、删 L2、
+> adaptive-L1 替代边界 sweep、删 finalCheck。
 
 **2.1 删 L2(#7)✅** — `FillerRepairEngine.cpp` loop 改为 `level<=1`、`Window.*`
 注释、spec §6.3。单 cluster 下 L2==L1,ExpansionCutoff 必然触发,白付一次
 buildWindow + 诊断噪音。已删;level 循环结构保留给 rewrite 阶段留口。
 
-**2.2 adaptive-L1(#8)** — `Window.cpp` buildWindow(L1 分支)、`FillerRepairEngine.cpp`
-主循环。现在 L1 横向 snap 到 fixed/core 边界可吞整条 filler run → `fullSpaceSize`
-超 budget(`SubsetSearch.cpp:50`)→ 退化成 size≤4 + member cap 截断枚举。改为:
-每轮向 **best 非-clean candidate 的 blocking violation 所在侧**扩固定 K≈2 个 filler,
-重算 `plan.complete`,循环到预算尽或扩窗截止。engine 现有的 `best`(`:196-204`)已经
-在追踪 best 非-clean summary,扩窗方向从它的 blocking violation 取。
+**2.2 adaptive-L1(#8)✅** — `Window::expandWindowAdaptive` + engine 主循环。
+每轮从 `DeltaSummary.blockingViolations` 取 best non-clean 的 residual/new-related
+finding,按 xWindow 相对窗口选择左/右;相关行及其 ±1 行每侧每行最多加入配置 K
+(默认 2)个连续 filler,遇 non-filler boundary 停止。每步重跑排序/枚举并重算
+`plan.complete`;新 editable 为空即截止;扩窗后的窗口完整枚举且 blocking multiset
+与上一步相同也截止。回归覆盖 K 限制、方向、耦合行、fixed boundary、adaptive
+才能找到的解、unchanged-blocking cutoff 与 last-window definitive。
 
 **2.3 swap-unfixable 降级(#6)✅** — `FillerRepairEngine.cpp` stage 2b。原来
 `hasFillerNearViolation` 失败会提前 `return`(hard fail)。已改为:不提前 return,
@@ -178,7 +178,7 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
 2. **checker-as-oracle。** engine 永不判 DRC;干净与否只来自 baseline-delta 门(§6.8)。
 3. **engine 是纯 planner、确定性。** 相同输入 → 相同 changes/诊断/调用次数;不碰 DB,
    本体不含 UDM 头(UDM 只允许出现在 adapter/)。
-4. **fake 与 35 个测试不许删不许改语义。** 每次改动跑 `test/run_tests.sh`,必须全绿
+4. **fake 与 63 个测试不许删不许改语义。** 每次改动跑 `test/run_tests.sh`,必须全绿
    (`-Wall -Wextra -Werror`);V2.1 的每条改动都应补对应回归 case(ScriptedChecker /
    MisbehavingChecker 已够用)。
 5. **debug print 规范**:清晰的 因→果 逻辑链 + data change,别废话(参考 `Log.h`

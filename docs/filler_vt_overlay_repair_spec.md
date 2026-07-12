@@ -812,7 +812,7 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
 | 完备枚举阈值 | 3^k ≤ 剩余预算(k ≤ 5) | 满足则完整枚举,无解结论对**当前窗口**确定(§6.7/§6.9 #10) |
 | size-2/3/4 成员上限 N_s(按 filler 计) | 24 / 12 / 8 | 仅大窗口截断时启用,作用在 filler 数上(V2.1 #9);超出则渐进扩窗 |
 | 最大子集 size | 4 | 更大组合交给渐进扩窗 |
-| 渐进扩窗步长 K | 2 | adaptive-L1 每步向 blocking 侧扩入的 filler 数(§6.3) |
+| 渐进扩窗步长 K | 2 | adaptive-L1 每步在相关行/侧扩入的连续 filler 数;耦合 blocking rows ±1(§6.3) |
 | 窗口模型 | L0 + adaptive-L1 | L2 已删(V2.1 #7);扩窗截止即失败路径 |
 
 所有参数进 config,diagnostics 打印实际取值。
@@ -933,7 +933,7 @@ gate 语义:
 2. fake checker + fake candidate provider,先锁定 overlay/协议语义。
 3. 100% utility precheck(fatal 短路路径)。
 4. violation 归一化 + signature 匹配(§6.2 的钉死规则)。
-5. L0/L1/L2 window builder + guardRegion 生成。
+5. L0 + adaptive-L1 window builder + guardRegion 生成。
 6. Swap 生成器(只产原子 swap move;组合由⑧枚举、方向由⑦排序承担)。
 7. Ranker(5 特征,per-band 计数)。
 8. SubsetSearcher(排序枚举、批产出、预算)。
@@ -944,11 +944,11 @@ gate 语义:
 12. 等 `ImplantOverlayChecker::checkPlaceWithOverlays` 稳定后接真实 checker;
     `src/dpl2` CMake 接入后纳入 build/test。
 
-状态(2026-07-12):TODO 1–11 已实现,`src/dpl2/src/fillerRepair/` 下 60 个确定性
+状态(2026-07-12):TODO 1–11 已实现,`src/dpl2/src/fillerRepair/` 下 63 个确定性
 测试全绿。TODO 12(真实 checker/infra 对接 + CMake)未做,checker 源码已导入
 `src/dpl2/src/drc`。V2.1 修订(§0)落地进度,详见 `src/dpl2/HandOff.md`:
 批 1(OracleGate 正确性 #1/#2/#3/#4/#5/#10)**已完成**;批 2(窗口/管线简化)
-**#6/#7/#11 已完成,#8 adaptive-L1 待做**(L1 仍是边界 sweep 老实现);
+**#6/#7/#8/#11 全部完成**(adaptive-L1 已替代边界 sweep);
 批 3(搜索域建模)**#9 filler-domain 枚举已完成**,#12 随 adapter 对接。真实
 `ImplantLayerChecker` core 已在 fake-UDM boundary 下直接编译并通过 dense
 width/spacing × intra/inter-row 4 个用例、raw/rowIds 1 个回归及 ASan;这不等同于 TODO 12 adapter/真实

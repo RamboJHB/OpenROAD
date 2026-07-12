@@ -3,7 +3,7 @@
 > 写给负责测试拓展的 AI。真实 checker core 已有独立 harness(见下),但尚未通过
 > adapter 接入 engine;等待对接期间继续把纯 planner 各
 > 子模块(PreCheck / Signature / Window / SwapGenerator / Ranker / SubsetSearch /
-> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 60 个测试全绿
+> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 63 个测试全绿
 > (`test/run_tests.sh`,`-Wall -Wextra -Werror`)。
 > **进度**:第一批拓展(commit `a1a0750`,15 个)已合入并通过 review——
 > **P0 全部完成**;P1 完成 Signature 3 个与 SubsetSearch 3 个。
@@ -40,14 +40,17 @@
    (拆分时保持单二进制、单注册表,run_tests.sh 一并更新)。
 7. 定期跑 ASan 版本(见 §5 命令);新测试合入前至少跑一次。
 
-## 1. 现有覆盖(planner 60 个 + checker 5 个,勿重复)
+## 1. 现有覆盖(planner 63 个 + checker 5 个,勿重复)
 
 - Swap 构造/校验、canonicalKey、wire 转换(3)
 - PreCheck:全覆盖 OK、gap、overlap/offgrid/illegal、engine fatal 短路(4)
 - fake checker 协议与规则:echo/order、invalid 隔离、intra/inter 检测、
   guard 过滤、target override(6)
 - Signature:normalize、匹配、relatedness(3)
-- Window:L0、L1 扩到 fixed 边界、guard 两圈 ring(3)
+- Window:L0 membership、guard 两圈 ring、unfixable ring(3)
+- adaptive-L1 #8:每步 K 限制/不 sweep 整段、blocking 侧方向、耦合行 ±1、
+  fixed boundary、远端 filler E2E 解、完整枚举后 blocking 不变截止(3 个新增;
+  旧 L1 boundary case 已替换)。
 - 生成器:basic、no usable master(2);Ranker 顺序(filler-domain)(1);
   枚举顺序/完备性(1);#9 回归 filler cap 不挤出(1)
 - Engine E2E:单 swap、非单调 pair、unrelated halo、definitive 无解、
@@ -61,7 +64,7 @@
 - 真实 `ImplantLayerChecker` core:8×200 dense layout 上 width/spacing ×
   intra/inter-row;每组覆盖 clean、original 残留、新 violation、无关 baseline
   过滤(4);raw API 保留无关 baseline 并携带 rowIds(1)。独立 harness,不计入
-  上述 planner 60 个。
+  上述 planner 63 个。
 
 ## 2. 待补测试(按优先级;名字用建议的 case 名)
 
@@ -166,8 +169,7 @@ size-3 cap 与笛卡尔积顺序)。
 - 不在 planner `test_main.cpp` 中复刻真实 checker DRC 语义;checker 行为测试统一
   放 `src/dpl2/src/drc/test/`。
 - 不写依赖 fake 规则模型细节的"伪 DRC 正确性"断言(见总原则 2)。
-- 不为 #8 adaptive-L1 预写行为测试(接口未定,写了也是猜;等重构落地后按
-  spec §6.3 补。#9 已落地,不受此限)。
+- #8 adaptive-L1 已落地并有回归;后续只补发现的新边界,不保留旧 L1 sweep 语义。
 
 ## 4. 工作流
 

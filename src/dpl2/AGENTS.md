@@ -38,8 +38,8 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 | 部分 | 状态 |
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
-| planner(`src/fillerRepair/`) | TODO 1–11 实现;V2.1 **批 1 全落地**、**批 2 落地 #6/#7/#11**、**批 3 落地 #9(filler-domain 枚举)**;**#8/#12 未做** |
-| 测试 | planner 60 个,`-Werror` + ASan 全绿;真实 checker core 5 个(`src/drc/test/run_tests.sh`),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
+| planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
+| 测试 | planner 63 个,`-Werror` + ASan 全绿;真实 checker core 5 个(`src/drc/test/run_tests.sh`),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
 | checker(`src/drc/`) | **2026-07-12 更新版已合入**:overlay API 真实现。契约项、header/cpp 编译漂移、guard target/neighbor/merge bug 已在 checker 侧修好(均 `[fillerRepair-fix]`,详见 `drc/CHECKER_REPAIR_CONTRACT.md`);fake-UDM boundary 下直接编译生产 checker 5/5 全绿。wire 仍是顺序关联、无 status、batch=单 target+N 变更。**真实 UDM extraction/adapter 前 engine 仍只接 fake** |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 
@@ -268,6 +268,23 @@ guard 裁剪,所有 shape 可作 target/neighbor,同层接触几何跨 provenanc
 CMake/依赖闭包、checker↔engine adapter(TODO 12)。用户提供的 DePlace/network
 文件已归位,但它们的完整构建仍依赖其余 infrastructure/UDM 文件。
 
+### D19. #8 adaptive-L1 落地(2026-07-12)
+**决策**:删掉 L1 一次 sweep 到 fixed/core boundary 的实现。L0 搜完未 clean 时,
+OracleGate 的 best summary 携带实际 `blockingViolations`(residual originals +
+in-window/related-halo new);Window 按它们相对当前 x 的位置确定左/右,在 blocking
+rows 及 ±1 耦合行上每侧每行最多加入配置 K 个连续 filler(默认 2),遇 non-filler
+立即停。每步重新 generate/rank/enumerate,所以 `plan.complete` 按新 domain 重算。
+
+**截止**:下一步没有新增 editable filler → 截止;扩窗后的窗口完成完整枚举且
+blocking violation multiset 按 pinned signature 与上一步相同 → 截止。后者只在
+当前窗口 complete 时启用,截断窗口不能据此宣称更远 filler 无关。最终 definitive
+仍只取最后实际搜索窗口(D10)。
+
+**测试**:旧 `window_L1_extends_to_fixed_boundary` 被 K 限制测试替换;新增耦合行+
+fixed boundary、adaptive 才能找到远端 filler 的 E2E、unchanged-blocking cutoff;
+原 last-window definitive 回归改用 K=6 直接造截断 adaptive window。planner
+总数 63,普通/ASan 全绿。
+
 ## 5. 实现要点与陷阱(接手前必读)
 
 - **对接 blocker(D17/D18)**:checker core 已在 fake-UDM boundary 下直编译并
@@ -300,24 +317,20 @@ CMake/依赖闭包、checker↔engine adapter(TODO 12)。用户提供的 DePlace
 2. **`rowLegalSpan` 单区间**表达不了 macro/blockage 多段 legal segment;#12
    上收 infra + 窗口局部复核会大幅缓解,真多段时由 adapter 报 issue。
 3. **R/L/UL 含义未经 library 团队确认**(见 D13);影响仅注释/文档,不影响算法。
-4. **#8 未做期间的已知次优**:L1 sweep 可吞整条 filler run → 完备枚举退化为
-   截断枚举(spec §6.3 已写明目标行为,代码还是老实现,`Window.h` 头注释有
-   显式 NOTE)。#9 落地后此项影响减半(截断时 cap 按 filler、domain 不丢),
-   但"完备性丢失"本身仍在,#8 仍值得做。
+4. **adaptive K 是启发式参数**:默认每相关行/侧 K=2;只影响扩窗速度与 checker
+   call 分布,不改变 accept gate。若真设计的跨行耦合需要更大步长,通过 config
+   调整,不在算法里 hard-code 工艺值。
 
 ## 7. 下一步(优先级序)
 
-1. **#8 adaptive-L1**(批 2 收尾,最后一个算法项):每轮向 best 非-clean
-   candidate 的 blocking violation 所在侧扩 K≈2 个 filler,重算完备性;取代 L1
-   的边界 sweep。engine 的 `best` 已在追踪扩窗方向所需信息。
-2. **测试拓展**(可并行,另一 AI 负责):按
+1. **测试拓展**:按
    `src/fillerRepair/test/TestPlan.md` 执行(#9 已落地,P1 的
    SubsetSearch/Ranker 测试直接按 filler-domain 语义写)。
-3. **TODO 12 对接**(checker overlay core 已可测,等真实 UDM extraction/RD确认):adapter 层
+2. **TODO 12 对接**(checker overlay core 已可测,等真实 UDM extraction/RD确认):adapter 层
    (`fillerRepair/adapter/`,可含 UDM)+ CMake + 用真 checker 重放 spec §10。
-4. **#12 precheck 上收**:随 adapter 一起(infra 按 design revision 缓存
+3. **#12 precheck 上收**:随 adapter 一起(infra 按 design revision 缓存
    full-utility;planner 留 O(window) 防御复核)。
-5. **问用户拍板 D12 输出格式**,再动 `FillerRepairResult`。
+4. **问用户拍板 D12 输出格式**,再动 `FillerRepairResult`。
 
 ## 8. 工作方式(硬约束)
 
