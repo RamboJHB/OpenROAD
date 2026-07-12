@@ -21,8 +21,12 @@ planner is built and tested against the fakes in `fake/`.
 > unpopulated `Violation.rowIds`) plus one header/impl compile mismatch have
 > been **fixed checker-side** (all `[fillerRepair-fix]`-tagged; see
 > `drc/CHECKER_REPAIR_CONTRACT.md`) — a new `checkPlaceWithOverlaysRaw` and
-> rowIds population. Pending the checker RD's review and a build in their full
-> UDM/Grid environment, the engine stays on the fakes; wire it to the raw API,
+> rowIds population. A standalone fake-UDM-boundary harness now compiles the
+> production checker directly; four dense width/spacing × intra/inter-row cases
+> plus one raw/baseline/rowIds regression pass under `-Werror` and ASan. The
+> same run fixed additional header/cpp drift
+> and guard target/neighbor/merge bugs; see the RD contract document. Pending
+> real UDM extraction and the adapter, the engine stays on the fakes; wire it to the raw API,
 > not the blocking-filter one (spec §5.2.1, AGENTS D17).
 
 ## Layout
@@ -78,6 +82,10 @@ Standalone (STL only) until dpl2 joins the CMake build (spec §11 TODO 12):
 ```sh
 test/run_tests.sh              # quiet
 FR_VERBOSE=1 test/run_tests.sh # with the [fr] debug transcript
+
+cd ../drc/test
+./run_tests.sh                 # real checker core, fake UDM boundary, 5 cases
+SANITIZE=address ./run_tests.sh
 ```
 
 ## Status vs spec §11 TODO

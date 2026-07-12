@@ -39,8 +39,8 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 实现;V2.1 **批 1 全落地**、**批 2 落地 #6/#7/#11**、**批 3 落地 #9(filler-domain 枚举)**;**#8/#12 未做** |
-| 测试 | 60 个,`-Werror` + ASan 全绿(`test/run_tests.sh`);TestPlan 第一批拓展(`a1a0750`,tester,15 个)已 review 合入;fake-UDM provider 4 个 |
-| checker(`src/drc/`) | **2026-07-12 更新版已合入**(helper 并入本体、`Dbu`/`colId`、接 dpl2 Grid/DRCChecker):overlay API 真实现。两条契约项 + 一个编译 bug **已在 checker 侧改好**(带 `[fillerRepair-fix]` 标记,说明文档 `drc/CHECKER_REPAIR_CONTRACT.md`,待 RD review):新增 `checkPlaceWithOverlaysRaw`(不做 blocking 过滤)、填充 `Violation.rowIds`、对齐 `validateOverlayRequest` 头/实现。wire 仍是顺序关联、无 status、batch=单 target+N 变更。**RD 确认前 engine 仍只接 fake** |
+| 测试 | planner 60 个,`-Werror` + ASan 全绿;真实 checker core 5 个(`src/drc/test/run_tests.sh`),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
+| checker(`src/drc/`) | **2026-07-12 更新版已合入**:overlay API 真实现。契约项、header/cpp 编译漂移、guard target/neighbor/merge bug 已在 checker 侧修好(均 `[fillerRepair-fix]`,详见 `drc/CHECKER_REPAIR_CONTRACT.md`);fake-UDM boundary 下直接编译生产 checker 5/5 全绿。wire 仍是顺序关联、无 status、batch=单 target+N 变更。**真实 UDM extraction/adapter 前 engine 仍只接 fake** |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 
 关键 commit(倒序):#9 filler-domain(见 git log 最新)→ `d293265` AGENTS/TestPlan
@@ -245,17 +245,39 @@ include `ImplantBaseTypes.h` → 该头现在是 **planner 专用**(同 TU 同�
 size+order,adapter 按 index 合成 id。participants 缺失 → adapter 从
 violation.instances + placedInsts 合成。
 
+### D18. 真实 checker standalone harness 与 guard 扫描修复(2026-07-12)
+**测试边界**:`src/drc/test/run_tests.sh` 用 test-only fake UDM/mini-gtest,但直接
+编译生产 `ImplantLayerChecker.cpp`;`DPL2_FAKE_UDM` 只关闭 Session 自动初始化与
+缺失 helper 的 extraction,测试显式注入 `ImplantInput`。因此规则/index/overlay/
+violation 路径是真 checker,不是 FakeImplantChecker。dense 8×200 的 MW/MS ×
+intra/inter-row 4 例 + raw/baseline/rowIds 1 例在 `-Werror` 与 ASan 下全绿。
+
+**编译漂移**:首次直编译暴露 `evaluate/evalRule`、`findNeighbors` 参数、
+`ScanOutcome.instances/instanceIds`、`RowInput/RowId` 四组头实现不一致,已按 cpp
+实现与真实容器类型对齐。
+
+**行为根因**:guard committed rect 曾全部标成 candidate,随后 neighbors 又跳过
+candidate,所以 inter-row/spacing false clean;反向仅保留 committed 又会漏掉
+换型后残留在 committed shape 上的新违例。另一个 bug 是 candidate/context 同层
+接触 interval 被强制分段,制造 false MW/MS。裁定为 guard-wide scan:context 只按
+guard 裁剪,所有 shape 可作 target/neighbor,同层接触几何跨 provenance 合并,
+`containsCandidate` 仅保留为 OR 元数据;双向 pair 扫描按签名/窗口/参与者去重;
+末端 blocking/raw 各自按契约输出。
+
+**仍未完成**:真实 UDM extraction(原 helper 已删但等价实现未交付)、完整 dpl2
+CMake/依赖闭包、checker↔engine adapter(TODO 12)。用户提供的 DePlace/network
+文件已归位,但它们的完整构建仍依赖其余 infrastructure/UDM 文件。
+
 ## 5. 实现要点与陷阱(接手前必读)
 
-- **对接 blocker(D17)**:两条契约项已在 checker 侧改好(raw API + rowIds,
-  `drc/CHECKER_REPAIR_CONTRACT.md`),但**待 checker RD review 并在其完整环境
-  编译通过**前,engine 仍只接 `fake/FakeImplantChecker`(本仓无 UDM/Grid 头,
-  checker 无法在此独立编译)。对接时用 `checkPlaceWithOverlaysRaw`,不用
+- **对接 blocker(D17/D18)**:checker core 已在 fake-UDM boundary 下直编译并
+  5/5 + ASan 全绿(raw API + rowIds + guard scan 修复见
+  `drc/CHECKER_REPAIR_CONTRACT.md`),但**真实 UDM extraction 与 adapter 完成**前,
+  engine 仍只接 `fake/FakeImplantChecker`。对接时用 `checkPlaceWithOverlaysRaw`,不用
   blocking 形态的 `checkPlaceWithOverlay[s]`。
-- **checker 字段契约(D17 后)**:新版 `Violation` 带 rowIds 字段与签名 hash,
-  但 rowIds **从未填充**;participants 不存在,adapter 从 `violation.instances`
-  + `placedInsts` 合成;kind 从 ruleSource 推导,relation = relationship。
-  rowIds 缺失时 engine rowId fallback 降精度(inter-row 违例可能误并)。
+- **checker 字段契约(D17 后)**:新版 `Violation` 的 rowIds 与签名 hash 已填充;
+  participants 不存在,adapter 从 `violation.instances` + `placedInsts` 合成;
+  kind 从 ruleSource 推导,relation = relationship。
 - **单位**:planner 全 DBU、半开区间 `[xl,xh)`;checker 的
   `PlacedInst.colId` / `CheckRequest.colId` 是 **site 单位**
   (`x = colId * siteWidth`)。adapter 换算是头号 bug 温床。
@@ -291,7 +313,7 @@ violation.instances + placedInsts 合成。
 2. **测试拓展**(可并行,另一 AI 负责):按
    `src/fillerRepair/test/TestPlan.md` 执行(#9 已落地,P1 的
    SubsetSearch/Ranker 测试直接按 filler-domain 语义写)。
-3. **TODO 12 对接**(等真 checker overlay 实现):adapter 层
+3. **TODO 12 对接**(checker overlay core 已可测,等真实 UDM extraction/RD确认):adapter 层
    (`fillerRepair/adapter/`,可含 UDM)+ CMake + 用真 checker 重放 spec §10。
 4. **#12 precheck 上收**:随 adapter 一起(infra 按 design revision 缓存
    full-utility;planner 留 O(window) 防御复核)。

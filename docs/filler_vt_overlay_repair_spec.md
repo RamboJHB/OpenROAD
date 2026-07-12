@@ -944,12 +944,15 @@ gate 语义:
 12. 等 `ImplantOverlayChecker::checkPlaceWithOverlays` 稳定后接真实 checker;
     `src/dpl2` CMake 接入后纳入 build/test。
 
-状态(2026-07-09):TODO 1–11 已实现,`src/dpl2/src/fillerRepair/` 下 41 个确定性
+状态(2026-07-12):TODO 1–11 已实现,`src/dpl2/src/fillerRepair/` 下 60 个确定性
 测试全绿。TODO 12(真实 checker/infra 对接 + CMake)未做,checker 源码已导入
 `src/dpl2/src/drc`。V2.1 修订(§0)落地进度,详见 `src/dpl2/HandOff.md`:
 批 1(OracleGate 正确性 #1/#2/#3/#4/#5/#10)**已完成**;批 2(窗口/管线简化)
 **#6/#7/#11 已完成,#8 adaptive-L1 待做**(L1 仍是边界 sweep 老实现);
-批 3(搜索域建模)**#9 filler-domain 枚举已完成**,#12 随 adapter 对接。
+批 3(搜索域建模)**#9 filler-domain 枚举已完成**,#12 随 adapter 对接。真实
+`ImplantLayerChecker` core 已在 fake-UDM boundary 下直接编译并通过 dense
+width/spacing × intra/inter-row 4 个用例、raw/rowIds 1 个回归及 ASan;这不等同于 TODO 12 adapter/真实
+UDM extraction 完成。
 
 ---
 

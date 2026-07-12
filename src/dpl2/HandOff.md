@@ -19,13 +19,13 @@ checker 用 overlay 验证,干净则由 infrastructure commit。engine 永远不
 不自己判 DRC(checker-as-oracle)。阶段词汇:**本阶段只有 swap;下一阶段才是
 rewrite(merge/split)**。代码里不允许出现 Move / FillerRewrite 抽象。
 
-## 2. 现状(截至 commit `b5dd6b2`,分支 `claude/wizardly-carson-secahu`)
+## 2. 现状(更新至 2026-07-12,分支 `claude/wizardly-carson-secahu`)
 
 | 部分 | 位置 | 状态 |
 |---|---|---|
 | Spec **V2.1**(含 §0 修订记录) | `docs/filler_vt_overlay_repair_spec.md` | 定稿 |
-| 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | 已实现,**但按 V2 旧语义**;35 个确定性测试全绿 |
-| checker 源码 + spec §5 接口脚手架 | `src/dpl2/src/drc/ImplantLayerChecker.{h,cpp}` | 类型/声明在;overlay API 是 stub(非我方责任) |
+| 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | V2.1 已落地批次见 §3;60 个确定性测试全绿 |
+| checker + standalone harness | `src/dpl2/src/drc/` | 真实 overlay core 已以 fake-UDM boundary 直接编译;dense 4 例 + raw/rowIds 1 例,5/5 + ASan 全绿;详见 `CHECKER_REPAIR_CONTRACT.md` |
 | fake checker / design / candidate provider | `src/dpl2/src/fillerRepair/fake/` | 继续用于单元测试 |
 
 **关键认知**:engine 代码是 **V2 语义**,spec 已升到 **V2.1**。下面三批工作就是把
@@ -143,12 +143,14 @@ size-2 组合存在"(旧语义下 cap=2 只覆盖 f1 的两个 option,size-2 一
 engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此仅为让 engine 侧
 知道边界、并在集成时能验证。
 
-1. **checker 已交付真实 overlay API(2026-07-12,helper 已删)**;两条契约项 +
-   一个编译 bug **已在 checker 侧改好**(带 `[fillerRepair-fix]` 标记,说明文档
+1. **checker 已交付真实 overlay API(2026-07-12,helper 已删)**;两条原始契约项、
+   header/cpp 编译漂移与 guard overlay target/neighbor/merge 问题
+   **已在 checker 侧改好**(带 `[fillerRepair-fix]` 标记,说明文档
    `drc/CHECKER_REPAIR_CONTRACT.md`):新增 `checkPlaceWithOverlaysRaw`(不做
    blocking 过滤,复用 `checkOverlayRegion`)、填充 `Violation.rowIds`、对齐
-   `validateOverlayRequest` 头/实现。**待 checker RD review 并在其完整环境
-   (UDM+Grid)编译通过前,engine 仍只接 `fake/FakeImplantChecker`**;对接时
+   `validateOverlayRequest` 头/实现。standalone fake-UDM harness 直接编译生产
+   checker,5/5 + ASan 全绿。**待 checker RD review、真实 UDM extraction
+   与 adapter 完成前,engine 仍只接 `fake/FakeImplantChecker`**;对接时
    用 raw API,不用 blocking 形态。
 2. **新 wire 形态(以实物为准)**:`checkPlaceWithOverlays(request, guard,
    vector<vector<FillerChange>>)`——单 target/guard + N 候选,结果按输入顺序

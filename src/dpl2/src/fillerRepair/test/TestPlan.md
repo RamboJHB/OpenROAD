@@ -1,6 +1,7 @@
 # Test Plan — fillerRepair 子模块测试拓展
 
-> 写给负责测试拓展的 AI。背景:真实 checker 尚未接入,等待期间把纯 planner 各
+> 写给负责测试拓展的 AI。真实 checker core 已有独立 harness(见下),但尚未通过
+> adapter 接入 engine;等待对接期间继续把纯 planner 各
 > 子模块(PreCheck / Signature / Window / SwapGenerator / Ranker / SubsetSearch /
 > OracleGate / Engine 主循环)的测试覆盖做扎实。当前 60 个测试全绿
 > (`test/run_tests.sh`,`-Wall -Wextra -Werror`)。
@@ -10,6 +11,11 @@
 > **V2.1 #9(filler-domain 枚举)已落地**:Ranker 返回 `FillerDomain`、
 > SubsetSearch 枚举 filler 组合 × domain 赋值、cap 按 filler 数——本计划中
 > Ranker/SubsetSearch 的测试一律按该语义写。
+> **真实 checker 进度(2026-07-12)**:`src/dpl2/src/drc/test/run_tests.sh`
+> 直接编译生产 `ImplantLayerChecker.cpp`,仅以 `DPL2_FAKE_UDM` 跳过自动 UDM
+> extraction,4 个 dense overlay 用例(width/spacing × intra/inter-row)加 1 个
+> raw/baseline/rowIds 回归全绿;
+> `SANITIZE=address ./run_tests.sh` 也全绿。checker 与 engine 尚未做 TODO 12 adapter。
 >
 > 先读:`src/dpl2/AGENTS.md`(项目记忆与红线)→ spec §0/§6/§10
 > (`docs/filler_vt_overlay_repair_spec.md`)→ 本文。
@@ -34,7 +40,7 @@
    (拆分时保持单二进制、单注册表,run_tests.sh 一并更新)。
 7. 定期跑 ASan 版本(见 §5 命令);新测试合入前至少跑一次。
 
-## 1. 现有覆盖(41 个,勿重复)
+## 1. 现有覆盖(planner 60 个 + checker 5 个,勿重复)
 
 - Swap 构造/校验、canonicalKey、wire 转换(3)
 - PreCheck:全覆盖 OK、gap、overlap/offgrid/illegal、engine fatal 短路(4)
@@ -52,6 +58,10 @@
 - 杂项(candidate provider 等)(1)
 - fake-UDM provider(adapter 预演):derivation、malformed、候选契约、
   engine E2E(4)
+- 真实 `ImplantLayerChecker` core:8×200 dense layout 上 width/spacing ×
+  intra/inter-row;每组覆盖 clean、original 残留、新 violation、无关 baseline
+  过滤(4);raw API 保留无关 baseline 并携带 rowIds(1)。独立 harness,不计入
+  上述 planner 60 个。
 
 ## 2. 待补测试(按优先级;名字用建议的 case 名)
 
@@ -141,10 +151,20 @@ size-3 cap 与笛卡尔积顺序)。
 - (可选)固定 seed 的随机小布局 smoke:生成 5-10 个随机 3 行布局,断言
   上述不变量(不断言具体解);seed 固定写死。
 
+### P0 — 真实 checker 后续覆盖
+
+- `checkPlaceWithOverlaysRaw` bridge-MW:残留 original 不触及 target 时 raw 必须
+  保留、blocking API 可过滤。
+- `Violation.rowIds/hash/isInGuard`:同 x 不同行 hash 不同,guard 能按行裁剪。
+- invalid overlay batch 隔离:duplicate/non-filler/unknown/footprint mismatch
+  只污染自己的 candidate。
+- 真 UDM extraction + adapter E2E 等 TODO 12;当前 fake-UDM harness 只替代 DB
+  边界,不替代 checker core。
+
 ## 3. 明确不做
 
-- 不给 stub 的 `ImplantLayerChecker::checkPlaceWithOverlay` 写行为测试
-  (它会被真实现替换;checker 实现不是本模块责任)。
+- 不在 planner `test_main.cpp` 中复刻真实 checker DRC 语义;checker 行为测试统一
+  放 `src/dpl2/src/drc/test/`。
 - 不写依赖 fake 规则模型细节的"伪 DRC 正确性"断言(见总原则 2)。
 - 不为 #8 adaptive-L1 预写行为测试(接口未定,写了也是猜;等重构落地后按
   spec §6.3 补。#9 已落地,不受此限)。
@@ -164,6 +184,11 @@ cd src/dpl2/src/fillerRepair/test
 ./run_tests.sh                     # 全量,-Werror
 ./run_tests.sh <name-substr>       # 过滤
 FR_VERBOSE=1 ./run_tests.sh <case> # 带 [fr] 决策链日志
+
+# 真实 checker core(fake UDM boundary,生产 checker 源码原样编译)
+cd src/dpl2/src/drc/test
+./run_tests.sh                    # 5 cases
+SANITIZE=address ./run_tests.sh   # 5 cases + ASan
 
 # ASan(内存错误;本项目曾靠它抓到一个测试布局引发的段错误)
 cd src/dpl2/src/fillerRepair

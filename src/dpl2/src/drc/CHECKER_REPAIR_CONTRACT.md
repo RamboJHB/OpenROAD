@@ -2,8 +2,9 @@
 
 对象:`ImplantLayerChecker.{h,cpp}`。背景:filler-repair engine 会消费 overlay
 接口的结果来做 VT 修复(把周围 filler 换型消 implant MW/MS 违例)。审查你交付的
-overlay 实现后,发现 **2 条契约问题** 会让 repair 得到错误的"干净"判断,外加
-**1 个头/实现不一致的编译问题**。我已按最小、可加性方式改好,**所有改动都带
+overlay 实现后,先发现 **2 条契约问题** 会让 repair 得到错误的"干净"判断,外加
+**1 个头/实现不一致的编译问题**;真实 checker harness 又暴露出额外编译漂移与
+guard overlay 扫描错误。均已按最小方式修正,**所有 checker 改动都带
 `[fillerRepair-fix]` 注释标记**,`grep -n "fillerRepair-fix"` 即可全部定位。
 
 这些是**你的文件**,改动请你 review 并接管;有异议随时改回或换实现,只要保住
@@ -107,10 +108,53 @@ filler 不被改),那应改**定义**加参数并用上,而不是只留在声明
 
 ---
 
+## 改动 4:对齐其余 header/cpp 编译漂移
+
+standalone harness 首次直接编译生产 checker 后又发现:
+
+- header 声明 `evaluate`,cpp/调用点使用 `evalRule`;
+- header 的 `findNeighbors` 多一个 cpp 不接受的 `targetShapes` 参数;
+- `ScanOutcome` header 为 `instances`,cpp 使用 `instanceIds`;
+- dump/load 把 `vector<RowId>` 当成不存在的 `RowInput`。
+
+已以 cpp 实际实现与 `ImplantInput::rows` 的真实类型为准对齐,均为命名/类型修复,
+不改变规则语义。
+
+## 改动 5:guard overlay 的 target/neighbor/merge 语义
+
+真实 dense 测试暴露两个相互关联的 false-clean/false-violation 问题:
+
+1. `scanOverlaySnapshot` 把 guard 内所有 committed rect 标成 candidate,而
+   `scanNeighbors` 跳过 candidate → inter-row 与 spacing 找不到任何 committed
+   neighbor,产生 false clean。
+2. candidate 与 committed 的同层接触 interval 在 `scanShapes` 被强制分成不同
+   merged shape → 物理上连续的 implant run 被捏造成窄宽/零间距 violation。
+
+修正后的语义:只把真实 target/changed filler 标为 candidate;committed context
+按 guard 裁剪但保持 non-candidate;guard 内所有 shape 都可作为规则 target/neighbor;
+同 row/slot/layer 且接触的 interval 无论 provenance 都合并,合并后的
+`containsCandidate` 只作为 OR 元数据。blocking API 仍在末端过滤 old violation;
+raw API 返回 guard 内全量 finding。guard-wide 扫描会从 pair 两端各访问一次,
+因此 `finishViolation` 先规范化 participants,`scanViolations` 再按 hash/xWindow/
+participants 折叠仅方向不同的重复项,避免污染 engine 的 multiset delta。
+
+## 改动 6:fake-UDM 编译边界
+
+新增 test-only `DPL2_FAKE_UDM`:构造器不自动访问 Session/DB,
+`initFromUDM` 返回 false;测试随后显式 `initialize(ImplantInput)`。这只替代缺失的
+UDM extraction/helper,实际 overlay/index/rule/violation 代码仍直接编译自生产
+`ImplantLayerChecker.cpp`。真实 UDM extraction 仍待 checker RD/UDM 环境接管。
+
+---
+
 ## 验证
 
-- checker 需在你的完整环境(UDM + `infrastructure/Grid.h`)里编译:上述改动
-  均为 additive + 类型一致,不涉及新依赖。
+- `src/dpl2/src/drc/test/run_tests.sh`:`-Werror`,4 个 dense overlay + 1 个
+  raw/baseline/rowIds 回归,5/5 全绿。
+- `SANITIZE=address ./run_tests.sh`:5/5 全绿。
+- fillerRepair planner:`src/fillerRepair/test/run_tests.sh`,60/60 全绿。
+- 完整 UDM extraction 与全 dpl2 build 仍需真实 UDM/其余 infrastructure 文件;
+  当前 harness 明确只 fake DB boundary。
 - 建议加两个用例:(a) bridge-MW false-accept——cell 换色后残留一条不触及
   target 的 MW,`checkPlaceWithOverlaysRaw` 应报出该违例、`isLegal=false`
   (旧 `checkPlaceWithOverlay` 会 isLegal=true);(b) 同 x 间隙不同行的两条违例,
