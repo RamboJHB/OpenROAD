@@ -134,9 +134,23 @@ standalone harness 首次直接编译生产 checker 后又发现:
 按 guard 裁剪但保持 non-candidate;guard 内所有 shape 都可作为规则 target/neighbor;
 同 row/slot/layer 且接触的 interval 无论 provenance 都合并,合并后的
 `containsCandidate` 只作为 OR 元数据。blocking API 仍在末端过滤 old violation;
-raw API 返回 guard 内全量 finding。guard-wide 扫描会从 pair 两端各访问一次,
-因此 `finishViolation` 先规范化 participants,`scanViolations` 再按 hash/xWindow/
-participants 折叠仅方向不同的重复项,避免污染 engine 的 multiset delta。
+raw API 返回 guard 内全量 finding。
+
+review 后补的两个修正(同属本节语义,均 `[fillerRepair-fix]`):
+
+1. **快照按"guard + 最大规则半径"外扩纳入,结果仍按精确 guard 裁剪**
+   (`scanOverlaySnapshot` 的 `paddedGuard`,margin = max over rules of
+   `queryRadius` + 纵向一行)。原来的精确-guard 裁快照会把跨 guard 边界的
+   implant run **截断**,在断口上捏造 width violation(测试里 guard 两侧各出
+   3 条幽灵违例)、并丢失 guard 外一步之遥的 spacing neighbor。外扩后断口
+   only 出现在 padded 边缘,离精确 guard 至少一个 radius,结果裁剪必然丢弃。
+2. **方向/band 重复折叠移到两条路径共享**:guard-wide 扫描从 pair 两端各
+   访问一次、同层双 band 会把一条物理 run 报两次;原折叠代码只放在
+   `makeViolations`(fast path,并不产生这种重复),`scanViolations`(真正
+   产生重复的 scan path)反而没有。现抽成 `sortAndDedupViolations` 两处共用,
+   排序比较器补了 hash/participants tiebreak 保证重复相邻、`std::unique`
+   必然可见。契约:raw API 对一条物理违例恰好返回一条 finding
+   (`BlockingHidesResidualButRawReports` 用精确计数锁死)。
 
 ## 改动 6:fake-UDM 编译边界
 

@@ -1917,6 +1917,49 @@ ImplantLayerChecker::findNeighbors(
     return neighbors;
 }
 
+// [fillerRepair-fix] Shared final ordering + duplicate collapse for BOTH
+// violation paths. Guard-wide scans visit a physical pair from both directions
+// (target=A/neighbor=B and target=B/neighbor=A) and same-layer band shapes can
+// report one physical run twice; every duplicate agrees on hash, xWindow and
+// instances. The hash/instances tiebreak in the sort makes duplicates
+// adjacent, so std::unique is guaranteed to see them.
+static void sortAndDedupViolations(std::vector<Violation>& violations)
+{
+    std::sort(violations.begin(),
+              violations.end(),
+              [](const Violation& left, const Violation& right) {
+                  if (left.ruleId != right.ruleId) {
+                      return left.ruleId < right.ruleId;
+                  }
+                  if (left.primaryLayer != right.primaryLayer) {
+                      return left.primaryLayer < right.primaryLayer;
+                  }
+                  if (left.relationship != right.relationship) {
+                      return left.relationship < right.relationship;
+                  }
+                  if (lessXInterval(left.xWindow, right.xWindow)) {
+                      return true;
+                  }
+                  if (lessXInterval(right.xWindow, left.xWindow)) {
+                      return false;
+                  }
+                  if (left.hash != right.hash) {
+                      return left.hash < right.hash;
+                  }
+                  return left.instances < right.instances;
+              });
+    violations.erase(
+        std::unique(violations.begin(),
+                    violations.end(),
+                    [](const Violation& left, const Violation& right) {
+                        return left.hash == right.hash &&
+                               left.xWindow.xl == right.xWindow.xl &&
+                               left.xWindow.xh == right.xWindow.xh &&
+                               left.instances == right.instances;
+                    }),
+        violations.end());
+}
+
 // Convert raw rule outcomes into final violations, suppressing broad-rule
 // failures when a contained specific rule is satisfied for the same context.
 std::vector<Violation> ImplantLayerChecker::makeViolations(
@@ -2023,33 +2066,7 @@ std::vector<Violation> ImplantLayerChecker::makeViolations(
         finishViolation(violation);
         violations.push_back(violation);
     }
-    std::sort(violations.begin(),
-              violations.end(),
-              [](const Violation& left, const Violation& right) {
-                  if (left.ruleId != right.ruleId) {
-                      return left.ruleId < right.ruleId;
-                  }
-                  if (left.primaryLayer != right.primaryLayer) {
-                      return left.primaryLayer < right.primaryLayer;
-                  }
-                  if (left.relationship != right.relationship) {
-                      return left.relationship < right.relationship;
-                  }
-                  return lessXInterval(left.xWindow, right.xWindow);
-              });
-    // [fillerRepair-fix] Guard-wide scans visit a physical pair in both
-    // directions. Collapse the direction-only duplicate so raw baseline-delta
-    // consumers receive one finding per physical violation.
-    violations.erase(
-        std::unique(violations.begin(),
-                    violations.end(),
-                    [](const Violation& left, const Violation& right) {
-                        return left.hash == right.hash &&
-                               left.xWindow.xl == right.xWindow.xl &&
-                               left.xWindow.xh == right.xWindow.xh &&
-                               left.instances == right.instances;
-                    }),
-        violations.end());
+    sortAndDedupViolations(violations);
     return violations;
 }
 
@@ -2095,6 +2112,28 @@ ImplantLayerChecker::scanOverlaySnapshot(
     bool useNewFillers,
     const std::set<InstanceId>& excludedInstances) const
 {
+    // [fillerRepair-fix] Snapshot inclusion uses the guard PADDED by the
+    // largest rule radius (+ one row vertically). Clipping the snapshot at
+    // the exact guard edge truncates implant runs that straddle it, which
+    // fabricates width violations on the cut stumps and hides neighbors just
+    // outside the guard. The padding keeps edge geometry complete for every
+    // rule's reach; result clipping in checkOverlayRegion still uses the
+    // exact guard, and any stump artifact at the PADDED edge lies at least
+    // one full radius outside the guard, so the result clip drops it.
+    Dbu margin = siteWidth_;
+    for (const Rule& rule : ruleIndex_.rules) {
+        margin = std::max(margin, queryRadius(rule));
+    }
+    const ::Rect paddedGuard(
+        UvDist(static_cast<int64_t>(guardRegion.getXL().getStorage()
+                                    - margin)),
+        UvDist(static_cast<int64_t>(guardRegion.getYL().getStorage()
+                                    - rowHeight_)),
+        UvDist(static_cast<int64_t>(guardRegion.getXH().getStorage()
+                                    + margin)),
+        UvDist(static_cast<int64_t>(guardRegion.getYH().getStorage()
+                                    + rowHeight_)));
+
     std::vector<ScanRect> snapshot;
     for (const auto& [instanceId, instance] : instances_) {
         if (excludedInstances.find(instanceId) != excludedInstances.end()) {
@@ -2109,10 +2148,10 @@ ImplantLayerChecker::scanOverlaySnapshot(
         rects.erase(
             std::remove_if(rects.begin(),
                            rects.end(),
-                           [&guardRegion, this](const ScanRect& rect) {
+                           [&paddedGuard, this](const ScanRect& rect) {
                                return !isInGuard(xOf(rect.rect),
                                                  {rect.rowId},
-                                                 guardRegion);
+                                                 paddedGuard);
                            }),
             rects.end());
         snapshot.insert(snapshot.end(), rects.begin(), rects.end());
@@ -2646,20 +2685,10 @@ std::vector<Violation> ImplantLayerChecker::scanViolations(
         finishViolation(violation);
         violations.push_back(violation);
     }
-    std::sort(violations.begin(),
-              violations.end(),
-              [](const Violation& left, const Violation& right) {
-                  if (left.ruleId != right.ruleId) {
-                      return left.ruleId < right.ruleId;
-                  }
-                  if (left.primaryLayer != right.primaryLayer) {
-                      return left.primaryLayer < right.primaryLayer;
-                  }
-                  if (left.relationship != right.relationship) {
-                      return left.relationship < right.relationship;
-                  }
-                  return lessXInterval(left.xWindow, right.xWindow);
-              });
+    // [fillerRepair-fix] The scan path is where direction/band duplicates
+    // actually arise (guard-wide targets); collapse them exactly like the
+    // fast path does.
+    sortAndDedupViolations(violations);
     return violations;
 }
 

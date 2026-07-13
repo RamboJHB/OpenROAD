@@ -39,7 +39,7 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
-| 测试 | planner 79 个,`-Werror` + ASan 全绿;真实 checker core 8 个(`src/drc/test/run_tests.sh`),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
+| 测试 | planner 79 个,`-Werror` + ASan 全绿;真实 checker core 9 个(`src/drc/test/run_tests.sh`,含 raw-vs-blocking 契约测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
 | checker(`src/drc/`) | overlay API 真实现;本轮不改 checker 源码,只扩 standalone harness:类型共存、invalid batch 隔离、row/hash/guard 已覆盖。wire 仍是顺序关联、无 status、batch=单 target+N 变更。**真实 UDM extraction/adapter 前 engine 仍只接 fake** |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 
@@ -301,6 +301,29 @@ coverage segment 扫描,多重 overlap 的 `CoverageIssue.instances` 带完整�
 ASan 全绿。未伪造 `ranker_majority_per_band`:当前 `MasterInfo` 只有单 `vt`,必须等
 真实 adapter 提供 P/N band 元数据。bridge-MW 专用 checker fixture 与真实
 UDM/adapter E2E 仍待完成。
+
+### D20. 对 2026-07-12 批次(#8 + checker harness + 类型解耦)的 review(修 3 处)
+**总评**:批次质量高——adaptive-L1 忠实 spec §6.3(终止性有保证:单调增长 +
+双 cutoff)、fake-UDM 边界干净(`DPL2_FAKE_UDM` 只圈 ctor 与 initFromUDM)、
+`BaseTypes.h` 类型解耦正是 D17 要求的方向、checker 的 scan 语义修正
+(candidate 不再抑制 target/neighbor、同层接触合并)方向正确且有 8 测试佐证。
+**review 修掉的三处**:
+(1) **去重放错路径**:方向/band 重复折叠只加在 `makeViolations`(fast path,
+不产生该类重复),真正产生重复的 `scanViolations` 没有 → raw API 一条物理违例
+报两次。抽 `sortAndDedupViolations` 两处共用 + 比较器 hash/participants
+tiebreak(重复必相邻)。
+(2) **guard 边界截断幽灵违例**:新的精确-guard 快照裁剪把跨边界 run 切断,
+断口上捏造 width 违例(测试窗两侧各 3 条)。修法:快照纳入按
+guard + max(queryRadius) 外扩(纵向 +1 行),结果裁剪仍用精确 guard——
+padded 边缘的断口离精确 guard ≥ 1 radius,必被结果裁剪丢弃。
+(3) **缺 raw-vs-blocking 契约测试**:补 `BlockingHidesResidualButRawReports`
+(bridge 场景:target 离开 F1 run,残留违例 participants 不含 target;
+blocking 判 isLegal=true = false accept 实锤,raw 恰好报一条、fix 后干净)。
+它同时用精确计数锁死 (1)(2)。
+**附带**:删孤儿 `drc/ImplantBaseTypes.h`(D17 解耦后零引用);发现他们的
+contract 文档声称"scanViolations 折叠重复"超前于代码——修复后文档为真。
+**教训**:声称的行为要有精确计数的测试钉住(`.empty()`/presence 断言抓不住
+重复和幽灵);guard 类空间裁剪永远要问"跨边界的几何被切断后会不会说谎"。
 
 ## 5. 实现要点与陷阱(接手前必读)
 

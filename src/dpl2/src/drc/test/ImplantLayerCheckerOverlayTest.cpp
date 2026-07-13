@@ -67,6 +67,11 @@ constexpr ColId NEW_INTER_SPACING_COL = 160;
 constexpr RowId OLD_UNRELATED_ROW = 7;
 constexpr ColId OLD_UNRELATED_COL = 190;
 
+// Bridge-residual contract window (raw vs blocking), row 6 sites 30..35.
+constexpr RowId BRIDGE_ROW = 6;
+constexpr ColId BRIDGE_TARGET_COL = 32;
+constexpr ColId BRIDGE_FILLER_COL = 33;
+
 const char* denseOverlaySchematic()
 {
   return R"(Schematic: dense_overlay_8x200
@@ -122,6 +127,15 @@ row2 ref: [ 1F1 ][ aF1 ][ 2F2 ][ bF2 ][ 2F2 ][ bF2 ]
 
 Old unrelated baseline violation, row7 sites 189..191:
 before:   [ bF2 ][ 1F1 ][ bF2 ]
+
+Bridge residual (raw vs blocking), row6 sites 30..35:
+Sites:        30     31     32     33     34     35
+committed:[ 2F2 ][ bF2 ][ 1F1 ][ aF1 ][ 3F3 ][ cF3 ]
+request:  target 32 becomes 2F2 -> it LEAVES the F1 run; residual F1 run =
+          the lone filler 33 (width 10 < 20). Its instances do NOT include
+          the target, so the blocking filter drops it as old (false accept);
+          the raw API must keep reporting it until 33 is actually fixed.
+fix:      [ 2F2 ][ bF2 ][ 2F2*][ bF2*][ 3F3 ][ cF3 ]  (33 -> bF2 heals)
 )";
 }
 
@@ -318,6 +332,24 @@ std::vector<PlacedInst> densePlaced()
   setFiller(sites, OLD_UNRELATED_ROW, 189, F2_FILL_MASTER);
   setCell(sites, OLD_UNRELATED_ROW, 190, C1_MASTER);
   setFiller(sites, OLD_UNRELATED_ROW, 191, F2_FILL_MASTER);
+
+  // Bridge-residual contract window: committed F1 run = target(32) +
+  // filler(33), legal (width 20). When the request retypes the target to
+  // C2_MASTER the residual F1 run is the lone filler 33.
+  setCell(sites, BRIDGE_ROW, 30, C2_MASTER);
+  setFiller(sites, BRIDGE_ROW, 31, F2_FILL_MASTER);
+  setCell(sites, BRIDGE_ROW, BRIDGE_TARGET_COL, C1_MASTER);
+  setFiller(sites, BRIDGE_ROW, BRIDGE_FILLER_COL, F1_FILL_MASTER);
+  // F3 on the right so retyping the target to F2 does not open an F2-F2
+  // spacing gap across the residual F1 filler.
+  setCell(sites, BRIDGE_ROW, 34, C3_MASTER);
+  setFiller(sites, BRIDGE_ROW, 35, F3_FILL_MASTER);
+  // Keep the coupled rows F1-free at 30..31 so the residual is exactly one
+  // intra-row finding (background there would put F1 into rows 5/7).
+  for (RowId rowId : {BRIDGE_ROW - 1, BRIDGE_ROW + 1}) {
+    setCell(sites, rowId, 30, C2_MASTER);
+    setFiller(sites, rowId, 31, F2_FILL_MASTER);
+  }
 
   std::vector<PlacedInst> placed;
   placed.reserve(static_cast<size_t>(ROW_COUNT * SITE_COUNT));
@@ -734,6 +766,73 @@ TEST(ImplantCheckerOverlayTest, RowHashAndGuardClipping)
   ASSERT_EQ(clipped.size(), 1u);
   EXPECT_TRUE(findAtRow(clipped[0], 6) != nullptr);
   EXPECT_TRUE(findAtRow(clipped[0], 7) == nullptr);
+}
+
+// The reason checkPlaceWithOverlaysRaw exists (CHECKER_REPAIR_CONTRACT
+// change 1): a residual violation whose merged run no longer includes the
+// target instance is invisible to the blocking filter, so the blocking API
+// false-accepts a candidate that fixes nothing. The raw API must keep
+// reporting it -- exactly once (direction/band duplicates collapse) -- until
+// the filler is actually fixed.
+TEST(ImplantCheckerOverlayTest, BlockingHidesResidualButRawReports)
+{
+  SCOPED_TRACE(denseOverlaySchematic());
+  ImplantLayerChecker checker(nullptr);
+  EXPECT_TRUE(checker.initialize(input()));
+
+  // The opto change: the row-6 target leaves the F1 run it shared with the
+  // bridge filler 33; the residual F1 run is that lone filler (width 10 < 20)
+  // and its instances do NOT include the target.
+  const CheckRequest target{instId(BRIDGE_ROW, BRIDGE_TARGET_COL),
+                            C2_MASTER,
+                            BRIDGE_ROW,
+                            BRIDGE_TARGET_COL,
+                            PhysOrientationE::R0};
+  const Rect bridgeGuard = makeRect(28 * SITE_WIDTH,
+                                    BRIDGE_ROW * ROW_HEIGHT,
+                                    38 * SITE_WIDTH,
+                                    (BRIDGE_ROW + 1) * ROW_HEIGHT - 1);
+  const InstanceId fillerId = instId(BRIDGE_ROW, BRIDGE_FILLER_COL);
+  const std::vector<std::vector<FillerChange>> candidates
+      = {{}, {FillerChange{fillerId, F2_FILL_MASTER}}};
+
+  // Blocking API: the do-nothing candidate reads clean -- the documented
+  // false accept. The repair engine must never consume this form.
+  const auto blocking
+      = checker.checkPlaceWithOverlays(target, bridgeGuard, candidates);
+  ASSERT_EQ(blocking.size(), 2u);
+  EXPECT_TRUE(blocking[0].isLegal);
+  EXPECT_TRUE(blocking[0].violations.empty());
+
+  // Raw API: the residual is reported, exactly once, without the target in
+  // its participants; the actual fix (filler 33 -> F2) is clean.
+  const auto raw
+      = checker.checkPlaceWithOverlaysRaw(target, bridgeGuard, candidates);
+  if (std::getenv("DPL2_CHECKER_TEST_DEBUG") != nullptr) {
+    for (size_t index = 0; index < raw.size(); ++index) {
+      std::cerr << "raw candidate " << index
+                << " legal=" << raw[index].isLegal
+                << " violations=" << raw[index].violations.size() << '\n';
+      for (const Violation& violation : raw[index].violations) {
+        std::cerr << "  " << violation.toString(SITE_WIDTH) << " rows=";
+        for (RowId rowId : violation.rowIds) {
+          std::cerr << rowId << ',';
+        }
+        std::cerr << '\n';
+      }
+    }
+  }
+  ASSERT_EQ(raw.size(), 2u);
+  EXPECT_FALSE(raw[0].isLegal);
+  ASSERT_EQ(raw[0].violations.size(), 1u);
+  const Violation& residual = raw[0].violations[0];
+  EXPECT_TRUE(residual.ruleId == F1_WIDTH_RULE);
+  EXPECT_TRUE(residual.relationship == Relationship::IntraRow);
+  EXPECT_TRUE(residual.instances == std::vector<InstanceId>{fillerId});
+  EXPECT_TRUE(residual.rowIds == std::vector<RowId>{BRIDGE_ROW});
+  EXPECT_TRUE(blocking[1].isLegal);
+  EXPECT_TRUE(raw[1].isLegal);
+  EXPECT_TRUE(raw[1].violations.empty());
 }
 
 }  // namespace
