@@ -235,7 +235,597 @@ commit/检测路径,递归按构造不可能。
 engine 的抽象接口(双向抽象)——checker→engine 是具体的单向调用,无环,
 再抽象是空转;(c) `std::function` 回调注入——与现有抽象接口等价但类型面更弱;
 (d) 第三方 orchestrator 拥有两者(flow: check→repair→commit)——架构上最
-干净,但当前集成事实是 checker 驱动;engine 对"谁驱动"不敏感,将��N���$z{-���jםling(两个 bridge filler 合一、在 cell 边界切开宽 filler、短 run 重铺),控制
+干净,但当前集成事实是 checker 驱动;engine 对"谁驱动"不敏感,将来切
+orchestrator 零改动,记为 future option;(e) 再拆一个共享 wire 库——两侧已有
+各自 UDM-free/UDM 类型,wire 结构二元是 §5.2 的既定决策,不加库。
+
+---
+
+## 4. 核心操作:Swap(本阶段唯一操作)
+
+### 4.1 本阶段需求钉死
+
+本 feature 的操作演进是两步:**第一步 swap(本阶段),第二步 rewrite(未来,
+§8)**。没有、也不引入论文式的通用"Move"抽象层——那是文献里的概念,不是本
+feature 的需要。代码中不出现 Move/FillerRewrite/adapter 转换,也没有 merge/split
+机器(无 span-rewrite 结构、无 tiling 校验)。
+
+planner 的原子操作就是 `Swap`:`FillerChange` 的语义(instanceId + newMasterId)
+加上排序/几何要用的元数据:
+
+```cpp
+struct Swap
+{
+    InstanceId instanceId = 0;
+    MasterId oldMasterId = 0;
+    MasterId newMasterId = 0;  // same-width / same-height filler master
+    RowId rowId = 0;
+    XInterval span;            // 该 filler 的占位区间
+    VtId oldVt = kUnknownVt;
+    VtId newVt = kUnknownVt;
+};
+```
+
+`rowId`/`span` 不是 merge/split 预留:开窗(§6.3)、bridge filler 识别(§6.5)、
+delta 相关性判定(§6.2)、swap-unfixable 快速判定(§6.2)都是几何计算,是 V1
+自身的需要。`Swap.change()` 直接产出 `FillerChange`,不存在独立的 adapter 层。
+
+### 4.2 overlay cache key
+
+- 一个 **overlay 候选** = 一组 Swap 的集合,原子应用。
+- cache key = `sorted_unique((instanceId, newMasterId))`,order-independent。
+  checker call 前必须用它去重并查 cache;cache value 至少含 `CheckResult`、
+  score 摘要和 checker call index。同一 key 的 overlay 在一次 repair 内只调用
+  一次 checker。
+- **不需要冲突判定机制**:③层枚举按 filler 分组(每个 filler 至多选一个目标
+  VT),"同一 instance 出现两次"按构造不可能发生。
+
+### 4.3 未来演进(不在本阶段)
+
+第二步 rewrite(merge/split)需要"span rewrite(区段重铺)"抽象与
+primitive-op 形态的 v2 checker API;设计、职责归属与升级时机见 §5.2 决策记录和
+§8.1,multi-height 见 §8.2。本阶段代码中不出现这些概念。
+
+---
+
+## 5. 接口
+
+checker API 与 infrastructure API 仍可协商修改;本节是推荐形态。凡与 V1 一致的
+协议约定原样保留。
+
+### 5.1 共享基础类型
+
+```cpp
+struct TargetPlace   // 实现中可继续命名为 CheckRequest,语义必须是 std-cell anchor
+{
+    InstanceId instanceId = 0;  // opto changed std cell
+    MasterId masterId = 0;      // new/candidate std-cell master
+    RowId rowId = 0;
+    DbCoord x = 0;
+    PhysOrientation orientation = PhysOrientationE::R0;
+};
+```
+
+`Violation` 结构与 V1 相同(推荐字段:`ruleId`,`kind(MinWidth/MinSpacing)`,
+`relation(IntraInstance/IntraRow/InterRow)`,`primaryLayer/secondaryLayer`,
+sorted-unique `rowIds`,`xWindow`,`measuredValue/requiredValue`,`participants`)。
+checker 侧必须保证:
+
+- `rowIds` 提供且 sorted unique;inter-row violation 包含所有涉及行。
+- `ViolationParticipant` 含 `instanceId/masterId/rowId/xRange/isFiller/isTarget`,
+  其中 `rowId` 用于区分同 x 位置、不同 row/participant 的 violation。
+- violation 不需要 stable id;repair 侧自己生成临时 signature(§6.2)。
+
+### 5.2 Checker overlay API(第一版 wire format = V1 `FillerChange`)
+
+```cpp
+struct FillerChange
+{
+    InstanceId instanceId = 0;  // 只能是 filler instance
+    MasterId newMasterId = 0;   // 同宽/同高/orientation 兼容的 filler master
+};
+
+using OverlayRequestId = int;
+
+struct OverlayCheckRequest
+{
+    OverlayRequestId requestId = -1;  // repair 生成,batch 内唯一
+    TargetPlace targetPlace;
+    Rect guardRegion;                 // repair window 外扩 two-cell guard halo
+    std::vector<FillerChange> fillerChanges;  // 一个 atomic overlay 候选
+};
+
+enum class CheckStatus { Checked, InvalidOverlay, Unsupported, CheckerError };
+
+struct CheckResult
+{
+    OverlayRequestId requestId = -1;  // 必须 echo 请求的 requestId
+    CheckStatus status = CheckStatus::CheckerError;
+    bool isLegal = false;             // 仅 status == Checked 时有意义
+    std::vector<Violation> violations;
+    std::vector<Diagnostic> diagnostics;
+};
+
+class ImplantOverlayChecker
+{
+ public:
+  CheckResult checkPlaceWithOverlay(const OverlayCheckRequest& request) const;
+  std::vector<CheckResult> checkPlaceWithOverlays(
+      const std::vector<OverlayCheckRequest>& requests) const;
+};
+```
+
+checker 实现 overlay 的语义与 V1 相同:把每个 `fillerChanges` 中的 filler instance
+按 `newMasterId` 换 master 后,在 target-local 规则下重查。planner 的 `Swap`
+直接携带 `FillerChange` 语义,无转换层。
+
+#### 5.2.1 checker 实际交付形态(2026-07-12)与差异裁定
+
+checker 已交付真实 overlay 实现(helper 并入 checker 本体),wire 形态与上面的
+V2 草案不同,**对接以实物为准**,上面的草案保留作 engine 内部抽象的语义参照:
+
+```cpp
+// batch = 单 target + 单 guardRegion + N 个候选;结果按输入顺序一一对应
+// (没有 requestId:顺序即关联)。CheckRequest 用 colId(site 单位)。
+std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
+    const CheckRequest& request,
+    const Rect& guardRegion,          // eUTL::Rect(UDM 类型)
+    const std::vector<std::vector<FillerChange>>& fillerChanges) const;
+
+struct CheckResult {                  // 没有 status 枚举
+  bool isLegal;                       // = violations 空 && diagnostics 干净
+  std::vector<Violation> violations;  // 仅 "blocking"(见下)
+  std::vector<Diagnostic> diagnostics;  // invalid 候选 → 诊断 + isLegal=false
+};
+```
+
+差异与裁定:
+
+- **requestId/CheckStatus 取消**:关联按顺序(结果数 == 输入数、序一致),
+  engine 的协议校验改为 size+order;invalid 候选以 diagnostics 表达,
+  per-candidate 隔离语义保持(逐候选 validate)。adapter 可按 index 合成 id。
+- **batch 形态收敛**为"单 target/guard + N 变更列表"——与 engine 每窗口的
+  实际用法一致(engine 每批本就同 anchor 同 guard)。
+- **checker 内部已做 per-batch baseline**(旧 filler master、target 按新 master
+  以 candidate 注入)+ guard 裁剪 + guard 内规则评估限定;`Violation` 带
+  签名 hash(rule/kind/relation/layers/rows——与 §6.2 钉死的签名键一致)。
+- 对每个候选只返回 **blocking** 违例 = 触及 target instance 的 ∪ 不被
+  baseline 违例"包含"的(`containsViolation` = hash 相等 + xWindow 包含 +
+  instances 子集)。
+
+**契约项(已在 checker 侧改好,待 checker RD review 接管)**——完整改动说明见
+`src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`,checker 内改动均带
+`[fillerRepair-fix]` 标记:
+
+1. **blocking 过滤会吞掉"未修好但不触及 target instance"的 original**——
+   §1.2 的 bridge-MW 类正是这种(cell 换色后离开原 run,残宽 MW 的 participants
+   只有 filler),它在 baseline 里存在,任何候选都被判 old 过滤 → isLegal=true →
+   **false accept**。`containsViolation` 用 xWindow 包含判 old 还会隐藏"缩小
+   未消除"。**改法**:新增 `checkPlaceWithOverlaysRaw`——复用 `checkOverlayRegion`
+   返回 guard 内**全量**违例、不过滤,delta 判定归 engine §6.8;原
+   `checkPlaceWithOverlay[s]`(blocking 形态)保留给 legalizer。
+2. **`Violation.rowIds` 从未填充**。**改法**:`scanRule` 两处 + `scanViolations`
+   + `makeViolations` 补填(源自 `ScanShape.rowId` / `RuleContext.rowId` /
+   `MergedShape.rowId`)。
+3. 附带修一个**头/实现不一致**(`validateOverlayRequest` 头声明多一个未用的
+   `guardRegion` 参,与 2 参定义不符 → 编译不过),已把头对齐到定义。
+
+**future work(merge/split 前置条件)与职责归属(决策记录)**:届时 API
+需要一次版本化升级。"在 overlay context 里删除/实例化 filler"拆成两半,归属
+不同:
+
+- **语义半 = repair engine 做**:把一个 span rewrite 翻译成"删哪些 instance、
+  在哪些 x 放哪些 master"。tiling 规划知识(库宽度、切法、每段位置)全在
+  planner,①生成器本来就要算出精确位置;让 checker 解释 tiling 意图
+  会把规划知识泄漏进 oracle。
+- **机械半 = checker 做**:把删/加操作应用到 checker 内部 candidate context
+  (candidate intervals、merged shapes)并跑规则——这些索引是 checker 内部的,
+  只能它做;且 V1 的换 master 内部本来就是 remove + add,这是已有机制的直接
+  推广,不是新语义。
+
+由此推论,**v2 wire format 推荐 primitive-op 形态而非 span 形态**:repair 发
+`remove(instanceId)` 若干 + `add(masterId, rowId, x, orientation, overlayId)`
+若干;`overlayId` 是请求方分配的 request-scoped 合成 id,checker 在
+`ViolationParticipant` 中 echo 它——这直接消解了"overlay 新建 filler 没有
+instanceId、participant 无法引用"的协议难题(id 分配权归请求方)。checker 侧
+保留防御性校验(removed span 的并集必须等于 added tiles 铺出的并集,否则
+`InvalidOverlay`),但不解释 tiling 意图。op 形态还与 commit 路径同构:
+infrastructure 的 commit 原语同样是删/建 instance,solution 可直通 commit。
+span rewrite(`FillerRewrite`)届时作为 planner 内部抽象一并引入,对外始终翻译
+成 op 列表;本阶段(swap-only)代码中不存在该结构。
+
+**为什么不现在就升级(决策记录)**:V1 所有 move 都是同尺寸换 master,
+`FillerChange` 零歧义、零新增工作量;multi-height 的行对齐语义、commit 侧
+id 分配流程等契约细节仍依赖未定稿的设计,现在拍板是投机性 API。merge/split
+落地时 checker 反正要做机械半的推广实现,API 升级与其同批完成,不产生额外
+成本。现在只要求 checker RD 两点:① 接口版本化预留(升级时新增 v2 接口而非
+原地改语义);② 不把"overlay 不会创建/销毁 instance"的假设固化到 checker
+内部深处。
+
+协议约定(与 V1 相同,原样保留):
+
+- non-mutating,不 commit DB。
+- 一个 request 内的 `fillerChanges` 是 atomic candidate,必须一起 overlay 后检查;
+  batch API 输入是 request vector,不在一个 request 里嵌套 candidates。
+- 每个 request 必须携带 `guardRegion`;checker 至少在该区域内 collect violations。
+  `guardRegion` 只扩大 checking/diagnostics 范围,**不允许** repair 修改 guard-only
+  区域内的 filler。
+- 每个 `CheckResult` 必须 echo 对应 `requestId`;batch 返回顺序建议与输入一致,但
+  correctness 不依赖顺序。result 缺失、重复/未知 `requestId`、single API echo 错误,
+  一律视为 checker protocol error,repair 拒绝该 batch。
+- 单个 invalid/unsupported request 只影响自己的 `CheckResult`。
+- `status != Checked` 必须给 diagnostics。result 的两种自相矛盾形态 repair 都按不
+  clean 拒绝:`Checked && isLegal && violations 非空`,以及 `Checked && !isLegal &&
+  violations 空`(未解释的非法结果,V2.1 修订 #1);后者要求 checker 尽量补
+  violations,或以 diagnostics 说明为何非法(如 blocking overlap、site 不对齐、
+  polarity mismatch)。
+- checker 不需要维护 violation 历史,也不做 original/residual/new/spillover 分类;
+  分类由 repair 侧用同一 `guardRegion` 的 baseline/overlay delta 完成(§6.8)。
+- `checkPlaceWithOverlay[s]` 是**纯查询**(const、不 mutate DB),禁止在内部
+  触发 repair——repair 只从检测/修复入口进入,否则 checker→engine→checker 的
+  调用会成环(依赖拓扑见 §3.3)。
+
+### 5.3 Infrastructure 候选 API
+
+第一版(per-instance,与 V1 相同):
+
+```cpp
+struct MasterCandidateRequest { InstanceId fillerInstanceId = 0; };
+struct MasterCandidate       { MasterId masterId = 0; };
+
+struct MasterCandidateResult
+{
+    std::vector<MasterCandidate> candidates;
+    std::vector<Diagnostic> diagnostics;
+};
+
+class FillerMasterCandidateProvider
+{
+ public:
+  MasterCandidateResult getUsableMasterCandidates(
+      const MasterCandidateRequest& request) const;
+};
+```
+
+语义(与 V1 相同):输入必须是 filler instance;candidates 只含可直接替换的
+filler master(不含当前 master),保证 same width / same height / same site /
+orientation 兼容;没有可用替换时返回 empty candidates + diagnostics,不是 error。
+当前工艺下每个 filler 恒有 2 个同尺寸候选(3 VT − 当前,附录 A);
+empty candidates 保留为防御性路径,不是常态。
+
+**演进方向**(merge/split 需要,提前告知 infrastructure RD):查询按几何键而非
+instance 键——"在 `(rowId, width, orientation)` 下有哪些可用 filler master(或
+master 序列)可铺满该宽度"。第一版实现建议内部就按宽度建表,per-instance API 做成
+它的 wrapper,升级时零迁移。
+
+### 5.4 Repair planner API 与 utility precheck
+
+```cpp
+struct FillerRepairRequest
+{
+    TargetPlace targetPlace;
+    std::vector<Violation> violations;  // checker 的初始 snapshot
+};
+
+struct FillerRepairResult
+{
+    bool hasSolution = false;
+    std::vector<FillerChange> changes;  // 第一版 wire format,见 §5.2
+    std::vector<Diagnostic> diagnostics;
+};
+```
+
+100% utility 的**权威全量结果建议由 infrastructure 按 design revision 缓存一次并
+下发**给 planner 消费(每次 repair 全设计逐行扫描过重,V2.1 修订 #12);planner
+侧只在 repair window 内做一次 O(window) 的防御性复核。`rowLegalSpan` 单区间无法
+表达 macro/blockage 造成的多段 legal segment,adapter 需按段提供(或在窗口内以
+多段返回)。数据结构与 V1 相同:
+
+```cpp
+enum class CoverageIssueKind { Gap, Overlap, OffGrid, IllegalOccupant };
+
+struct CoverageIssue
+{
+    CoverageIssueKind kind = CoverageIssueKind::Gap;
+    RowId rowId = 0;
+    DbCoord xLo = 0;
+    DbCoord xHi = 0;
+    int siteCount = 0;
+    std::vector<InstanceId> instances;
+};
+
+struct SiteCoverageResult
+{
+    bool isFullUtility = false;
+    std::vector<CoverageIssue> issues;
+    std::vector<Diagnostic> diagnostics;
+};
+```
+
+---
+
+## 6. 修复流程
+
+### 6.1 100% utility precheck(硬前置条件)
+
+每个合法 std-cell site 必须被 std cell 或 filler 精确覆盖一次;gap / overlap /
+off-grid / illegal occupant 都是 precondition failure。macro、blockage、core cutout
+等非法 site 由 DB adapter 排除。**全设计全量扫描的权威结果由 infrastructure 按
+design revision 缓存并下发**(每次 repair 重扫太重,V2.1 修订 #12);planner 消费
+该结果,并只在 repair window 内做一次 O(window) 的防御性复核(窗口内单段假设成立;
+真遇 macro/blockage 多段由 adapter 报 issue,§5.4)。语义上必须等价于全量检查。
+
+失败语义:不生成 move、不调 checker、`hasSolution=false`、`changes` 为空、
+diagnostics 带 fatal/error 级 `NonFullUtility`(或等价 code)并报告至少一个 gap 的
+row/x range/site count。原因:本方案只做同尺寸 swap,覆盖不变量天然保持;若 design 本来
+就没铺满,正确动作是先跑 filler insertion / placement repair,不是让 VT repair
+承担补洞职责。
+
+### 6.2 violation 归一化与 signature
+
+对每条 violation 抽取:`type`(MW/MS)、`relation`(intra/inter-row)、`rowIds`
+(为空时退回 `targetPlace.rowId` 并在 diagnostics 标记)、`xRange`(xWindow 与
+participant bbox 的 union)、`vtHint`(MW 用 primary layer,MS 用 primary/secondary
+layer,**按 band-slot / P-N 区分别记**)、`cellAnchors`(至少含
+`targetPlace.instanceId`,再加参与或邻接的 fixed std cell)、`fillerParticipants`。
+
+**signature 匹配键(钉死,delta 分类依赖它)**:
+
+```text
+signature = (ruleId, kind, relation, primaryLayer, secondaryLayer,
+             sorted(rowIds), xWindow 重叠 ≥ 阈值)
+```
+
+两条 violation 跨 baseline/overlay result 匹配,当且仅当所有 id/enum/layer 字段
+相等且 xWindow 重叠超过阈值(建议:重叠长度 ≥ min(两者长度) 的一半,或距离 ≤
+1 site)。
+
+**为什么必须带 layer**:MS 分 P 区 / N 区,同一个 x 间隙可能同时产生 N-band 和
+P-band 两条 MS,它们的 ruleId/kind/relation/rowIds/xWindow 可能完全相同,只有
+implant layer 不同。若签名不含 layer,这两条会被误当成一条,直接违反"不按几何位置
+去重"(§1.2/§1.3)。因此 `primaryLayer`(MW)与 `primaryLayer/secondaryLayer`
+(MS)必须进签名;checker 未填 layer 时字段默认 0/空,对 layer-agnostic checker 是
+no-op,不影响行为。
+
+**"与本次改动相关"的定义(钉死)**:violation 的 participants 触及任一 changed
+span,或其 xWindow 距任一 changed span ≤ 1 个 rule distance。以 span 几何为锚而非
+instanceId,保证 merge/split 时代 instance 被销毁后判定依然成立。判定**新** violation
+的 relatedness 时,rule distance 取 `max(原始违例最大 requiredValue, 该 violation
+自身 requiredValue)`——新违例可能来自 requiredValue 更大的规则,只用原始值会把它
+误判成 unrelated 而放行(V2.1 修订 #5)。
+
+**swap-unfixable 提示**(借鉴 DAC'23 [Zou et al.] 的 unsolvable violation 分类
+思想,弱化为保守启发):若某条 original violation 的 xWindow 外扩 two-cell ring 内
+不存在任何 editable filler,则它很可能无法被 swap 影响。**V2.1 修订 #6:此判定
+降级为 Warning 诊断提示(`UnfixableByTypeSwap`),不再 fast-fail 提前终止**——
+"ring 内无 filler ⇏ 更远 filler 经连续 implant run 一定无法影响"这一推断在 planner
+侧没有 oracle 佐证,与 checker-as-oracle 有张力;而它的实际收益极小(此种 case 下
+L0 本就 `NoEditableFiller` 跳过、零 checker call)。因此保留提示帮助上游区分
+"结构性大概率不可修"与"搜索无解",但仍进入正常搜索路径,由 ④OracleGate 作终判。
+这类 case 通常意味着需要 merge/split(§8.1)或上游回退该 opto 改动。
+
+### 6.3 开窗:L0 → adaptive-L1 与 guardRegion
+
+窗口用于圈定 candidate filler、限制搜索、和 delta 分类;它不是 `targetPlace`。
+两级模型(V2.1 修订 #7,删去了 V2 的 L2):
+
+| 级别 | 内容 |
+|---|---|
+| L0 | violation participants ∪ anchor std cell 左右相邻 filler ∪ bridge filler(见下)——最小 participant/bridge 窗口 |
+| adaptive-L1 | 受控渐进扩窗:每步向"当前 best 非-clean candidate 的 blocking violation 所在侧"扩入固定 K 个相邻 filler(K≈2,纵向含耦合相邻行 ±1),重算完备枚举判定;循环到预算尽或扩窗截止 |
+
+- intra-row violation 从 L0 入,inter-row 从含 ±1 行的 L0 入(bridge 集合天然覆盖)。
+- 扩窗触发:result 非 clean 且 remaining violation 的 xWindow/participants 靠近当前
+  窗口边界;或当前窗口枚举/预算耗尽仍无 clean——每步只向 blocking 侧扩 K 个 filler。
+- **为什么渐进扩窗而非一次吞整段 filler run(V2.1 修订 #8)**:早期 L1 会横向 snap
+  到最近 fixed cell/blockage/core 边界,可能一次把整条 filler run 拉进窗口——editable
+  filler 一多,`3^k > 预算`,完备枚举立刻退化成 size≤4 的截断枚举,"窗口更大"反而
+  "更难找到解"。按 best-residual 的 blocking 侧逐步扩,让窗口只在确需的方向增长,
+  尽量维持完备枚举区间。
+- **扩窗截止**(借鉴 DAC'23 contour refinement 的终止准则):若扩窗后没有引入任何
+  新的 editable filler/move,或(完备枚举前提下)扩窗后 remaining violation 集合与
+  上一步完全相同,则违例与更远的 filler 无关——停止扩窗,直接进入失败路径,不烧
+  剩余预算。
+- multi-height 预留规则:窗口按行扩展时,跨行 instance 把它占用的所有行拉进同一窗口。
+
+**bridge filler 默认必选**(不是兜底):与 anchor std cell 左右接触的 filler、上下行
+中与 anchor x-boundary 对齐的 filler、宽度 ≤ rule window 或明显短于相邻大 filler 的
+短 filler、夹在两个不同 VT 大区之间的短 filler run——即使不在任何 participant list
+中也进入候选集。§1.2 的例子里正解就是这类 filler。
+
+每次确定 repair window 后计算:
+
+```text
+guardRegion = expandByCellRing(repairWindow, 2)
+```
+
+即 two-cell guard halo:横向包含窗口左右各两圈相邻 placed instance,纵向包含上下各
+两条相邻 row 中与窗口 xRange 相交或贴近的 instance。只能用几何距离近似时,必须取
+不小于 two-cell ring 的 conservative expansion,并在 diagnostics 打印实际
+`repairWindow`、`guardRegion` 与 halo 来源。同一窗口生成的所有 `OverlayCheckRequest`
+携带同一个 `guardRegion`;guard-only 区域的 filler 只参与 checking/diagnostics,
+不得出现在 `fillerChanges` 中(违反判 invalid request)。
+
+### 6.4 cluster:第一版单 cluster
+
+opto 一次只改一个 cell,本次 snapshot 的所有 violation 都在同一 anchor 邻域内。
+第一版直接把它们并成**一个 cluster、一个(逐级放大的)窗口**一次求解,等价于 V1
+从合并窗口起步,但删去了"cluster 独立求解 → final merge → conflict-graph retry"
+整套机制。该机制在 batch opto(多 anchor)时代再引入(§8.4)。
+
+**V2.1 修订 #11:删除单独的 final full-overlay check**。单 cluster、单 guardRegion
+下,该检查与搜索中判定为 clean 的那一次 overlay 用完全相同的 cacheKey,必然 cache
+命中、classify 输出相同,零验证增益。因此获胜 overlay 一经 §6.8 的 baseline-delta
+门判为 clean 即作为解返回,不再重复一次。真正有增益的"扩大 guard 的独立认证"需要
+为新 guard 重跑 baseline(每次 +2 call),留到 batch opto / 多窗口合并(§8.4)真正
+引入多 guard 时,按实测预算决定是否加回。
+
+### 6.5 Swap 生成器(本阶段唯一的 move 生成器)
+
+生成器是纯枚举,**只产出原子 swap move,不产出任何组合/种子/hint**:
+
+1. 对窗口内每个 editable filler 调 `getUsableMasterCandidates`;为空则该 filler
+   不生成 swap,diagnostics 记 `NoUsableMaster`(正常结果,不是 error)。
+2. 对每个 candidate master 生成一个 `Swap`(§4.1),master 到 VT 的映射由 DB
+   adapter 提供,供排序使用;通不过构造校验的候选记 diagnostics 后跳过
+   (defense in depth)。
+3. 绝不为 std cell、macro、guard-only filler、non-editable filler 生成 swap。
+4. 输出定序:窗口 editable 顺序(row, x),同 filler 内按 master id 升序。
+
+**组合不在生成器做**:多 filler 联动方案由③层 SubsetSearcher 枚举 size-2/3 子集
+自然产生(§6.7);anchor-follow 方向(把 anchor 相邻/bridge filler 换成 anchor
+新 VT)由②层 Ranker 的排序实现(§6.6)——排序把该方向的 swap 排最前,首批
+size-1/2 子集就等价于 anchor-follow 组合,不需要独立的种子注入机制。
+
+### 6.6 排序(Ranker)
+
+排序只影响 checker call 次数,不影响正确性。第一版 5 特征,lexicographic 比较:
+
+| 优先级 | 特征 | 含义 |
+|---|---|---|
+| 1 | `directParticipant` | filler 出现在 violation participants 中 |
+| 2 | `bridgeScore` | 位于 anchor 与相邻大 implant 区之间的短 filler |
+| 3 | `cellAnchorVote` | targetVT == anchor std cell 的新 VT(本问题最常见正解方向) |
+| 4 | `width` | 更窄优先 |
+| 5 | `position` | x 更小优先,再 row 更小,保证 deterministic |
+
+**排序作用在 filler 上,不是扁平的 swap 上(V2.1 修订 #9)**:先按上表对窗口内
+editable filler 排序,得到 filler 优先序;每个入选 filler **保留其全部候选 master
+作为 domain**(当前库恒 2 个,附录 A)。③层枚举的是"filler 子集 × 各自 domain 的
+赋值",成员上限(§6.7)因此作用在 filler 数而非候选数上——不会再出现"高排名
+filler 的两个 master 占满 rank 前缀,导致某个关键 filler 或它的第三 VT 完全不进入
+组合"的问题。
+
+target VT 顺序(决定各 filler domain 内的排序):① anchor 的新 VT;② 邻接 majority
+VT(**按 band-slot 分别计数**,不能按 cell 整体数);③ 稳定 type id。所有顺序都只在
+candidate provider 实际返回的 master 中取值(防御库变化;当前库各宽度 VT 齐全,
+附录 A)。
+
+**第三 VT 强降权(V2.1 修订 #9:改为 domain 内排序)**:三档 VT 下,每个 filler 的
+两个候选中总有一个"既非 anchor 新 VT、也非邻接 majority"的第三色,几乎不可能是解
+的一部分。它不再作用在扁平的全局 swap 列表上,而是**在该 filler 自己的候选 domain
+内排到最后**(降权,**不剔除**,三 VT 相邻的犄角场景仍可达)。有效分支因子由此从
+2 降到 ~1;配合 §6.7 的完备枚举,正确性完全不依赖该启发。
+
+fixed cell 是投票和约束,不是禁改理由(贴着 fixed cell 的 filler 往往最该先试)。
+V1 的其余特征(`fillerVote`/`diffEdgesRemoved`/`multiViolationTouch`/`islandScore`/
+`sameVtBefore`/`cellConflict`)列为 backlog,fake-checker 测试显示排序命中率不足时
+再逐个引入;merge/split 时代加"操作类型偏好(swap 优先于 rewrite)、changed span 面积
+小者优先"两项。backlog 还包括 **model-guided proposal**(DAC'23 的 inference /
+forced-assignment 思想:用近似局部规则模型推导"该 filler 必须是某色否则必然
+违例"的强制赋值,用于排序与剪枝)——anchor-follow 种子与第三 VT 降权正是它的
+弱化版;模型不准只多花 checker call,正确性始终由 ④OracleGate 保证。
+
+### 6.7 子集搜索(SubsetSearcher)
+
+从排序后的 move 列表 `m1..mM` 枚举 overlay 候选:
+
+- **枚举顺序** = 按 `(子集 size, 成员 rank 的字典序)`。Ranker 把 anchor-follow
+  方向的 move 排最前(§6.6),因此首批 size-1/2 子集天然覆盖 anchor-follow
+  组合——没有独立的种子/hint 注入机制(§6.5)。
+- **小窗口完备枚举(优先规则)**:窗口内 editable filler 数为 k 时,完整子集空间
+  = 3^k 个着色方案(每个 filler 恒 2 候选,附录 A)。当 `3^k ≤ 剩余预算` 时
+  (k ≤ 5 对应 243 ≤ 512),**完整枚举全部非冲突子集**,仍按 rank 序分批、首
+  clean 早停。此时"窗口内无解"是**确定性结论**——扩窗触发精确、不可能漏解,
+  排序只影响速度不影响完备性,`hasSolution=false` 的诊断含义从"预算耗尽"升级为
+  "窗口内确定无解"。**但完备只对当前窗口成立(V2.1 修订 #10)**:L0 完备只证明
+  L0 无解,不能证明后续被截断的扩窗窗口无解;因此"definitive no solution"必须以
+  **最后一个实际搜索过的窗口**是否完备为准,而不是"任一较小窗口曾完备"(见 §6.9)。
+- **成员限制(仅大窗口,V2.1 修订 #9)**:`3^k > 剩余预算` 时启用截断——size 1
+  允许全部 filler;size ≥ 2 限制在 rank 前 `N_s` 个 **filler**(不是 swap)中组合
+  (建议 `N_2 = 24`,`N_3 = 12`,`N_4 = 8`;size > 4 不枚举,渐进扩窗);每个入选
+  filler 仍展开其完整 domain。
+- 跳过含冲突 move 的子集;canonical key 去重、查 cache(§4.2)。
+- **分批验证**:每批 16-32 个候选发 batch checker;批内按枚举序取第一个
+  delta-clean 作为解(保证确定性),命中立即停止。
+- **预算**:每窗口 checker call 上限 512(含 baseline)。预算耗尽或枚举完仍无
+  clean → 渐进扩窗(L0 → adaptive-L1,§6.3);扩窗截止 → 失败路径(§6.9)。
+
+MW"必须多 filler 联动、单改不改善甚至更差"的非单调 case,在这里只是一个普通的
+size-2/3 子集,不需要任何特殊机制;好排序下通常出现在首批。
+
+### 6.8 accept gate:baseline-delta clean(唯一 accept 标准)
+
+对每个窗口/guardRegion,先发一次 **baseline request**(同 `targetPlace`、同
+`guardRegion`、空 `fillerChanges`)。
+
+**baseline 一致性门(V2.1 修订 #2+#4,搜索前必过)**:baseline 必须能复现输入
+snapshot——每条 original violation 都应在 baseline result 中按 signature 出现;且
+baseline 的 repairWindow 内 / 与 anchor 相关的 violation 不能多于这些 original
+(§2.3 假设:输入快照除待修 original 外是干净的)。任一条不满足 → 输入 snapshot
+已过期 / guard 不一致 / checker 字段漂移,repair 以 `BaselineMismatch` fatal 中止
+并请上游重出快照,而不是把"没观察到 original"误当成"已修好"。halo 内 baseline
+已有且与本次改动无关的历史违例不触发此门(它们本就允许存在)。
+
+过门后,candidate 判 **delta-clean** 当且仅当:
+
+1. `status == CheckStatus::Checked`、无 checker fatal/protocol diagnostics,且结果
+   自洽——`isLegal` 与 `violations 是否为空` 必须一致(V2.1 修订 #1:`isLegal &&
+   violations 非空` 与 `!isLegal && violations 空` 两种矛盾形态都判不 clean);
+2. 初始 snapshot 的 original violations 在 overlay result 中全部消失
+   (signature 匹配,§6.2);
+3. `repairWindow` 内没有新增 violation(overlay 有、baseline 无);
+4. guard halo 内没有"与本次改动相关"(§6.2 定义,rule distance 取 per-violation
+   max)的新增或迁移 violation;
+5. guard halo 内 baseline 已有且与本次改动无关的 violation **不导致失败**,只进
+   diagnostics。
+
+**"新增" = baseline↔candidate 一对一 multiset delta(V2.1 修订 #3)**:判断
+candidate 里哪些 violation 是新增时,把 baseline 与 candidate 的 violation 各视为
+multiset,按 signature 做**消耗式一对一匹配**——一条 baseline finding 只能抵消一条
+candidate violation。否则两条同 signature 的 candidate violation 会被同一条 baseline
+finding 一起"吸收",其中真正新增的那条被漏计(signature 带一个 site 的容差,同
+signature 多条是现实场景)。
+
+辅助规则:`status != Checked` 的 request 只保留 diagnostics,不参与成功候选。
+
+失败时为 diagnostics 挑选 best overlay 用的比较序(lexicographic,不用加权
+magic number):
+
+```text
+deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
+> 相关 violation 数少 > changed span 总面积小 > 枚举序靠前
+```
+
+### 6.9 final check、输出与失败路径
+
+- `hasSolution=true`:`changes` 是搜索中首个通过 §6.8 baseline-delta clean 门的
+  overlay(不再有单独的 final full-overlay check,V2.1 修订 #11)。
+- `hasSolution=false`:`changes` 为空(不返回 partial repair,避免把违例挪走但未清
+  干净;explicit partial mode 未来可加,不默认开启),diagnostics 说明失败原因:
+  无合法 master、fixed-cell 冲突、枚举/call 预算耗尽、窗口到顶(含扩窗截止,§6.3)、
+  所有 overlay 均未 delta-clean;附 best overlay、remaining violations、窗口与预算
+  统计;若命中 swap-unfixable 提示(§6.2,已降级为 Warning)一并附上。**definitive
+  语义(V2.1 修订 #10)**:仅当**最后一个实际搜索过的窗口**完成了完备枚举(未被
+  size 上限或预算截断)才可标注"window space exhausted definitively";任一较早窗口
+  曾完备不足以据此断言。
+- utility precheck 失败:`hasSolution=false`、changes 为空、fatal diagnostics,
+  语义是 placement precondition 不满足,不是搜索无解。
+
+---
+
+## 7. 预算与参数(初值)
+
+| 参数 | 值 | 说明 |
+|---|---|---|
+| 每窗口 checker call 上限 | 512 | 含 baseline;与 V1 持平 |
+| batch 大小 | 16-32 | 批内枚举序定序 |
+| 完备枚举阈值 | 3^k ≤ 剩余预算(k ≤ 5) | 满足则完整枚举,无解结论对**当前窗口**确定(§6.7/§6.9 #10) |
+| size-2/3/4 成员上限 N_s(按 filler 计) | 24 / 12 / 8 | 仅大窗口截断时启用,作用在 filler 数上(V2.1 #9);超出则渐进扩窗 |
+| 最大子集 size | 4 | 更大组合交给渐进扩窗 |
+| 渐进扩窗步长 K | 2 | adaptive-L1 每步在相关行/侧扩入的连续 filler 数;耦合 blocking rows ±1(§6.3) |
+| 窗口模型 | L0 + adaptive-L1 | L2 已删(V2.1 #7);扩窗截止即失败路径 |
+
+所有参数进 config,diagnostics 打印实际取值。
+
+---
+
+## 8. 扩展性设计
+
+### 8.1 merge/split
+
+- **①层增量**:新增 RewriteGenerator(merge/split),只提议少数高价值
+  tiling(两个 bridge filler 合一、在 cell 边界切开宽 filler、短 run 重铺),控制
   分支爆炸的位置在生成器,不在搜索。split 的价值在于比 swap 更细的
   VT 粒度(例如 4 → 2+2 允许 span 的半段换 VT、半段保持,是 swap-only 覆盖不了的
   解形态);tiling 每段宽度必须取自库中实际存在的宽度集合(附录 A,当前为
