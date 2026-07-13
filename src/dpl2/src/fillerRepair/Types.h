@@ -22,19 +22,9 @@
 #include <string>
 #include <vector>
 
-// Base ids and XInterval are the checker's own types (single source of
-// truth, extended in place per the reuse rule): see drc/ImplantBaseTypes.h.
-#include "../drc/ImplantBaseTypes.h"
+#include "BaseTypes.h"
 
 namespace dpl2::fillerRepair {
-
-using ipl::DbCoord;
-using ipl::InstanceId;
-using ipl::LayerId;
-using ipl::MasterId;
-using ipl::RowId;
-using ipl::ShapeId;
-using ipl::XInterval;
 
 // VT family identity. The planner only compares VT ids; it never interprets
 // them -- rule semantics stay inside the checker (checker-as-oracle).

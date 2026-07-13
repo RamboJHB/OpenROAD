@@ -33,14 +33,14 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 - 词汇红线:本阶段只有 **swap**,下一阶段才是 **rewrite**(merge/split)。代码中
   不允许出现 Move / FillerRewrite 抽象(它们是论文概念,用户明确否决过,见 §4-D3)。
 
-## 2. 现状(2026-07-09,分支 `claude/wizardly-carson-secahu`)
+## 2. 现状(2026-07-13,分支 `claude/wizardly-carson-secahu`)
 
 | 部分 | 状态 |
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
-| 测试 | planner 63 个,`-Werror` + ASan 全绿;真实 checker core 5 个(`src/drc/test/run_tests.sh`),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
-| checker(`src/drc/`) | **2026-07-12 更新版已合入**:overlay API 真实现。契约项、header/cpp 编译漂移、guard target/neighbor/merge bug 已在 checker 侧修好(均 `[fillerRepair-fix]`,详见 `drc/CHECKER_REPAIR_CONTRACT.md`);fake-UDM boundary 下直接编译生产 checker 5/5 全绿。wire 仍是顺序关联、无 status、batch=单 target+N 变更。**真实 UDM extraction/adapter 前 engine 仍只接 fake** |
+| 测试 | planner 79 个,`-Werror` + ASan 全绿;真实 checker core 8 个(`src/drc/test/run_tests.sh`),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
+| checker(`src/drc/`) | overlay API 真实现;本轮不改 checker 源码,只扩 standalone harness:类型共存、invalid batch 隔离、row/hash/guard 已覆盖。wire 仍是顺序关联、无 status、batch=单 target+N 变更。**真实 UDM extraction/adapter 前 engine 仍只接 fake** |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 
 关键 commit(倒序):#9 filler-domain(见 git log 最新)→ `d293265` AGENTS/TestPlan
@@ -98,7 +98,8 @@ engine,**机械半**(candidate context 应用与规则执行)归 checker——ti
 
 ### D5. 类型二元性是设计决定,靠薄 adapter,不"统一"
 **决策**:`fillerRepair::Types.h` 持有与 `ipl::` 结构同构的 UDM-free wire 类型;
-共享基础 id + XInterval 放 `drc/ImplantBaseTypes.h`(checker 侧持有,planner alias)。
+基础 id + XInterval 由 `fillerRepair/BaseTypes.h` 自持;checker 保留独立 `ipl::`
+类型,adapter 显式转换。checker harness 在同一 TU include 两边防止 ODR 回归。
 **为什么**:`ipl::CheckRequest` 内嵌 `eUTL::PhysOrientation`(UDM),UDM 头进
 planner 就毁掉纯度与独立编译测试。
 **三个已知转换坑**(adapter 必须单测):`Orient`↔`PhysOrientation`;
@@ -199,7 +200,7 @@ overlay API 是纯查询(const),**禁止内部触发 repair**;repair 入口加�
 assert。构建:libfillerRepair 零依赖 ← checker;adapter 随 checker 目标。
 **否决备选**:并入 checker(毁独立测试)、双向抽象(空转)、std::function
 (类型面弱)、orchestrator 拥有两者(最干净但当前集成事实是 checker 驱动;
-engine 对谁驱动不敏感,future option)、再拆共享库(ImplantBaseTypes.h 已够)。
+engine 对谁驱动不敏感,future option)、再拆共享库(两侧已有各自基础类型,无必要)。
 
 ### D16. Fake-UDM candidate provider(adapter 预演,`fake/FakeUdmCandidateProvider.*`)
 **目的**:真 provider 将坐在 checker 的 master 表上(buildMasters 从 UDM 构建),
@@ -237,11 +238,10 @@ original——§1.2 bridge-MW 类必踩;xWindow 包含判 old 还会隐藏"缩�
 (2) `Violation.rowIds` 从未填充。**改法**:`scanRule`×2 + `scanViolations` +
 `makeViolations` 补填。附带修 `validateOverlayRequest` 头/实现不一致(编译 bug)。
 我改的是 RD 的文件,只保住两条语义,形态他们可换。
-**连带决策**:新 header 在 `ipl` 命名空间重定义了全部基础 id + XInterval,不再
-include `ImplantBaseTypes.h` → 该头现在是 **planner 专用**(同 TU 同时 include
-两边会 ODR 冲突)。后续做 adapter 前,planner 应改为完全自持基础类型(Types.h
-不再 alias ipl),adapter 在两套独立类型间显式转换——这比"共享头"更干净,
-也与 D5/D15 的方向一致。requestId 取消 → 关联按顺序,engine 协议校验届时改
+**连带决策(2026-07-13 已落实前置)**:planner 基础类型已迁到
+`fillerRepair/BaseTypes.h`,不再 include/alias `ipl`;adapter 可在两套独立类型间
+显式转换,checker harness 的共存编译测试已通过。`drc/ImplantBaseTypes.h` 已无代码
+引用,待 checker RD/CMake 集成确认后删除。requestId 取消 → 关联按顺序,engine 协议校验届时改
 size+order,adapter 按 index 合成 id。participants 缺失 → adapter 从
 violation.instances + placedInsts 合成。
 
@@ -250,7 +250,8 @@ violation.instances + placedInsts 合成。
 编译生产 `ImplantLayerChecker.cpp`;`DPL2_FAKE_UDM` 只关闭 Session 自动初始化与
 缺失 helper 的 extraction,测试显式注入 `ImplantInput`。因此规则/index/overlay/
 violation 路径是真 checker,不是 FakeImplantChecker。dense 8×200 的 MW/MS ×
-intra/inter-row 4 例 + raw/baseline/rowIds 1 例在 `-Werror` 与 ASan 下全绿。
+intra/inter-row 4 例 + raw/baseline/rowIds、类型共存、invalid batch、row/hash/guard
+共 8 例在 `-Werror` 与 ASan 下全绿。
 
 **编译漂移**:首次直编译暴露 `evaluate/evalRule`、`findNeighbors` 参数、
 `ScanOutcome.instances/instanceIds`、`RowInput/RowId` 四组头实现不一致,已按 cpp
@@ -283,12 +284,28 @@ blocking violation multiset 按 pinned signature 与上一步相同 → 截止�
 **测试**:旧 `window_L1_extends_to_fixed_boundary` 被 K 限制测试替换;新增耦合行+
 fixed boundary、adaptive 才能找到远端 filler 的 E2E、unchanged-blocking cutoff;
 原 last-window definitive 回归改用 K=6 直接造截断 adaptive window。planner
-总数 63,普通/ASan 全绿。
+总数 79,普通/ASan 全绿。
+
+### D20. 2026-07-13 planner hardening 与测试扩展
+**实现**:修复 SubsetSearch 在 `space == budget` 时已枚举完整却误标 truncated 的
+边界;`plan.complete` 现在由完整空间与实际 emitted 数共同决定。PreCheck 改为按
+coverage segment 扫描,多重 overlap 的 `CoverageIssue.instances` 带完整、排序后的
+参与者,最终 issue 按 row/x 确定排序。planner runner 原生支持
+`SANITIZE=address`。
+
+**类型**:新增 `fillerRepair/BaseTypes.h`,消除 planner 对
+`drc/ImplantBaseTypes.h` 的依赖。checker 生产源码未修改;仅在 checker test TU
+验证两套 header 共存。
+
+**测试**:planner 63→79,补完可由当前接口表达的 P1/P2 项;checker 5→8。普通与
+ASan 全绿。未伪造 `ranker_majority_per_band`:当前 `MasterInfo` 只有单 `vt`,必须等
+真实 adapter 提供 P/N band 元数据。bridge-MW 专用 checker fixture 与真实
+UDM/adapter E2E 仍待完成。
 
 ## 5. 实现要点与陷阱(接手前必读)
 
 - **对接 blocker(D17/D18)**:checker core 已在 fake-UDM boundary 下直编译并
-  5/5 + ASan 全绿(raw API + rowIds + guard scan 修复见
+  8/8 + ASan 全绿(raw API + rowIds + guard scan 修复见
   `drc/CHECKER_REPAIR_CONTRACT.md`),但**真实 UDM extraction 与 adapter 完成**前,
   engine 仍只接 `fake/FakeImplantChecker`。对接时用 `checkPlaceWithOverlaysRaw`,不用
   blocking 形态的 `checkPlaceWithOverlay[s]`。
@@ -298,9 +315,8 @@ fixed boundary、adaptive 才能找到远端 filler 的 E2E、unchanged-blocking
 - **单位**:planner 全 DBU、半开区间 `[xl,xh)`;checker 的
   `PlacedInst.colId` / `CheckRequest.colId` 是 **site 单位**
   (`x = colId * siteWidth`)。adapter 换算是头号 bug 温床。
-- **ODR 警告(D17)**:`drc/ImplantBaseTypes.h` 现为 planner 专用;checker 新
-  header 在同一 `ipl` 命名空间自定义了同名类型,同一 TU include 两边会重定义
-  冲突。adapter 动工前先让 planner 自持基础类型。
+- **类型边界(D17/D20)**:planner 已自持 `BaseTypes.h`;checker `ipl::` 类型独立。
+  adapter 必须显式做范围/单位转换,不可重新共享同命名空间结构。
 - **fake checker 语义是简化**(run-based):用户 5 行 grid 在 MW=MS=1 下 fake
   报的违例与用户预期的不同——这不是 bug,是 oracle 边界;测试锁"对给定
   oracle 的确定性行为"。
@@ -323,13 +339,11 @@ fixed boundary、adaptive 才能找到远端 filler 的 E2E、unchanged-blocking
 
 ## 7. 下一步(优先级序)
 
-1. **测试拓展**:按
-   `src/fillerRepair/test/TestPlan.md` 执行(#9 已落地,P1 的
-   SubsetSearch/Ranker 测试直接按 filler-domain 语义写)。
-2. **TODO 12 对接**(checker overlay core 已可测,等真实 UDM extraction/RD确认):adapter 层
+1. **TODO 12 对接**(checker overlay core 已可测,等真实 UDM extraction/RD确认):adapter 层
    (`fillerRepair/adapter/`,可含 UDM)+ CMake + 用真 checker 重放 spec §10。
-3. **#12 precheck 上收**:随 adapter 一起(infra 按 design revision 缓存
+2. **#12 precheck 上收**:随 adapter 一起(infra 按 design revision 缓存
    full-utility;planner 留 O(window) 防御复核)。
+3. **补 per-band/bridge-MW/真实 UDM E2E 测试**:只在真实元数据/API 可用后做。
 4. **问用户拍板 D12 输出格式**,再动 `FillerRepairResult`。
 
 ## 8. 工作方式(硬约束)
@@ -339,6 +353,6 @@ fixed boundary、adaptive 才能找到远端 filler 的 E2E、unchanged-blocking
 - commit:小步单主题,`fillerRepair:` / `drc:` / `docs:` 前缀,message 讲清因果。
 - 语义改动顺序:spec → 代码+测试 → HandOff/README 状态 → 本文决策日志。
 - 每次改动 `./run_tests.sh` 必须全绿;合入前跑一次 ASan。
-- fake 与既有测试不许删、不许改语义(测试暴露 bug 走 TestPlan §4 流程)。
+- fake 与既有 79+8 测试不许删、不许改语义(测试暴露 bug 走 TestPlan §4 流程)。
 - 修改 `drc/ImplantLayerChecker.{h,cpp}`/helper 时保留现有代码(删除 → 注释),
   新类型 additive 扩展。

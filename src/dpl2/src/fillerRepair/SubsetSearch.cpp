@@ -109,9 +109,11 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   for (int size = 1; size <= maxSize && !budgetHit; ++size) {
     choose(size, 0, memberCap(size));
   }
-  if (budgetHit) {
-    plan.complete = false;  // truncated by budget after all
-  }
+  // Reaching the budget on the final element is still a complete search.
+  // Derive completeness from what was actually emitted so space == budget
+  // cannot be mislabeled as truncated.
+  plan.complete = space <= budget
+                  && static_cast<long long>(plan.overlays.size()) == space;
 
   log.msg("enumerate",
           cat(fillerTotal, " filler domain(s), ", optionTotal,

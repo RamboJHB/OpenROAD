@@ -4,6 +4,7 @@
 #include "PreCheck.h"
 
 #include <algorithm>
+#include <tuple>
 
 namespace dpl2::fillerRepair {
 
@@ -44,19 +45,17 @@ SiteCoverageResult runUtilityPreCheck(const PlacementView& view,
     issue.xHi = xHi;
     issue.siteCount = static_cast<int>((xHi - xLo) / siteWidth);
     issue.instances = std::move(instances);
-    log.msg("precheck",
-            cat(kindName(kind), " row=", rowId, " x=", show(XInterval{xLo, xHi}),
-                " sites=", issue.siteCount, " -> precondition failure"));
     result.issues.push_back(std::move(issue));
   };
 
   for (const RowId rowId : view.rows()) {
     const XInterval legal = view.rowLegalSpan(rowId);
-    // cursor = end of covered prefix; every instance must continue exactly
-    // at cursor, otherwise the difference is a gap or an overlap.
-    DbCoord cursor = legal.xl;
+    const std::vector<PlacedInstance> instances = view.instancesInRow(rowId);
+    std::vector<XInterval> clippedSpans;
+    clippedSpans.reserve(instances.size());
+    std::vector<DbCoord> cuts{legal.xl, legal.xh};
 
-    for (const PlacedInstance& inst : view.instancesInRow(rowId)) {
+    for (const PlacedInstance& inst : instances) {
       const XInterval span = instanceSpan(view, inst);
 
       if ((span.xl - legal.xl) % siteWidth != 0) {
@@ -66,25 +65,73 @@ SiteCoverageResult runUtilityPreCheck(const PlacementView& view,
         addIssue(CoverageIssueKind::IllegalOccupant, rowId, span.xl, span.xh,
                  {inst.id});
       }
-      if (span.xl > cursor) {
-        addIssue(CoverageIssueKind::Gap, rowId, cursor, span.xl, {});
-      } else if (span.xl < cursor) {
-        addIssue(CoverageIssueKind::Overlap, rowId, span.xl,
-                 std::min(cursor, span.xh), {inst.id});
+
+      const XInterval clipped{std::max(span.xl, legal.xl),
+                              std::min(span.xh, legal.xh)};
+      clippedSpans.push_back(clipped);
+      if (!clipped.empty()) {
+        cuts.push_back(clipped.xl);
+        cuts.push_back(clipped.xh);
       }
-      cursor = std::max(cursor, span.xh);
     }
 
-    if (cursor < legal.xh) {
-      addIssue(CoverageIssueKind::Gap, rowId, cursor, legal.xh, {});
+    std::sort(cuts.begin(), cuts.end());
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+    for (size_t i = 0; i + 1 < cuts.size(); ++i) {
+      const XInterval segment{cuts[i], cuts[i + 1]};
+      if (segment.empty()) {
+        continue;
+      }
+      std::vector<InstanceId> active;
+      for (size_t j = 0; j < instances.size(); ++j) {
+        if (clippedSpans[j].overlaps(segment)) {
+          active.push_back(instances[j].id);
+        }
+      }
+      std::sort(active.begin(), active.end());
+      if (active.empty()) {
+        addIssue(CoverageIssueKind::Gap, rowId, segment.xl, segment.xh, {});
+      } else if (active.size() > 1) {
+        addIssue(CoverageIssueKind::Overlap,
+                 rowId,
+                 segment.xl,
+                 segment.xh,
+                 std::move(active));
+      }
     }
   }
+
+  std::sort(result.issues.begin(),
+            result.issues.end(),
+            [](const CoverageIssue& a, const CoverageIssue& b) {
+              return std::tie(a.rowId, a.xLo, a.kind, a.xHi, a.instances)
+                     < std::tie(b.rowId, b.xLo, b.kind, b.xHi, b.instances);
+            });
+
+  std::vector<CoverageIssue> merged;
+  for (CoverageIssue& issue : result.issues) {
+    if (!merged.empty() && merged.back().kind == issue.kind
+        && merged.back().rowId == issue.rowId
+        && merged.back().xHi == issue.xLo
+        && merged.back().instances == issue.instances) {
+      merged.back().xHi = issue.xHi;
+      merged.back().siteCount
+          = static_cast<int>((merged.back().xHi - merged.back().xLo) / siteWidth);
+    } else {
+      merged.push_back(std::move(issue));
+    }
+  }
+  result.issues = std::move(merged);
 
   result.isFullUtility = result.issues.empty();
   if (result.isFullUtility) {
     log.msg("precheck", "all rows fully covered -> 100% utility OK");
   } else {
     for (const CoverageIssue& issue : result.issues) {
+      log.msg("precheck",
+              cat(kindName(issue.kind), " row=", issue.rowId, " x=",
+                  show(XInterval{issue.xLo, issue.xHi}), " sites=",
+                  issue.siteCount, " -> precondition failure"));
       result.diagnostics.push_back(makeDiag(
           Severity::Error,
           "NonFullUtility",

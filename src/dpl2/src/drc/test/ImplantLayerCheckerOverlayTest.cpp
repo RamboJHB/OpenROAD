@@ -1,4 +1,5 @@
 #include "drc/ImplantLayerChecker.h"
+#include "fillerRepair/Types.h"
 
 #include <gtest/gtest.h>
 
@@ -6,6 +7,7 @@
 #include <array>
 #include <cstdlib>
 #include <iostream>
+#include <type_traits>
 #include <vector>
 
 namespace dpl2 {
@@ -401,6 +403,15 @@ bool hasViolation(const CheckResult& result,
       });
 }
 
+bool hasDiagnostic(const CheckResult& result, const std::string& status)
+{
+  return std::any_of(result.diagnostics.begin(),
+                     result.diagnostics.end(),
+                     [&status](const Diagnostic& diagnostic) {
+                       return diagnostic.status == status;
+                     });
+}
+
 void expectOldUnrelatedFiltered(const CheckResult& result)
 {
   EXPECT_FALSE(hasViolation(result,
@@ -600,6 +611,129 @@ TEST(ImplantCheckerOverlayTest, RawKeepsUnrelatedBaselineWithRows)
     }
   }
   EXPECT_TRUE(oldUnrelatedCount >= 1u);
+}
+
+TEST(ImplantCheckerOverlayTest, PlannerTypesCoexistWithCheckerTypes)
+{
+  static_assert(
+      !std::is_same_v<XInterval, dpl2::fillerRepair::XInterval>,
+      "planner and checker intervals must be adapter-separated types");
+  const XInterval checkerInterval{10, 20};
+  const dpl2::fillerRepair::XInterval plannerInterval{10, 20};
+  EXPECT_TRUE(checkerInterval.xl == plannerInterval.xl);
+  EXPECT_TRUE(checkerInterval.xh == plannerInterval.xh);
+}
+
+TEST(ImplantCheckerOverlayTest, InvalidOverlayBatchIsolation)
+{
+  SCOPED_TRACE(denseOverlaySchematic());
+  ImplantInput data = input();
+  constexpr MasterId WIDE_FILL_MASTER = 299;
+  MasterInput wide;
+  wide.masterId = WIDE_FILL_MASTER;
+  wide.width = 2 * SITE_WIDTH;
+  wide.height = ROW_HEIGHT;
+  wide.isFiller = true;
+  wide.shapes = {
+      MasterShape{WIDE_FILL_MASTER,
+                  41,
+                  F1_LAYER,
+                  makeRect(0, 50, 2 * SITE_WIDTH, ROW_HEIGHT)},
+      MasterShape{WIDE_FILL_MASTER,
+                  42,
+                  F1_LAYER,
+                  makeRect(0, 0, 2 * SITE_WIDTH, 50)}};
+  data.masters.push_back(wide);
+
+  ImplantLayerChecker checker(nullptr);
+  EXPECT_TRUE(checker.initialize(data));
+  const CheckRequest target = request(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const InstanceId validFiller = instId(INTRA_WIDTH_ROW, 11);
+  const std::vector<CheckResult> results = checker.checkPlaceWithOverlays(
+      target,
+      guard(),
+      {{FillerChange{validFiller, F1_FILL_MASTER}},
+       {FillerChange{validFiller, F1_FILL_MASTER},
+        FillerChange{validFiller, F2_FILL_MASTER}},
+       {FillerChange{instId(INTRA_WIDTH_ROW, 8), F1_FILL_MASTER}},
+       {FillerChange{-12345, F1_FILL_MASTER}},
+       {FillerChange{validFiller, C1_MASTER}},
+       {FillerChange{validFiller, WIDE_FILL_MASTER}}});
+
+  ASSERT_EQ(results.size(), 6u);
+  EXPECT_TRUE(results[0].isLegal);
+  EXPECT_TRUE(results[0].diagnostics.empty());
+  EXPECT_FALSE(results[1].isLegal);
+  EXPECT_TRUE(hasDiagnostic(results[1], "duplicate_filler_change"));
+  EXPECT_FALSE(results[2].isLegal);
+  EXPECT_TRUE(hasDiagnostic(results[2], "changed_instance_not_filler"));
+  EXPECT_FALSE(results[3].isLegal);
+  EXPECT_TRUE(hasDiagnostic(results[3], "unknown_filler_instance"));
+  EXPECT_FALSE(results[4].isLegal);
+  EXPECT_TRUE(hasDiagnostic(results[4], "replacement_master_not_filler"));
+  EXPECT_FALSE(results[5].isLegal);
+  EXPECT_TRUE(hasDiagnostic(results[5], "replacement_footprint_mismatch"));
+}
+
+TEST(ImplantCheckerOverlayTest, RowHashAndGuardClipping)
+{
+  SCOPED_TRACE(denseOverlaySchematic());
+  ImplantInput data = input();
+  for (PlacedInst& instance : data.placedInsts) {
+    const bool rowMatch = instance.rowId == 6 || instance.rowId == 7;
+    if (rowMatch && (instance.colId == 179 || instance.colId == 181)) {
+      instance.masterId = F2_FILL_MASTER;
+      instance.isFiller = true;
+    } else if (rowMatch && instance.colId == 180) {
+      instance.masterId = C1_MASTER;
+      instance.isFiller = false;
+    }
+  }
+
+  ImplantLayerChecker checker(nullptr);
+  EXPECT_TRUE(checker.initialize(data));
+  const CheckRequest target = request(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const auto full = checker.checkPlaceWithOverlaysRaw(target, guard(), {{}});
+  ASSERT_EQ(full.size(), 1u);
+
+  const auto findAtRow = [](const CheckResult& result,
+                            RowId rowId) -> const Violation* {
+    const InstanceId center = instId(rowId, 180);
+    for (const Violation& violation : result.violations) {
+      if (violation.ruleId == F1_WIDTH_RULE
+          && violation.relationship == Relationship::IntraRow
+          && std::find(violation.instances.begin(),
+                       violation.instances.end(),
+                       center)
+                 != violation.instances.end()) {
+        return &violation;
+      }
+    }
+    return nullptr;
+  };
+
+  const Violation* row6 = findAtRow(full[0], 6);
+  const Violation* row7 = findAtRow(full[0], 7);
+  EXPECT_TRUE(row6 != nullptr);
+  EXPECT_TRUE(row7 != nullptr);
+  if (row6 == nullptr || row7 == nullptr) {
+    return;
+  }
+  EXPECT_TRUE(row6->xWindow.xl == row7->xWindow.xl);
+  EXPECT_TRUE(row6->xWindow.xh == row7->xWindow.xh);
+  EXPECT_TRUE(row6->rowIds == std::vector<RowId>{6});
+  EXPECT_TRUE(row7->rowIds == std::vector<RowId>{7});
+  EXPECT_TRUE(row6->hash != row7->hash);
+
+  const Rect row6Guard = makeRect(0,
+                                  6 * ROW_HEIGHT,
+                                  SITE_COUNT * SITE_WIDTH,
+                                  7 * ROW_HEIGHT - 1);
+  const auto clipped
+      = checker.checkPlaceWithOverlaysRaw(target, row6Guard, {{}});
+  ASSERT_EQ(clipped.size(), 1u);
+  EXPECT_TRUE(findAtRow(clipped[0], 6) != nullptr);
+  EXPECT_TRUE(findAtRow(clipped[0], 7) == nullptr);
 }
 
 }  // namespace

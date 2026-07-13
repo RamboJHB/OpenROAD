@@ -2,15 +2,16 @@
 
 Implements the pure repair planner from `docs/filler_vt_overlay_repair_spec.md`.
 Development is confined to `src/dpl2`; the checker integrates into the
-infrastructure side, so until the real checker / infrastructure APIs land the
-planner is built and tested against the fakes in `fake/`.
+infrastructure side. The real checker overlay API has landed, but the real UDM
+extraction, adapter, and build integration have not, so the planner still runs
+end-to-end against the fakes in `fake/`.
 
 > **V2.1 rollout (spec §0), three batches:** **batch 1 (OracleGate correctness,
 > #1/#2/#3/#4/#5/#10) DONE.** **Batch 2: #6/#7/#8/#11 DONE**
 > (unfixable→warning, dropped L2, adaptive-L1, dropped final check).
 > **Batch 3: #9 filler-domain enumeration DONE** (ranker
 > returns `FillerDomain`s; caps count fillers); **#12 precheck upstreaming
-> pending** (goes with the adapter). 63 tests green. Plan and pointers in
+> pending** (goes with the adapter). 79 planner tests green. Plan and pointers in
 > `src/dpl2/HandOff.md`. Dependency topology (checker calls engine, engine
 > calls checker through its own abstract oracle — no cycle) is pinned in spec
 > §3.3.
@@ -23,7 +24,8 @@ planner is built and tested against the fakes in `fake/`.
 > `drc/CHECKER_REPAIR_CONTRACT.md`) — a new `checkPlaceWithOverlaysRaw` and
 > rowIds population. A standalone fake-UDM-boundary harness now compiles the
 > production checker directly; four dense width/spacing × intra/inter-row cases
-> plus one raw/baseline/rowIds regression pass under `-Werror` and ASan. The
+> plus type coexistence, invalid-batch isolation, and row/hash/guard regressions
+> pass under `-Werror` and ASan (8 cases total). The
 > same run fixed additional header/cpp drift
 > and guard target/neighbor/merge bugs; see the RD contract document. Pending
 > real UDM extraction and the adapter, the engine stays on the fakes; wire it to the raw API,
@@ -33,7 +35,8 @@ planner is built and tested against the fakes in `fake/`.
 
 | Path | Content |
 |---|---|
-| `Types.h` | Wire types (`TargetPlace`, `FillerChange`, `Violation`, `OverlayCheckRequest`, `CheckResult`), planner entry/coverage types; base ids + `XInterval` reused from `drc/ImplantBaseTypes.h` |
+| `BaseTypes.h` | Planner-owned UDM-free ids and half-open `XInterval`; deliberately separate from checker `ipl::` types |
+| `Types.h` | Wire types (`TargetPlace`, `FillerChange`, `Violation`, `OverlayCheckRequest`, `CheckResult`) and planner entry/coverage types |
 | `PlacementView.h` | Read-only DB view interface (real adapter wraps the UDM design) |
 | `CheckerApi.h` | Abstract `ImplantOverlayChecker` (spec §5.2 protocol) |
 | `CandidateApi.h` | Abstract `FillerMasterCandidateProvider` (spec §5.3) |
@@ -55,13 +58,13 @@ planner is built and tested against the fakes in `fake/`.
 ## Conventions
 
 - Base ids (`DbCoord`, `InstanceId`, `MasterId`, `RowId`, `LayerId`) and
-  `XInterval` come from `src/dpl2/src/drc/ImplantBaseTypes.h`, which is now
-  **planner-only**: the 2026-07-12 checker defines its own copies of these
-  names inside `ImplantLayerChecker.h` (same `ipl` namespace — never include
-  both in one TU). Follow-up per AGENTS D17: move the planner to self-owned
-  base types before the adapter is written. `PlacedInstance` / `MasterInfo`
-  are adapter-side projections of the infrastructure `Node` / `Master`
-  classes (UDM-typed, hence not directly reusable in the pure planner).
+  `XInterval` are owned by `fillerRepair/BaseTypes.h`. The checker owns its
+  distinct `ipl::` types; the adapter must convert explicitly. The checker
+  harness includes both headers in one translation unit to prevent the old ODR
+  collision from returning. The now-unreferenced `drc/ImplantBaseTypes.h` is
+  retained until checker RD/build integration confirms it can be removed.
+  `PlacedInstance` / `MasterInfo` remain adapter-side projections of the
+  infrastructure `Node` / `Master` classes.
 - The operation vocabulary is **swap** (this stage) and **rewrite** (future).
   There is no generic "Move" abstraction.
 
@@ -82,15 +85,17 @@ Standalone (STL only) until dpl2 joins the CMake build (spec §11 TODO 12):
 ```sh
 test/run_tests.sh              # quiet
 FR_VERBOSE=1 test/run_tests.sh # with the [fr] debug transcript
+SANITIZE=address test/run_tests.sh
 
 cd ../drc/test
-./run_tests.sh                 # real checker core, fake UDM boundary, 5 cases
+./run_tests.sh                 # real checker core, fake UDM boundary, 8 cases
 SANITIZE=address ./run_tests.sh
 ```
 
 ## Status vs spec §11 TODO
 
-TODO 1–11 and all V2.1 engine revisions are implemented (63 deterministic tests green).
+TODO 1–11 and all V2.1 engine revisions are implemented for the current
+single-VT planner projection (79 deterministic tests green).
 TODO 12 (real checker/infra adapter + CMake) is pending. The spec is at **V2.1**;
 folding the 12 revisions into this code is tracked as three batches in
 `src/dpl2/HandOff.md`.
@@ -103,9 +108,9 @@ folding the 12 revisions into this code is tracked as three batches in
 | 4 | Violation normalization + signature matching | done |
 | 5 | Window builder + guardRegion + unfixable check | done (V2.1 #6/#7/#8: warning-only, drop L2, adaptive-L1) |
 | 6 | Swap generator (atomic swaps only) | done |
-| 7 | Ranker (filler domains, third-VT demotion in-domain) | done; V2.1 #9 applied |
-| 8 | Subset searcher (filler combos × domain assignments) | done; V2.1 #9 applied (caps count fillers) |
+| 7 | Ranker (filler domains, third-VT demotion in-domain) | done for current single-VT projection; true P/N per-band majority awaits adapter metadata |
+| 8 | Subset searcher (filler combos × domain assignments) | done; V2.1 #9 applied (caps count fillers); exact `space == budget` completeness fixed |
 | 9 | Oracle gate (batch, cache, baseline-delta, protocol validation) | done; V2.1 #1–#5 correctness fixes applied (batch 1) |
 | 10 | Window escalation + diagnostics | done; V2.1 #10 applied; #11 final check dropped (batch 2) |
-| 11 | Full spec test set | done for fake-checker scope (63 tests) |
+| 11 | Full spec test set | done for current fake-checker scope (79 planner + 8 real-checker-core tests) |
 | 12 | Real checker adapter + CMake integration | pending |

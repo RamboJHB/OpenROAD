@@ -19,17 +19,19 @@ checker 用 overlay 验证,干净则由 infrastructure commit。engine 永远不
 不自己判 DRC(checker-as-oracle)。阶段词汇:**本阶段只有 swap;下一阶段才是
 rewrite(merge/split)**。代码里不允许出现 Move / FillerRewrite 抽象。
 
-## 2. 现状(更新至 2026-07-12,分支 `claude/wizardly-carson-secahu`)
+## 2. 现状(更新至 2026-07-13,分支 `claude/wizardly-carson-secahu`)
 
 | 部分 | 位置 | 状态 |
 |---|---|---|
 | Spec **V2.1**(含 §0 修订记录) | `docs/filler_vt_overlay_repair_spec.md` | 定稿 |
-| 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | V2.1 三批 engine 项全部落地;63 个确定性测试全绿 |
-| checker + standalone harness | `src/dpl2/src/drc/` | 真实 overlay core 已以 fake-UDM boundary 直接编译;dense 4 例 + raw/rowIds 1 例,5/5 + ASan 全绿;详见 `CHECKER_REPAIR_CONTRACT.md` |
+| 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | V2.1 engine 项全部落地;exact-budget 修复、planner 自持基础类型、P1/P2 边界补强完成;79 个确定性测试全绿 |
+| checker + standalone harness | `src/dpl2/src/drc/` | checker 源码未改;fake-UDM boundary 直接编译生产 overlay core,8/8 + ASan 全绿(新增类型共存、invalid batch 隔离、row/hash/guard) |
 | fake checker / design / candidate provider | `src/dpl2/src/fillerRepair/fake/` | 继续用于单元测试 |
+| TODO 12 adapter/CMake/真实 UDM | `src/dpl2/src/fillerRepair/adapter/`(规划) | 未完成;当前分支缺完整 dpl2 CMake、`DePlace.h` 与真实 UDM extraction,不可安全猜接口 |
 
-**关键认知**:engine 代码是 **V2 语义**,spec 已升到 **V2.1**。下面三批工作就是把
-engine 从 V2 收敛到 V2.1。V1 存档 spec(`spec_v1` / `addendum_v1`)已删除(冗余)。
+**关键认知**:engine 与 spec 都已对齐 **V2.1**。下面三批说明保留作审阅历史;
+当前剩余工作集中在真实 adapter/UDM/CMake 与 per-band 元数据。V1 存档 spec
+(`spec_v1` / `addendum_v1`)已删除(冗余)。
 
 ## 3. 三批工作(按此顺序;每批做完跑 `test/run_tests.sh` 必须全绿)
 
@@ -149,7 +151,7 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
    `drc/CHECKER_REPAIR_CONTRACT.md`):新增 `checkPlaceWithOverlaysRaw`(不做
    blocking 过滤,复用 `checkOverlayRegion`)、填充 `Violation.rowIds`、对齐
    `validateOverlayRequest` 头/实现。standalone fake-UDM harness 直接编译生产
-   checker,5/5 + ASan 全绿。**待 checker RD review、真实 UDM extraction
+   checker,8/8 + ASan 全绿。**待 checker RD review、真实 UDM extraction
    与 adapter 完成前,engine 仍只接 `fake/FakeImplantChecker`**;对接时
    用 raw API,不用 blocking 形态。
 2. **新 wire 形态(以实物为准)**:`checkPlaceWithOverlays(request, guard,
@@ -162,9 +164,10 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
    `CheckRequest.colId`/`PlacedInst.colId`(**site 单位**,`x = colId*siteWidth`)、
    `Region`(row-based)↔ guard `eUTL::Rect`(y-based,`y = rowId*rowHeight`)。
    建议放 `src/dpl2/src/fillerRepair/adapter/`(可含 UDM 头,planner 本体保持
-   UDM-free),重点单测这三个转换。**前置**:planner 先自持基础类型(Types.h
-   停止 alias `ipl`)——checker 新 header 已在 `ipl` 命名空间自定义同名类型,
-   `ImplantBaseTypes.h` 现为 planner 专用,同 TU include 两边会 ODR 冲突。
+   UDM-free),重点单测这三个转换。**前置已完成(2026-07-13)**:planner 基础类型
+   已迁到 `fillerRepair/BaseTypes.h`,不再 alias `ipl`;checker harness 已验证两套
+   header 可在同一 adapter TU 共存。`drc/ImplantBaseTypes.h` 已无代码引用,但本轮
+   不改 checker 目录资产,待 RD/CMake 对接时确认删除。
 4. **依赖拓扑已钉死(spec §3.3 / AGENTS D15)**:checker 调 engine(具体、单向
    编译依赖),engine 调 checker 只经自己的抽象 oracle 接口——无编译环;
    `checkPlaceWithOverlay[s]` 是纯查询、禁止内部触发 repair——无运行时递归。
@@ -178,7 +181,7 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
 2. **checker-as-oracle。** engine 永不判 DRC;干净与否只来自 baseline-delta 门(§6.8)。
 3. **engine 是纯 planner、确定性。** 相同输入 → 相同 changes/诊断/调用次数;不碰 DB,
    本体不含 UDM 头(UDM 只允许出现在 adapter/)。
-4. **fake 与 63 个测试不许删不许改语义。** 每次改动跑 `test/run_tests.sh`,必须全绿
+4. **fake 与 79 个 planner 测试不许删不许改语义。** 每次改动跑 `test/run_tests.sh`,必须全绿
    (`-Wall -Wextra -Werror`);V2.1 的每条改动都应补对应回归 case(ScriptedChecker /
    MisbehavingChecker 已够用)。
 5. **debug print 规范**:清晰的 因→果 逻辑链 + data change,别废话(参考 `Log.h`
@@ -189,7 +192,8 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
 
 ```bash
 cd src/dpl2/src/fillerRepair/test
-./run_tests.sh                       # 35 cases,应输出 "OK: 35 test(s) passed"
+./run_tests.sh                       # 79 cases,应输出 "OK: 79 test(s) passed"
+SANITIZE=address ./run_tests.sh      # 79 cases + ASan
 ./run_tests.sh <name-substr>         # 按名字过滤
 FR_VERBOSE=1 ./run_tests.sh <case>   # 完整逻辑链日志
 ```
@@ -211,6 +215,32 @@ FR_VERBOSE=1 ./run_tests.sh <case>   # 完整逻辑链日志
 | `src/dpl2/src/fillerRepair/Ranker.{h,cpp}` / `SubsetSearch.{h,cpp}` | 批 3 战场:filler-domain 枚举(#9) |
 | `src/dpl2/src/fillerRepair/Signature.{h,cpp}` | signature / relatedness;ruleDistance(#5) |
 | `src/dpl2/src/fillerRepair/PreCheck.{h,cpp}` | precheck 上收(#12) |
-| `src/dpl2/src/drc/ImplantLayerChecker.{h,cpp}` | checker(非我方责任);overlay stub 在 `:3273`,spec §5 字段填充点在 `:1885`/`:2454` |
+| `src/dpl2/src/drc/ImplantLayerChecker.{h,cpp}` | checker(非我方责任);真实 blocking/raw overlay API 已实现;本轮未修改 |
 | `src/dpl2/src/fillerRepair/fake/` | 单元测试用假件(保留) |
-| `src/dpl2/src/fillerRepair/test/` | 35-case harness + run_tests.sh |
+| `src/dpl2/src/fillerRepair/test/` | 79-case planner harness + ASan-capable run_tests.sh |
+| `src/dpl2/src/drc/test/` | 8-case production-checker harness(fake UDM boundary) |
+
+## 8. 剩余 TODO 与依赖清理顺序
+
+1. **真实 UDM extraction**:checker 侧先恢复/交付等价于旧 helper 的 layer/master/
+   placed-instance 提取;这是 adapter E2E 的外部 blocker,本轮未猜 UDM API。
+2. **真实 adapter**:显式转换 orientation、DBU↔site column、row region↔UDM Rect、
+   checker violation→planner violation/participants,并把真实 candidate provider 接到
+   checker master 表。planner 类型共存前置已完成。
+3. **CMake/依赖闭包**:当前分支没有 `src/dpl2/CMakeLists.txt`,且 `DePlace.cpp`
+   引用的 `include/dpl2/DePlace.h` 等文件不完整;补齐真实工程文件后再接目标,不要造
+   临时 CMake 冒充集成完成。
+4. **#12 precheck 上收**:infrastructure 按 design revision 缓存全量 utility,
+   adapter 表达多段 legal segment,planner 保留窗口内防御复核。当前全设计 sweep
+   已补多行、边界、三重 overlap 测试,但不等于 #12 完成。
+5. **per-band majority**:当前 `MasterInfo` 只有单个 `vt`;P/N band 投影进入 adapter
+   数据模型后再补 `ranker_majority_per_band`,不使用 fake 名称推断。
+6. **checker 后续回归**:补专门的 bridge-MW raw-vs-blocking fixture;真实 UDM 到位后
+   补 extraction + adapter E2E。现有 row/hash/guard 与 invalid-batch 已完成。
+7. **开放产品决策 D12**:all-or-nothing/结构化残留输出仍需用户拍板。
+
+FakeDesign、FakeCandidateProvider、FakeImplantChecker、Scripted/Misbehaving checker
+均是 planner 单测边界,继续保留。`FakeUdmCandidateProvider` 在真实 provider E2E
+落地前保留。`DPL2_FAKE_UDM` 与 checker test support 在真实 UDM CI 可运行前保留。
+`drc/ImplantBaseTypes.h` 现已无代码引用,可在 adapter/CMake 合并时经 checker RD
+确认后删除;本轮遵守 checker 不改动边界,不提前移除。

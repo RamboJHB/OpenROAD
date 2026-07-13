@@ -4,13 +4,21 @@
 # Usage: test/run_tests.sh                       run all, quiet
 #        FR_VERBOSE=1 test/run_tests.sh          all, with [fr] transcript
 #        FR_VERBOSE=1 test/run_tests.sh <name>   only cases matching <name>
+#        SANITIZE=address test/run_tests.sh      run all under AddressSanitizer
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BUILD_DIR=test/build
 mkdir -p "$BUILD_DIR"
 
-g++ -std=c++17 -Wall -Wextra -Werror -g \
+cxx="${CXX:-c++}"
+sanitize_flags=(-O0)
+if [[ "${SANITIZE:-}" == "address" ]]; then
+  sanitize_flags+=(-fsanitize=address -fno-omit-frame-pointer)
+fi
+
+"$cxx" -std=c++17 -Wall -Wextra -Werror -g \
+  "${sanitize_flags[@]}" \
   Swap.cpp PreCheck.cpp Signature.cpp Window.cpp SwapGenerator.cpp \
   Ranker.cpp SubsetSearch.cpp OracleGate.cpp \
   FillerRepairEngine.cpp \
