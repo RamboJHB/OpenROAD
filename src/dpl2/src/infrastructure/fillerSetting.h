@@ -26,7 +26,7 @@ public:
     std::map<std::pair<int, int>, bool> getAvoidPattern() {return avoid_pattern_;};
     eUNL::Design* getDesign() {return design_;};
 
-    bool needAvoidAout(std::pair<int, int> twoLibCell);
+    bool needAvoidAbut(std::pair<int, int> twoLibCell);
 
 private:
     bool follow_order_;
