@@ -19,13 +19,13 @@ checker 用 overlay 验证,干净则由 infrastructure commit。engine 永远不
 不自己判 DRC(checker-as-oracle)。阶段词汇:**本阶段只有 swap;下一阶段才是
 rewrite(merge/split)**。代码里不允许出现 Move / FillerRewrite 抽象。
 
-## 2. 现状(更新至 2026-07-13,分支 `claude/wizardly-carson-secahu`)
+## 2. 现状(更新至 2026-07-15,分支 `claude/wizardly-carson-secahu`)
 
 | 部分 | 位置 | 状态 |
 |---|---|---|
 | Spec **V2.1**(含 §0 修订记录) | `docs/filler_vt_overlay_repair_spec.md` | 定稿 |
-| 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | V2.1 engine 项全部落地;exact-budget 修复、planner 自持基础类型、P1/P2 边界补强完成;79 个确定性测试全绿 |
-| checker + standalone harness | `src/dpl2/src/drc/` | checker 源码未改;fake-UDM boundary 直接编译生产 overlay core,8/8 + ASan 全绿(新增类型共存、invalid batch 隔离、row/hash/guard) |
+| 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | V2.1 engine 项全部落地;exact-budget 修复、planner 自持基础类型、P1/P2 边界补强完成;81 个确定性测试全绿;复杂 3-row/8-domain pair 在 21 次 checker call 内成功 |
+| checker + standalone harness | `src/dpl2/src/drc/` | checker 源码未改;fake-UDM boundary 直接编译生产 overlay core,10/10 + ASan 全绿(含 64-candidate 混合批确定性) |
 | fake checker / design / candidate provider | `src/dpl2/src/fillerRepair/fake/` | 继续用于单元测试 |
 | TODO 12 adapter/CMake/真实 UDM | `src/dpl2/src/fillerRepair/adapter/`(规划) | 未完成;当前分支缺完整 dpl2 CMake、`DePlace.h` 与真实 UDM extraction,不可安全猜接口 |
 
@@ -150,7 +150,7 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
    无 blocking 过滤(已删,连同 touchesInstance/containsViolation)、**无查重**
    (同一物理违例可有 band/方向重复,确定性保证)。RD 2026-07-13 交付已含
    内联 UDM extraction;scan 正确性修正与 `DPL2_FAKE_UDM` 边界已重新套用
-   (`drc/CHECKER_REPAIR_CONTRACT.md` 顶部)。standalone harness 9/9 + ASan
+   (`drc/CHECKER_REPAIR_CONTRACT.md` 顶部)。standalone harness 10/10 + ASan
    全绿。**adapter 完成前 engine 仍只接 `fake/FakeImplantChecker`。**
 2. **wire 形态(以实物为准)**:`checkPlaceWithOverlays(request, guard,
    vector<vector<FillerChange>>)`——单 target/guard + N 候选,结果按输入顺序
@@ -182,7 +182,7 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
 2. **checker-as-oracle。** engine 永不判 DRC;干净与否只来自 baseline-delta 门(§6.8)。
 3. **engine 是纯 planner、确定性。** 相同输入 → 相同 changes/诊断/调用次数;不碰 DB,
    本体不含 UDM 头(UDM 只允许出现在 adapter/)。
-4. **fake 与 79 个 planner 测试不许删不许改语义。** 每次改动跑 `test/run_tests.sh`,必须全绿
+4. **fake 与 81 个 planner 测试不许删不许改语义。** 每次改动跑 `test/run_tests.sh`,必须全绿
    (`-Wall -Wextra -Werror`);V2.1 的每条改动都应补对应回归 case(ScriptedChecker /
    MisbehavingChecker 已够用)。
 5. **debug print 规范**:清晰的 因→果 逻辑链 + data change,别废话(参考 `Log.h`
@@ -193,8 +193,8 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
 
 ```bash
 cd src/dpl2/src/fillerRepair/test
-./run_tests.sh                       # 79 cases,应输出 "OK: 79 test(s) passed"
-SANITIZE=address ./run_tests.sh      # 79 cases + ASan
+./run_tests.sh                       # 81 cases,应输出 "OK: 81 test(s) passed"
+SANITIZE=address ./run_tests.sh      # 81 cases + ASan
 ./run_tests.sh <name-substr>         # 按名字过滤
 FR_VERBOSE=1 ./run_tests.sh <case>   # 完整逻辑链日志
 ```
@@ -218,8 +218,8 @@ FR_VERBOSE=1 ./run_tests.sh <case>   # 完整逻辑链日志
 | `src/dpl2/src/fillerRepair/PreCheck.{h,cpp}` | precheck 上收(#12) |
 | `src/dpl2/src/drc/ImplantLayerChecker.{h,cpp}` | checker(非我方责任);终版契约 list-only 无查重(D21),UDM extraction 内联 |
 | `src/dpl2/src/fillerRepair/fake/` | 单元测试用假件(保留) |
-| `src/dpl2/src/fillerRepair/test/` | 79-case planner harness + ASan-capable run_tests.sh |
-| `src/dpl2/src/drc/test/` | 8-case production-checker harness(fake UDM boundary) |
+| `src/dpl2/src/fillerRepair/test/` | 81-case planner harness + ASan-capable run_tests.sh |
+| `src/dpl2/src/drc/test/` | 10-case production-checker harness(fake UDM boundary) |
 
 ## 8. 剩余 TODO 与依赖清理顺序
 
@@ -236,8 +236,9 @@ FR_VERBOSE=1 ./run_tests.sh <case>   # 完整逻辑链日志
    已补多行、边界、三重 overlap 测试,但不等于 #12 完成。
 5. **per-band majority**:当前 `MasterInfo` 只有单个 `vt`;P/N band 投影进入 adapter
    数据模型后再补 `ranker_majority_per_band`,不使用 fake 名称推断。
-6. **checker 后续回归**:补专门的 bridge-MW raw-vs-blocking fixture;真实 UDM 到位后
-   补 extraction + adapter E2E。现有 row/hash/guard 与 invalid-batch 已完成。
+6. **checker 后续回归**:list-only bridge residual 与 64-candidate 混合批已完成;
+   真实 UDM 到位后补 extraction + adapter E2E。现有 row/hash/guard 与
+   invalid-batch 已完成。
 7. **开放产品决策 D12**:all-or-nothing/结构化残留输出仍需用户拍板。
 
 FakeDesign、FakeCandidateProvider、FakeImplantChecker、Scripted/Misbehaving checker

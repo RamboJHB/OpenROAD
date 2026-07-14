@@ -1761,6 +1761,214 @@ void testEngineSolvesPairNonMonotone()
   CHECK(checker.requestCount() >= 7);
 }
 
+// A protocol-honest oracle for complex search-order tests. Baseline and every
+// partial candidate retain the original violation multiset; an overlay becomes
+// clean only after it contains every required (instance, master) assignment.
+class RequiredChangesChecker : public fr::ImplantOverlayChecker
+{
+ public:
+  std::vector<fr::Violation> originals;
+  std::vector<fr::FillerChange> required;
+
+  fr::CheckResult checkPlaceWithOverlay(
+      const fr::OverlayCheckRequest& request) override
+  {
+    ++request_count_;
+    fr::CheckResult result;
+    result.requestId = request.requestId;
+    result.status = fr::CheckStatus::Checked;
+    const bool solved = std::all_of(
+        required.begin(),
+        required.end(),
+        [&](const fr::FillerChange& need) {
+          return std::any_of(
+              request.fillerChanges.begin(),
+              request.fillerChanges.end(),
+              [&](const fr::FillerChange& change) {
+                return change.instanceId == need.instanceId
+                       && change.newMasterId == need.newMasterId;
+              });
+        });
+    if (!solved) {
+      result.violations = originals;
+    }
+    result.isLegal = result.violations.empty();
+    return result;
+  }
+
+  std::vector<fr::CheckResult> checkPlaceWithOverlays(
+      const std::vector<fr::OverlayCheckRequest>& requests) override
+  {
+    ++batch_count_;
+    std::vector<fr::CheckResult> results;
+    results.reserve(requests.size());
+    for (const fr::OverlayCheckRequest& request : requests) {
+      results.push_back(checkPlaceWithOverlay(request));
+    }
+    return results;
+  }
+
+  int requestCount() const { return request_count_; }
+  int batchCount() const { return batch_count_; }
+
+ private:
+  int request_count_ = 0;
+  int batch_count_ = 0;
+};
+
+struct ComplexSearchFixture
+{
+  fr::FakeDesign design;
+  fr::FillerRepairRequest request;
+};
+
+ComplexSearchFixture makeComplexSearchFixture()
+{
+  ComplexSearchFixture fixture;
+  fixture.design = makeLibrary();
+
+  // Vt Type: 1=VT1, 2=VT2 | Widths: {2,4}
+  // cell type: 1=std cell, 0=filler | Format: (vt type,width,cell type)
+  // Rows 0/2: (1,4,0)(1,2,0)(1,2,0)(1,4,1)(1,2,0)(1,2,0)(1,4,0)(1,4,0)
+  // Row 1:    (1,4,0)(1,2,0)(1,2,0)(2,4,1)(1,2,0)(1,2,0)(1,4,0)(1,4,0)
+  // The two required fillers are 102/202 at x=[6,8): both direct participants
+  // and bridges into the anchor boundary. 101/201/104/204 are direct decoys,
+  // while coupled-row fillers enlarge L0 further. All rows cover [0,24).
+  for (fr::RowId row = 0; row < 3; ++row) {
+    const fr::InstanceId base = 100 + row * 100;
+    fixture.design.addRow(row, 0, 24)
+        .place(base + 0, fillerMaster(4, kVt1), row, 0)
+        .place(base + 1, fillerMaster(2, kVt1), row, 4)
+        .place(base + 2, fillerMaster(2, kVt1), row, 6)
+        .place(base + 3,
+               cellMaster(row == 1 ? kVt2 : kVt1),
+               row,
+               8)
+        .place(base + 4, fillerMaster(2, kVt1), row, 12)
+        .place(base + 5, fillerMaster(2, kVt1), row, 14)
+        .place(base + 6, fillerMaster(4, kVt1), row, 16)
+        .place(base + 7, fillerMaster(4, kVt1), row, 20);
+  }
+
+  auto participant = [&](fr::InstanceId id) {
+    const fr::PlacedInstance* instance = fixture.design.instance(id);
+    fr::ViolationParticipant value;
+    value.instanceId = id;
+    value.masterId = instance->masterId;
+    value.rowId = instance->rowId;
+    value.xRange = fr::instanceSpan(fixture.design, *instance);
+    value.isFiller = true;
+    return value;
+  };
+
+  fr::Violation left = makeViolation(
+      31,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::InterRow,
+      {0, 1},
+      {4, 8});
+  left.requiredValue = 2;
+  left.participants = {
+      participant(101), participant(201), participant(102), participant(202)};
+
+  fr::Violation right = makeViolation(
+      32,
+      fr::ViolationKind::MinSpacing,
+      fr::ViolationRelation::InterRow,
+      {1, 2},
+      {12, 16});
+  right.requiredValue = 2;
+  right.participants = {participant(104), participant(204)};
+
+  fixture.request.targetPlace = anchorPlace(fixture.design, 203);
+  fixture.request.violations = {left, right};
+  return fixture;
+}
+
+void testEngineComplexRankedPairFast()
+{
+  ComplexSearchFixture fixture = makeComplexSearchFixture();
+  RequiredChangesChecker checker;
+  checker.originals = fixture.request.violations;
+  checker.required = {{102, fillerMaster(2, kVt2)},
+                      {202, fillerMaster(2, kVt2)}};
+  fr::FakeCandidateProvider provider(fixture.design);
+  fr::RepairConfig config;
+  config.batchSize = 4;
+  config.checkerCallBudgetPerWindow = 128;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(
+      fixture.design, checker, provider, config);
+
+  const fr::FillerRepairResult result = engine.repair(fixture.request);
+  CHECK(result.hasSolution);
+  CHECK_EQ(result.changes.size(), 2u);
+  if (result.changes.size() == 2) {
+    CHECK_EQ(result.changes[0].instanceId, 102);
+    CHECK_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt2));
+    CHECK_EQ(result.changes[1].instanceId, 202);
+    CHECK_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt2));
+  }
+  // The correct fillers are the two highest-ranked direct participants and
+  // VT2 is the anchor-follow first option. Even with many decoys, the engine
+  // reaches the first size-2 assignment without approaching the 128-call cap.
+  CHECK(checker.requestCount() <= 21);
+  CHECK(checker.batchCount() <= 6);
+
+  // Reordering the incoming snapshot must not change success, solution, or
+  // the deterministic checker-call transcript.
+  std::reverse(fixture.request.violations.begin(),
+               fixture.request.violations.end());
+  RequiredChangesChecker checkerAgain;
+  checkerAgain.originals = fixture.request.violations;
+  checkerAgain.required = checker.required;
+  fr::FillerRepairEngine engineAgain(
+      fixture.design, checkerAgain, provider, config);
+  const fr::FillerRepairResult again = engineAgain.repair(fixture.request);
+  CHECK(again.hasSolution);
+  CHECK_EQ(again.changes.size(), result.changes.size());
+  if (again.changes.size() == result.changes.size()) {
+    for (size_t index = 0; index < result.changes.size(); ++index) {
+      CHECK_EQ(again.changes[index].instanceId,
+               result.changes[index].instanceId);
+      CHECK_EQ(again.changes[index].newMasterId,
+               result.changes[index].newMasterId);
+    }
+  }
+  CHECK_EQ(checkerAgain.requestCount(), checker.requestCount());
+  CHECK_EQ(checkerAgain.batchCount(), checker.batchCount());
+}
+
+void testEngineComplexThirdVtStillSucceeds()
+{
+  ComplexSearchFixture fixture = makeComplexSearchFixture();
+  RequiredChangesChecker checker;
+  checker.originals = fixture.request.violations;
+  // Both fillers require the domain-tail third VT. This is deliberately a
+  // harder solution than anchor-follow and proves demotion does not prune it.
+  checker.required = {{102, fillerMaster(2, kVt3)},
+                      {202, fillerMaster(2, kVt3)}};
+  fr::FakeCandidateProvider provider(fixture.design);
+  fr::RepairConfig config;
+  config.batchSize = 4;
+  config.checkerCallBudgetPerWindow = 128;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(
+      fixture.design, checker, provider, config);
+
+  const fr::FillerRepairResult result = engine.repair(fixture.request);
+  CHECK(result.hasSolution);
+  CHECK_EQ(result.changes.size(), 2u);
+  if (result.changes.size() == 2) {
+    CHECK_EQ(result.changes[0].instanceId, 102);
+    CHECK_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt3));
+    CHECK_EQ(result.changes[1].instanceId, 202);
+    CHECK_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt3));
+  }
+  CHECK(checker.requestCount() <= 21);
+  CHECK(checker.batchCount() <= 7);
+}
+
 // Unrelated pre-existing violation inside the guard halo must not block
 // acceptance (spec 6.8 rule 5). Far VT3 inter-row MW at x=[2,3) exists in
 // baseline and in every overlay result; the initial snapshot (target-local)
@@ -3374,6 +3582,9 @@ int main(int argc, char** argv)
        testEnumerationFillerDomainNotCrowdedOut},
       {"engine_solves_single_swap", testEngineSolvesSingleSwap},
       {"engine_solves_pair_non_monotone", testEngineSolvesPairNonMonotone},
+      {"engine_complex_ranked_pair_fast", testEngineComplexRankedPairFast},
+      {"engine_complex_third_vt_still_succeeds",
+       testEngineComplexThirdVtStillSucceeds},
       {"engine_ignores_unrelated_halo_violation",
        testEngineIgnoresUnrelatedHaloViolation},
       {"engine_no_solution_definitive", testEngineNoSolutionDefinitive},

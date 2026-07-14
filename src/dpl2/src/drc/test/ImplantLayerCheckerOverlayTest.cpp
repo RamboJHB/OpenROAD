@@ -872,6 +872,98 @@ TEST(ImplantCheckerOverlayTest, ListReportsResidualWithoutTarget)
   ASSERT_EQ(again[0].violations.size(), results[0].violations.size());
 }
 
+// Exercise the production checker with a planner-sized heterogeneous batch.
+// The four-candidate cycle mixes a clean repair, an unchanged residual, a
+// repair that creates a distant violation, and a malformed overlay. Repeating
+// it 16 times catches candidate-state leakage and pins deterministic ordering
+// and hashes across successive batch calls.
+TEST(ImplantCheckerOverlayTest, ComplexMixedBatchDeterministic)
+{
+  SCOPED_TRACE(denseOverlaySchematic());
+  ImplantLayerChecker checker(nullptr);
+  EXPECT_TRUE(checker.initialize(input()));
+
+  const CheckRequest target = request(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const InstanceId repairFiller = instId(INTRA_WIDTH_ROW, 11);
+  const InstanceId distantFiller
+      = instId(NEW_INTRA_WIDTH_ROW, NEW_INTRA_WIDTH_COL + 1);
+  const Rect mixedGuard = makeRect(6 * SITE_WIDTH,
+                                   0,
+                                   106 * SITE_WIDTH,
+                                   ROW_HEIGHT - 1);
+
+  std::vector<std::vector<FillerChange>> candidates;
+  candidates.reserve(64);
+  for (int cycle = 0; cycle < 16; ++cycle) {
+    candidates.push_back({FillerChange{repairFiller, F1_FILL_MASTER}});
+    candidates.push_back({FillerChange{repairFiller, F2_FILL_MASTER}});
+    candidates.push_back({FillerChange{repairFiller, F1_FILL_MASTER},
+                          FillerChange{distantFiller, F2_FILL_MASTER}});
+    candidates.push_back({FillerChange{repairFiller, F1_FILL_MASTER},
+                          FillerChange{repairFiller, F2_FILL_MASTER}});
+  }
+
+  const auto results
+      = checker.checkPlaceWithOverlays(target, mixedGuard, candidates);
+  ASSERT_EQ(results.size(), candidates.size());
+  for (size_t index = 0; index < results.size(); index += 4) {
+    EXPECT_TRUE(results[index].isLegal);
+    EXPECT_TRUE(results[index].violations.empty());
+    EXPECT_TRUE(results[index].diagnostics.empty());
+
+    EXPECT_FALSE(results[index + 1].isLegal);
+    EXPECT_TRUE(hasViolation(results[index + 1],
+                             F1_WIDTH_RULE,
+                             Relationship::IntraRow,
+                             {target.instanceId}));
+
+    EXPECT_FALSE(results[index + 2].isLegal);
+    EXPECT_FALSE(hasViolation(results[index + 2],
+                              F1_WIDTH_RULE,
+                              Relationship::IntraRow,
+                              {target.instanceId}));
+    EXPECT_TRUE(hasViolation(results[index + 2],
+                             F1_WIDTH_RULE,
+                             Relationship::IntraRow,
+                             {instId(NEW_INTRA_WIDTH_ROW,
+                                     NEW_INTRA_WIDTH_COL)}));
+
+    EXPECT_FALSE(results[index + 3].isLegal);
+    EXPECT_TRUE(
+        hasDiagnostic(results[index + 3], "duplicate_filler_change"));
+  }
+
+  const auto again
+      = checker.checkPlaceWithOverlays(target, mixedGuard, candidates);
+  ASSERT_EQ(again.size(), results.size());
+  for (size_t resultIndex = 0; resultIndex < results.size(); ++resultIndex) {
+    const CheckResult& lhs = results[resultIndex];
+    const CheckResult& rhs = again[resultIndex];
+    EXPECT_TRUE(lhs.isLegal == rhs.isLegal);
+    ASSERT_EQ(lhs.violations.size(), rhs.violations.size());
+    for (size_t violationIndex = 0;
+         violationIndex < lhs.violations.size();
+         ++violationIndex) {
+      const Violation& left = lhs.violations[violationIndex];
+      const Violation& right = rhs.violations[violationIndex];
+      EXPECT_TRUE(left.ruleId == right.ruleId);
+      EXPECT_TRUE(left.relationship == right.relationship);
+      EXPECT_TRUE(left.instances == right.instances);
+      EXPECT_TRUE(left.rowIds == right.rowIds);
+      EXPECT_TRUE(left.hash == right.hash);
+    }
+    ASSERT_EQ(lhs.diagnostics.size(), rhs.diagnostics.size());
+    for (size_t diagnosticIndex = 0;
+         diagnosticIndex < lhs.diagnostics.size();
+         ++diagnosticIndex) {
+      EXPECT_TRUE(lhs.diagnostics[diagnosticIndex].status
+                  == rhs.diagnostics[diagnosticIndex].status);
+      EXPECT_TRUE(lhs.diagnostics[diagnosticIndex].message
+                  == rhs.diagnostics[diagnosticIndex].message);
+    }
+  }
+}
+
 }  // namespace
 }  // namespace ipl
 }  // namespace dpl2

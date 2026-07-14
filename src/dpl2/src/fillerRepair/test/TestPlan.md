@@ -3,7 +3,7 @@
 > 写给负责测试拓展的 AI。真实 checker core 已有独立 harness(见下),但尚未通过
 > adapter 接入 engine;等待对接期间继续把纯 planner 各
 > 子模块(PreCheck / Signature / Window / SwapGenerator / Ranker / SubsetSearch /
-> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 79 个 planner 测试全绿
+> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 81 个 planner 测试全绿
 > (`test/run_tests.sh`,`-Wall -Wextra -Werror`;ASan 同样全绿)。
 > **进度(2026-07-13)**:P0、可由当前接口表达的 P1、P2 五项不变量均完成。
 > P1 仅余 `ranker_majority_per_band`,它受 `MasterInfo` 只有单 `vt` 的数据模型
@@ -15,7 +15,7 @@
 > 直接编译生产 `ImplantLayerChecker.cpp`,仅以 `DPL2_FAKE_UDM` 跳过自动 UDM
 > extraction,4 个 dense overlay 用例(width/spacing × intra/inter-row)加
 > raw/baseline/rowIds、planner/checker 类型共存、invalid batch 隔离、
-> row/hash/guard 回归,共 8 个全绿;
+> row/hash/guard 回归、64-candidate 混合批确定性,共 10 个全绿;
 > `SANITIZE=address ./run_tests.sh` 也全绿。checker 与 engine 尚未做 TODO 12 adapter。
 >
 > 先读:`src/dpl2/AGENTS.md`(项目记忆与红线)→ spec §0/§6/§10
@@ -41,7 +41,7 @@
    (拆分时保持单二进制、单注册表,run_tests.sh 一并更新)。
 7. 定期跑 ASan 版本(见 §5 命令);新测试合入前至少跑一次。
 
-## 1. 现有覆盖(planner 79 个 + checker 8 个,勿重复)
+## 1. 现有覆盖(planner 81 个 + checker 10 个,勿重复)
 
 - Swap 构造/校验、canonicalKey、wire 转换(3)
 - PreCheck:全覆盖 OK、gap、overlap/offgrid/illegal、engine fatal 短路、多行确定性、
@@ -58,7 +58,8 @@
   domain 内序(filler-domain)(3);
   枚举顺序/完备性(1);#9 回归 filler cap 不挤出(1)
 - Engine E2E/不变量:原有 9 项 + batch-size 不变、全文确定性、guard-only 不编辑、
-  预算上限、unfixable hint 仍可由 L1 解(14)
+  预算上限、unfixable hint 仍可由 L1 解;复杂 3 行/8-domain/桥接干扰场景验证
+  高优先 VT pair 与 domain-tail 第三 VT pair 均在 21 次 checker call 内成功(16)
 - Gate:cache 单次评估、delta 分类分支(2)
 - V2.1 批 1 回归:unexplained illegal、baseline mismatch、multiset、
   per-violation ruleDistance、definitive-last-window(5)
@@ -68,8 +69,9 @@
 - 真实 `ImplantLayerChecker` core:8×200 dense layout 上 width/spacing ×
   intra/inter-row;每组覆盖 clean、original 残留、新 violation、无关 baseline
   过滤(4);raw API 保留无关 baseline 并携带 rowIds(1);planner/checker 类型同 TU
-  共存、invalid batch 隔离、同 x 不同行 hash + guard 裁剪(3)。独立 harness,
-  不计入上述 planner 79 个。
+  共存、invalid batch 隔离、同 x 不同行 hash + guard 裁剪(3);64-candidate
+  clean/residual/new/invalid 混合批重复执行后 violation 顺序/hash/诊断确定(1)。
+  独立 harness,不计入上述 planner 81 个。
 
 ## 2. 待补测试(按优先级;名字用建议的 case 名)
 
@@ -156,6 +158,11 @@
 - `engine_unfixable_hint_but_solved`:ring 内无 filler、但 L1 能拉到可修
   filler 且 oracle 判 clean → **hint Warning 存在且 hasSolution=true**
   (V2.1 #6 降级的正向收益)。✅
+- `engine_complex_ranked_pair_fast`:3 行、8 个 filler domain、两条跨行 violation
+  与 direct/bridge/coupled decoy;首选 VT pair 在 21 次调用内成功,反转 snapshot
+  顺序后解、调用数和 batch 数不变。✅
+- `engine_complex_third_vt_still_succeeds`:同一 127-candidate 搜索空间要求 domain-tail
+  第三 VT pair,仍在 21 次调用内成功,验证排序降级不会剪枝。✅
 - (可选)固定 seed 的随机小布局 smoke:生成 5-10 个随机 3 行布局,断言
   上述不变量(不断言具体解);seed 固定写死。
 
@@ -166,6 +173,8 @@
 - `Violation.rowIds/hash/isInGuard`:同 x 不同行 hash 不同,guard 能按行裁剪。✅
 - invalid overlay batch 隔离:duplicate/non-filler/unknown/footprint mismatch
   只污染自己的 candidate。✅
+- `ComplexMixedBatchDeterministic`:生产 checker 一次处理 64 个混合候选并重复整批,
+  clean/residual/new/invalid 分类及 violation 顺序/rowIds/hash/diagnostic 完全确定。✅
 - planner/checker 类型可在同一 adapter TU 共存。✅
 - 真 UDM extraction + adapter E2E 等 TODO 12;当前 fake-UDM harness 只替代 DB
   边界,不替代 checker core。
@@ -192,10 +201,10 @@ cd src/dpl2/src/fillerRepair/test
 ./run_tests.sh                     # 全量,-Werror
 ./run_tests.sh <name-substr>       # 过滤
 FR_VERBOSE=1 ./run_tests.sh <case> # 带 [fr] 决策链日志
-SANITIZE=address ./run_tests.sh    # 79 cases + ASan
+SANITIZE=address ./run_tests.sh    # 81 cases + ASan
 
 # 真实 checker core(fake UDM boundary,生产 checker 源码原样编译)
 cd src/dpl2/src/drc/test
-./run_tests.sh                    # 8 cases
-SANITIZE=address ./run_tests.sh   # 8 cases + ASan
+./run_tests.sh                    # 10 cases
+SANITIZE=address ./run_tests.sh   # 10 cases + ASan
 ```

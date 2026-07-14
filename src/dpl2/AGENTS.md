@@ -33,13 +33,13 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 - 词汇红线:本阶段只有 **swap**,下一阶段才是 **rewrite**(merge/split)。代码中
   不允许出现 Move / FillerRewrite 抽象(它们是论文概念,用户明确否决过,见 §4-D3)。
 
-## 2. 现状(2026-07-13,分支 `claude/wizardly-carson-secahu`)
+## 2. 现状(2026-07-15,分支 `claude/wizardly-carson-secahu`)
 
 | 部分 | 状态 |
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
-| 测试 | planner 79 个,`-Werror` + ASan 全绿;真实 checker core 9 个(`src/drc/test/run_tests.sh`,含 raw-vs-blocking 契约测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
+| 测试 | planner 81 个,`-Werror` + ASan 全绿;真实 checker core 10 个(`src/drc/test/run_tests.sh`,含 list-only residual 与 64-candidate 混合批测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
 | checker(`src/drc/`) | **终版契约已落地(D21)**:RD 2026-07-13 交付(UDM extraction 内联)+ 用户钉死 list-only——`checkPlaceWithOverlays` 输出 guard 内全量违例,无 blocking 过滤、无查重(重复允许但确定性);scan 正确性修正与 `DPL2_FAKE_UDM` 边界重新套用。wire:顺序关联、无 status、batch=单 target+N 变更。**adapter 前 engine 仍只接 fake;infra 版 planner 迁移在即** |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 
@@ -344,10 +344,22 @@ fake-UDM 编译边界;fixture 只保留 F1 规则(F2/F3 的职责是切断 F1 ru
 infra 的版本,无视 UDM 依赖**——adapter 的对手方从 UDM/checker 内表变成 infra
 API,D5/D17 的类型自持决策正好为此铺路。
 
+### D22. 复杂搜索性能/成功率回归(2026-07-15)
+**目的**:在不修改 repair engine 与 checker 语义的前提下,用确定性调用次数同时
+钉住搜索速度和较深 domain 解的成功率;不使用受机器负载影响的 wall-clock 阈值。
+**planner fixture**:3 行 100% 覆盖、8 个 editable filler domain、两条跨行
+violation,混入 direct/bridge/coupled decoy,完整候选计划 127 个。最高排序 VT pair
+在候选 #16 被发现,含 baseline/final check 共 21 次 checker call;反转 snapshot
+顺序后 solution/call/batch 完全一致。要求 domain-tail 第三 VT pair 时在候选 #19
+发现,总调用仍为 21,证明降序但不剪枝。
+**生产 checker fixture**:8×200 dense layout 一批 64 个候选,循环混合 clean、
+residual、new violation、invalid duplicate;连续执行两批后分类、violation 顺序、
+rowIds/hash 与 diagnostics 完全一致。当前 planner 81/81、checker 10/10。
+
 ## 5. 实现要点与陷阱(接手前必读)
 
 - **对接 blocker(D17/D18)**:checker core 已在 fake-UDM boundary 下直编译并
-  8/8 + ASan 全绿(raw API + rowIds + guard scan 修复见
+  10/10 + ASan 全绿(list-only API + rowIds + guard scan + mixed batch 见
   `drc/CHECKER_REPAIR_CONTRACT.md`),但**真实 UDM extraction 与 adapter 完成**前,
   engine 仍只接 `fake/FakeImplantChecker`。对接时用 `checkPlaceWithOverlaysRaw`,不用
   blocking 形态的 `checkPlaceWithOverlay[s]`。
@@ -401,6 +413,6 @@ API,D5/D17 的类型自持决策正好为此铺路。
 - commit:小步单主题,`fillerRepair:` / `drc:` / `docs:` 前缀,message 讲清因果。
 - 语义改动顺序:spec → 代码+测试 → HandOff/README 状态 → 本文决策日志。
 - 每次改动 `./run_tests.sh` 必须全绿;合入前跑一次 ASan。
-- fake 与既有 79+8 测试不许删、不许改语义(测试暴露 bug 走 TestPlan §4 流程)。
+- fake 与既有 81+10 测试不许删、不许改语义(测试暴露 bug 走 TestPlan §4 流程)。
 - 修改 `drc/ImplantLayerChecker.{h,cpp}`/helper 时保留现有代码(删除 → 注释),
   新类型 additive 扩展。
