@@ -40,7 +40,7 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
 | 测试 | planner 79 个,`-Werror` + ASan 全绿;真实 checker core 9 个(`src/drc/test/run_tests.sh`,含 raw-vs-blocking 契约测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
-| checker(`src/drc/`) | overlay API 真实现;本轮不改 checker 源码,只扩 standalone harness:类型共存、invalid batch 隔离、row/hash/guard 已覆盖。wire 仍是顺序关联、无 status、batch=单 target+N 变更。**真实 UDM extraction/adapter 前 engine 仍只接 fake** |
+| checker(`src/drc/`) | **终版契约已落地(D21)**:RD 2026-07-13 交付(UDM extraction 内联)+ 用户钉死 list-only——`checkPlaceWithOverlays` 输出 guard 内全量违例,无 blocking 过滤、无查重(重复允许但确定性);scan 正确性修正与 `DPL2_FAKE_UDM` 边界重新套用。wire:顺序关联、无 status、batch=单 target+N 变更。**adapter 前 engine 仍只接 fake;infra 版 planner 迁移在即** |
 | 对接(adapter/CMake,TODO 12) | 未做 |
 
 关键 commit(倒序):#9 filler-domain(见 git log 最新)→ `d293265` AGENTS/TestPlan
@@ -325,6 +325,25 @@ contract 文档声称"scanViolations 折叠重复"超前于代码——修复后
 **教训**:声称的行为要有精确计数的测试钉住(`.empty()`/presence 断言抓不住
 重复和幽灵);guard 类空间裁剪永远要问"跨边界的几何被切断后会不会说谎"。
 
+### D21. 终版 checker 契约:list-only、无过滤、无查重(2026-07-13 用户钉死)
+**事实**:RD 交付新版 checker(UDM extraction 内联,暂为 final 版,回到 blocking
+形态);用户随即裁定:**checker 只输出 violation list,不做查重**。
+**落地**:`checkPlaceWithOverlays` 每候选返回 guard 内全量违例;blocking 过滤
+(touchesInstance/containsViolation)整体删除;不做重复折叠(D20-1 的
+`sortAndDedupViolations` 不再引入——**注意与 D20 的差异**:那时的裁定是"checker
+去重",用户现在明确"不查重",以用户为准)。raw/blocking 二分终结:主 API 即
+raw。**重复契约**:同一物理违例可出现多条(band/方向),但必须确定性;engine
+的一对一 multiset 匹配容忍一致性重复,**前提 originals 快照与 baseline 同源**
+(集成时必须保证快照也来自这个 API)。
+**连带**:重新套用 D20 的 scan 正确性修正(committed 不标 candidate、不按
+provenance 切 run、target 不按 candidate 过滤、快照 padded-guard 纳入)与
+fake-UDM 编译边界;fixture 只保留 F1 规则(F2/F3 的职责是切断 F1 run,它们的
+规则会暴露 fixture 故意留下的单 site 残条,而所有断言只针对 F1);dense 测试
+改用每窗口窄 guard(list-only 下全设计 guard 会正确地带出所有别处违例)。
+**用户预告的方向**:infrastructure 即将更新,planner/engine 将迁移到**基于
+infra 的版本,无视 UDM 依赖**——adapter 的对手方从 UDM/checker 内表变成 infra
+API,D5/D17 的类型自持决策正好为此铺路。
+
 ## 5. 实现要点与陷阱(接手前必读)
 
 - **对接 blocker(D17/D18)**:checker core 已在 fake-UDM boundary 下直编译并
@@ -362,11 +381,17 @@ contract 文档声称"scanViolations 折叠重复"超前于代码——修复后
 
 ## 7. 下一步(优先级序)
 
-1. **TODO 12 对接**(checker overlay core 已可测,等真实 UDM extraction/RD确认):adapter 层
-   (`fillerRepair/adapter/`,可含 UDM)+ CMake + 用真 checker 重放 spec §10。
+0. **等 infrastructure 更新(用户预告)**:planner/engine 将迁移到**基于 infra
+   的版本、无视 UDM 依赖**。adapter 的对手方从 UDM/checker 内表变为 infra
+   API——PlacementView/candidate provider/oracle 三个抽象接口不变,换后端实现。
+   infra 落地前不要预写 UDM 版 adapter(会白做)。
+1. **TODO 12 对接**(以 infra 版为准):adapter 层 + 构建集成 + 用真 checker
+   重放 spec §10;checker 契约已终版(D21,list-only),engine 侧对接改动:
+   协议校验 size+order、参与者从 `violation.instances` 合成、快照与 baseline
+   同源(重复容忍的前提)。
 2. **#12 precheck 上收**:随 adapter 一起(infra 按 design revision 缓存
    full-utility;planner 留 O(window) 防御复核)。
-3. **补 per-band/bridge-MW/真实 UDM E2E 测试**:只在真实元数据/API 可用后做。
+3. **补 per-band/bridge-MW/真实 E2E 测试**:只在真实元数据/API 可用后做。
 4. **问用户拍板 D12 输出格式**,再动 `FillerRepairResult`。
 
 ## 8. 工作方式(硬约束)

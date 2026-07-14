@@ -374,12 +374,12 @@ ImplantInput input()
       ImplantLayer{F1_LAYER, "F1", Family::VTL, Polarity::N},
       ImplantLayer{F2_LAYER, "F2", Family::VTH, Polarity::N},
       ImplantLayer{F3_LAYER, "F3", Family::VTUL, Polarity::N}};
+  // Rules exist for F1 only: every scenario asserts F1 findings, and F2/F3
+  // exist purely to break F1 runs. Under the list-only contract (no old
+  // filtering) F2/F3 rules would surface the single-site F2/F3 slivers the
+  // seeded windows deliberately leave behind, polluting every result.
   input.rules = {rule(F1_WIDTH_RULE, RuleSource::Width, F1_LAYER),
-                 rule(102, RuleSource::Width, F2_LAYER),
-                 rule(103, RuleSource::Width, F3_LAYER),
-                 rule(F1_SPACING_RULE, RuleSource::Spacing, F1_LAYER),
-                 rule(202, RuleSource::Spacing, F2_LAYER),
-                 rule(203, RuleSource::Spacing, F3_LAYER)};
+                 rule(F1_SPACING_RULE, RuleSource::Spacing, F1_LAYER)};
   input.masters = {master(C1_MASTER, 1, F1_LAYER, false),
                    master(C2_MASTER, 3, F2_LAYER, false),
                    master(C3_MASTER, 5, F3_LAYER, false),
@@ -452,8 +452,13 @@ void expectOldUnrelatedFiltered(const CheckResult& result)
                             {instId(OLD_UNRELATED_ROW, OLD_UNRELATED_COL)}));
 }
 
+// Contract (pinned 2026-07-13): the overlay API returns the guard-clipped
+// violation LIST per candidate -- no old-violation filtering, no dedup.
+// Tests therefore pass per-window guards: with a design-wide guard every
+// committed violation elsewhere would (correctly) appear in every result.
 std::vector<CheckResult> check(
     const CheckRequest& request,
+    const Rect& guardRect,
     const std::vector<std::vector<FillerChange>>& changes)
 {
   SCOPED_TRACE(denseOverlaySchematic());
@@ -461,7 +466,7 @@ std::vector<CheckResult> check(
   EXPECT_TRUE(checker.initialize(input()));
   EXPECT_TRUE(checker.initDiagnostics().empty());
   std::vector<CheckResult> results
-      = checker.checkPlaceWithOverlays(request, guard(), changes);
+      = checker.checkPlaceWithOverlays(request, guardRect, changes);
   if (std::getenv("DPL2_CHECKER_TEST_DEBUG") != nullptr) {
     for (size_t index = 0; index < results.size(); ++index) {
       std::cerr << "candidate " << index << " legal=" << results[index].isLegal
@@ -481,8 +486,14 @@ std::vector<CheckResult> check(
 TEST(ImplantCheckerOverlayTest, DenseCaseIntraRowWidth)
 {
   const CheckRequest target = request(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  // Row 0 only: covers this window and the new-violation window at 98..103
+  // while excluding the seeded windows on rows 1..5 and the old unrelated
+  // violation on row 7.
+  const Rect rowGuard
+      = makeRect(0, 0, SITE_COUNT * SITE_WIDTH, ROW_HEIGHT - 1);
   const std::vector<CheckResult> results = check(
       target,
+      rowGuard,
       {{FillerChange{instId(INTRA_WIDTH_ROW, 11), F1_FILL_MASTER}},
        {FillerChange{instId(INTRA_WIDTH_ROW, 11), F2_FILL_MASTER}},
        {FillerChange{instId(INTRA_WIDTH_ROW, 11), F1_FILL_MASTER},
@@ -514,8 +525,13 @@ TEST(ImplantCheckerOverlayTest, DenseCaseInterRowWidth)
       = request(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL);
   const InstanceId neighbor
       = instId(INTER_WIDTH_NEIGHBOR_ROW, INTER_WIDTH_COL);
+  // Rows 0..2, x past the row-0 width window (committed-violated) up to the
+  // new-violation window at 120..121.
+  const Rect windowGuard = makeRect(
+      28 * SITE_WIDTH, 0, 130 * SITE_WIDTH, 3 * ROW_HEIGHT - 1);
   const std::vector<CheckResult> results = check(
       target,
+      windowGuard,
       {{FillerChange{instId(INTER_WIDTH_NEIGHBOR_ROW, 31), F1_FILL_MASTER}},
        {FillerChange{instId(INTER_WIDTH_NEIGHBOR_ROW, 31), F2_FILL_MASTER}},
        {FillerChange{instId(INTER_WIDTH_NEIGHBOR_ROW, 31), F1_FILL_MASTER},
@@ -549,8 +565,13 @@ TEST(ImplantCheckerOverlayTest, DenseCaseIntraRowSpacing)
   const CheckRequest target = request(INTRA_SPACING_ROW, INTRA_SPACING_COL);
   const InstanceId neighbor
       = instId(INTRA_SPACING_ROW, INTRA_SPACING_COL + 3);
+  // Rows 0..3, x past the row-0 width window; covers this window (48..56)
+  // and the new-violation window at 140..145.
+  const Rect windowGuard = makeRect(
+      46 * SITE_WIDTH, 0, 148 * SITE_WIDTH, 4 * ROW_HEIGHT - 1);
   const std::vector<CheckResult> results = check(
       target,
+      windowGuard,
       {{FillerChange{instId(INTRA_SPACING_ROW, 52), F1_FILL_MASTER}},
        {FillerChange{instId(INTRA_SPACING_ROW, 52), F2_FILL_MASTER}},
        {FillerChange{instId(INTRA_SPACING_ROW, 52), F1_FILL_MASTER},
@@ -585,8 +606,13 @@ TEST(ImplantCheckerOverlayTest, DenseCaseInterRowSpacing)
       = request(INTER_SPACING_TARGET_ROW, INTER_SPACING_COL);
   const InstanceId neighbor
       = instId(INTER_SPACING_NEIGHBOR_ROW, INTER_SPACING_COL + 3);
+  // Rows 2..5, x past the row-2/3 seeded windows; covers this window
+  // (70..75) and the new-violation window at 160..165.
+  const Rect windowGuard = makeRect(
+      68 * SITE_WIDTH, 2 * ROW_HEIGHT, 167 * SITE_WIDTH, 6 * ROW_HEIGHT - 1);
   const std::vector<CheckResult> results = check(
       target,
+      windowGuard,
       {{FillerChange{instId(INTER_SPACING_NEIGHBOR_ROW, 72), F1_FILL_MASTER}},
        {FillerChange{instId(INTER_SPACING_NEIGHBOR_ROW, 72), F2_FILL_MASTER}},
        {FillerChange{instId(INTER_SPACING_NEIGHBOR_ROW, 72), F1_FILL_MASTER},
@@ -615,14 +641,17 @@ TEST(ImplantCheckerOverlayTest, DenseCaseInterRowSpacing)
   expectOldUnrelatedFiltered(results[0]);
 }
 
-TEST(ImplantCheckerOverlayTest, RawKeepsUnrelatedBaselineWithRows)
+// With a design-wide guard the list contains every violation in the guard,
+// including pre-existing ones unrelated to the overlay -- classification is
+// the repair engine's job, not the checker's.
+TEST(ImplantCheckerOverlayTest, ListKeepsUnrelatedBaselineWithRows)
 {
   SCOPED_TRACE(denseOverlaySchematic());
   ImplantLayerChecker checker(nullptr);
   EXPECT_TRUE(checker.initialize(input()));
 
   const CheckRequest target = request(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
-  const std::vector<CheckResult> results = checker.checkPlaceWithOverlaysRaw(
+  const std::vector<CheckResult> results = checker.checkPlaceWithOverlays(
       target,
       guard(),
       {{FillerChange{instId(INTRA_WIDTH_ROW, 11), F1_FILL_MASTER}}});
@@ -681,9 +710,13 @@ TEST(ImplantCheckerOverlayTest, InvalidOverlayBatchIsolation)
   EXPECT_TRUE(checker.initialize(data));
   const CheckRequest target = request(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   const InstanceId validFiller = instId(INTRA_WIDTH_ROW, 11);
+  // Narrow guard around the window so the valid candidate reads clean under
+  // the list-only contract.
+  const Rect windowGuard
+      = makeRect(6 * SITE_WIDTH, 0, 15 * SITE_WIDTH, ROW_HEIGHT - 1);
   const std::vector<CheckResult> results = checker.checkPlaceWithOverlays(
       target,
-      guard(),
+      windowGuard,
       {{FillerChange{validFiller, F1_FILL_MASTER}},
        {FillerChange{validFiller, F1_FILL_MASTER},
         FillerChange{validFiller, F2_FILL_MASTER}},
@@ -725,7 +758,7 @@ TEST(ImplantCheckerOverlayTest, RowHashAndGuardClipping)
   ImplantLayerChecker checker(nullptr);
   EXPECT_TRUE(checker.initialize(data));
   const CheckRequest target = request(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
-  const auto full = checker.checkPlaceWithOverlaysRaw(target, guard(), {{}});
+  const auto full = checker.checkPlaceWithOverlays(target, guard(), {{}});
   ASSERT_EQ(full.size(), 1u);
 
   const auto findAtRow = [](const CheckResult& result,
@@ -762,19 +795,20 @@ TEST(ImplantCheckerOverlayTest, RowHashAndGuardClipping)
                                   SITE_COUNT * SITE_WIDTH,
                                   7 * ROW_HEIGHT - 1);
   const auto clipped
-      = checker.checkPlaceWithOverlaysRaw(target, row6Guard, {{}});
+      = checker.checkPlaceWithOverlays(target, row6Guard, {{}});
   ASSERT_EQ(clipped.size(), 1u);
   EXPECT_TRUE(findAtRow(clipped[0], 6) != nullptr);
   EXPECT_TRUE(findAtRow(clipped[0], 7) == nullptr);
 }
 
-// The reason checkPlaceWithOverlaysRaw exists (CHECKER_REPAIR_CONTRACT
-// change 1): a residual violation whose merged run no longer includes the
-// target instance is invisible to the blocking filter, so the blocking API
-// false-accepts a candidate that fixes nothing. The raw API must keep
-// reporting it -- exactly once (direction/band duplicates collapse) -- until
-// the filler is actually fixed.
-TEST(ImplantCheckerOverlayTest, BlockingHidesResidualButRawReports)
+// The contract case that pinned list-only reporting: a residual violation
+// whose merged run no longer includes the target instance (the bridge case)
+// was invisible to the removed old-violation blocking filter, which
+// false-accepted candidates that fixed nothing. The list-only API must keep
+// reporting it until the filler is actually fixed. Duplicates (per band /
+// direction) are allowed by the contract but must be deterministic; every
+// reported finding here must BE the residual.
+TEST(ImplantCheckerOverlayTest, ListReportsResidualWithoutTarget)
 {
   SCOPED_TRACE(denseOverlaySchematic());
   ImplantLayerChecker checker(nullptr);
@@ -793,27 +827,18 @@ TEST(ImplantCheckerOverlayTest, BlockingHidesResidualButRawReports)
                                     38 * SITE_WIDTH,
                                     (BRIDGE_ROW + 1) * ROW_HEIGHT - 1);
   const InstanceId fillerId = instId(BRIDGE_ROW, BRIDGE_FILLER_COL);
+  // The empty change-list doubles as the baseline request in the repair flow.
   const std::vector<std::vector<FillerChange>> candidates
       = {{}, {FillerChange{fillerId, F2_FILL_MASTER}}};
 
-  // Blocking API: the do-nothing candidate reads clean -- the documented
-  // false accept. The repair engine must never consume this form.
-  const auto blocking
+  const auto results
       = checker.checkPlaceWithOverlays(target, bridgeGuard, candidates);
-  ASSERT_EQ(blocking.size(), 2u);
-  EXPECT_TRUE(blocking[0].isLegal);
-  EXPECT_TRUE(blocking[0].violations.empty());
-
-  // Raw API: the residual is reported, exactly once, without the target in
-  // its participants; the actual fix (filler 33 -> F2) is clean.
-  const auto raw
-      = checker.checkPlaceWithOverlaysRaw(target, bridgeGuard, candidates);
   if (std::getenv("DPL2_CHECKER_TEST_DEBUG") != nullptr) {
-    for (size_t index = 0; index < raw.size(); ++index) {
-      std::cerr << "raw candidate " << index
-                << " legal=" << raw[index].isLegal
-                << " violations=" << raw[index].violations.size() << '\n';
-      for (const Violation& violation : raw[index].violations) {
+    for (size_t index = 0; index < results.size(); ++index) {
+      std::cerr << "candidate " << index
+                << " legal=" << results[index].isLegal
+                << " violations=" << results[index].violations.size() << '\n';
+      for (const Violation& violation : results[index].violations) {
         std::cerr << "  " << violation.toString(SITE_WIDTH) << " rows=";
         for (RowId rowId : violation.rowIds) {
           std::cerr << rowId << ',';
@@ -822,17 +847,29 @@ TEST(ImplantCheckerOverlayTest, BlockingHidesResidualButRawReports)
       }
     }
   }
-  ASSERT_EQ(raw.size(), 2u);
-  EXPECT_FALSE(raw[0].isLegal);
-  ASSERT_EQ(raw[0].violations.size(), 1u);
-  const Violation& residual = raw[0].violations[0];
-  EXPECT_TRUE(residual.ruleId == F1_WIDTH_RULE);
-  EXPECT_TRUE(residual.relationship == Relationship::IntraRow);
-  EXPECT_TRUE(residual.instances == std::vector<InstanceId>{fillerId});
-  EXPECT_TRUE(residual.rowIds == std::vector<RowId>{BRIDGE_ROW});
-  EXPECT_TRUE(blocking[1].isLegal);
-  EXPECT_TRUE(raw[1].isLegal);
-  EXPECT_TRUE(raw[1].violations.empty());
+  ASSERT_EQ(results.size(), 2u);
+
+  // Do-nothing candidate: the residual is visible and is the ONLY physical
+  // finding (any duplicate must also be the residual).
+  EXPECT_FALSE(results[0].isLegal);
+  EXPECT_FALSE(results[0].violations.empty());
+  for (const Violation& violation : results[0].violations) {
+    EXPECT_TRUE(violation.ruleId == F1_WIDTH_RULE);
+    EXPECT_TRUE(violation.relationship == Relationship::IntraRow);
+    EXPECT_TRUE(violation.instances == std::vector<InstanceId>{fillerId});
+    EXPECT_TRUE(violation.rowIds == std::vector<RowId>{BRIDGE_ROW});
+  }
+
+  // The actual fix (filler 33 -> F2) is clean.
+  EXPECT_TRUE(results[1].isLegal);
+  EXPECT_TRUE(results[1].violations.empty());
+
+  // Duplication (if any) must be deterministic: the engine's baseline-delta
+  // multiset matching relies on identical multiplicity across calls.
+  const auto again
+      = checker.checkPlaceWithOverlays(target, bridgeGuard, candidates);
+  ASSERT_EQ(again.size(), 2u);
+  ASSERT_EQ(again[0].violations.size(), results[0].violations.size());
 }
 
 }  // namespace

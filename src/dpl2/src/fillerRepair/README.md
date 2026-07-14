@@ -16,20 +16,19 @@ end-to-end against the fakes in `fake/`.
 > calls checker through its own abstract oracle — no cycle) is pinned in spec
 > §3.3.
 >
-> **Checker status (2026-07-12 drop):** the real overlay API landed in
-> `drc/ImplantLayerChecker.{h,cpp}` (helper folded in). Two contract items (a
-> blocking filter that hid residual originals not touching the target, and an
-> unpopulated `Violation.rowIds`) plus one header/impl compile mismatch have
-> been **fixed checker-side** (all `[fillerRepair-fix]`-tagged; see
-> `drc/CHECKER_REPAIR_CONTRACT.md`) — a new `checkPlaceWithOverlaysRaw` and
-> rowIds population. A standalone fake-UDM-boundary harness now compiles the
-> production checker directly; four dense width/spacing × intra/inter-row cases
-> plus type coexistence, invalid-batch isolation, and row/hash/guard regressions
-> pass under `-Werror` and ASan (8 cases total). The
-> same run fixed additional header/cpp drift
-> and guard target/neighbor/merge bugs; see the RD contract document. Pending
-> real UDM extraction and the adapter, the engine stays on the fakes; wire it to the raw API,
-> not the blocking-filter one (spec §5.2.1, AGENTS D17).
+> **Checker status (contract FINAL, 2026-07-13):** the user pinned the overlay
+> contract to **list-only, no filtering, no dedup** — `checkPlaceWithOverlays`
+> returns every guard-clipped violation per candidate (the blocking filter and
+> its helpers are deleted; the raw/blocking split is gone — the one API IS
+> raw). Duplicates (per band/direction) are allowed but deterministic; the
+> engine's one-to-one multiset matching tolerates them as long as the original
+> snapshot and the baseline come from this same API. The 2026-07-13 RD drop
+> carries the inline UDM extraction; the scan-correctness fixes and the
+> `DPL2_FAKE_UDM` boundary are re-applied on top (see
+> `drc/CHECKER_REPAIR_CONTRACT.md`). Standalone harness: 9 cases green under
+> `-Werror` and ASan. Pending the adapter the engine stays on the fakes.
+> **Upcoming:** infrastructure is being updated; the planner/engine will move
+> to an infra-backed version with no UDM dependency (spec §5.2.1, AGENTS D21).
 
 ## Layout
 

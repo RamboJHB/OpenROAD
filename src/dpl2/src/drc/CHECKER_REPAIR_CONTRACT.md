@@ -1,14 +1,30 @@
 # Checker 改动说明 — 供 filler-repair engine 对接(给 checker RD)
 
-对象:`ImplantLayerChecker.{h,cpp}`。背景:filler-repair engine 会消费 overlay
-接口的结果来做 VT 修复(把周围 filler 换型消 implant MW/MS 违例)。审查你交付的
-overlay 实现后,先发现 **2 条契约问题** 会让 repair 得到错误的"干净"判断,外加
-**1 个头/实现不一致的编译问题**;真实 checker harness 又暴露出额外编译漂移与
-guard overlay 扫描错误。均已按最小方式修正,**所有 checker 改动都带
-`[fillerRepair-fix]` 注释标记**,`grep -n "fillerRepair-fix"` 即可全部定位。
+## 终版契约(2026-07-13,用户钉死;应用在 2026-07-13 的 RD 交付上)
 
-这些是**你的文件**,改动请你 review 并接管;有异议随时改回或换实现,只要保住
-下面两条语义即可。engine 侧在这两条落地前继续接 fake checker,不接真 checker。
+**`checkPlaceWithOverlays` 只输出 violation list,不做任何过滤/查重**:
+
+- 每个候选返回 **guard 裁剪后的全量违例列表**。原 blocking 过滤
+  (`touchesInstance` ∪ 非 old,`containsViolation` 按 hash/包含判 old)已
+  **整体删除**(连同这两个 helper)——它会吞掉"未修好但不触及 target"的
+  bridge 残留,对 repair 流是 false accept;old/new 分类是 engine 的职责。
+  baseline = 发一个空变更列表候选。
+- **不做查重**:同一物理违例可出现多条(每 band/方向各一条)。重复必须
+  **确定性**(同输入同 multiplicity);engine 的一对一 multiset 匹配容忍
+  一致性重复。
+- 其余保持 RD 交付形态:顺序关联(无 requestId/status)、invalid 候选 =
+  diagnostics + isLegal=false 且逐候选隔离、`rowIds` 填充、签名 hash。
+- 测试锁定:`src/dpl2/src/drc/test/`,9 个用例(-Werror + ASan),含
+  `ListReportsResidualWithoutTarget`(bridge 残留必须可见 + 重复确定性)。
+- 附带重新套用的三处 scan 正确性修正(guard 语义,见"改动 5"):committed
+  上下文不标 candidate、同层接触 interval 不按 provenance 切分、target 不按
+  candidate 归属过滤,外加快照按"guard + 最大规则半径"外扩纳入。
+- `DPL2_FAKE_UDM` 编译边界重新加上(ctor 的 Session 路径与 `initFromUDM`
+  的 UDM extraction 本体),standalone 测试用 `initialize(ImplantInput)` 注入。
+
+以下为历史改动记录(部分已被终版契约取代:改动 1 的 `checkPlaceWithOverlaysRaw`
+不再作为独立方法存在——**主 API 本身就是 raw/list-only**)。所有 checker 改动
+仍带 `[fillerRepair-fix]` 标记,`grep -n "fillerRepair-fix"` 可全部定位。
 
 ---
 

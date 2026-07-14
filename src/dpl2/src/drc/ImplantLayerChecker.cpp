@@ -319,12 +319,16 @@ return groupId < other.groupId;
 
 ImplantLayerChecker::ImplantLayerChecker(Grid* grid) : DRCChecker(grid)
 {
+// [fillerRepair-fix] Standalone checker tests inject ImplantInput via
+// initialize() and have no live UDM Session.
+#ifndef DPL2_FAKE_UDM
 eUNL::Session& sess = eUNL::Session::getSession();
 eUNL::Design* design = sess.getCurrentDesign();
 if (design) {
 DePlace* dePlace = DePlace::get();
 initFromUDM(*dePlace->getDesMgr());
 }
+#endif
 }
 
 ImplantLayerChecker::~ImplantLayerChecker()
@@ -1579,6 +1583,14 @@ return result;
 }
 
 
+// [fillerRepair-fix] Contract pinned 2026-07-13: the overlay API only
+// reports the guard-clipped violation LIST per candidate. No old-violation
+// filtering (the repair engine owns the baseline-delta classification; the
+// old blocking filter hid residual violations whose run no longer includes
+// the target) and no duplicate collapse (a physical finding may appear once
+// per band/direction; duplication is deterministic, and the engine's
+// one-to-one multiset matching tolerates it). Pass an empty change-list
+// entry to obtain the baseline.
 std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
 const CheckRequest& request,
 const Rect& guardRegion,
@@ -1586,9 +1598,8 @@ const std::vector<std::vector<FillerChange>>& fillerChanges) const
 {
 std::vector<CheckResult> results;
 results.reserve(fillerChanges.size());
-const std::vector<Violation> oldViolations = checkOverlayRegion(request, guardRegion, {}, false).violations;
 for (const std::vector<FillerChange>& changes : fillerChanges) {
-results.push_back(checkPlaceWithOverlay(request, guardRegion, changes, oldViolations));
+results.push_back(checkPlaceWithOverlay(request, guardRegion, changes));
 }
 return results;
 }
@@ -1596,8 +1607,7 @@ return results;
 CheckResult ImplantLayerChecker::checkPlaceWithOverlay(
 const CheckRequest& request,
 const Rect& guardRegion,
-const std::vector<FillerChange>& fillerChanges,
-const std::vector<Violation>& oldViolations) const
+const std::vector<FillerChange>& fillerChanges) const
 {
 CheckResult result;
 result.diagnostics = diagnostics_;
@@ -1617,26 +1627,8 @@ result.diagnostics.insert(result.diagnostics.end(),
 overlay.diagnostics.begin(),
 overlay.diagnostics.end());
 
-std::vector<Violation> blocking;
-for (const Violation& violation : overlay.violations) {
-if (touchesInstance(violation, request.instanceId)) {
-blocking.push_back(violation);
-continue;
-}
-const bool isOld =
-std::any_of(oldViolations.begin(),
-oldViolations.end(),
-[&violation, this](const Violation& oldViolation) {
-return containsViolation(oldViolation, violation);
-});
-if (!isOld) {
-blocking.push_back(violation);
-}
-}
-
-result.violations = std::move(blocking);
+result.violations = overlay.violations;
 result.isLegal = result.violations.empty() &&
-requestDiagnostics.empty() &&
 overlay.diagnostics.empty();
 return result;
 }
@@ -2255,17 +2247,39 @@ const std::vector<FillerChange>& fillerChanges,
 bool useNewFillers,
 const std::set<InstanceId>& excludedInstances) const
 {
+// [fillerRepair-fix] Committed context stays NON-candidate (only the real
+// target/changed fillers are candidates; marking guard context as candidate
+// previously split runs and hid neighbors). Snapshot inclusion uses the
+// guard PADDED by the largest rule radius (+ one row vertically): clipping
+// at the exact edge truncates runs that straddle it, fabricating width
+// stumps and hiding spacing neighbors just outside. Result clipping in
+// checkOverlayRegion still uses the exact guard, so any stump at the
+// PADDED edge -- at least one full radius outside -- is dropped there.
+Dbu margin = siteWidth_;
+for (const Rule& rule : ruleIndex_.rules) {
+margin = std::max(margin, queryRadius(rule));
+}
+const ::Rect paddedGuard(
+UvDist(static_cast<int64_t>(guardRegion.getXL().getStorage() - margin)),
+UvDist(static_cast<int64_t>(guardRegion.getYL().getStorage() - rowHeight_)),
+UvDist(static_cast<int64_t>(guardRegion.getXH().getStorage() + margin)),
+UvDist(static_cast<int64_t>(guardRegion.getYH().getStorage() + rowHeight_)));
+
 std::vector<ScanRect> snapshot;
 for (const auto& [instanceId, instance] : instances_) {
 if (excludedInstances.find(instanceId) != excludedInstances.end()) {
 continue;
 }
 std::vector<ScanRect> rects = scanInst(instance, false);
-for (ScanRect& rect : rects) {
-if (isInGuard(xOf(rect.rect), {rect.rowId}, guardRegion)) {
-rect.isCandidate = true;
-}
-}
+rects.erase(
+std::remove_if(rects.begin(),
+rects.end(),
+[&paddedGuard, this](const ScanRect& rect) {
+return !isInGuard(xOf(rect.rect),
+{rect.rowId},
+paddedGuard);
+}),
+rects.end());
 snapshot.insert(snapshot.end(), rects.begin(), rects.end());
 }
 
@@ -2401,11 +2415,13 @@ std::vector<ScanShape> shapes;
 int nextId = 1;
 for (const ScanRect& rect : sorted) {
 const XInterval x = xOf(rect.rect);
+// [fillerRepair-fix] Candidate and committed intervals on the same layer
+// form ONE physical implant run; provenance must not split touching
+// geometry (containsCandidate is OR metadata below).
 if (shapes.empty() ||
 shapes.back().rowId != rect.rowId ||
 shapes.back().bandSlot != rect.bandSlot ||
 shapes.back().layer != rect.layer ||
-shapes.back().containsCandidate != rect.isCandidate ||
 x.xl > shapes.back().bbox.xh) {
 ScanShape shape;
 shape.shapeId = nextId++;
@@ -2445,7 +2461,11 @@ return outcomes;
 }
 
 for (const ScanShape& target : shapes) {
-if (!target.containsCandidate || target.layer != rule.primaryLayer) {
+// [fillerRepair-fix] Overlay checking is guard-wide: a filler change can
+// leave a residual violation on committed geometry that carries no
+// candidate interval (the bridge case), so candidate ownership must not
+// suppress rule targets.
+if (target.layer != rule.primaryLayer) {
 continue;
 }
 for (Relationship relationship : {Relationship::IntraRow,
@@ -3227,32 +3247,8 @@ change.instanceId)});
 return diagnostics;
 }
 
-bool ImplantLayerChecker::touchesInstance(
-const Violation& violation,
-InstanceId instanceId) const
-{
-return std::find(violation.instances.begin(),
-violation.instances.end(),
-instanceId) != violation.instances.end();
-}
-
-bool ImplantLayerChecker::containsViolation(
-const Violation& oldViolation,
-const Violation& newViolation) const
-{
-if (oldViolation.hash != newViolation.hash ||
-!contains(oldViolation.xWindow, newViolation.xWindow)) {
-return false;
-}
-for (InstanceId instanceId : newViolation.instances) {
-if (std::find(oldViolation.instances.begin(),
-oldViolation.instances.end(),
-instanceId) == oldViolation.instances.end()) {
-return false;
-}
-}
-return true;
-}
+// [fillerRepair-fix] touchesInstance/containsViolation removed with the
+// old-violation blocking filter: the overlay API reports the raw list only.
 
 bool ImplantLayerChecker::isInGuard(
 const XInterval& xWindow,
@@ -3870,6 +3866,13 @@ master.shapes.push_back(ms);
 // -----------------------------------------------------------------------------
 bool ImplantLayerChecker::initFromUDM(const PhysDesMgr& desMgr)
 {
+// [fillerRepair-fix] The extraction body below needs the real UDM API;
+// standalone tests build under fake headers and inject ImplantInput via
+// initialize() instead.
+#ifdef DPL2_FAKE_UDM
+(void) desMgr;
+return false;
+#else
 // Reset all state
 ruleIndex_ = RuleIndex{};
 masterIdToIndex_.clear();
@@ -4176,6 +4179,7 @@ std::cout << diag.status << " " << diag.message << std::endl;
 }
 }
 return ok;
+#endif  // DPL2_FAKE_UDM
 }
 
 // -----------------------------------------------------------------------------

@@ -558,11 +558,12 @@ class ImplantLayerChecker final : public DRCChecker
       const std::vector<ScanShape>& shapes) const;
   std::vector<Violation> scanViolations(
       const std::vector<ScanOutcome>& outcomes) const;
+  // [fillerRepair-fix] Contract pinned 2026-07-13: reports the guard-clipped
+  // violation list only -- no old-violation filtering, no duplicate collapse.
   CheckResult checkPlaceWithOverlay(
       const CheckRequest& request,
       const Rect& guardRegion,
-      const std::vector<FillerChange>& fillerChanges,
-      const std::vector<Violation>& oldViolations) const;
+      const std::vector<FillerChange>& fillerChanges) const;
   CheckResult checkOverlayRegion(
       const CheckRequest& request,
       const Rect& guardRegion,
@@ -608,10 +609,6 @@ class ImplantLayerChecker final : public DRCChecker
   std::vector<Diagnostic> validateOverlayRequest(
       const CheckRequest& request,
       const std::vector<FillerChange>& fillerChanges) const;
-  bool touchesInstance(const Violation& violation,
-                       InstanceId instanceId) const;
-  bool containsViolation(const Violation& oldViolation,
-                         const Violation& newViolation) const;
   bool isInGuard(const XInterval& xWindow,
                  const std::vector<RowId>& rowIds,
                  const Rect& guard) const;

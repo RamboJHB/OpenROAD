@@ -145,20 +145,21 @@ size-2 组合存在"(旧语义下 cap=2 只覆盖 f1 的两个 option,size-2 一
 engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此仅为让 engine 侧
 知道边界、并在集成时能验证。
 
-1. **checker 已交付真实 overlay API(2026-07-12,helper 已删)**;两条原始契约项、
-   header/cpp 编译漂移与 guard overlay target/neighbor/merge 问题
-   **已在 checker 侧改好**(带 `[fillerRepair-fix]` 标记,说明文档
-   `drc/CHECKER_REPAIR_CONTRACT.md`):新增 `checkPlaceWithOverlaysRaw`(不做
-   blocking 过滤,复用 `checkOverlayRegion`)、填充 `Violation.rowIds`、对齐
-   `validateOverlayRequest` 头/实现。standalone fake-UDM harness 直接编译生产
-   checker,8/8 + ASan 全绿。**待 checker RD review、真实 UDM extraction
-   与 adapter 完成前,engine 仍只接 `fake/FakeImplantChecker`**;对接时
-   用 raw API,不用 blocking 形态。
-2. **新 wire 形态(以实物为准)**:`checkPlaceWithOverlays(request, guard,
+1. **checker 契约已终版(2026-07-13,用户钉死;spec §5.2.1 / AGENTS D21)**:
+   `checkPlaceWithOverlays` **只输出 violation list**——guard 内全量违例,
+   无 blocking 过滤(已删,连同 touchesInstance/containsViolation)、**无查重**
+   (同一物理违例可有 band/方向重复,确定性保证)。RD 2026-07-13 交付已含
+   内联 UDM extraction;scan 正确性修正与 `DPL2_FAKE_UDM` 边界已重新套用
+   (`drc/CHECKER_REPAIR_CONTRACT.md` 顶部)。standalone harness 9/9 + ASan
+   全绿。**adapter 完成前 engine 仍只接 `fake/FakeImplantChecker`。**
+2. **wire 形态(以实物为准)**:`checkPlaceWithOverlays(request, guard,
    vector<vector<FillerChange>>)`——单 target/guard + N 候选,结果按输入顺序
-   关联(无 requestId/status;invalid 候选 = 诊断 + isLegal=false,逐候选隔离)。
-   engine 协议校验届时改 size+order;participants 由 adapter 从
-   `violation.instances` + `placedInsts` 合成;kind 从 ruleSource 推导。
+   关联(无 requestId/status;invalid 候选 = 诊断 + isLegal=false,逐候选隔离);
+   baseline = 空变更列表候选。engine 对接改动:协议校验 size+order;
+   participants 由 adapter 从 `violation.instances` + `placedInsts` 合成;
+   kind 从 ruleSource 推导;**originals 快照必须与 baseline 同源**(重复
+   容忍的前提)。**注意**:infrastructure 即将更新,planner/engine 将迁移到
+   基于 infra 的版本(无视 UDM 依赖)——adapter 后端等 infra 落地再写。
 3. **adapter 层**(engine 侧要写,属我方):`ipl::` ↔ `fillerRepair::` 类型转换。
    三处易埋 bug 的转换:`Orient`↔`PhysOrientation`、`x`(DBU)↔
    `CheckRequest.colId`/`PlacedInst.colId`(**site 单位**,`x = colId*siteWidth`)、
@@ -215,7 +216,7 @@ FR_VERBOSE=1 ./run_tests.sh <case>   # 完整逻辑链日志
 | `src/dpl2/src/fillerRepair/Ranker.{h,cpp}` / `SubsetSearch.{h,cpp}` | 批 3 战场:filler-domain 枚举(#9) |
 | `src/dpl2/src/fillerRepair/Signature.{h,cpp}` | signature / relatedness;ruleDistance(#5) |
 | `src/dpl2/src/fillerRepair/PreCheck.{h,cpp}` | precheck 上收(#12) |
-| `src/dpl2/src/drc/ImplantLayerChecker.{h,cpp}` | checker(非我方责任);真实 blocking/raw overlay API 已实现;本轮未修改 |
+| `src/dpl2/src/drc/ImplantLayerChecker.{h,cpp}` | checker(非我方责任);终版契约 list-only 无查重(D21),UDM extraction 内联 |
 | `src/dpl2/src/fillerRepair/fake/` | 单元测试用假件(保留) |
 | `src/dpl2/src/fillerRepair/test/` | 79-case planner harness + ASan-capable run_tests.sh |
 | `src/dpl2/src/drc/test/` | 8-case production-checker harness(fake UDM boundary) |

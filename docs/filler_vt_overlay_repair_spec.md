@@ -359,10 +359,11 @@ checker 实现 overlay 的语义与 V1 相同:把每个 `fillerChanges` 中的 f
 按 `newMasterId` 换 master 后,在 target-local 规则下重查。planner 的 `Swap`
 直接携带 `FillerChange` 语义,无转换层。
 
-#### 5.2.1 checker 实际交付形态(2026-07-12)与差异裁定
+#### 5.2.1 checker 实际交付形态(终版契约,2026-07-13 用户钉死)
 
-checker 已交付真实 overlay 实现(helper 并入 checker 本体),wire 形态与上面的
-V2 草案不同,**对接以实物为准**,上面的草案保留作 engine 内部抽象的语义参照:
+checker 已交付真实 overlay 实现(helper 并入本体,UDM extraction 内联,暂为
+final 版)。**对接以实物为准**,上面的 V2 草案保留作 engine 内部抽象的语义参照。
+用户裁定:**checker 只输出 violation list,不做任何过滤/查重**。
 
 ```cpp
 // batch = 单 target + 单 guardRegion + N 个候选;结果按输入顺序一一对应
@@ -374,41 +375,30 @@ std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
 
 struct CheckResult {                  // 没有 status 枚举
   bool isLegal;                       // = violations 空 && diagnostics 干净
-  std::vector<Violation> violations;  // 仅 "blocking"(见下)
+  std::vector<Violation> violations;  // guard 内全量 list,无过滤无查重
   std::vector<Diagnostic> diagnostics;  // invalid 候选 → 诊断 + isLegal=false
 };
 ```
 
-差异与裁定:
+终版契约要点:
 
-- **requestId/CheckStatus 取消**:关联按顺序(结果数 == 输入数、序一致),
-  engine 的协议校验改为 size+order;invalid 候选以 diagnostics 表达,
-  per-candidate 隔离语义保持(逐候选 validate)。adapter 可按 index 合成 id。
-- **batch 形态收敛**为"单 target/guard + N 变更列表"——与 engine 每窗口的
-  实际用法一致(engine 每批本就同 anchor 同 guard)。
-- **checker 内部已做 per-batch baseline**(旧 filler master、target 按新 master
-  以 candidate 注入)+ guard 裁剪 + guard 内规则评估限定;`Violation` 带
-  签名 hash(rule/kind/relation/layers/rows——与 §6.2 钉死的签名键一致)。
-- 对每个候选只返回 **blocking** 违例 = 触及 target instance 的 ∪ 不被
-  baseline 违例"包含"的(`containsViolation` = hash 相等 + xWindow 包含 +
-  instances 子集)。
-
-**契约项(已在 checker 侧改好,待 checker RD review 接管)**——完整改动说明见
-`src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`,checker 内改动均带
-`[fillerRepair-fix]` 标记:
-
-1. **blocking 过滤会吞掉"未修好但不触及 target instance"的 original**——
-   §1.2 的 bridge-MW 类正是这种(cell 换色后离开原 run,残宽 MW 的 participants
-   只有 filler),它在 baseline 里存在,任何候选都被判 old 过滤 → isLegal=true →
-   **false accept**。`containsViolation` 用 xWindow 包含判 old 还会隐藏"缩小
-   未消除"。**改法**:新增 `checkPlaceWithOverlaysRaw`——复用 `checkOverlayRegion`
-   返回 guard 内**全量**违例、不过滤,delta 判定归 engine §6.8;原
-   `checkPlaceWithOverlay[s]`(blocking 形态)保留给 legalizer。
-2. **`Violation.rowIds` 从未填充**。**改法**:`scanRule` 两处 + `scanViolations`
-   + `makeViolations` 补填(源自 `ScanShape.rowId` / `RuleContext.rowId` /
-   `MergedShape.rowId`)。
-3. 附带修一个**头/实现不一致**(`validateOverlayRequest` 头声明多一个未用的
-   `guardRegion` 参,与 2 参定义不符 → 编译不过),已把头对齐到定义。
+- **list-only**:每个候选返回 guard 裁剪后的**全量**违例列表。没有 blocking
+  过滤(旧 blocking 形态会吞掉"未修好但不触及 target"的 §1.2 bridge 残留 →
+  false accept,已删除,`touchesInstance`/`containsViolation` 一并移除)、
+  没有 old/new 分类——分类是 engine §6.8 的职责,checker 零分类职责与本节
+  协议原文完全一致。baseline = 发一个空变更列表候选。
+- **不做查重**:同一物理违例可能出现多条(每 band/方向各一条)。重复是
+  确定性的(同输入同 multiplicity);engine 的一对一 multiset 匹配天然容忍
+  一致性重复,**前提是 originals 快照与 baseline 来自同一 API**。
+- **requestId/CheckStatus 取消**:关联按顺序(结果数==输入数、序一致);
+  invalid 候选以 diagnostics 表达(dup/非 filler/尺寸不符等),逐候选隔离。
+  adapter 按 index 合成 id。
+- **batch 形态**:单 target/guard + N 变更列表,与 engine 每窗口用法一致。
+- `Violation` 带 `rowIds`(已填充)与签名 hash(rule/kind/relation/layers/
+  rows,与 §6.2 签名键一致);guard 裁剪按 x + 行两个维度。
+- 快照纳入按 guard 外扩最大规则半径(结果仍按精确 guard 裁剪),避免跨 guard
+  边界的 run 被截断产生伪违例(细节见
+  `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`)。
 
 **future work(merge/split 前置条件)与职责归属(决策记录)**:届时 API
 需要一次版本化升级。"在 overlay context 里删除/实例化 filler"拆成两半,归属
