@@ -41,7 +41,7 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 | planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
 | 测试 | planner 81 个,`-Werror` + ASan 全绿;真实 checker core 10 个(`src/drc/test/run_tests.sh`,含 list-only residual 与 64-candidate 混合批测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
 | checker(`src/drc/`) | **终版契约已落地(D21)**:RD 2026-07-13 交付(UDM extraction 内联)+ 用户钉死 list-only——`checkPlaceWithOverlays` 输出 guard 内全量违例,无 blocking 过滤、无查重(重复允许但确定性);scan 正确性修正与 `DPL2_FAKE_UDM` 边界重新套用。wire:顺序关联、无 status、batch=单 target+N 变更。**adapter 前 engine 仍只接 fake;infra 版 planner 迁移在即** |
-| 对接(adapter/CMake,TODO 12) | 未做 |
+| 对接(adapter,TODO 12) | **adapter 层代码已写齐**(`src/fillerRepair/adapter/`,D23):UdmIdBridge / CheckerPlacementView / UdmMasterCandidateProvider / CheckerOracleAdapter / UdmPrecheck / FillerVtRepair + README([VERIFY-UDM] 清单 12 项)。**本仓不编译**(依赖真实 UDM 头),等用户拿到集成环境的编译/debug 信息后迭代;构建接线未做 |
 
 关键 commit(倒序):#9 filler-domain(见 git log 最新)→ `d293265` AGENTS/TestPlan
 → `a7de6f0` 批 2 部分(#6/#7/#11)→ `c1bafce` 批 1(6 个正确性修复 + 5 回归测试)
@@ -356,6 +356,46 @@ violation,混入 direct/bridge/coupled decoy,完整候选计划 127 个。最高
 residual、new violation、invalid duplicate;连续执行两批后分类、violation 顺序、
 rowIds/hash 与 diagnostics 完全一致。当前 planner 81/81、checker 10/10。
 
+### D23. UDM/infra adapter 层落地(copy-paste-ready,本仓不编译)(2026-07-14)
+**用户指令**:远端已补齐 infra(`src/infrastructure/`),写可直接 copy-paste
+进集成环境的 UDM 版算法(基于 infra 与 checker);master provider 与 precheck
+从 UDM 取数,参照 checker/infra 的实现方法;本地无法编译,用户后续提供编译/
+debug 信息(§7-0 "infra 前不预写 UDM adapter" 由此指令取代)。
+**组件**(`src/fillerRepair/adapter/`,命名空间 `dpl2::fillerRepair::adapter`):
+- **UdmIdBridge**:checker 的 MasterId/InstanceId 是 initFromUDM 枚举序顺次
+  分配且不回暴露 → bridge 逐步重放同一枚举/过滤逻辑重建双向映射
+  (LeafCellID↔InstanceId、PhysLibCell/LibCellID↔MasterId)+ 行 span/
+  siteWidth/rowHeight;`validate()` 对 checker 公开表交叉核对(计数、逐 id
+  宽高/isFiller、行原点 X 对齐)。**脆弱点**:必须与 initFromUDM 锁步;
+  长期解是 RD 暴露映射表。
+- **coverage extras**:无 implant shapes 的已放置 core cell(checker 不建模、
+  无 InstanceId)仍占 site → bridge 收集 `CoverageExtra{row,x,w,h}`,view 以
+  **负 id 合成非 filler 实例**(负 id 不出 planner:checker 违例不会引用,
+  isFiller=false 不进 swap),保证 100% 覆盖 precheck 与窗口边界看得见它们。
+- **CheckerPlacementView**:构造时一次性快照 checker 表(不动 UDM/checker
+  活状态);x = colId·siteWidth(checker 行相对系);VT = shapes 层 Family;
+  height 换算成行单位;多行 extras 按 PlacementView 契约逐行上报。
+- **UdmMasterCandidateProvider**:checker filler master(VT 已知)∩ 可选
+  fillerSetting 允许表(LibCellID 经 bridge 转 MasterId,无 implant 的条目
+  记日志跳过);同宽高、异 VT、升序;avoid-abut 模式**不**在此应用(commit
+  侧职责,checker 裁合法性)。
+- **CheckerOracleAdapter**:list-only 契约适配——DBU↔site 换算、行 Region→
+  Rect guard(yh=(rowHi+1)·rowHeight−1)、violation 参与者从 instances+view
+  合成、无违例+!isLegal+diagnostics→InvalidOverlay、结果按序回 echo planner
+  requestId、同 (target,guard) 连续分组批量。
+- **UdmPrecheck(#12 上收)**:同尺寸 swap 不改变覆盖 → 按 caller 提供的
+  coverageRevision 缓存 `runUtilityPreCheck` 结果,整个 repair campaign 只扫
+  一次;revision 只在几何性编辑时递增。
+- **FillerVtRepair**(入口):bridge→validate→view→precheck→target 解析
+  (LeafCellID+新 PhysLibCell,**pre-commit**:新 master 以 overlay 传入,
+  设计里可以还是旧 master)→ 空变更候选取快照(halo 默认 2×max
+  queryRadius,精度非正确性关键——engine 自己重推窗口)→ engine.repair →
+  结果映回 (LeafCellID, PhysLibCell*)。快照/baseline/候选全走同一 adapter,
+  满足 D21 重复容忍前提。
+**未验证点**:12 项 [VERIFY-UDM] 清单在 `adapter/README.md`(id 重放锁步、
+row bbox API、层名唯一性、UvDist 构造、宏 cutout 未从 rowLegalSpan 扣除等)。
+planner/checker 本地测试不受影响(adapter 不进本地构建),81+10 全绿。
+
 ## 5. 实现要点与陷阱(接手前必读)
 
 - **对接 blocker(D17/D18)**:checker core 已在 fake-UDM boundary 下直编译并
@@ -393,16 +433,14 @@ rowIds/hash 与 diagnostics 完全一致。当前 planner 81/81、checker 10/10�
 
 ## 7. 下一步(优先级序)
 
-0. **等 infrastructure 更新(用户预告)**:planner/engine 将迁移到**基于 infra
-   的版本、无视 UDM 依赖**。adapter 的对手方从 UDM/checker 内表变为 infra
-   API——PlacementView/candidate provider/oracle 三个抽象接口不变,换后端实现。
-   infra 落地前不要预写 UDM 版 adapter(会白做)。
-1. **TODO 12 对接**(以 infra 版为准):adapter 层 + 构建集成 + 用真 checker
-   重放 spec §10;checker 契约已终版(D21,list-only),engine 侧对接改动:
-   协议校验 size+order、参与者从 `violation.instances` 合成、快照与 baseline
-   同源(重复容忍的前提)。
-2. **#12 precheck 上收**:随 adapter 一起(infra 按 design revision 缓存
-   full-utility;planner 留 O(window) 防御复核)。
+0. **adapter 编译/debug 迭代(等用户反馈)**:adapter 层代码已写齐(D23,
+   本仓不编译);用户会把它 copy 进集成环境并带回编译/debug 信息。届时按
+   `adapter/README.md` 的 [VERIFY-UDM] 清单逐项确认,首跑先看
+   `UdmIdBridge::validate()` 输出(id 重放是否与 initFromUDM 锁步)。
+1. **构建接线**:集成环境把 `fillerRepair/*.cpp + adapter/*.cpp + checker`
+   加进 dpl2 构建;本地测试目标不动。之后用真 checker 重放 spec §10。
+2. **#12 precheck 上收**:已随 adapter 落地(UdmPrecheck 按 coverageRevision
+   缓存);剩余:coverageRevision 的来源在集成环境确认([VERIFY-UDM] 第 11 项)。
 3. **补 per-band/bridge-MW/真实 E2E 测试**:只在真实元数据/API 可用后做。
 4. **问用户拍板 D12 输出格式**,再动 `FillerRepairResult`。
 

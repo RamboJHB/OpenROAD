@@ -27,11 +27,12 @@ rewrite(merge/split)**。代码里不允许出现 Move / FillerRewrite 抽象。
 | 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | V2.1 engine 项全部落地;exact-budget 修复、planner 自持基础类型、P1/P2 边界补强完成;81 个确定性测试全绿;复杂 3-row/8-domain pair 在 21 次 checker call 内成功 |
 | checker + standalone harness | `src/dpl2/src/drc/` | checker 源码未改;fake-UDM boundary 直接编译生产 overlay core,10/10 + ASan 全绿(含 64-candidate 混合批确定性) |
 | fake checker / design / candidate provider | `src/dpl2/src/fillerRepair/fake/` | 继续用于单元测试 |
-| TODO 12 adapter/CMake/真实 UDM | `src/dpl2/src/fillerRepair/adapter/`(规划) | 未完成;当前分支缺完整 dpl2 CMake、`DePlace.h` 与真实 UDM extraction,不可安全猜接口 |
+| TODO 12 adapter(UDM/infra 集成) | `src/dpl2/src/fillerRepair/adapter/` | **代码已写齐**(AGENTS D23):UdmIdBridge / CheckerPlacementView / UdmMasterCandidateProvider / CheckerOracleAdapter / UdmPrecheck / FillerVtRepair + README;**本仓不编译**(依赖真实 UDM 头),等用户带回集成环境编译/debug 信息迭代;[VERIFY-UDM] 清单见 `adapter/README.md` |
 
 **关键认知**:engine 与 spec 都已对齐 **V2.1**。下面三批说明保留作审阅历史;
-当前剩余工作集中在真实 adapter/UDM/CMake 与 per-band 元数据。V1 存档 spec
-(`spec_v1` / `addendum_v1`)已删除(冗余)。
+当前剩余工作 = adapter 在集成环境的编译/debug 迭代(入口
+`adapter/FillerVtRepair.h` 顶部有 wiring 示例)与 per-band 元数据。V1 存档
+spec(`spec_v1` / `addendum_v1`)已删除(冗余)。
 
 ## 3. 三批工作(按此顺序;每批做完跑 `test/run_tests.sh` 必须全绿)
 
@@ -158,17 +159,18 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
    baseline = 空变更列表候选。engine 对接改动:协议校验 size+order;
    participants 由 adapter 从 `violation.instances` + `placedInsts` 合成;
    kind 从 ruleSource 推导;**originals 快照必须与 baseline 同源**(重复
-   容忍的前提)。**注意**:infrastructure 即将更新,planner/engine 将迁移到
-   基于 infra 的版本(无视 UDM 依赖)——adapter 后端等 infra 落地再写。
-3. **adapter 层**(engine 侧要写,属我方):`ipl::` ↔ `fillerRepair::` 类型转换。
-   三处易埋 bug 的转换:`Orient`↔`PhysOrientation`、`x`(DBU)↔
-   `CheckRequest.colId`/`PlacedInst.colId`(**site 单位**,`x = colId*siteWidth`)、
-   `Region`(row-based)↔ guard `eUTL::Rect`(y-based,`y = rowId*rowHeight`)。
-   建议放 `src/dpl2/src/fillerRepair/adapter/`(可含 UDM 头,planner 本体保持
-   UDM-free),重点单测这三个转换。**前置已完成(2026-07-13)**:planner 基础类型
-   已迁到 `fillerRepair/BaseTypes.h`,不再 alias `ipl`;checker harness 已验证两套
-   header 可在同一 adapter TU 共存。`drc/ImplantBaseTypes.h` 已无代码引用,但本轮
-   不改 checker 目录资产,待 RD/CMake 对接时确认删除。
+   容忍的前提)。
+3. **adapter 层已落地**(`src/fillerRepair/adapter/`,AGENTS D23):上述转换
+   全部实现——`Orient`↔`PhysOrientation`(CheckerPlacementView)、`x`(DBU)↔
+   `colId`(**site 单位**,CheckerOracleAdapter)、`Region`↔guard `eUTL::Rect`
+   (`yh=(rowHi+1)*rowHeight-1`)。id 通路:checker 的顺次 id 不回暴露 →
+   `UdmIdBridge` 重放 initFromUDM 枚举重建映射,`validate()` 交叉核对
+   (**集成首跑第一件事**);checker 不建模的占位 cell 以负 id coverage extras
+   进 view。precheck 上收(#12)= `UdmPrecheck` 按 coverageRevision 缓存。
+   planner 本体保持 UDM-free(UDM 头只出现在 adapter/)。未验证点全部标
+   `[VERIFY-UDM]`,清单+wiring 指南见 `adapter/README.md`。
+   `drc/ImplantBaseTypes.h` 已无代码引用,但本轮不改 checker 目录资产,待
+   RD/CMake 对接时确认删除。
 4. **依赖拓扑已钉死(spec §3.3 / AGENTS D15)**:checker 调 engine(具体、单向
    编译依赖),engine 调 checker 只经自己的抽象 oracle 接口——无编译环;
    `checkPlaceWithOverlay[s]` 是纯查询、禁止内部触发 repair——无运行时递归。
@@ -223,17 +225,21 @@ FR_VERBOSE=1 ./run_tests.sh <case>   # 完整逻辑链日志
 
 ## 8. 剩余 TODO 与依赖清理顺序
 
-1. **真实 UDM extraction**:checker 侧先恢复/交付等价于旧 helper 的 layer/master/
-   placed-instance 提取;这是 adapter E2E 的外部 blocker,本轮未猜 UDM API。
-2. **真实 adapter**:显式转换 orientation、DBU↔site column、row region↔UDM Rect、
-   checker violation→planner violation/participants,并把真实 candidate provider 接到
-   checker master 表。planner 类型共存前置已完成。
-3. **CMake/依赖闭包**:当前分支没有 `src/dpl2/CMakeLists.txt`,且 `DePlace.cpp`
-   引用的 `include/dpl2/DePlace.h` 等文件不完整;补齐真实工程文件后再接目标,不要造
-   临时 CMake 冒充集成完成。
-4. **#12 precheck 上收**:infrastructure 按 design revision 缓存全量 utility,
-   adapter 表达多段 legal segment,planner 保留窗口内防御复核。当前全设计 sweep
-   已补多行、边界、三重 overlap 测试,但不等于 #12 完成。
+1. **adapter 编译/debug 迭代**(当前最高优先):adapter 代码已写齐但本仓不
+   编译;用户会带回集成环境的编译/debug 信息。按 `adapter/README.md` 的
+   [VERIFY-UDM] 清单逐项过,首跑先看 `UdmIdBridge::validate()`(id 重放是否
+   与 initFromUDM 锁步)。真实 UDM extraction(checker 侧 initFromUDM 内联版)
+   已由 RD 2026-07-13 交付。
+2. ~~真实 adapter~~ **已完成**(D23):orientation、DBU↔site、Region↔Rect、
+   violation/participants 合成、candidate provider 接 checker master 表 ∩
+   fillerSetting,全部落地于 `adapter/`。
+3. **CMake/依赖闭包**:集成环境把 `fillerRepair/*.cpp + adapter/*.cpp` 接进
+   dpl2 构建(清单见 `adapter/README.md` 末节);本仓不造临时 CMake 冒充
+   集成完成。
+4. **#12 precheck 上收**:`UdmPrecheck` 已按 coverageRevision 缓存全量
+   utility(同尺寸 swap 不改覆盖 → campaign 级一次扫描);剩余:revision
+   来源与多段 legal segment(宏 cutout)在集成环境确认([VERIFY-UDM]
+   7/11 项)。
 5. **per-band majority**:当前 `MasterInfo` 只有单个 `vt`;P/N band 投影进入 adapter
    数据模型后再补 `ranker_majority_per_band`,不使用 fake 名称推断。
 6. **checker 后续回归**:list-only bridge residual 与 64-candidate 混合批已完成;

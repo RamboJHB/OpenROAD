@@ -2,9 +2,11 @@
 
 Implements the pure repair planner from `docs/filler_vt_overlay_repair_spec.md`.
 Development is confined to `src/dpl2`; the checker integrates into the
-infrastructure side. The real checker overlay API has landed, but the real UDM
-extraction, adapter, and build integration have not, so the planner still runs
-end-to-end against the fakes in `fake/`.
+infrastructure side. The real checker overlay API has landed, and the UDM/infra
+integration layer is written under `adapter/` (copy-paste-ready for the
+integration environment — NOT compiled in this repo; see `adapter/README.md`
+for wiring and the `[VERIFY-UDM]` checklist). The locally-built planner still
+runs end-to-end against the fakes in `fake/`.
 
 > **V2.1 rollout (spec §0), three batches:** **batch 1 (OracleGate correctness,
 > #1/#2/#3/#4/#5/#10) DONE.** **Batch 2: #6/#7/#8/#11 DONE**
@@ -26,9 +28,11 @@ end-to-end against the fakes in `fake/`.
 > carries the inline UDM extraction; the scan-correctness fixes and the
 > `DPL2_FAKE_UDM` boundary are re-applied on top (see
 > `drc/CHECKER_REPAIR_CONTRACT.md`). Standalone harness: 9 cases green under
-> `-Werror` and ASan. Pending the adapter the engine stays on the fakes.
-> **Upcoming:** infrastructure is being updated; the planner/engine will move
-> to an infra-backed version with no UDM dependency (spec §5.2.1, AGENTS D21).
+> `-Werror` and ASan. Locally the engine stays on the fakes.
+> **Adapter (2026-07-14, AGENTS D23):** the infra drop landed and the full
+> UDM/infra adapter stack is written under `adapter/` — it compiles only in
+> the integration environment; next step is iterating on the user's
+> compile/debug feedback against the `[VERIFY-UDM]` checklist.
 
 ## Layout
 
@@ -52,6 +56,7 @@ end-to-end against the fakes in `fake/`.
 | `fake/FakeCandidateProvider.h` | Same-size replacement lookup over the fake library |
 | `fake/FakeUdmCandidateProvider.h/.cpp` | Adapter rehearsal: UDM-style master catalog (layers named `FAMILY_POLARITY`, band shapes) with the checker's derivation rules — VT = implant-layer family, never the master name; `describeMasters(ids)` -> width/VT per id; implements the spec §5.3 provider; ships the appendix-A 12-master library |
 | `fake/FakeImplantChecker.h/.cpp` | Rule-parameterized oracle locking the request/result protocol |
+| `adapter/` | Real UDM/infra integration (AGENTS D23, not compiled locally): `UdmIdBridge` (replays initFromUDM id enumeration + validate), `CheckerPlacementView` (snapshot incl. negative-id coverage extras), `UdmMasterCandidateProvider` (checker fillers ∩ fillerSetting), `CheckerOracleAdapter` (list-only contract), `UdmPrecheck` (#12 cached utility gate), `FillerVtRepair` (entry point); see `adapter/README.md` |
 | `test/` | Unit tests + runner |
 
 ## Conventions
