@@ -10,6 +10,22 @@ spec 与本文冲突时以 spec 为准。
 
 ---
 
+
+## 0. 2026-07-15 infrastructure alignment
+
+本轮已完成五项目标:
+
+1. filler candidates 只来自 infrastructure `fillerSetting`。
+2. checker/planner instance/master id 统一为 `LeafCellID`/`LibCellID` 稳定索引。
+3. full-utility precheck 与 placement 都遍历 `Network/Node/Master`,并由同一 `InfrastructurePlacementView` 缓存。
+4. `SwapGenerator` 合并进 `Swap`。
+5. `BaseTypes` 和 candidate wire types 合并进 `Types`。
+
+真实调用链现在是 `FillerVtRepair -> InfrastructurePlacementView -> CheckerOracleAdapter -> FillerRepairEngine`。旧的枚举 replay bridge、checker-backed placement view、独立 candidate provider、独立 precheck cache 已删除。planner 的搜索、rank、subset 和 oracle gate 算法未改。
+
+未完成项:构建/CMake 接线;checker 为 `fillerSetting` 中未实例化候选 master 建模;真实 UDM E2E。本轮按用户要求未编译、未运行 UDM-dependent tests。
+
+
 ## 1. 项目一句话
 
 设计 100% utility;opto 一次只改一个 std cell 的 VT;周围 filler 还是旧 implant
@@ -25,9 +41,9 @@ rewrite(merge/split)**。代码里不允许出现 Move / FillerRewrite 抽象。
 |---|---|---|
 | Spec **V2.1**(含 §0 修订记录) | `docs/filler_vt_overlay_repair_spec.md` | 定稿 |
 | 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | V2.1 engine 项全部落地;exact-budget 修复、planner 自持基础类型、P1/P2 边界补强完成;81 个确定性测试全绿;复杂 3-row/8-domain pair 在 21 次 checker call 内成功 |
-| checker + standalone harness | `src/dpl2/src/drc/` | checker 源码未改;fake-UDM boundary 直接编译生产 overlay core,10/10 + ASan 全绿(含 64-candidate 混合批确定性) |
+| checker + standalone harness | `src/dpl2/src/drc/` | DRC 算法未改;initFromUDM ID assignment 已改为稳定 LeafCellID/LibCellID 索引。历史 harness 10/10 + ASan;本轮未重跑 |
 | fake checker / design / candidate provider | `src/dpl2/src/fillerRepair/fake/` | 继续用于单元测试 |
-| TODO 12 adapter(UDM/infra 集成) | `src/dpl2/src/fillerRepair/adapter/` | **代码已写齐**(AGENTS D23):UdmIdBridge / CheckerPlacementView / UdmMasterCandidateProvider / CheckerOracleAdapter / UdmPrecheck / FillerVtRepair + README;**本仓不编译**(依赖真实 UDM 头),等用户带回集成环境编译/debug 信息迭代;[VERIFY-UDM] 清单见 `adapter/README.md` |
+| infrastructure adapter | `src/dpl2/src/fillerRepair/adapter/` | 2026-07-15 重构完成:统一 PlacementView + oracle + entry;未编译,剩余 build/E2E 与 checker candidate catalog |
 
 **关键认知**:engine 与 spec 都已对齐 **V2.1**。下面三批说明保留作审阅历史;
 当前剩余工作 = adapter 在集成环境的编译/debug 迭代(入口
@@ -129,7 +145,7 @@ size-2 组合存在"(旧语义下 cap=2 只覆盖 f1 的两个 option,size-2 一
 用户 5 行 grid 测试因此换了一个同样 oracle-clean 的首解(2012→vt0,原 3013→vt1),
 测试已更新并注明原因。
 
-**3.2 precheck 上收(#12)** — `PreCheck.*`、`FillerRepairEngine.cpp:42`
+**3.2 precheck 上收(#12)** — `PlacementView.{h,cpp}`、`FillerRepairEngine.cpp:42`
 现在每次 repair 全设计逐行扫(O(design))。改:full-utility 权威结果由 infrastructure
 按 design revision 缓存下发,planner 消费;engine 保留 **窗口内 O(window) 防御性
 复核**(这同时化解 `rowLegalSpan` 单区间表达不了 macro/blockage 多段的问题——窗口
@@ -160,17 +176,8 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
    participants 由 adapter 从 `violation.instances` + `placedInsts` 合成;
    kind 从 ruleSource 推导;**originals 快照必须与 baseline 同源**(重复
    容忍的前提)。
-3. **adapter 层已落地**(`src/fillerRepair/adapter/`,AGENTS D23):上述转换
-   全部实现——`Orient`↔`PhysOrientation`(CheckerPlacementView)、`x`(DBU)↔
-   `colId`(**site 单位**,CheckerOracleAdapter)、`Region`↔guard `eUTL::Rect`
-   (`yh=(rowHi+1)*rowHeight-1`)。id 通路:checker 的顺次 id 不回暴露 →
-   `UdmIdBridge` 重放 initFromUDM 枚举重建映射,`validate()` 交叉核对
-   (**集成首跑第一件事**);checker 不建模的占位 cell 以负 id coverage extras
-   进 view。precheck 上收(#12)= `UdmPrecheck` 按 coverageRevision 缓存。
-   planner 本体保持 UDM-free(UDM 头只出现在 adapter/)。未验证点全部标
-   `[VERIFY-UDM]`,清单+wiring 指南见 `adapter/README.md`。
-   `drc/ImplantBaseTypes.h` 已无代码引用,但本轮不改 checker 目录资产,待
-   RD/CMake 对接时确认删除。
+3. **统一 infrastructure boundary 已落地**:`InfrastructurePlacementView` 从 `Network/Node/Master` 建 placement/coverage snapshot,从 `fillerSetting` 取得 candidate allow-list,用 checker 表补 VT 并交叉校验。checker/planner 直接共用 LeafCellID/LibCellID 稳定索引;不再重放枚举、不再合成负 ID coverage extras。`CheckerOracleAdapter` 继续只做 wire/unit 转换。
+
 4. **依赖拓扑已钉死(spec §3.3 / AGENTS D15)**:checker 调 engine(具体、单向
    编译依赖),engine 调 checker 只经自己的抽象 oracle 接口——无编译环;
    `checkPlaceWithOverlay[s]` 是纯查询、禁止内部触发 repair——无运行时递归。
@@ -225,30 +232,13 @@ FR_VERBOSE=1 ./run_tests.sh <case>   # 完整逻辑链日志
 
 ## 8. 剩余 TODO 与依赖清理顺序
 
-1. **adapter 编译/debug 迭代**(当前最高优先):adapter 代码已写齐但本仓不
-   编译;用户会带回集成环境的编译/debug 信息。按 `adapter/README.md` 的
-   [VERIFY-UDM] 清单逐项过,首跑先看 `UdmIdBridge::validate()`(id 重放是否
-   与 initFromUDM 锁步)。真实 UDM extraction(checker 侧 initFromUDM 内联版)
-   已由 RD 2026-07-13 交付。
-2. ~~真实 adapter~~ **已完成**(D23):orientation、DBU↔site、Region↔Rect、
-   violation/participants 合成、candidate provider 接 checker master 表 ∩
-   fillerSetting,全部落地于 `adapter/`。
-3. **CMake/依赖闭包**:集成环境把 `fillerRepair/*.cpp + adapter/*.cpp` 接进
-   dpl2 构建(清单见 `adapter/README.md` 末节);本仓不造临时 CMake 冒充
-   集成完成。
-4. **#12 precheck 上收**:`UdmPrecheck` 已按 coverageRevision 缓存全量
-   utility(同尺寸 swap 不改覆盖 → campaign 级一次扫描);剩余:revision
-   来源与多段 legal segment(宏 cutout)在集成环境确认([VERIFY-UDM]
-   7/11 项)。
-5. **per-band majority**:当前 `MasterInfo` 只有单个 `vt`;P/N band 投影进入 adapter
-   数据模型后再补 `ranker_majority_per_band`,不使用 fake 名称推断。
-6. **checker 后续回归**:list-only bridge residual 与 64-candidate 混合批已完成;
-   真实 UDM 到位后补 extraction + adapter E2E。现有 row/hash/guard 与
-   invalid-batch 已完成。
-7. **开放产品决策 D12**:all-or-nothing/结构化残留输出仍需用户拍板。
+1. **构建/CMake 接线**:加入 `PlacementView.cpp`、`InfrastructurePlacementView.cpp` 和其余 planner/adapter sources;本轮按要求未编译。
+2. **checker candidate catalog**:确保 `fillerSetting` 中未实例化 replacement master 进入 checker master table;当前 view 会以 `CheckerMissingConfiguredMaster` 明确拒绝。
+3. **真实 UDM E2E**:验证 row origin、multi-height、macro/blockage legal segments、target overlay 与 result mapping。
+4. **per-band metadata / 产品输出格式**:等待真实 API 和用户拍板。
 
-FakeDesign、FakeCandidateProvider、FakeImplantChecker、Scripted/Misbehaving checker
+FakeDesign、FakeDesign candidate catalog、FakeImplantChecker、Scripted/Misbehaving checker
 均是 planner 单测边界,继续保留。`FakeUdmCandidateProvider` 在真实 provider E2E
 落地前保留。`DPL2_FAKE_UDM` 与 checker test support 在真实 UDM CI 可运行前保留。
 `drc/ImplantBaseTypes.h` 现已无代码引用,可在 adapter/CMake 合并时经 checker RD
-确认后删除;本轮遵守 checker 不改动边界,不提前移除。
+确认后删除;本轮仅调整 checker ID assignment,未改 DRC 规则与 scan 算法。

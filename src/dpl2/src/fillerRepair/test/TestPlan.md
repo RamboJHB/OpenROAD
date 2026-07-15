@@ -2,7 +2,7 @@
 
 > 写给负责测试拓展的 AI。真实 checker core 已有独立 harness(见下),但尚未通过
 > adapter 接入 engine;等待对接期间继续把纯 planner 各
-> 子模块(PreCheck / Signature / Window / SwapGenerator / Ranker / SubsetSearch /
+> 子模块(PlacementView coverage / Signature / Window / Swap generation / Ranker / SubsetSearch /
 > OracleGate / Engine 主循环)的测试覆盖做扎实。当前 81 个 planner 测试全绿
 > (`test/run_tests.sh`,`-Wall -Wextra -Werror`;ASan 同样全绿)。
 > **进度(2026-07-13)**:P0、可由当前接口表达的 P1、P2 五项不变量均完成。
@@ -44,7 +44,7 @@
 ## 1. 现有覆盖(planner 81 个 + checker 10 个,勿重复)
 
 - Swap 构造/校验、canonicalKey、wire 转换(3)
-- PreCheck:全覆盖 OK、gap、overlap/offgrid/illegal、engine fatal 短路、多行确定性、
+- PlacementView coverage:全覆盖 OK、gap、overlap/offgrid/illegal、engine fatal 短路、多行确定性、
   行首尾 gap、三重 overlap 完整 participants(7)
 - fake checker 协议与规则:echo/order、invalid 隔离、intra/inter 检测、
   guard 过滤、target override(6)
@@ -112,7 +112,7 @@
 - `relatedness_row_and_distance_edges` ✅
 - `rule_distance_fallback`:violations 全零 requiredValue → 退回 siteWidth。✅
 
-**PreCheck**
+**PlacementView coverage**
 - `precheck_multi_row_issues_deterministic`:多行多 issue,顺序与两次运行
   一致性。✅
 - `precheck_gap_at_row_edges`:行首 gap、行尾 gap 的 xLo/xHi/siteCount。✅
@@ -142,7 +142,7 @@
 - `ranker_majority_per_band`:构造上下行 band 多数与同行多数不同的布局,
   验证按 band 计数。**阻塞:当前 planner projection 没有 per-band VT 字段。**
 
-**SwapGenerator**
+**Swap generation (`Swap`)**
 - `swapgen_rejected_candidate_diag`:provider 返回一个通不过 makeSwap 校验的
   master(如尺寸不符)→ `RejectedCandidate` 诊断 + 跳过,不 abort。✅
 

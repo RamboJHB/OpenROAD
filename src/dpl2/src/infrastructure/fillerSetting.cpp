@@ -1,7 +1,9 @@
 #include "fillerSetting.h"
 
+#include <algorithm>
 #include <iterator>
 #include <sstream>
+#include <stdexcept>
 
 namespace dpl2 {
 
@@ -14,13 +16,12 @@ fillerSetting::fillerSetting(eUNL::Design* design)
     this->prefix_ = "ECOFILLER";
 }
 
-fillerSetting::~fillerSetting()
-{
-}
-
 void
 fillerSetting::addFillerCell(std::string fillerCellName)
 {
+    if (design_ == nullptr) {
+        throw std::logic_error("fillerSetting has no design");
+    }
     std::istringstream iss(fillerCellName);
     std::vector<std::string> nameVec{
         std::istream_iterator<std::string>(iss),
@@ -29,8 +30,14 @@ fillerSetting::addFillerCell(std::string fillerCellName)
     for (const auto& cellName : nameVec) {
         eFNL::ModuleID moduleId = design_->getLibAcc().findModule(cellName);
         auto* libCell = design_->getLibAcc().getLibCell(moduleId);
+        if (libCell == nullptr) {
+            throw std::invalid_argument("unknown filler cell: " + cellName);
+        }
         const PhysLibCell& pell = design_->getLibAcc().getPhysLibCell(libCell->getId());
-        this->core_.push_back(pell.getLibCellId());
+        const eLIB::LibCellID id = pell.getLibCellId();
+        if (std::find(core_.begin(), core_.end(), id) == core_.end()) {
+            core_.push_back(id);
+        }
     }
 }
 
@@ -56,9 +63,22 @@ fillerSetting::addAvoidPattern(std::string avoidPattern)
 }
 
 bool
-fillerSetting::needAvoidAbut(std::pair<int, int> twoLibCell)
+fillerSetting::needAvoidAbut(std::pair<int, int> twoLibCell) const
 {
-    return avoid_pattern_[twoLibCell];
+    return avoid_pattern_.find(twoLibCell) != avoid_pattern_.end();
+}
+
+std::vector<const eLIB::PhysLibCell*> fillerSetting::getFillerMasters() const
+{
+    std::vector<const eLIB::PhysLibCell*> result;
+    if (design_ == nullptr) {
+        return result;
+    }
+    result.reserve(core_.size());
+    for (const eLIB::LibCellID id : core_) {
+        result.push_back(&design_->getLibAcc().getPhysLibCell(id));
+    }
+    return result;
 }
 
 } // namespace dpl2

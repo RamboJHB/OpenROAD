@@ -9,8 +9,8 @@ namespace dpl2 {
 class fillerSetting
 {
 public:
-    fillerSetting(eUNL::Design* design);
-    ~fillerSetting();
+    explicit fillerSetting(eUNL::Design* design);
+    ~fillerSetting() = default;
 
     ADD_SETTER_GETTER_PP(bool, FollowOrder, follow_order_);
     ADD_SETTER_GETTER_PP(bool, CheckDRC, check_drc_);
@@ -22,11 +22,15 @@ public:
     void addAvoidPattern(std::string avoidPattern);
 
     // getter
-    std::vector<eLIB::LibCellID> getFillerCells() {return core_;};
-    std::map<std::pair<int, int>, bool> getAvoidPattern() {return avoid_pattern_;};
-    eUNL::Design* getDesign() {return design_;};
+    const std::vector<eLIB::LibCellID>& getFillerCells() const { return core_; }
+    std::vector<const eLIB::PhysLibCell*> getFillerMasters() const;
+    const std::map<std::pair<int, int>, bool>& getAvoidPattern() const
+    {
+      return avoid_pattern_;
+    }
+    eUNL::Design* getDesign() const { return design_; }
 
-    bool needAvoidAbut(std::pair<int, int> twoLibCell);
+    bool needAvoidAbut(std::pair<int, int> twoLibCell) const;
 
 private:
     bool follow_order_;
@@ -35,7 +39,7 @@ private:
     std::string prefix_;
     std::vector<eLIB::LibCellID> core_;
     std::map<std::pair<int, int>, bool> avoid_pattern_;
-    eUNL::Design* design_;
+    eUNL::Design* design_{nullptr};
 };
 
 } //namespace dpl2

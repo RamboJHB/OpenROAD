@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "PreCheck.h"
+#include "PlacementView.h"
+
+#include "Log.h"
 
 #include <algorithm>
 #include <tuple>
@@ -27,11 +29,70 @@ const char* kindName(CoverageIssueKind kind)
 
 }  // namespace
 
-SiteCoverageResult runUtilityPreCheck(const PlacementView& view,
-                                       const DebugLog& log)
+MasterCandidateResult PlacementView::getUsableMasterCandidates(
+    const MasterCandidateRequest& request) const
+{
+  MasterCandidateResult result;
+  const PlacedInstance* inst = instance(request.fillerInstanceId);
+  if (inst == nullptr) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Error, "UnknownInstance",
+        cat("instance ", request.fillerInstanceId, " not found")));
+    return result;
+  }
+  if (!inst->isFiller) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Warning, "NotAFiller",
+        cat("instance ", request.fillerInstanceId, " is not a filler")));
+    return result;
+  }
+  const MasterInfo* current = masterInfo(inst->masterId);
+  if (current == nullptr || !current->isFiller) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Error, "UnknownMaster",
+        cat("invalid current filler master for instance ", request.fillerInstanceId)));
+    return result;
+  }
+
+  if (current->vt == kUnknownVt) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Error, "UnknownCurrentVt",
+        cat("current filler master ", inst->masterId,
+            " has no checker VT")));
+    return result;
+  }
+
+  std::vector<MasterId> configured = fillerMasterIds();
+  std::sort(configured.begin(), configured.end());
+  configured.erase(std::unique(configured.begin(), configured.end()), configured.end());
+  for (const MasterId id : configured) {
+    const MasterInfo* candidate = masterInfo(id);
+    if (candidate == nullptr) {
+      result.diagnostics.push_back(makeDiag(
+          Severity::Warning, "UnknownConfiguredMaster",
+          cat("configured filler master ", id, " is not in the view")));
+      continue;
+    }
+    if (id != inst->masterId && candidate->isFiller
+        && candidate->vt != kUnknownVt && candidate->vt != current->vt
+        && candidate->width == current->width
+        && candidate->height == current->height) {
+      result.candidates.push_back(MasterCandidate{id});
+    }
+  }
+  if (result.candidates.empty()) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Info, "NoUsableMaster",
+        cat("no configured same-size VT replacement for instance ",
+            request.fillerInstanceId)));
+  }
+  return result;
+}
+
+SiteCoverageResult PlacementView::checkSiteCoverage(const DebugLog& log) const
 {
   SiteCoverageResult result;
-  const DbCoord siteWidth = std::max<DbCoord>(view.siteWidth(), 1);
+  const DbCoord site_width = std::max<DbCoord>(this->siteWidth(), 1);
 
   const auto addIssue = [&](CoverageIssueKind kind,
                             RowId rowId,
@@ -43,22 +104,22 @@ SiteCoverageResult runUtilityPreCheck(const PlacementView& view,
     issue.rowId = rowId;
     issue.xLo = xLo;
     issue.xHi = xHi;
-    issue.siteCount = static_cast<int>((xHi - xLo) / siteWidth);
+    issue.siteCount = static_cast<int>((xHi - xLo) / site_width);
     issue.instances = std::move(instances);
     result.issues.push_back(std::move(issue));
   };
 
-  for (const RowId rowId : view.rows()) {
-    const XInterval legal = view.rowLegalSpan(rowId);
-    const std::vector<PlacedInstance> instances = view.instancesInRow(rowId);
+  for (const RowId rowId : rows()) {
+    const XInterval legal = rowLegalSpan(rowId);
+    const std::vector<PlacedInstance> instances = instancesInRow(rowId);
     std::vector<XInterval> clippedSpans;
     clippedSpans.reserve(instances.size());
     std::vector<DbCoord> cuts{legal.xl, legal.xh};
 
     for (const PlacedInstance& inst : instances) {
-      const XInterval span = instanceSpan(view, inst);
+      const XInterval span = instanceSpan(*this, inst);
 
-      if ((span.xl - legal.xl) % siteWidth != 0) {
+      if ((span.xl - legal.xl) % site_width != 0) {
         addIssue(CoverageIssueKind::OffGrid, rowId, span.xl, span.xh, {inst.id});
       }
       if (span.xl < legal.xl || span.xh > legal.xh) {
@@ -116,7 +177,7 @@ SiteCoverageResult runUtilityPreCheck(const PlacementView& view,
         && merged.back().instances == issue.instances) {
       merged.back().xHi = issue.xHi;
       merged.back().siteCount
-          = static_cast<int>((merged.back().xHi - merged.back().xLo) / siteWidth);
+          = static_cast<int>((merged.back().xHi - merged.back().xLo) / site_width);
     } else {
       merged.push_back(std::move(issue));
     }

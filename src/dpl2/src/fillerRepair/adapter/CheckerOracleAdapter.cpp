@@ -48,7 +48,7 @@ CheckStatus statusOf(const ipl::CheckResult& result)
 
 CheckerOracleAdapter::CheckerOracleAdapter(
     const ipl::ImplantLayerChecker& checker,
-    const CheckerPlacementView& view,
+    const PlacementView& view,
     DbCoord rowHeight,
     const DebugLog& log)
     : checker_(checker), view_(view), row_height_(rowHeight), log_(log)

@@ -16,6 +16,8 @@
 
 namespace dpl2::fillerRepair {
 
+class DebugLog;
+
 struct MasterInfo
 {
   MasterId id = 0;
@@ -60,6 +62,11 @@ class PlacementView
   // nullptr when unknown.
   virtual const PlacedInstance* instance(InstanceId id) const = 0;
   virtual const MasterInfo* masterInfo(MasterId id) const = 0;
+
+  virtual std::vector<MasterId> fillerMasterIds() const = 0;
+  virtual MasterCandidateResult getUsableMasterCandidates(
+      const MasterCandidateRequest& request) const;
+  virtual SiteCoverageResult checkSiteCoverage(const DebugLog& log) const;
 };
 
 // Occupied x span of a placed instance (width comes from its master).

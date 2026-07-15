@@ -33,7 +33,6 @@
 #include <string>
 #include <vector>
 
-#include "../CandidateApi.h"
 #include "../Log.h"
 #include "../PlacementView.h"
 #include "FakeDesign.h"
@@ -77,15 +76,13 @@ struct MasterDescription
   std::string reason;    // checker-style code when unusable, empty otherwise
 };
 
-class FakeUdmCandidateProvider : public FillerMasterCandidateProvider
+class FakeUdmCandidateProvider
 {
  public:
   // `view` resolves instances for the candidate query (spec 5.3 is keyed by
   // filler INSTANCE); the catalog itself is master-only.
-  FakeUdmCandidateProvider(const PlacementView& view,
-                           DbCoord siteWidth,
-                           DbCoord rowHeight)
-      : view_(view), site_width_(siteWidth), row_height_(rowHeight)
+  FakeUdmCandidateProvider(DbCoord siteWidth, DbCoord rowHeight)
+      : site_width_(siteWidth), row_height_(rowHeight)
   {
   }
 
@@ -113,8 +110,6 @@ class FakeUdmCandidateProvider : public FillerMasterCandidateProvider
   // Same width + height, usable filler masters, current master excluded,
   // ascending master id. Non-filler input / no replacement -> diagnostics,
   // never an error.
-  MasterCandidateResult getUsableMasterCandidates(
-      const MasterCandidateRequest& request) const override;
 
   // Sync every usable master into a FakeDesign so the engine's PlacementView
   // and this provider agree on width/height/vt (the engine validates each
@@ -140,7 +135,6 @@ class FakeUdmCandidateProvider : public FillerMasterCandidateProvider
   const LayerInfo* layer(LayerId id) const;
   MasterDescription derive(const FakeUdmMaster& master) const;
 
-  const PlacementView& view_;
   DbCoord site_width_ = 1;
   DbCoord row_height_ = 1;
   std::map<LayerId, LayerInfo> layers_;              // ordered: deterministic

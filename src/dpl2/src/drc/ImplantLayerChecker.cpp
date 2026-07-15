@@ -4015,13 +4015,14 @@ if (hasImplant) break;
 mastersWithImplant[&master] = hasImplant;
 }
 
-// Step 5b: Build MasterInput from masters with implant shapes
-MasterId nextMasterId = 0;
+// Step 5b: Build MasterInput using stable infrastructure LibCellID indexes.
 for (const auto& [masterPtr, hasImplant] : mastersWithImplant) {
 if (!hasImplant) {
 continue;
 }
 const eLIB::PhysLibCell& masterCell = *masterPtr;
+const MasterId masterId = static_cast<MasterId>(
+masterCell.getLibCellId().getIndexValue());
 MasterInput mi;
 mi.width = masterCell.getWidth().getStorage();
 mi.height = masterCell.getHeight().getStorage();
@@ -4042,7 +4043,7 @@ if (techShape.getType() != eLIB::TechShape::RECT) {
 diagnostics_.push_back(
 {"skipped_unsupported_geometry",
 "skipped_unsupported_geometry: master "
-+ std::to_string(nextMasterId) + " non-RECT shape"});
++ std::to_string(masterId) + " non-RECT shape"});
 continue;
 }
 const eUTL::Rect& mRect = techShape.getRect();
@@ -4056,11 +4057,10 @@ mi.shapes.push_back(mis);
 }
 
 if (!mi.shapes.empty()) {
-mi.masterId = nextMasterId;
+mi.masterId = masterId;
 mi.rawShapes = mi.shapes;
-masterToId[masterPtr] = nextMasterId;
+masterToId[masterPtr] = masterId;
 masters_.push_back(mi);
-nextMasterId++;
 }
 }
 
@@ -4085,7 +4085,6 @@ rowYBounds.emplace_back(yLo, yLo + row.getSite().getHeight());
 rowOriginsX.push_back(row.getOrigin().getX());
 }
 
-InstanceId nextInstId = 0;
 for (eUNL::LeafCellID lcId : hierMgr.getAllLeafCellIter()) {
 PhysCell physCell = desMgr.getPhysCell(lcId);
 if (!physCell.isValid()) continue;
@@ -4161,7 +4160,8 @@ diagnostics_.push_back(
 + " x not site-aligned"});
 }
 
-const InstanceId instId = nextInstId++;
+const InstanceId instId = static_cast<InstanceId>(
+    lcId.getIndexValue());
 const MasterId mId = mIt->second;
 const Dbu instX = static_cast<Dbu>(xOffset);
 const bool isFiller = mIt->first->getType().isCoreFiller()

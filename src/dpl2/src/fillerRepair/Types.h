@@ -4,8 +4,7 @@
 // Shared base types for the filler VT overlay repair planner.
 //
 // The planner is a pure, deterministic component (spec section 3.1): it
-// depends only on the abstract interfaces in PlacementView.h / CheckerApi.h /
-// CandidateApi.h and never on the UDM database or the real checker headers.
+// depends only on the abstract interfaces in PlacementView.h / CheckerApi.h and never on the UDM database or the real checker headers.
 // Real checker / infrastructure integrations are attached later through
 // adapters; until then the fakes under fake/ implement these interfaces.
 //
@@ -20,11 +19,36 @@
 #include <cstdint>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
-#include "BaseTypes.h"
-
 namespace dpl2::fillerRepair {
+
+using DbCoord = int64_t;
+using LayerId = int32_t;
+using MasterId = int32_t;
+using InstanceId = int32_t;
+using ShapeId = int32_t;
+using RowId = int32_t;
+
+// Half-open interval [xl, xh).
+struct XInterval
+{
+  DbCoord xl = 0;
+  DbCoord xh = 0;
+
+  DbCoord length() const { return xh - xl; }
+  bool empty() const { return xh <= xl; }
+  bool overlaps(const XInterval& other) const
+  {
+    return xl < other.xh && other.xl < xh;
+  }
+  bool contains(DbCoord x) const { return x >= xl && x < xh; }
+  bool operator==(const XInterval& other) const
+  {
+    return xl == other.xl && xh == other.xh;
+  }
+};
 
 // VT family identity. The planner only compares VT ids; it never interprets
 // them -- rule semantics stay inside the checker (checker-as-oracle).
@@ -76,6 +100,24 @@ inline Diagnostic makeDiag(Severity severity, std::string code, std::string mess
 {
   return Diagnostic{severity, std::move(code), std::move(message)};
 }
+
+// --- Infrastructure candidate query ---------------------------------------
+
+struct MasterCandidateRequest
+{
+  InstanceId fillerInstanceId = 0;
+};
+
+struct MasterCandidate
+{
+  MasterId masterId = 0;
+};
+
+struct MasterCandidateResult
+{
+  std::vector<MasterCandidate> candidates;
+  std::vector<Diagnostic> diagnostics;
+};
 
 // --- Wire types shared with the checker (spec section 5.1 / 5.2) -----------
 

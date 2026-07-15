@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <map>
+#include <utility>
 #include <vector>
 
 #include "../PlacementView.h"
@@ -57,8 +58,14 @@ class FakeDesign : public PlacementView
     return *this;
   }
 
-  // Master ids in deterministic (ascending) order; used by the fake
-  // candidate provider, not part of PlacementView.
+  FakeDesign& setFillerMasterIds(std::vector<MasterId> ids)
+  {
+    configured_fillers_ = std::move(ids);
+    have_configured_fillers_ = true;
+    return *this;
+  }
+
+  // Master ids in deterministic order, useful for test inspection.
   std::vector<MasterId> allMasters() const
   {
     std::vector<MasterId> ids;
@@ -93,8 +100,13 @@ class FakeDesign : public PlacementView
   {
     std::vector<PlacedInstance> result;
     for (const auto& [id, inst] : instances_) {
-      if (inst.rowId == rowId) {
-        result.push_back(inst);
+      const MasterInfo* master = masterInfo(inst.masterId);
+      const DbCoord height
+          = master != nullptr ? std::max<DbCoord>(master->height, 1) : 1;
+      if (rowId >= inst.rowId && rowId < inst.rowId + height) {
+        PlacedInstance copy = inst;
+        copy.rowId = rowId;
+        result.push_back(copy);
       }
     }
     std::sort(result.begin(),
@@ -117,11 +129,23 @@ class FakeDesign : public PlacementView
     return it != masters_.end() ? &it->second : nullptr;
   }
 
+  std::vector<MasterId> fillerMasterIds() const override
+  {
+    if (have_configured_fillers_) return configured_fillers_;
+    std::vector<MasterId> ids;
+    for (const auto& [id, info] : masters_) {
+      if (info.isFiller) ids.push_back(id);
+    }
+    return ids;
+  }
+
  private:
   DbCoord site_width_ = 1;
   std::map<MasterId, MasterInfo> masters_;      // ordered => deterministic
   std::map<RowId, XInterval> row_spans_;        // ordered => deterministic
   std::map<InstanceId, PlacedInstance> instances_;
+  std::vector<MasterId> configured_fillers_;
+  bool have_configured_fillers_ = false;
 };
 
 }  // namespace dpl2::fillerRepair

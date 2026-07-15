@@ -165,7 +165,7 @@ repair engine 内部是五层管线,每层单独可测、单独可替换:
 ```text
 ┌─ 窗口控制外环(L0 → adaptive-L1,预算尽/近边界则渐进扩窗,§6.3)──┐
 │                                                                  │
-│  ① SwapGenerator   窗口内生成候选 swap                           │
+│  ① Swap   窗口内生成候选 swap                           │
 │                    本阶段:仅 swap;未来:+RewriteGenerator       │
 │  ② Ranker          按 filler 排序(启发式,只影响评估顺序,不判   │
 │                    合法性,§6.6);每 filler 保留全部候选 domain   │
@@ -200,14 +200,13 @@ repair engine 内部是五层管线,每层单独可测、单独可替换:
 - fillerRepair 是纯底层库,**不 include 任何 checker 头**。它调用的"checker"
   是它自己定义的抽象接口 `fillerRepair::ImplantOverlayChecker`(CheckerApi.h);
   wire 类型和基础 id/interval 都由 `fillerRepair::` 自有的 UDM-free
-  `Types.h`/`BaseTypes.h` 提供(§5.2 决策);checker 的 `ipl::` 类型独立,
+  `Types.h` 提供(§5.2 决策);checker 的 `ipl::` 类型独立,
   只在 adapter 中显式转换。
 - checker → engine 单向依赖:checker 侧的 repair 入口 include fillerRepair 头,
   构造 engine,并把**自己**包进 `CheckerOracleAdapter :
   public fillerRepair::ImplantOverlayChecker` 注入(adapter 同时做 ipl↔
   fillerRepair 的类型换皮:Orient↔PhysOrientation、columnId·siteWidth↔DBU、
-  Region↔CheckerRect)。candidate provider 的真实实现同理:基于 checker 的
-  master 表,adapter 实现 engine 的 `FillerMasterCandidateProvider`。
+  Region↔CheckerRect)。candidate 查询由同一个 `PlacementView` 提供;真实 view 的允许表只来自 infrastructure `fillerSetting`,checker master 表只补 VT 元数据并做交叉校验。
 - 构建目标:libfillerRepair(零依赖)← checker/drc。adapter 文件放
   `fillerRepair/adapter/`(允许 UDM 头)或 drc/ 侧,随 checker 目标链接。
 
@@ -240,6 +239,18 @@ orchestrator 零改动,记为 future option;(e) 再拆一个共享 wire 库—�
 各自 UDM-free/UDM 类型,wire 结构二元是 §5.2 的既定决策,不加库。
 
 ---
+
+
+### 3.4 Infrastructure alignment (2026-07-15)
+
+- `InfrastructurePlacementView` 是 placement、candidate、coverage precheck 与 ID mapping 的唯一只读边界。
+- placement/precheck 遍历 infrastructure `Network::getNodes()`;master 几何来自 `Network::getMasters()`/`PhysLibCell`。
+- candidate universe 只来自 `fillerSetting`;共享过滤执行同宽同高、异 VT、filler-only。
+- checker 与 planner 的 instance/master id 分别固定为 `LeafCellID`/`LibCellID` 索引,删除枚举顺序 replay bridge。
+- `SwapGenerator` 已并入 `Swap`;`BaseTypes` 与 candidate wire types 已并入 `Types`。
+- 搜索、排序、subset enumeration 与 checker-as-oracle accept gate 没有改变。
+- 本轮按要求未编译、未运行 UDM-dependent tests。
+
 
 ## 4. 核心操作:Swap(本阶段唯一操作)
 
@@ -469,11 +480,13 @@ struct MasterCandidateResult
     std::vector<Diagnostic> diagnostics;
 };
 
-class FillerMasterCandidateProvider
+class PlacementView
 {
  public:
-  MasterCandidateResult getUsableMasterCandidates(
+  virtual std::vector<MasterId> fillerMasterIds() const = 0;
+  virtual MasterCandidateResult getUsableMasterCandidates(
       const MasterCandidateRequest& request) const;
+  virtual SiteCoverageResult checkSiteCoverage(const DebugLog& log) const;
 };
 ```
 
@@ -939,16 +952,14 @@ gate 语义:
 状态(2026-07-13):TODO 1–11 在当前单-VT planner projection 下已实现,
 `src/dpl2/src/fillerRepair/` 下 79 个确定性测试普通版/ASan 全绿。SubsetSearch
 的 exact `space == budget` 完备性边界已修复;planner 基础类型已迁到
-`fillerRepair/BaseTypes.h`,可与 checker header 在同一 adapter TU 共存。
-TODO 12(真实 checker/infra 对接 + CMake)未做,checker 源码已导入
-`src/dpl2/src/drc`。V2.1 修订(§0)落地进度,详见 `src/dpl2/HandOff.md`:
+`fillerRepair/Types.h`,可与 checker header 在同一 adapter TU 共存。
+TODO 12 的 infrastructure/checker adapter 重构已于 2026-07-15 完成;剩余 CMake/build 接线与真实 UDM E2E。checker DRC 算法不变,仅 initFromUDM 的 instance/master ID assignment 改为稳定 LeafCellID/LibCellID 索引。V2.1 修订(§0)落地进度,详见 `src/dpl2/HandOff.md`:
 批 1(OracleGate 正确性 #1/#2/#3/#4/#5/#10)**已完成**;批 2(窗口/管线简化)
 **#6/#7/#8/#11 全部完成**(adaptive-L1 已替代边界 sweep);
 批 3(搜索域建模)**#9 filler-domain 枚举已完成**,#12 随 adapter 对接。真实
 `ImplantLayerChecker` core 已在 fake-UDM boundary 下直接编译并通过 8 个用例及
 ASan:4 个 dense width/spacing × intra/inter-row,以及 raw/rowIds、类型共存、
-invalid-batch 隔离、row/hash/guard 回归。这不等同于 TODO 12 adapter/真实 UDM
-extraction 完成。`ranker_majority_per_band` 仍等待真实 band 元数据;checker 的
+invalid-batch 隔离、row/hash/guard 回归。这不等同于真实 UDM build/E2E 已验证;本轮按要求未编译。`ranker_majority_per_band` 仍等待真实 band 元数据;checker 的
 bridge-MW 专用 raw-vs-blocking fixture 与真实 adapter E2E 仍待补。
 
 ---
@@ -996,7 +1007,7 @@ VT 后缀含义(按业界常规命名推断,待 library 团队确认):R = RVT(re
 本附录命名仅供人读。
 
 对算法的推论(备注性质,算法不 hard-code 这张表,一切以
-`FillerMasterCandidateProvider` 运行时返回为准):
+`PlacementView::getUsableMasterCandidates` 运行时返回为准):
 
 1. **枚举预算充裕**:每个 filler 恒有 2 个同尺寸替换候选(3 VT − 当前),
    分支因子小且均匀,窗口内 move 总数很小,§6.7 的排序枚举远够用——这张表是

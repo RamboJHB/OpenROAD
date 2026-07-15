@@ -14,7 +14,7 @@
 //   [x] 3  100% utility pre-check with fatal short-circuit
 //   [x] 4  violation normalization + signature matching (Signature.h)
 //   [x] 5  L0 + adaptive-L1, guardRegion, unfixable warning (#6/#7/#8)
-//   [x] 6  swap generator: atomic swap moves only (SwapGenerator.h)
+//   [x] 6  swap generator: atomic swap moves only (Swap.h)
 //   [x] 7  ranker (Ranker.h)
 //   [x] 8  subset searcher (SubsetSearch.h)
 //   [x] 9  oracle gate: batch, cache, baseline-delta (OracleGate.h)
@@ -22,7 +22,6 @@
 
 #pragma once
 
-#include "CandidateApi.h"
 #include "CheckerApi.h"
 #include "Log.h"
 #include "PlacementView.h"
@@ -49,7 +48,6 @@ class FillerRepairEngine
  public:
   FillerRepairEngine(const PlacementView& view,
                      ImplantOverlayChecker& checker,
-                     const FillerMasterCandidateProvider& candidates,
                      RepairConfig config = {});
 
   FillerRepairResult repair(const FillerRepairRequest& request);
@@ -57,7 +55,6 @@ class FillerRepairEngine
  private:
   const PlacementView& view_;
   ImplantOverlayChecker& checker_;
-  const FillerMasterCandidateProvider& candidates_;
   RepairConfig config_;
   DebugLog log_;
 };

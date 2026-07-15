@@ -4,11 +4,10 @@
 #include "FillerRepairEngine.h"
 
 #include "OracleGate.h"
-#include "PreCheck.h"
 #include "Ranker.h"
 #include "Signature.h"
 #include "SubsetSearch.h"
-#include "SwapGenerator.h"
+#include "Swap.h"
 #include "Window.h"
 
 #include <algorithm>
@@ -68,11 +67,9 @@ std::string windowLabel(const RepairWindow& window)
 FillerRepairEngine::FillerRepairEngine(
     const PlacementView& view,
     ImplantOverlayChecker& checker,
-    const FillerMasterCandidateProvider& candidates,
     RepairConfig config)
     : view_(view),
       checker_(checker),
-      candidates_(candidates),
       config_(config),
       log_(config.verbose)
 {
@@ -91,7 +88,7 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
 
   // Stage 1: hard precondition (spec 6.1). On failure: fatal, no candidate
   // generation, zero checker calls, empty changes.
-  const SiteCoverageResult coverage = runUtilityPreCheck(view_, log_);
+  const SiteCoverageResult coverage = view_.checkSiteCoverage(log_);
   if (!coverage.isFullUtility) {
     const CoverageIssue& first = coverage.issues.front();
     result.hasSolution = false;
@@ -179,7 +176,7 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
               " contains no editable filler")));
     } else {
       const SwapGenerationResult generated =
-          generateSwaps(window, view_, candidates_, log_);
+          generateSwaps(window, view_, log_);
       result.diagnostics.insert(result.diagnostics.end(),
                                 generated.diagnostics.begin(),
                                 generated.diagnostics.end());

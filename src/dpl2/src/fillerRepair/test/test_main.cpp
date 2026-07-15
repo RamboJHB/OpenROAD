@@ -20,14 +20,11 @@
 
 #include "../FillerRepairEngine.h"
 #include "../Swap.h"
-#include "../PreCheck.h"
 #include "../Signature.h"
 #include "../OracleGate.h"
 #include "../Ranker.h"
 #include "../SubsetSearch.h"
-#include "../SwapGenerator.h"
 #include "../Window.h"
-#include "../fake/FakeCandidateProvider.h"
 #include "../fake/FakeDesign.h"
 #include "../fake/FakeImplantChecker.h"
 #include "../fake/FakeUdmCandidateProvider.h"
@@ -212,7 +209,7 @@ void testWireAdapter()
 void testPreCheckFullUtility()
 {
   RowFixture f = makeCoveredRow();
-  const auto coverage = fr::runUtilityPreCheck(f.design, fr::DebugLog(verbose()));
+  const auto coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
   CHECK(coverage.isFullUtility);
   CHECK(coverage.issues.empty());
 }
@@ -222,7 +219,7 @@ void testPreCheckGap()
   RowFixture f = makeCoveredRow();
   f.design.remove(101);  // hole [4,6)
 
-  const auto coverage = fr::runUtilityPreCheck(f.design, fr::DebugLog(verbose()));
+  const auto coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
   CHECK(!coverage.isFullUtility);
   CHECK_EQ(coverage.issues.size(), 1u);
   CHECK(coverage.issues[0].kind == fr::CoverageIssueKind::Gap);
@@ -237,7 +234,7 @@ void testPreCheckOverlapOffGridIllegal()
   RowFixture f = makeCoveredRow();
   // Overlap: extra filler on top of [4,6).
   f.design.place(300, fillerMaster(2, kVt2), 0, 5);
-  auto coverage = fr::runUtilityPreCheck(f.design, fr::DebugLog(verbose()));
+  auto coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
   CHECK(!coverage.isFullUtility);
   bool sawOverlap = false;
   for (const auto& issue : coverage.issues) {
@@ -248,7 +245,7 @@ void testPreCheckOverlapOffGridIllegal()
 
   // Illegal occupant: instance sticking out of the legal row span.
   f.design.remove(104).place(104, fillerMaster(8, kVt1), 0, 12);  // [12,20) > 16
-  coverage = fr::runUtilityPreCheck(f.design, fr::DebugLog(verbose()));
+  coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
   bool sawIllegal = false;
   for (const auto& issue : coverage.issues) {
     sawIllegal |= issue.kind == fr::CoverageIssueKind::IllegalOccupant;
@@ -258,7 +255,7 @@ void testPreCheckOverlapOffGridIllegal()
   // Off-grid: site width 2, instance at odd x.
   fr::FakeDesign design = makeLibrary();
   design.setSiteWidth(2).addRow(0, 0, 8).place(400, fillerMaster(4, kVt1), 0, 1);
-  coverage = fr::runUtilityPreCheck(design, fr::DebugLog(verbose()));
+  coverage = design.checkSiteCoverage(fr::DebugLog(verbose()));
   bool sawOffGrid = false;
   for (const auto& issue : coverage.issues) {
     sawOffGrid |= issue.kind == fr::CoverageIssueKind::OffGrid;
@@ -294,8 +291,8 @@ void testPreCheckMultiRowIssuesDeterministic()
       .addRow(5, 0, 8)
       .place(500, fillerMaster(4, kVt1), 5, 0);
 
-  const auto first = fr::runUtilityPreCheck(design, fr::DebugLog(verbose()));
-  const auto second = fr::runUtilityPreCheck(design, fr::DebugLog(verbose()));
+  const auto first = design.checkSiteCoverage(fr::DebugLog(verbose()));
+  const auto second = design.checkSiteCoverage(fr::DebugLog(verbose()));
   CHECK(!first.isFullUtility);
   CHECK(sameCoverageIssues(first.issues, second.issues));
   CHECK_EQ(first.issues.size(), 2u);
@@ -316,7 +313,7 @@ void testPreCheckGapAtRowEdges()
   fr::FakeDesign design = makeLibrary();
   design.addRow(0, 0, 8).place(100, fillerMaster(4, kVt1), 0, 2);
 
-  const auto coverage = fr::runUtilityPreCheck(design, fr::DebugLog(verbose()));
+  const auto coverage = design.checkSiteCoverage(fr::DebugLog(verbose()));
   CHECK_EQ(coverage.issues.size(), 2u);
   if (coverage.issues.size() != 2) {
     return;
@@ -341,7 +338,7 @@ void testPreCheckOverlapThreeInstances()
       .place(100, fillerMaster(4, kVt2), 0, 0)
       .place(101, fillerMaster(4, kVt3), 0, 0);
 
-  const auto coverage = fr::runUtilityPreCheck(design, fr::DebugLog(verbose()));
+  const auto coverage = design.checkSiteCoverage(fr::DebugLog(verbose()));
   CHECK_EQ(coverage.issues.size(), 1u);
   if (coverage.issues.size() != 1) {
     return;
@@ -359,10 +356,9 @@ void testEngineFatalOnGapWithoutCheckerCalls()
   f.design.remove(101);  // hole [4,6)
 
   fr::FakeImplantChecker checker(f.design, {});
-  fr::FakeCandidateProvider provider(f.design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(f.design, checker, provider, config);
+  fr::FillerRepairEngine engine(f.design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(f.design, f.anchor);
@@ -384,17 +380,16 @@ void testEngineFatalOnGapWithoutCheckerCalls()
 void testCandidateProvider()
 {
   RowFixture f = makeCoveredRow();
-  fr::FakeCandidateProvider provider(f.design);
 
   // Filler 101 is w2 vt1 -> exactly the two other w2 VTs, ascending order.
-  const auto result = provider.getUsableMasterCandidates({101});
+  const auto result = f.design.getUsableMasterCandidates({101});
   CHECK_EQ(result.candidates.size(), 2u);
   CHECK_EQ(result.candidates[0].masterId, fillerMaster(2, kVt2));
   CHECK_EQ(result.candidates[1].masterId, fillerMaster(2, kVt3));
 
   // Std cell input: empty + diagnostic, not an error.
   f.design.remove(103).place(103, cellMaster(kVt1), 0, 10);
-  const auto cellResult = provider.getUsableMasterCandidates({103});
+  const auto cellResult = f.design.getUsableMasterCandidates({103});
   CHECK(cellResult.candidates.empty());
   CHECK(!cellResult.diagnostics.empty());
 }
@@ -410,8 +405,7 @@ void testCandidateProvider()
 void testUdmProviderDescribeWidthsAndVts()
 {
   fr::FakeDesign design;  // only needed to satisfy the provider's view
-  fr::FakeUdmCandidateProvider provider(design, /*siteWidth=*/1,
-                                        /*rowHeight=*/2);
+  fr::FakeUdmCandidateProvider provider(/*siteWidth=*/1, /*rowHeight=*/2);
   provider.addAppendixALibrary();
 
   // Batch query in a fixed order; input order must be preserved.
@@ -449,8 +443,7 @@ void testUdmProviderDescribeWidthsAndVts()
 void testUdmProviderRejectsMalformedMasters()
 {
   fr::FakeDesign design;
-  fr::FakeUdmCandidateProvider provider(design, /*siteWidth=*/2,
-                                        /*rowHeight=*/2);
+  fr::FakeUdmCandidateProvider provider(/*siteWidth=*/2, /*rowHeight=*/2);
   provider.addLayer(1, "VTS_N");
   provider.addLayer(2, "VTS_P");
   provider.addLayer(3, "VTL_N");
@@ -493,7 +486,7 @@ void testUdmProviderCandidatesContract()
 {
   fr::FakeDesign design;
   design.setSiteWidth(1);
-  fr::FakeUdmCandidateProvider provider(design, 1, /*rowHeight=*/2);
+  fr::FakeUdmCandidateProvider provider(1, /*rowHeight=*/2);
   provider.addAppendixALibrary();
   // A non-filler master in the same catalog (same size as w4 fillers).
   provider.addLayer(7, "VTH_N");
@@ -507,18 +500,18 @@ void testUdmProviderCandidatesContract()
 
   // Filler: exactly the two other w4 filler VTs, ascending id; the same-size
   // NON-filler master 942 must not appear.
-  const auto result = provider.getUsableMasterCandidates({500});
+  const auto result = design.getUsableMasterCandidates({500});
   CHECK_EQ(result.candidates.size(), 2u);
   CHECK_EQ(result.candidates[0].masterId, 41);  // w4 VTL
   CHECK_EQ(result.candidates[1].masterId, 43);  // w4 VTUL
 
   // Std cell input: empty + warning, not an error.
-  const auto cellResult = provider.getUsableMasterCandidates({501});
+  const auto cellResult = design.getUsableMasterCandidates({501});
   CHECK(cellResult.candidates.empty());
   CHECK(!cellResult.diagnostics.empty());
 
   // Unknown instance: error diagnostic.
-  const auto unknown = provider.getUsableMasterCandidates({777});
+  const auto unknown = design.getUsableMasterCandidates({777});
   CHECK(unknown.candidates.empty());
   CHECK(!unknown.diagnostics.empty());
 
@@ -546,7 +539,7 @@ void testEngineSolvesWithUdmProvider()
 {
   fr::FakeDesign design;
   design.setSiteWidth(1);
-  fr::FakeUdmCandidateProvider provider(design, 1, /*rowHeight=*/2);
+  fr::FakeUdmCandidateProvider provider(1, /*rowHeight=*/2);
   provider.addAppendixALibrary();
   provider.addBandMaster(941, "CELL4_VTL", 4, /*isFiller=*/false, "VTL");
   provider.registerInto(design);
@@ -583,7 +576,7 @@ void testEngineSolvesWithUdmProvider()
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
   CHECK(result.hasSolution);
@@ -1301,10 +1294,9 @@ void testEngineUnfixableFastFail()
       .place(103, cellMaster(kVt1), 0, 12);
 
   fr::FakeImplantChecker checker(design, {});
-  fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
@@ -1327,10 +1319,9 @@ void testEngineEmptySnapshotIsSuccess()
 {
   RowFixture f = makeCoveredRow();
   fr::FakeImplantChecker checker(f.design, {});
-  fr::FakeCandidateProvider provider(f.design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(f.design, checker, provider, config);
+  fr::FillerRepairEngine engine(f.design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(f.design, f.anchor);
@@ -1346,7 +1337,6 @@ void testEngineEmptySnapshotIsSuccess()
 void testSwapGeneratorBasic()
 {
   fr::FakeDesign design = makeTwoRowDesign();
-  fr::FakeCandidateProvider provider(design);
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
   request.targetPlace.masterId = cellMaster(kVt2);
@@ -1365,7 +1355,7 @@ void testSwapGeneratorBasic()
       fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
   const auto window = fr::buildWindow(0, request.targetPlace, normalized,
                                       design, 1, fr::DebugLog(verbose()));
-  const auto generated = fr::generateSwaps(window, design, provider,
+  const auto generated = fr::generateSwaps(window, design,
                                                fr::DebugLog(verbose()));
 
   // Full library: every editable filler has exactly 2 same-size candidates.
@@ -1392,14 +1382,12 @@ void testSwapGeneratorNoUsableMaster()
   fr::FakeDesign design = makeLibrary();
   design.addMaster(51, 5, 1, /*isFiller=*/true, kVt1);
   design.addRow(0, 0, 5).place(100, 51, 0, 0);
-
-  fr::FakeCandidateProvider provider(design);
   fr::RepairWindow window;
   window.rows = {0};
   window.x = {0, 5};
   window.editableFillers = {100};
 
-  const auto generated = fr::generateSwaps(window, design, provider,
+  const auto generated = fr::generateSwaps(window, design,
                                                fr::DebugLog(verbose()));
   CHECK(generated.swaps.empty());
   bool sawNoUsable = false;
@@ -1409,8 +1397,7 @@ void testSwapGeneratorNoUsableMaster()
   CHECK(sawNoUsable);
 }
 
-class MixedValidityCandidateProvider
-    : public fr::FillerMasterCandidateProvider
+class MixedValidityPlacementView : public fr::FakeDesign
 {
  public:
   fr::MasterCandidateResult getUsableMasterCandidates(
@@ -1427,16 +1414,19 @@ void testSwapgenRejectedCandidateDiag()
 {
   // Vt Type: 1 | Widths: {2} | cell type: 0=filler
   // Provider returns one valid width-2 and one invalid width-4 replacement.
-  fr::FakeDesign design = makeLibrary();
+  MixedValidityPlacementView design;
+  design.setSiteWidth(1)
+      .addMaster(fillerMaster(2, kVt1), 2, 1, true, kVt1)
+      .addMaster(fillerMaster(2, kVt2), 2, 1, true, kVt2)
+      .addMaster(fillerMaster(4, kVt2), 4, 1, true, kVt2);
   design.addRow(0, 0, 2).place(100, fillerMaster(2, kVt1), 0, 0);
   fr::RepairWindow window;
   window.rows = {0};
   window.x = {0, 2};
   window.editableFillers = {100};
 
-  MixedValidityCandidateProvider provider;
   const auto generated = fr::generateSwaps(
-      window, design, provider, fr::DebugLog(verbose()));
+      window, design, fr::DebugLog(verbose()));
   CHECK_EQ(generated.swaps.size(), 1u);
   CHECK_EQ(generated.swaps.front().newMasterId, fillerMaster(2, kVt2));
   bool sawRejected = false;
@@ -1485,8 +1475,7 @@ void testRankerOrder()
       fr::normalizeViolations(sc.request, sc.design, fr::DebugLog(verbose()));
   const auto window = fr::buildWindow(0, sc.request.targetPlace, normalized,
                                       sc.design, 2, fr::DebugLog(verbose()));
-  fr::FakeCandidateProvider provider(sc.design);
-  const auto generated = fr::generateSwaps(window, sc.design, provider,
+  const auto generated = fr::generateSwaps(window, sc.design,
                                            fr::DebugLog(verbose()));
   const auto ranked =
       fr::rankFillers(generated.swaps, sc.request.targetPlace, normalized,
@@ -1689,10 +1678,9 @@ void testEngineSolvesSingleSwap()
 {
   ScenarioA sc = makeScenarioA();
   fr::FakeImplantChecker checker(sc.design, sc.rules);
-  fr::FakeCandidateProvider provider(sc.design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(sc.design, checker, provider, config);
+  fr::FillerRepairEngine engine(sc.design, checker, config);
 
   const auto result = engine.repair(sc.request);
   CHECK(result.hasSolution);
@@ -1705,7 +1693,7 @@ void testEngineSolvesSingleSwap()
 
   // Determinism: same input -> identical outcome and identical call count.
   fr::FakeImplantChecker checker2(sc.design, sc.rules);
-  fr::FillerRepairEngine engine2(sc.design, checker2, provider, config);
+  fr::FillerRepairEngine engine2(sc.design, checker2, config);
   const auto result2 = engine2.repair(sc.request);
   CHECK(result2.hasSolution);
   CHECK_EQ(result2.changes.size(), result.changes.size());
@@ -1744,10 +1732,9 @@ void testEngineSolvesPairNonMonotone()
   CHECK_EQ(request.violations.size(), 2u);  // VT2 MS + VT1 MS
 
   fr::FakeImplantChecker checker(design, rules);
-  fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
   CHECK(result.hasSolution);
@@ -1892,13 +1879,12 @@ void testEngineComplexRankedPairFast()
   checker.originals = fixture.request.violations;
   checker.required = {{102, fillerMaster(2, kVt2)},
                       {202, fillerMaster(2, kVt2)}};
-  fr::FakeCandidateProvider provider(fixture.design);
   fr::RepairConfig config;
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
   fr::FillerRepairEngine engine(
-      fixture.design, checker, provider, config);
+      fixture.design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(fixture.request);
   CHECK(result.hasSolution);
@@ -1923,7 +1909,7 @@ void testEngineComplexRankedPairFast()
   checkerAgain.originals = fixture.request.violations;
   checkerAgain.required = checker.required;
   fr::FillerRepairEngine engineAgain(
-      fixture.design, checkerAgain, provider, config);
+      fixture.design, checkerAgain, config);
   const fr::FillerRepairResult again = engineAgain.repair(fixture.request);
   CHECK(again.hasSolution);
   CHECK_EQ(again.changes.size(), result.changes.size());
@@ -1948,13 +1934,12 @@ void testEngineComplexThirdVtStillSucceeds()
   // harder solution than anchor-follow and proves demotion does not prune it.
   checker.required = {{102, fillerMaster(2, kVt3)},
                       {202, fillerMaster(2, kVt3)}};
-  fr::FakeCandidateProvider provider(fixture.design);
   fr::RepairConfig config;
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
   fr::FillerRepairEngine engine(
-      fixture.design, checker, provider, config);
+      fixture.design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(fixture.request);
   CHECK(result.hasSolution);
@@ -2012,10 +1997,9 @@ void testEngineIgnoresUnrelatedHaloViolation()
   CHECK_EQ(request.violations.size(), 1u);  // only the anchor-caused MW
 
   fr::FakeImplantChecker checker(design, rules);
-  fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
   // The pre-existing VT3 MW sits in the baseline of the same guard region;
@@ -2047,10 +2031,9 @@ void testEngineNoSolutionDefinitive()
   CHECK(!request.violations.empty());
 
   fr::FakeImplantChecker checker(design, rules);
-  fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
   CHECK(!result.hasSolution);
@@ -2127,10 +2110,9 @@ void testEngineDetectsProtocolError()
   ScenarioA sc = makeScenarioA();
   fr::FakeImplantChecker inner(sc.design, sc.rules);
   MisbehavingChecker checker(inner);
-  fr::FakeCandidateProvider provider(sc.design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(sc.design, checker, provider, config);
+  fr::FillerRepairEngine engine(sc.design, checker, config);
 
   const auto result = engine.repair(sc.request);
   CHECK(!result.hasSolution);
@@ -2168,10 +2150,9 @@ void testEngineOrderIndependentBatches()
   ScenarioA sc = makeScenarioA();
   fr::FakeImplantChecker inner(sc.design, sc.rules);
   ReversingChecker checker(inner);
-  fr::FakeCandidateProvider provider(sc.design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(sc.design, checker, provider, config);
+  fr::FillerRepairEngine engine(sc.design, checker, config);
 
   const auto result = engine.repair(sc.request);
   CHECK(result.hasSolution);
@@ -2238,20 +2219,19 @@ class RecordingChecker : public fr::ImplantOverlayChecker
 void testEngineBatchSizeInvariance()
 {
   ScenarioA sc = makeScenarioA();
-  fr::FakeCandidateProvider provider(sc.design);
 
   fr::FakeImplantChecker checkerOne(sc.design, sc.rules);
   fr::RepairConfig one;
   one.batchSize = 1;
   one.verbose = verbose();
-  fr::FillerRepairEngine engineOne(sc.design, checkerOne, provider, one);
+  fr::FillerRepairEngine engineOne(sc.design, checkerOne, one);
   const auto resultOne = engineOne.repair(sc.request);
 
   fr::FakeImplantChecker checkerMany(sc.design, sc.rules);
   fr::RepairConfig many;
   many.batchSize = 32;
   many.verbose = verbose();
-  fr::FillerRepairEngine engineMany(sc.design, checkerMany, provider, many);
+  fr::FillerRepairEngine engineMany(sc.design, checkerMany, many);
   const auto resultMany = engineMany.repair(sc.request);
 
   CHECK(resultOne.hasSolution == resultMany.hasSolution);
@@ -2261,17 +2241,16 @@ void testEngineBatchSizeInvariance()
 void testEngineDeterminismFullTranscript()
 {
   ScenarioA sc = makeScenarioA();
-  fr::FakeCandidateProvider provider(sc.design);
   fr::RepairConfig config;
   config.batchSize = 3;
   config.verbose = verbose();
 
   fr::FakeImplantChecker checkerA(sc.design, sc.rules);
-  fr::FillerRepairEngine engineA(sc.design, checkerA, provider, config);
+  fr::FillerRepairEngine engineA(sc.design, checkerA, config);
   const auto resultA = engineA.repair(sc.request);
 
   fr::FakeImplantChecker checkerB(sc.design, sc.rules);
-  fr::FillerRepairEngine engineB(sc.design, checkerB, provider, config);
+  fr::FillerRepairEngine engineB(sc.design, checkerB, config);
   const auto resultB = engineB.repair(sc.request);
 
   CHECK(resultA.hasSolution == resultB.hasSolution);
@@ -2300,10 +2279,9 @@ void testEngineNeverEditsGuardOnly()
 
   fr::FakeImplantChecker inner(sc.design, sc.rules);
   RecordingChecker checker(inner);
-  fr::FakeCandidateProvider provider(sc.design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(sc.design, checker, provider, config);
+  fr::FillerRepairEngine engine(sc.design, checker, config);
   const auto result = engine.repair(sc.request);
 
   CHECK(result.hasSolution);
@@ -2699,11 +2677,10 @@ void testEngineBudgetCeiling()
   AlwaysUnsolvedChecker inner;
   inner.original = original;
   RecordingChecker checker(inner);
-  fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.checkerCallBudgetPerWindow = 3;  // baseline + exact two-option space
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
   CHECK(!result.hasSolution);
@@ -2780,11 +2757,10 @@ void testEngineUnfixableHintButSolved()
   AdaptiveSolutionChecker checker;
   checker.original = original;
   checker.solutionInstance = 141;
-  fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
   CHECK(result.hasSolution);
@@ -2837,11 +2813,10 @@ void testEngineAdaptiveL1FindsFarFiller()
   AdaptiveSolutionChecker checker;
   checker.original = original;
   checker.solutionInstance = 141;
-  fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(request);
   CHECK(result.hasSolution);
@@ -2886,11 +2861,10 @@ void testEngineAdaptiveCutoffUnchangedBlocking()
 
   AlwaysUnsolvedChecker checker;
   checker.original = original;
-  fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(request);
   CHECK(!result.hasSolution);
@@ -2938,13 +2912,12 @@ void testEngineDefinitiveReflectsLastWindow()
 
   AlwaysUnsolvedChecker checker;
   checker.original = original;
-  fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.verbose = verbose();
   // L0 (1 filler, space 2) fits; adaptive step (7 fillers) far exceeds 50.
   config.checkerCallBudgetPerWindow = 50;
   config.adaptiveStepFillers = 6;
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
   CHECK(!result.hasSolution);
@@ -3491,10 +3464,9 @@ void testEngineUserGridMwMs1()
   CHECK_EQ(snapshot.size(), 2u);  // two corner-touch inter-row MS at [49,50)
 
   fr::FakeImplantChecker checker(design, rules);
-  fr::FakeCandidateProvider provider(design);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, provider, config);
+  fr::FillerRepairEngine engine(design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchor;
@@ -3514,7 +3486,7 @@ void testEngineUserGridMwMs1()
 
   // Same input -> identical result (planner determinism).
   fr::FakeImplantChecker checker2(design, rules);
-  fr::FillerRepairEngine engine2(design, checker2, provider, config);
+  fr::FillerRepairEngine engine2(design, checker2, config);
   const auto result2 = engine2.repair(request);
   CHECK(result2.hasSolution);
   CHECK_EQ(result2.changes.size(), 1u);

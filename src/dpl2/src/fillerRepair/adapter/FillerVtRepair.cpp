@@ -10,28 +10,22 @@ namespace fillerRepair {
 namespace adapter {
 
 FillerVtRepair::FillerVtRepair(const eUNL::PhysDesMgr& desMgr,
+                               const dpl2::Network& network,
                                const ipl::ImplantLayerChecker& checker,
+                               const dpl2::fillerSetting& fillerSetting,
                                const FillerVtRepairConfig& config)
-    : config_(config), log_(config.verbose), own_precheck_(log_)
+    : config_(config), log_(config.verbose)
 {
   config_.repair.verbose = config_.repair.verbose || config_.verbose;
 
-  bridge_ = std::make_unique<UdmIdBridge>(desMgr, checker);
-  std::vector<std::string> problems;
-  if (!bridge_->validate(problems)) {
-    for (const std::string& problem : problems) {
-      setup_diagnostics_.push_back(
-          makeDiag(Severity::Fatal, "BridgeMismatch", problem));
-      log_.msg("adapter", cat("bridge validation: ", problem));
-    }
-    return;  // ready_ stays false; repair() refuses.
+  view_ = std::make_unique<InfrastructurePlacementView>(
+      desMgr, network, checker, fillerSetting, log_);
+  setup_diagnostics_ = view_->setupDiagnostics();
+  if (!view_->isValid()) {
+    return;
   }
-
-  view_ = std::make_unique<CheckerPlacementView>(checker, *bridge_, log_);
   oracle_ = std::make_unique<CheckerOracleAdapter>(
-      checker, *view_, static_cast<DbCoord>(bridge_->rowHeight()), log_);
-  candidates_ = std::make_unique<UdmMasterCandidateProvider>(
-      checker, *view_, *bridge_, config_.fillerSetting, log_);
+      checker, *view_, view_->rowHeight(), log_);
 
   // Default snapshot halo: 2x the max rule query radius (the checker's own
   // neighbor-search radius: max of minValue / |prl| / length per rule).
@@ -53,7 +47,7 @@ FillerVtRepair::FillerVtRepair(const eUNL::PhysDesMgr& desMgr,
   log_.msg("adapter",
            cat("FillerVtRepair ready: defaultHaloX=", default_halo_x_,
                " siteWidth=", view_->siteWidth(),
-               " rowHeight=", bridge_->rowHeight()));
+               " rowHeight=", view_->rowHeight()));
 }
 
 Region FillerVtRepair::snapshotGuard(const TargetPlace& target) const
@@ -87,16 +81,13 @@ FillerVtRepairResult FillerVtRepair::repair(eUNL::LeafCellID targetCell,
     result.diagnostics = setup_diagnostics_;
     result.diagnostics.push_back(makeDiag(
         Severity::Fatal, "AdapterNotReady",
-        "bridge validation failed at construction -> repair refused"));
+        "infrastructure/checker validation failed -> repair refused"));
     return result;
   }
 
-  // 1) 100%-utility gate (cached; same-size swaps never change coverage).
-  UdmPrecheck& precheck = config_.sharedPrecheck != nullptr
-                              ? *config_.sharedPrecheck
-                              : own_precheck_;
-  const SiteCoverageResult& coverage =
-      precheck.check(*view_, config_.coverageRevision);
+  // 1) Coverage gate over the same immutable infrastructure snapshot used
+  // for candidates and checker-id validation.
+  const SiteCoverageResult coverage = view_->checkSiteCoverage(log_);
   if (!coverage.isFullUtility) {
     result.diagnostics = coverage.diagnostics;
     result.diagnostics.push_back(makeDiag(
@@ -107,7 +98,7 @@ FillerVtRepairResult FillerVtRepair::repair(eUNL::LeafCellID targetCell,
   }
 
   // 2) Resolve the target into the checker frame.
-  const ipl::InstanceId targetId = bridge_->instanceIdOf(targetCell);
+  const InstanceId targetId = view_->instanceIdOf(targetCell);
   if (targetId < 0) {
     result.diagnostics.push_back(makeDiag(
         Severity::Fatal, "UnknownTarget",
@@ -115,7 +106,7 @@ FillerVtRepairResult FillerVtRepair::repair(eUNL::LeafCellID targetCell,
             " is not in the checker's placed set")));
     return result;
   }
-  const ipl::MasterId newMasterId = bridge_->masterIdOf(newMaster);
+  const MasterId newMasterId = view_->masterIdOf(newMaster);
   if (newMasterId < 0) {
     result.diagnostics.push_back(makeDiag(
         Severity::Fatal, "TargetMasterNotModeled",
@@ -129,6 +120,36 @@ FillerVtRepairResult FillerVtRepair::repair(eUNL::LeafCellID targetCell,
     result.diagnostics.push_back(makeDiag(
         Severity::Fatal, "TargetNotPlaced",
         cat("checker instance ", targetId, " missing from the view")));
+    return result;
+  }
+
+  const MasterInfo* oldMaster = view_->masterInfo(inst->masterId);
+  const MasterInfo* replacement = view_->masterInfo(newMasterId);
+  if (oldMaster == nullptr || replacement == nullptr) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Fatal, "TargetMasterNotModeled",
+        "target current or replacement master is absent from the view"));
+    return result;
+  }
+  const DbCoord replacementWidth = newMaster.getWidth().getStorage();
+  const DbCoord replacementHeight = std::max<DbCoord>(
+      (newMaster.getHeight().getStorage() + view_->rowHeight() - 1)
+          / view_->rowHeight(),
+      1);
+  if (inst->isFiller || oldMaster->isFiller
+      || newMaster.getType().isCoreFiller()) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Fatal, "TargetNotStdCell",
+        "target and replacement master must both be standard cells"));
+    return result;
+  }
+  if (oldMaster->width != replacementWidth
+      || oldMaster->height != replacementHeight
+      || replacement->width != replacementWidth
+      || replacement->height != replacementHeight) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Fatal, "TargetSizeMismatch",
+        "target VT replacement must preserve infrastructure width and height"));
     return result;
   }
 
@@ -169,7 +190,7 @@ FillerVtRepairResult FillerVtRepair::repair(eUNL::LeafCellID targetCell,
   FillerRepairRequest request;
   request.targetPlace = target;
   request.violations = snapshot.violations;
-  FillerRepairEngine engine(*view_, *oracle_, *candidates_, config_.repair);
+  FillerRepairEngine engine(*view_, *oracle_, config_.repair);
   FillerRepairResult planned = engine.repair(request);
 
   result.hasSolution = planned.hasSolution;
@@ -182,16 +203,14 @@ FillerVtRepairResult FillerVtRepair::repair(eUNL::LeafCellID targetCell,
     UdmFillerChange out;
     out.instanceId = change.instanceId;
     out.newMasterId = change.newMasterId;
-    out.cellId =
-        bridge_->leafCellOf(static_cast<ipl::InstanceId>(change.instanceId));
-    out.newMaster =
-        bridge_->physLibCellOf(static_cast<ipl::MasterId>(change.newMasterId));
+    out.cellId = view_->leafCellOf(change.instanceId);
+    out.newMaster = view_->physLibCellOf(change.newMasterId);
     if (!out.cellId.isValid() || out.newMaster == nullptr) {
       // A solution we cannot express in UDM terms is no solution.
       result.hasSolution = false;
       result.changes.clear();
       result.diagnostics.push_back(makeDiag(
-          Severity::Fatal, "BridgeMappingLost",
+          Severity::Fatal, "InfrastructureMappingLost",
           cat("accepted change (inst=", change.instanceId, " -> master=",
               change.newMasterId, ") has no UDM mapping")));
       return result;

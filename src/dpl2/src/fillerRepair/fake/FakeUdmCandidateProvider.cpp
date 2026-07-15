@@ -4,6 +4,7 @@
 #include "FakeUdmCandidateProvider.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace dpl2::fillerRepair {
 
@@ -164,60 +165,16 @@ std::vector<MasterDescription> FakeUdmCandidateProvider::describeMasters(
   return result;
 }
 
-MasterCandidateResult FakeUdmCandidateProvider::getUsableMasterCandidates(
-    const MasterCandidateRequest& request) const
-{
-  MasterCandidateResult result;
-
-  const PlacedInstance* inst = view_.instance(request.fillerInstanceId);
-  if (inst == nullptr) {
-    result.diagnostics.push_back(
-        makeDiag(Severity::Error, "UnknownInstance",
-                 cat("instance ", request.fillerInstanceId, " not found")));
-    return result;
-  }
-  if (!inst->isFiller) {
-    result.diagnostics.push_back(
-        makeDiag(Severity::Warning, "NotAFiller",
-                 cat("instance ", request.fillerInstanceId,
-                     " is not a filler")));
-    return result;
-  }
-  const MasterDescription* current = describeMaster(inst->masterId);
-  if (current == nullptr) {
-    result.diagnostics.push_back(
-        makeDiag(Severity::Error, "UnknownMaster",
-                 cat("master ", inst->masterId, " of instance ",
-                     request.fillerInstanceId, " not in the catalog")));
-    return result;
-  }
-
-  // Same width + height, usable filler masters, other id, ascending order
-  // (described_ is an ordered map). Width/height come from the master input
-  // directly, so an unusable CURRENT master still gets size-matched
-  // candidates; the candidates themselves must be usable (derivable VT).
-  for (const auto& [id, d] : described_) {
-    if (id != inst->masterId && d.usable && d.isFiller
-        && d.width == current->width && d.heightRows == current->heightRows) {
-      result.candidates.push_back(MasterCandidate{id});
-    }
-  }
-  if (result.candidates.empty()) {
-    result.diagnostics.push_back(
-        makeDiag(Severity::Info, "NoUsableMaster",
-                 cat("no same-size replacement for instance ",
-                     request.fillerInstanceId)));
-  }
-  return result;
-}
-
 void FakeUdmCandidateProvider::registerInto(FakeDesign& design) const
 {
+  std::vector<MasterId> fillerIds;
   for (const auto& [id, d] : described_) {
     if (d.usable) {
       design.addMaster(id, d.width, d.heightRows, d.isFiller, d.vt);
+      if (d.isFiller) fillerIds.push_back(id);
     }
   }
+  design.setFillerMasterIds(std::move(fillerIds));
 }
 
 void FakeUdmCandidateProvider::addAppendixALibrary()

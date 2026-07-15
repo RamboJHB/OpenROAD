@@ -2,6 +2,7 @@
 // Copyright (c) 2021-2025, The OpenROAD Authors
 
 #pragma once
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -19,10 +20,16 @@ class Network
 {
  public:
   std::vector<std::unique_ptr<Node>>& getNodes() { return nodes_; }
+  const std::vector<std::unique_ptr<Node>>& getNodes() const { return nodes_; }
   std::vector<std::unique_ptr<Master>>& getMasters() { return masters_; }
+  const std::vector<std::unique_ptr<Master>>& getMasters() const
+  {
+    return masters_;
+  }
   // For creating and adding cells.
   void addNode(LeafCellID cellId, const PhysDesMgr* desMgr);
   Node* getNode(LeafCellID cellId);
+  const Node* getNode(LeafCellID cellId) const;
   bool updateNode(Node* ndi,
                   const PhysDesMgr* desMgr,
                   const PhysLibCell& physLibCell);
@@ -30,6 +37,7 @@ class Network
   void setCore(const Rect& core) { core_ = core; }
   const Rect& getCore() const { return core_; }
   Master* getMaster(LibCellID db_master);
+  const Master* getMaster(LibCellID db_master) const;
   // For creating masters.
   Master* addMaster(const PhysLibCell& db_master,
                     const Grid* grid,

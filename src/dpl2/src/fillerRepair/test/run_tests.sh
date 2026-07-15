@@ -19,7 +19,7 @@ fi
 
 "$cxx" -std=c++17 -Wall -Wextra -Werror -g \
   "${sanitize_flags[@]}" \
-  Swap.cpp PreCheck.cpp Signature.cpp Window.cpp SwapGenerator.cpp \
+  PlacementView.cpp Swap.cpp Signature.cpp Window.cpp \
   Ranker.cpp SubsetSearch.cpp OracleGate.cpp \
   FillerRepairEngine.cpp \
   fake/FakeImplantChecker.cpp \

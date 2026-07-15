@@ -34,35 +34,38 @@ runs end-to-end against the fakes in `fake/`.
 > the integration environment; next step is iterating on the user's
 > compile/debug feedback against the `[VERIFY-UDM]` checklist.
 
+> **Infrastructure alignment (2026-07-15):** candidate lookup and coverage
+> precheck now come from one `PlacementView` snapshot. Production placement is
+> based on infrastructure `Network/Node/Master`; candidate ids come only from
+> `fillerSetting`; checker/planner ids use stable LeafCellID/LibCellID indexes.
+> `SwapGenerator` is merged into `Swap`, and `BaseTypes` into `Types`. The old
+> replay bridge/provider/precheck adapters are deleted. Per request, this
+> refactor was not compiled and UDM-dependent tests were not run.
+
 ## Layout
 
 | Path | Content |
 |---|---|
-| `BaseTypes.h` | Planner-owned UDM-free ids and half-open `XInterval`; deliberately separate from checker `ipl::` types |
-| `Types.h` | Wire types (`TargetPlace`, `FillerChange`, `Violation`, `OverlayCheckRequest`, `CheckResult`) and planner entry/coverage types |
-| `PlacementView.h` | Read-only DB view interface (real adapter wraps the UDM design) |
+| `Types.h` | Planner ids/intervals, candidate query types, checker wire types and planner result/coverage types |
+| `PlacementView.h/.cpp` | Single read-only boundary for placement, `fillerSetting` candidate filtering and full-utility coverage precheck |
 | `CheckerApi.h` | Abstract `ImplantOverlayChecker` (spec §5.2 protocol) |
-| `CandidateApi.h` | Abstract `FillerMasterCandidateProvider` (spec §5.3) |
-| `Swap.h/.cpp` | `Swap` (the stage's atomic operation: FillerChange + geometry metadata), overlay cache key (spec §4) |
-| `PreCheck.h/.cpp` | 100% utility pre-check (spec §6.1) |
+| `Swap.h/.cpp` | Atomic swap, validation, canonical key and candidate-to-swap generation |
 | `Signature.h/.cpp` | Violation normalization, pinned signature matching, change-relatedness (spec §6.2) |
 | `Window.h/.cpp` | L0 builder + adaptive-L1: grow K contiguous fillers per blocking side/relevant row, coupled rows ±1, fixed-boundary and unchanged-blocking cutoffs; guardRegion two-cell ring (spec §6.2/6.3) |
-| `SwapGenerator.h/.cpp` | Swap generator: atomic swaps only, no group/seed machinery (spec §6.5) |
 | `Ranker.h/.cpp` | Ranks fillers (direct/bridge/width/position) and returns `FillerDomain`s — each filler's full master domain, VT-preference ordered with the third VT demoted within the domain; realizes anchor-follow (spec §6.6, V2.1 #9) |
 | `SubsetSearch.h/.cpp` | Enumerates filler combinations × per-domain assignments in pinned order; member caps count fillers; complete-space rule (spec §6.7, V2.1 #9) |
 | `OracleGate.h/.cpp` | Baseline + batched checker calls, protocol validation, result cache, baseline-delta gate (spec §6.8). V2.1 batch-1 target: two-way self-consistency, BaselineMismatch gate, multiset delta, per-violation ruleDistance (#1–#5) |
 | `FillerRepairEngine.h/.cpp` | Planner entry + pipeline skeleton (spec §3.2) |
 | `fake/FakeDesign.h` | In-memory `PlacementView` with fluent builders |
-| `fake/FakeCandidateProvider.h` | Same-size replacement lookup over the fake library |
-| `fake/FakeUdmCandidateProvider.h/.cpp` | Adapter rehearsal: UDM-style master catalog (layers named `FAMILY_POLARITY`, band shapes) with the checker's derivation rules — VT = implant-layer family, never the master name; `describeMasters(ids)` -> width/VT per id; implements the spec §5.3 provider; ships the appendix-A 12-master library |
+| `fake/FakeUdmCandidateProvider.h/.cpp` | UDM-style test master catalog (layers named `FAMILY_POLARITY`, band shapes) with the checker's derivation rules — VT = implant-layer family, never the master name; `describeMasters(ids)` -> width/VT per id; registers its catalog into `FakeDesign`; ships the appendix-A 12-master library |
 | `fake/FakeImplantChecker.h/.cpp` | Rule-parameterized oracle locking the request/result protocol |
-| `adapter/` | Real UDM/infra integration (AGENTS D23, not compiled locally): `UdmIdBridge` (replays initFromUDM id enumeration + validate), `CheckerPlacementView` (snapshot incl. negative-id coverage extras), `UdmMasterCandidateProvider` (checker fillers ∩ fillerSetting), `CheckerOracleAdapter` (list-only contract), `UdmPrecheck` (#12 cached utility gate), `FillerVtRepair` (entry point); see `adapter/README.md` |
+| `adapter/` | `InfrastructurePlacementView` + `CheckerOracleAdapter` + `FillerVtRepair`; see `adapter/README.md` |
 | `test/` | Unit tests + runner |
 
 ## Conventions
 
 - Base ids (`DbCoord`, `InstanceId`, `MasterId`, `RowId`, `LayerId`) and
-  `XInterval` are owned by `fillerRepair/BaseTypes.h`. The checker owns its
+  `XInterval` and candidate wire types are owned by `fillerRepair/Types.h`. The checker owns its
   distinct `ipl::` types; the adapter must convert explicitly. The checker
   harness includes both headers in one translation unit to prevent the old ODR
   collision from returning. The now-unreferenced `drc/ImplantBaseTypes.h` is

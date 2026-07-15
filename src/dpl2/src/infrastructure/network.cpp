@@ -163,6 +163,12 @@ Master* Network::getMaster(LibCellID db_master)
   return masters_[it->second].get();
 }
 
+const Master* Network::getMaster(LibCellID db_master) const
+{
+  auto it = master_to_idx_.find(db_master);
+  return it == master_to_idx_.end() ? nullptr : masters_[it->second].get();
+}
+
 Master* Network::addMaster(const PhysLibCell& db_master,
                            const Grid* grid,
                            const PlacementDRC* drc_engine)
@@ -260,6 +266,12 @@ Node* Network::getNode(LeafCellID cellId)
   return nodes_[it->second].get();
 }
 
+const Node* Network::getNode(LeafCellID cellId) const
+{
+  auto it = inst_to_node_idx_.find(cellId);
+  return it == inst_to_node_idx_.end() ? nullptr : nodes_[it->second].get();
+}
+
 void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
 {
   Node ndi;
@@ -267,13 +279,15 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
   const PhysCell& inst = desMgr->getPhysCell(cellId);
   ndi.setId(id);
   ndi.setDbInst(cellId);
-  ndi.setType(Node::CELL);
+  ndi.setType(inst.getPhysMaster().getType().isCoreFiller()
+                  ? Node::FILLER
+                  : Node::CELL);
   auto master = getMaster(inst.getPhysMaster().getLibCellId());
   ndi.setMaster(master);
   ndi.setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi.setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
 
-  ndi.setOrient(PhysOrientationE::R0);
+  ndi.setOrient(inst.getOrient());
   ndi.setHeight(DbuY{inst.getPhysMaster().getHeight().getStorage()});
   ndi.setWidth(DbuX{inst.getPhysMaster().getWidth().getStorage()});
   ndi.setOrigLeft(DbuX{inst.getOrigin().getX().getStorage()
@@ -298,10 +312,13 @@ bool Network::updateNode(Node* ndi,
   const PhysCell& inst = desMgr->getPhysCell(cellId);
   auto master = getMaster(physLibCell.getLibCellId());
   ndi->setMaster(master);
+  ndi->setType(physLibCell.getType().isCoreFiller()
+                   ? Node::FILLER
+                   : Node::CELL);
   ndi->setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi->setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
 
-  ndi->setOrient(PhysOrientationE::R0);
+  ndi->setOrient(inst.getOrient());
   ndi->setHeight(DbuY{physLibCell.getHeight().getStorage()});
   ndi->setWidth(DbuX{physLibCell.getWidth().getStorage()});
   ndi->setOrigLeft(DbuX{inst.getOrigin().getX().getStorage()

@@ -32,7 +32,7 @@
 
 #include "../CheckerApi.h"
 #include "../Log.h"
-#include "CheckerPlacementView.h"
+#include "InfrastructurePlacementView.h"
 #include "drc/ImplantLayerChecker.h"
 
 namespace dpl2 {
@@ -43,7 +43,7 @@ class CheckerOracleAdapter : public ImplantOverlayChecker
 {
  public:
   CheckerOracleAdapter(const ipl::ImplantLayerChecker& checker,
-                       const CheckerPlacementView& view,
+                       const PlacementView& view,
                        DbCoord rowHeight,
                        const DebugLog& log);
 
@@ -60,7 +60,7 @@ class CheckerOracleAdapter : public ImplantOverlayChecker
 
  private:
   const ipl::ImplantLayerChecker& checker_;
-  const CheckerPlacementView& view_;
+  const PlacementView& view_;
   DbCoord row_height_ = 1;
   const DebugLog& log_;
 };

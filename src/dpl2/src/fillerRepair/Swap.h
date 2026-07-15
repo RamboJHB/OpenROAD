@@ -25,6 +25,9 @@
 
 namespace dpl2::fillerRepair {
 
+class DebugLog;
+struct RepairWindow;
+
 struct Swap
 {
   InstanceId instanceId = 0;
@@ -55,5 +58,21 @@ std::string canonicalKey(const Overlay& overlay);
 
 // Wire conversion, deterministic order (sorted by instanceId).
 std::vector<FillerChange> toFillerChanges(const Overlay& overlay);
+
+struct SwapGenerationResult
+{
+  // Deterministic order: window editable order (row, x), then candidate
+  // master id ascending.
+  std::vector<Swap> swaps;
+  // NoUsableMaster per replacement-less filler, plus any provider
+  // diagnostics. A filler without swaps is a normal outcome, not an error.
+  std::vector<Diagnostic> diagnostics;
+};
+
+SwapGenerationResult generateSwaps(
+    const RepairWindow& window,
+    const PlacementView& view,
+    const DebugLog& log);
+
 
 }  // namespace dpl2::fillerRepair
