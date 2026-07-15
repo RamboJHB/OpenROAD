@@ -61,7 +61,8 @@ FillerVtRepair(desMgr, network, checker, fillerSetting)
 ## Candidate 与 precheck
 
 - candidate universe **只来自** `fillerSetting::getFillerMasters()`。
-- `PlacementView` 的共享过滤负责:当前实例必须是 filler、候选必须是 filler、同宽同高、VT 已知且不同、排除当前 master、稳定排序。
+- `PlacementView` 的共享过滤负责:当前实例必须是 filler、候选必须是 filler、同宽同高、VT 已知且不同、排除当前 master、**同 R0 系 bottom-band polarity layout**(spec §5.3;layout 相反 = 每 band 落错 track,checker 必拒)、稳定排序。
+- **per-band 元数据**:`MasterInfo.bottomBandPolarity` 由本 view 从 checker `MasterInput.shapes`(rebuilt band shapes)最底 shape 的 layer polarity 派生(镜像 `rebuildMasterShapes` 锚定规则);VT family 每 master 唯一(checker `master_implant_family_mismatch`),band 间只有 polarity 交替。
 - coverage 只遍历 infrastructure `Network::getNodes()`;包括 checker 没有 implant shape 的普通 core cell,不再合成负 ID coverage extras。
 - multi-height node 会出现在其覆盖的每一行;每行使用自己的 row origin 计算相对 x。
 

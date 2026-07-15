@@ -55,6 +55,17 @@ struct XInterval
 using VtId = int32_t;
 inline constexpr VtId kUnknownVt = -1;
 
+// Implant band polarity (checker: ipl::Polarity, from the LAST '_' suffix of
+// the implant layer name via parseLayerName). Each row is two half-row bands
+// with alternating polarity; a master's VT FAMILY is uniform across its bands
+// by checker construction (buildMasters: master_implant_family_mismatch), so
+// the per-band degree of freedom is polarity only.
+enum class BandPolarity : uint8_t
+{
+  N,
+  P
+};
+
 // Placement orientation. The checker draft uses eUTL::PhysOrientation (a
 // UDM type); the pure planner keeps this minimal enum and the real DB
 // adapter maps between the two.

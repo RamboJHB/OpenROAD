@@ -1531,6 +1531,103 @@ void testRankerDomainOrderIsolated()
   CHECK_EQ(ranked[0].options[2].newVt, kVt3);  // third VT, retained last
 }
 
+void testRankerMajorityPerBand()
+{
+  // Vt Type: {1,2,3,4} | Widths: {2,4} | cell type: 1=std, 0=filler
+  // Spec 6.6: majority counts PER BAND SLOT, not per cell. A same-row
+  // abutting neighbor faces the filler on BOTH half-row bands (2 band
+  // votes); a row +-1 neighbor shares only the facing band pair (1 vote).
+  // Per-cell counting ties kVt1/kVt2 at 2 cells each and picks kVt1;
+  // per-band counting picks kVt2 (4 band votes vs 2).
+  fr::FakeDesign design = makeLibrary();
+  design.addMaster(fillerMaster(2, 4), 2, 1, /*isFiller=*/true, 4);
+  design.addRow(0, 0, 12).addRow(1, 0, 12).addRow(2, 0, 12);
+  design.place(900, cellMaster(kVt2), 1, 0)   // same row, abuts at x=4
+      .place(901, fillerMaster(2, 4), 1, 4)   // the ranked filler, span [4,6)
+      .place(902, cellMaster(kVt2), 1, 6)     // same row, abuts at x=6
+      .place(903, cellMaster(kVt1), 0, 4)     // row below, overlaps the span
+      .place(904, cellMaster(kVt1), 2, 4);    // row above, overlaps the span
+
+  const std::vector<fr::Swap> swaps = {
+      *fr::makeSwap(design, 901, fillerMaster(2, kVt1)),
+      *fr::makeSwap(design, 901, fillerMaster(2, kVt2)),
+      *fr::makeSwap(design, 901, fillerMaster(2, kVt3)),
+  };
+  fr::TargetPlace anchor;
+  anchor.masterId = cellMaster(kVt3);
+  const auto ranked = fr::rankFillers(swaps,
+                                      anchor,
+                                      {},
+                                      {},
+                                      design,
+                                      fr::DebugLog(verbose()));
+  CHECK_EQ(ranked.size(), 1u);
+  if (ranked.size() != 1 || ranked[0].options.size() != 3) {
+    return;
+  }
+  CHECK_EQ(ranked[0].options[0].newVt, kVt3);  // anchor vote
+  CHECK_EQ(ranked[0].options[1].newVt, kVt2);  // per-band majority
+  CHECK_EQ(ranked[0].options[2].newVt, kVt1);  // third VT, retained last
+}
+
+void testCandidatesBandPolarityLayoutMustMatch()
+{
+  // Same size and a known different VT is not enough: a swap keeps position
+  // and orientation, so a candidate whose R0-frame bottom band has the
+  // opposite polarity would land every band on the wrong track -- the
+  // provider must not offer it (the checker would reject the overlay).
+  fr::FakeDesign design;
+  design.setSiteWidth(1);
+  design.addMaster(10, 2, 1, /*isFiller=*/true, kVt1, fr::BandPolarity::N)
+      .addMaster(11, 2, 1, /*isFiller=*/true, kVt2, fr::BandPolarity::N)
+      .addMaster(12, 2, 1, /*isFiller=*/true, kVt3, fr::BandPolarity::P);
+  design.addRow(0, 0, 2).place(100, 10, 0, 0);
+
+  const auto result = design.getUsableMasterCandidates({100});
+  CHECK_EQ(result.candidates.size(), 1u);
+  if (!result.candidates.empty()) {
+    CHECK_EQ(result.candidates.front().masterId, 11);
+  }
+}
+
+void testFakeUdmBottomPolarityDerived()
+{
+  // The band anchor mirrors rebuildMasterShapes: the bottommost shape's
+  // layer polarity is the master's R0-frame bottom band.
+  fr::FakeUdmCandidateProvider provider(/*siteWidth=*/1, /*rowHeight=*/8);
+  provider.addLayer(1, "VTL_N");
+  provider.addLayer(2, "VTL_P");
+  provider.addBandMaster(500, "FIL_N_BOTTOM", 2, /*isFiller=*/true, "VTL");
+
+  fr::FakeUdmMaster flipped;  // same bands with P at the bottom
+  flipped.masterId = 501;
+  flipped.name = "FIL_P_BOTTOM";
+  flipped.width = 2;
+  flipped.height = 8;
+  flipped.isFiller = true;
+  flipped.shapes.push_back(fr::FakeUdmShape{0, 2, 0, 0, 2, 4});
+  flipped.shapes.push_back(fr::FakeUdmShape{1, 1, 0, 4, 2, 8});
+  provider.addMaster(flipped);
+
+  const auto* nBottom = provider.describeMaster(500);
+  const auto* pBottom = provider.describeMaster(501);
+  CHECK(nBottom != nullptr && nBottom->usable);
+  CHECK(pBottom != nullptr && pBottom->usable);
+  if (nBottom == nullptr || pBottom == nullptr) {
+    return;
+  }
+  CHECK(nBottom->bottomBandPolarity == fr::BandPolarity::N);
+  CHECK(pBottom->bottomBandPolarity == fr::BandPolarity::P);
+
+  fr::FakeDesign design;
+  design.setSiteWidth(1);
+  provider.registerInto(design);
+  CHECK(design.masterInfo(500) != nullptr
+        && design.masterInfo(500)->bottomBandPolarity == fr::BandPolarity::N);
+  CHECK(design.masterInfo(501) != nullptr
+        && design.masterInfo(501)->bottomBandPolarity == fr::BandPolarity::P);
+}
+
 void testEnumerationOrderAndCompleteness()
 {
   RowFixture f = makeCoveredRow();
@@ -3499,6 +3596,10 @@ int main(int argc, char** argv)
       {"ranker_order", testRankerOrder},
       {"ranker_filler_key_isolated", testRankerFillerKeyIsolated},
       {"ranker_domain_order_isolated", testRankerDomainOrderIsolated},
+      {"ranker_majority_per_band", testRankerMajorityPerBand},
+      {"candidates_band_polarity_layout_must_match",
+       testCandidatesBandPolarityLayoutMustMatch},
+      {"fake_udm_bottom_polarity_derived", testFakeUdmBottomPolarityDerived},
       {"enumeration_order_and_completeness", testEnumerationOrderAndCompleteness},
       {"enumeration_filler_domain_not_crowded_out",
        testEnumerationFillerDomainNotCrowdedOut},

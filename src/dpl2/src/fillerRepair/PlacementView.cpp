@@ -75,10 +75,16 @@ MasterCandidateResult PlacementView::getUsableMasterCandidates(
           cat("configured filler master ", id, " is not in the view")));
       continue;
     }
+    // Same size, different (known) VT family, and the same R0-frame band
+    // polarity layout: a swap keeps position/orientation, so a candidate
+    // whose bottom band has the opposite polarity would land every band on
+    // the wrong track -- the checker rejects such overlays unconditionally,
+    // offering them only burns checker calls.
     if (id != inst->masterId && candidate->isFiller
         && candidate->vt != kUnknownVt && candidate->vt != current->vt
         && candidate->width == current->width
-        && candidate->height == current->height) {
+        && candidate->height == current->height
+        && candidate->bottomBandPolarity == current->bottomBandPolarity) {
       result.candidates.push_back(MasterCandidate{id});
     }
   }

@@ -70,6 +70,9 @@ struct MasterDescription
   DbCoord width = 0;
   int heightRows = 0;
   VtId vt = kUnknownVt;  // family index (see header comment)
+  // Bottommost shape's layer polarity (R0 frame), mirroring
+  // rebuildMasterShapes' band anchor.
+  BandPolarity bottomBandPolarity = BandPolarity::N;
   bool isFiller = false;
   bool usable = false;   // derivation succeeded; unusable masters are never
                          // offered as swap candidates

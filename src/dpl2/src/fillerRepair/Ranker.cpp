@@ -11,8 +11,13 @@ namespace dpl2::fillerRepair {
 
 namespace {
 
-// Neighbor majority VT of a filler: x-adjacent instances in its row plus
-// instances in rows +-1 overlapping its span, counted on current masters.
+// Neighbor majority VT of a filler, counted PER BAND SLOT (spec 6.6: "per
+// band-slot, not per cell"). A master's VT family is uniform across its
+// bands (checker: master_implant_family_mismatch), so the band structure
+// shows up as WEIGHT: an x-adjacent same-row neighbor faces the filler on
+// BOTH half-row bands (two band votes), while a row +-1 neighbor interacts
+// only through the single facing band pair across the row boundary
+// (checker: activeKindByBoundary) -- one band vote.
 // Tie breaks toward the smaller VT id (deterministic).
 VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
 {
@@ -25,13 +30,13 @@ VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
     }
     const XInterval otherSpan = instanceSpan(view, other);
     if (otherSpan.xh == span.xl || otherSpan.xl == span.xh) {
-      ++votes[view.masterInfo(other.masterId)->vt];
+      votes[view.masterInfo(other.masterId)->vt] += 2;
     }
   }
   for (const RowId rowId : {inst.rowId - 1, inst.rowId + 1}) {
     for (const PlacedInstance& other : view.instancesInRow(rowId)) {
       if (instanceSpan(view, other).overlaps(span)) {
-        ++votes[view.masterInfo(other.masterId)->vt];
+        votes[view.masterInfo(other.masterId)->vt] += 1;
       }
     }
   }

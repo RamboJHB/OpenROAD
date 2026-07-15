@@ -24,6 +24,30 @@ VtId vtOfMaster(const ipl::ImplantLayerChecker& checker,
   return kUnknownVt;
 }
 
+// Bottom-band polarity in the master's R0 frame, mirroring the checker's
+// rebuildMasterShapes anchor: the bottommost band shape's layer carries it
+// (master.shapes are the rebuilt canonical band shapes).
+BandPolarity bottomPolarityOfMaster(const ipl::ImplantLayerChecker& checker,
+                                    const ipl::MasterInput& master)
+{
+  const ipl::MasterShape* bottom = nullptr;
+  for (const ipl::MasterShape& shape : master.shapes) {
+    if (bottom == nullptr || shape.rect.getYL().getStorage()
+                                 < bottom->rect.getYL().getStorage()) {
+      bottom = &shape;
+    }
+  }
+  if (bottom != nullptr) {
+    for (const ipl::ImplantLayer& layer : checker.layers()) {
+      if (layer.id == bottom->layer) {
+        return layer.polarity == ipl::Polarity::P ? BandPolarity::P
+                                                  : BandPolarity::N;
+      }
+    }
+  }
+  return BandPolarity::N;  // parseLayerName's default polarity
+}
+
 bool supportedOrientation(eUTL::PhysOrientation orientation)
 {
   return orientation == eUTL::PhysOrientationE::R0
@@ -210,7 +234,8 @@ InfrastructurePlacementView::InfrastructurePlacementView(
                                  input.width,
                                  heightInRows(input.height),
                                  input.isFiller,
-                                 vtOfMaster(checker, input)};
+                                 vtOfMaster(checker, input),
+                                 bottomPolarityOfMaster(checker, input)};
     checker_master_ids_.insert(id);
     auto [it, inserted] = masters_.emplace(id, checkerInfo);
     if (!inserted) {
@@ -221,6 +246,7 @@ InfrastructurePlacementView::InfrastructurePlacementView(
                    cat("checker and infrastructure disagree for master ", id));
       }
       it->second.vt = checkerInfo.vt;
+      it->second.bottomBandPolarity = checkerInfo.bottomBandPolarity;
     }
   }
   std::sort(filler_master_ids_.begin(), filler_master_ids_.end());

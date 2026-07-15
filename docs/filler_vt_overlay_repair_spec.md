@@ -496,6 +496,14 @@ orientation 兼容;没有可用替换时返回 empty candidates + diagnostics,�
 当前工艺下每个 filler 恒有 2 个同尺寸候选(3 VT − 当前,附录 A);
 empty candidates 保留为防御性路径,不是常态。
 
+**band polarity layout 约束(2026-07-15 落地)**:候选还必须与当前 master 的
+**R0 系 bottom-band polarity** 一致(`MasterInfo.bottomBandPolarity`,来源 =
+checker `rebuildMasterShapes` 的锚定规则:最底 shape 所在 layer 的 polarity;
+band 沿行向上 N/P 交替;family 每 master 唯一,checker
+`master_implant_family_mismatch` 保证)。理由:swap 保持位置**和 orientation**,
+layout 相反的候选会把每个 band 落到相反 track 上,checker 必然以 polarity
+mismatch 拒绝——提供它只烧 checker call。合法性终判仍在 checker(oracle 不变)。
+
 **演进方向**(merge/split 需要,提前告知 infrastructure RD):查询按几何键而非
 instance 键——"在 `(rowId, width, orientation)` 下有哪些可用 filler master(或
 master 序列)可铺满该宽度"。第一版实现建议内部就按宽度建表,per-instance API 做成
@@ -700,6 +708,13 @@ target VT 顺序(决定各 filler domain 内的排序):① anchor 的新 VT;② 
 VT(**按 band-slot 分别计数**,不能按 cell 整体数);③ 稳定 type id。所有顺序都只在
 candidate provider 实际返回的 master 中取值(防御库变化;当前库各宽度 VT 齐全,
 附录 A)。
+
+per-band 计数的落地形态(2026-07-15,依据 checker 实测模型):master 的 VT
+family 在 band 间**恒一致**(checker `master_implant_family_mismatch` 保证),
+band 间的自由度只有 polarity——因此 per-band 计数体现为**权重**:同行贴邻邻居
+与 filler 在上下两个 band 都相邻,记 **2 票**;±1 行邻居只经跨行边界的一对
+facing band 交互(checker `activeKindByBoundary`),记 **1 票**。tie 仍取
+较小 VT id(确定性)。
 
 **第三 VT 强降权(V2.1 修订 #9:改为 domain 内排序)**:三档 VT 下,每个 filler 的
 两个候选中总有一个"既非 anchor 新 VT、也非邻接 majority"的第三色,几乎不可能是解
@@ -936,8 +951,7 @@ gate 语义:
 4. violation 归一化 + signature 匹配(§6.2 的钉死规则)。
 5. L0 + adaptive-L1 window builder + guardRegion 生成。
 6. Swap 生成器(只产原子 swap move;组合由⑧枚举、方向由⑦排序承担)。
-7. Ranker(5 特征;当前单-VT projection 已实现,真实 P/N per-band 计数随 adapter
-   元数据补齐)。
+7. Ranker(5 特征;P/N per-band 计数已落地——同行 2 票/跨行 1 票,见 §6.6)。
 8. SubsetSearcher(排序枚举、批产出、预算)。
 9. OracleGate(batch wrapper、canonical cache、baseline-delta gate、best-overlay
    记录)。
@@ -956,7 +970,7 @@ TODO 12 的 infrastructure/checker adapter 重构已于 2026-07-15 完成;剩余
 批 3(搜索域建模)**#9 filler-domain 枚举已完成**,#12 随 adapter 对接。真实
 `ImplantLayerChecker` core 已在 fake-UDM boundary 下直接编译并通过 8 个用例及
 ASan:4 个 dense width/spacing × intra/inter-row,以及 raw/rowIds、类型共存、
-invalid-batch 隔离、row/hash/guard 回归。这不等同于真实 UDM build/E2E 已验证;本轮按要求未编译。`ranker_majority_per_band` 仍等待真实 band 元数据;checker 的
+invalid-batch 隔离、row/hash/guard 回归。这不等同于真实 UDM build/E2E 已验证;本轮按要求未编译。`ranker_majority_per_band` 已落地(per-band 权重 + polarity layout 过滤,2026-07-15);checker 的
 bridge-MW 专用 raw-vs-blocking fixture 与真实 adapter E2E 仍待补。
 
 ---

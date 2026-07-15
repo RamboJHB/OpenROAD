@@ -31,9 +31,10 @@ class FakeDesign : public PlacementView
     return *this;
   }
 
-  FakeDesign& addMaster(MasterId id, DbCoord width, DbCoord height, bool isFiller, VtId vt)
+  FakeDesign& addMaster(MasterId id, DbCoord width, DbCoord height, bool isFiller, VtId vt,
+                        BandPolarity bottomBandPolarity = BandPolarity::N)
   {
-    masters_[id] = MasterInfo{id, width, height, isFiller, vt};
+    masters_[id] = MasterInfo{id, width, height, isFiller, vt, bottomBandPolarity};
     return *this;
   }
 

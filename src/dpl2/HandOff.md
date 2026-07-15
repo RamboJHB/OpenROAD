@@ -40,6 +40,13 @@ TargetMasterNotModeled。本地 81+10+ASan 全绿。
 `CHECKER_REPAIR_CONTRACT.md` 历史段收敛为终版契约 + 稳定 ID 增补。planner
 测试 81→80(删 ring 单元测试;两个引擎测试改锁 NoEditableFiller/adaptive 语义)。
 
+**per-band P/N 集成(同日,AGENTS D26)**:核实 checker 模型后落地——family 每
+master 唯一(`master_implant_family_mismatch`),band 自由度只有 polarity。
+三处集成:`MasterInfo.bottomBandPolarity` 元数据(infra 从 checker rebuilt band
+shapes 派生、fake 同规则);候选过滤加 **同 bottom-polarity layout** 约束
+(spec §5.3);Ranker majority **按 band-slot 计权**(同行 2 票/跨行 1 票,
+spec §6.6 待办项闭环)。planner 测试 80→83。
+
 
 ## 1. 项目一句话
 
@@ -62,7 +69,7 @@ rewrite(merge/split)**。代码里不允许出现 Move / FillerRewrite 抽象。
 
 **关键认知**:engine 与 spec 都已对齐 **V2.1**。下面三批说明保留作审阅历史;
 当前剩余工作 = adapter 在集成环境的编译/debug 迭代(入口
-`adapter/FillerVtRepair.h` 顶部有 wiring 示例)与 per-band 元数据。V1 存档
+`adapter/FillerVtRepair.h` 顶部有 wiring 示例)。V1 存档
 spec(`spec_v1` / `addendum_v1`)已删除(冗余)。
 
 ## 3. 三批工作(按此顺序;每批做完跑 `test/run_tests.sh` 必须全绿)

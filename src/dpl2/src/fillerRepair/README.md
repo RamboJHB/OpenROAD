@@ -13,7 +13,7 @@ runs end-to-end against the fakes in `fake/`.
 > (unfixable→warning→removed in the 2026-07-15 slimming, dropped L2, adaptive-L1, dropped final check).
 > **Batch 3: #9 filler-domain enumeration DONE** (ranker
 > returns `FillerDomain`s; caps count fillers); **#12 precheck upstreaming
-> pending** (goes with the adapter). 80 planner tests green. Plan and pointers in
+> pending** (goes with the adapter). 83 planner tests green. Plan and pointers in
 > `src/dpl2/HandOff.md`. Dependency topology (checker calls engine, engine
 > calls checker through its own abstract oracle — no cycle) is pinned in spec
 > §3.3.
@@ -102,7 +102,7 @@ SANITIZE=address ./run_tests.sh
 ## Status vs spec §11 TODO
 
 TODO 1–11 and all V2.1 engine revisions are implemented for the current
-single-VT planner projection (80 deterministic tests green).
+single-VT planner projection (83 deterministic tests green).
 TODO 12 (real checker/infra adapter + CMake) is pending. The spec is at **V2.1**;
 folding the 12 revisions into this code is tracked as three batches in
 `src/dpl2/HandOff.md`.
@@ -115,7 +115,7 @@ folding the 12 revisions into this code is tracked as three batches in
 | 4 | Violation normalization + signature matching | done |
 | 5 | Window builder + guardRegion | done (V2.1 #6/#7/#8: drop L2, adaptive-L1; the unfixable hint was later removed as noise) |
 | 6 | Swap generator (atomic swaps only) | done |
-| 7 | Ranker (filler domains, third-VT demotion in-domain) | done for current single-VT projection; true P/N per-band majority awaits adapter metadata |
+| 7 | Ranker (filler domains, third-VT demotion in-domain) | done incl. P/N per-band majority weighting (same-row 2 votes, cross-row 1; family is uniform per master by checker construction, so polarity is the only per-band degree of freedom -- carried as MasterInfo.bottomBandPolarity and enforced by candidate filtering) |
 | 8 | Subset searcher (filler combos × domain assignments) | done; V2.1 #9 applied (caps count fillers); exact `space == budget` completeness fixed |
 | 9 | Oracle gate (batch, cache, baseline-delta, protocol validation) | done; V2.1 #1–#5 correctness fixes applied (batch 1) |
 | 10 | Window escalation + diagnostics | done; V2.1 #10 applied; #11 final check dropped (batch 2) |

@@ -3,11 +3,12 @@
 > 写给负责测试拓展的 AI。真实 checker core 已有独立 harness(见下),但尚未通过
 > adapter 接入 engine;等待对接期间继续把纯 planner 各
 > 子模块(PlacementView coverage / Signature / Window / Swap generation / Ranker / SubsetSearch /
-> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 80 个 planner 测试全绿
+> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 83 个 planner 测试全绿
 > (`test/run_tests.sh`,`-Wall -Wextra -Werror`;ASan 同样全绿)。
-> **进度(2026-07-13)**:P0、可由当前接口表达的 P1、P2 五项不变量均完成。
-> P1 仅余 `ranker_majority_per_band`,它受 `MasterInfo` 只有单 `vt` 的数据模型
-> 阻塞,必须等真实 adapter 提供 P/N band 元数据,不得用 master 名伪造。
+> **进度(2026-07-15)**:P0、P1、P2 五项不变量均完成。原 P1 尾项
+> `ranker_majority_per_band` 已随 per-band 集成落地(AGENTS D26:checker 实测
+> 模型下 family 每 master 唯一,per-band 计数 = 同行 2 票/跨行 1 票权重;
+> polarity layout 进 `MasterInfo.bottomBandPolarity` 并参与候选过滤)。
 > **V2.1 #9(filler-domain 枚举)已落地**:Ranker 返回 `FillerDomain`、
 > SubsetSearch 枚举 filler 组合 × domain 赋值、cap 按 filler 数——本计划中
 > Ranker/SubsetSearch 的测试一律按该语义写。
@@ -41,7 +42,7 @@
    (拆分时保持单二进制、单注册表,run_tests.sh 一并更新)。
 7. 定期跑 ASan 版本(见 §5 命令);新测试合入前至少跑一次。
 
-## 1. 现有覆盖(planner 80 个 + checker 10 个,勿重复)
+## 1. 现有覆盖(planner 83 个 + checker 10 个,勿重复)
 
 - Swap 构造/校验、canonicalKey、wire 转换(3)
 - PlacementView coverage:全覆盖 OK、gap、overlap/offgrid/illegal、engine fatal 短路、多行确定性、
@@ -71,7 +72,7 @@
   过滤(4);raw API 保留无关 baseline 并携带 rowIds(1);planner/checker 类型同 TU
   共存、invalid batch 隔离、同 x 不同行 hash + guard 裁剪(3);64-candidate
   clean/residual/new/invalid 混合批重复执行后 violation 顺序/hash/诊断确定(1)。
-  独立 harness,不计入上述 planner 80 个。
+  独立 harness,不计入上述 planner 83 个。
 
 ## 2. 待补测试(按优先级;名字用建议的 case 名)
 
@@ -137,8 +138,11 @@
   width、position)。✅
 - `ranker_domain_order_isolated`:domain 内序逐个验证(anchor VT 第一、
   majority 第二、第三 VT 垫底但不剔除)。✅
-- `ranker_majority_per_band`:构造上下行 band 多数与同行多数不同的布局,
-  验证按 band 计数。**阻塞:当前 planner projection 没有 per-band VT 字段。**
+- `ranker_majority_per_band` ✅ 已落地(2026-07-15,AGENTS D26):checker 实测
+  模型下 family 每 master 唯一,per-band 计数体现为权重(同行贴邻 2 票、±1 行
+  1 票);测试构造同行/跨行票数竞争(per-cell 平票 → per-band 同行胜)。配套
+  `candidates_band_polarity_layout_must_match`(polarity layout 过滤)与
+  `fake_udm_bottom_polarity_derived`(bottom polarity 派生锚定最底 shape)。
 
 **Swap generation (`Swap`)**
 - `swapgen_rejected_candidate_diag`:provider 返回一个通不过 makeSwap 校验的
@@ -199,7 +203,7 @@ cd src/dpl2/src/fillerRepair/test
 ./run_tests.sh                     # 全量,-Werror
 ./run_tests.sh <name-substr>       # 过滤
 FR_VERBOSE=1 ./run_tests.sh <case> # 带 [fr] 决策链日志
-SANITIZE=address ./run_tests.sh    # 80 cases + ASan
+SANITIZE=address ./run_tests.sh    # 83 cases + ASan
 
 # 真实 checker core(fake UDM boundary,生产 checker 源码原样编译)
 cd src/dpl2/src/drc/test

@@ -78,6 +78,7 @@ MasterDescription FakeUdmCandidateProvider::derive(
   }
 
   int familyIndex = -1;
+  const FakeUdmShape* bottom = nullptr;
   for (const FakeUdmShape& shape : master.shapes) {
     const LayerInfo* info = layer(shape.layer);
     if (info == nullptr || info->familyIndex < 0) {
@@ -94,9 +95,18 @@ MasterDescription FakeUdmCandidateProvider::derive(
       d.reason = "implant_shape_width_mismatch";
       return d;
     }
+    if (bottom == nullptr || shape.yl < bottom->yl) {
+      bottom = &shape;
+    }
   }
 
   d.vt = familyIndex;
+  // Band anchor exactly like rebuildMasterShapes: the bottommost shape's
+  // layer polarity is the master's R0-frame bottom band.
+  if (bottom != nullptr) {
+    d.bottomBandPolarity =
+        layer(bottom->layer)->polarityP ? BandPolarity::P : BandPolarity::N;
+  }
   d.usable = true;
   return d;
 }
@@ -170,7 +180,8 @@ void FakeUdmCandidateProvider::registerInto(FakeDesign& design) const
   std::vector<MasterId> fillerIds;
   for (const auto& [id, d] : described_) {
     if (d.usable) {
-      design.addMaster(id, d.width, d.heightRows, d.isFiller, d.vt);
+      design.addMaster(id, d.width, d.heightRows, d.isFiller, d.vt,
+                       d.bottomBandPolarity);
       if (d.isFiller) fillerIds.push_back(id);
     }
   }

@@ -39,7 +39,7 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
-| 测试 | planner 80 个,`-Werror` + ASan 全绿;真实 checker core 10 个(`src/drc/test/run_tests.sh`,含 list-only residual 与 64-candidate 混合批测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
+| 测试 | planner 83 个,`-Werror` + ASan 全绿;真实 checker core 10 个(`src/drc/test/run_tests.sh`,含 list-only residual 与 64-candidate 混合批测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
 | checker(`src/drc/`) | **终版契约已落地(D21)**:RD 2026-07-13 交付(UDM extraction 内联)+ 用户钉死 list-only——`checkPlaceWithOverlays` 输出 guard 内全量违例,无 blocking 过滤、无查重(重复允许但确定性);scan 正确性修正与 `DPL2_FAKE_UDM` 边界重新套用。wire:顺序关联、无 status、batch=单 target+N 变更。**adapter 前 engine 仍只接 fake;infra 版 planner 迁移在即** |
 | infrastructure adapter | **2026-07-15 重构完成**:`InfrastructurePlacementView` / `CheckerOracleAdapter` / `FillerVtRepair`;placement/precheck 来自 Network Objects,candidate 来自 fillerSetting,稳定 ID 已接 checker。未编译;剩余 build/E2E 与 checker candidate catalog |
 
@@ -435,6 +435,41 @@ precheck 每次构造 view 重扫(view 本身 O(design) 重建,同阶;等真实�
 - view 构造期交叉校验(集成初期保命绳;跑稳后可降为抽样/verbose-only)。
 - FakeUdmCandidateProvider 的目录构建(测试地基;等集成编译反馈回来后若
   要继续瘦身,把 appendix-A 目录折进 FakeDesign、删 describeMasters 层)。
+
+### D26. per-band P/N 集成:polarity 是 band 自由度,VT family 不是(2026-07-15)
+**用户指令**:per-band P/N 参照 checker 中 Family 的赋值方式,核实后集成进
+engine/infra,集成点自选。
+**核实结论**(读 checker 实现):
+- `parseLayerName`:layer 名按**最后一个 '_'** 切分,前缀 = Family
+  (VTS/VTL/VTH/VTUL),后缀 = Polarity(P/p → P,其余 N)——用户理解正确,
+  VT 来自 master implant layer。
+- **family 每 master 唯一**:`buildMasters` 混 family 直接
+  `master_implant_family_mismatch` 判 unusable → "per-band VT" 中 VT 不随
+  band 变;**band 间自由度只有 polarity**。
+- `rebuildMasterShapes`:每行两个半行 band shape,bottom polarity 锚定在
+  最底 raw shape 的 layer,向上 N/P 交替;放置时 MX/R180 翻转 band。
+- 跨行边界只有一个 active polarity(`activeKindByBoundary`,行奇偶决定)
+  → ±1 行邻居只经 facing band 对交互。
+**集成点(三处)**:
+1. **元数据**:`MasterInfo.bottomBandPolarity`(R0 系;`Types.h` 新增
+   `BandPolarity{N,P}`)。infra 侧 `InfrastructurePlacementView` 从
+   checker `MasterInput.shapes`(rebuilt band shapes)最底 shape 的 layer
+   polarity 派生;fake 侧 `FakeUdmCandidateProvider::derive` 同规则,
+   `registerInto` 传给 `FakeDesign.addMaster`(新可选参,默认 N)。
+2. **候选过滤**(`PlacementView::getUsableMasterCandidates`):候选须与当前
+   master **同 bottom polarity layout**——swap 保持位置和 orientation,layout
+   相反 = 每个 band 落错 track,checker 必以 polarity mismatch 拒绝,提供它
+   只烧 call。spec §5.3 已补此约束。
+3. **Ranker majority per band-slot**(spec §6.6 待办项):family 齐 band 一致
+   → per-band 计数体现为权重:同行贴邻 2 票(两 band 都相邻)、±1 行 1 票
+   (只有 facing band)。tie 仍取小 VT id。既有测试无一翻转(旧 fixture 中
+   同行/跨行票数从未同时竞争)。
+**为什么不做 per-slot 取向翻转 helper**:majority 是双 band 求和,MX 翻转在
+求和下不变;polarity 过滤只比 R0 系 layout(swap 不动 orientation)。翻转
+规则已写进 MasterInfo 注释,留给未来真正 per-slot 的消费者。
+**测试**:+3(`ranker_majority_per_band` 同行/跨行权重区分场景、
+`candidates_band_polarity_layout_must_match`、
+`fake_udm_bottom_polarity_derived`),planner 83/83 + ASan、checker 10/10。
 
 ## 5. 实现要点与陷阱(接手前必读)
 

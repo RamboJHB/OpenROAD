@@ -24,9 +24,16 @@ struct MasterInfo
   DbCoord width = 0;
   DbCoord height = 0;
   bool isFiller = false;
-  // Single VT per master for V1. Per-band (P/N) VT can be added when the
-  // ranker starts counting adjacency per band slot (spec section 6.6).
+  // VT family. Uniform across the master's bands by checker construction
+  // (master_implant_family_mismatch), so one value covers every band.
   VtId vt = kUnknownVt;
+  // Bottom-band implant polarity in the master's R0 frame; bands alternate
+  // upward (checker rebuildMasterShapes, anchored at the bottommost shape's
+  // layer). Placement under MX/R180 flips the bands, but a SWAP keeps
+  // position AND orientation, so a replacement only has to match this
+  // R0-frame layout -- a mismatched layout puts every band on the opposite
+  // track and the checker rejects the overlay (polarity mismatch).
+  BandPolarity bottomBandPolarity = BandPolarity::N;
 };
 
 struct PlacedInstance
