@@ -32,6 +32,14 @@ bool supportedOrientation(eUTL::PhysOrientation orientation)
          || orientation == eUTL::PhysOrientationE::MY;
 }
 
+// MUST match the checker's MasterInput.isFiller predicate
+// (ImplantLayerChecker::initFromUDM: isCoreFiller() || isPadFiller()),
+// otherwise the master cross-check below reports a false mismatch.
+bool isFillerMaster(const eLIB::PhysLibCell& cell)
+{
+  return cell.getType().isCoreFiller() || cell.getType().isPadFiller();
+}
+
 }  // namespace
 
 Orient toPlannerOrient(eUTL::PhysOrientation orientation)
@@ -106,6 +114,52 @@ InfrastructurePlacementView::InfrastructurePlacementView(
                cat("checker site width ", checker.siteWidth(),
                    " differs from infrastructure ", site_width_));
   }
+  // Planner windows/guards and the checker's inter-row comparisons both use
+  // ONE x frame across rows (x relative to the row origin). Rows with
+  // different origin X (offset core corners, multi-segment rows) silently
+  // break that assumption for both sides -> refuse instead of miscomparing.
+  for (const auto& [id, frame] : frames) {
+    if (frame.originX != frames.begin()->second.originX) {
+      addProblem(Severity::Fatal, "RowOriginMisaligned",
+                 cat("row ", id, " origin X ", frame.originX,
+                     " differs from row ", frames.begin()->first, " origin X ",
+                     frames.begin()->second.originX,
+                     " -> per-row x frames are not comparable"));
+      break;
+    }
+  }
+
+  // y -> row lookup index. Uniform row height is validated above, so at most
+  // one yLo group can contain a given y; among same-y segments the checker's
+  // initFromUDM picks the FIRST row in row order -- mirror that tie-break.
+  struct RowRange
+  {
+    DbCoord yLo = 0;
+    DbCoord yHi = 0;
+    RowId rowId = 0;
+  };
+  std::vector<RowRange> rowRanges;
+  rowRanges.reserve(frames.size());
+  for (const auto& [id, frame] : frames) {
+    rowRanges.push_back(RowRange{frame.yLo, frame.yHi, id});
+  }
+  std::sort(rowRanges.begin(), rowRanges.end(),
+            [](const RowRange& a, const RowRange& b) {
+              return a.yLo != b.yLo ? a.yLo < b.yLo : a.rowId < b.rowId;
+            });
+  const auto rowContaining = [&rowRanges](DbCoord y) -> RowId {
+    auto it = std::upper_bound(
+        rowRanges.begin(), rowRanges.end(), y,
+        [](DbCoord value, const RowRange& range) { return value < range.yLo; });
+    if (it == rowRanges.begin()) {
+      return -1;
+    }
+    --it;
+    while (it != rowRanges.begin() && std::prev(it)->yLo == it->yLo) {
+      --it;
+    }
+    return (y >= it->yLo && y < it->yHi) ? it->rowId : -1;
+  };
 
   const auto heightInRows = [this](DbCoord height) {
     return row_height_ > 0
@@ -122,7 +176,7 @@ InfrastructurePlacementView::InfrastructurePlacementView(
     masters_[id] = MasterInfo{id,
                               cell->getWidth().getStorage(),
                               heightInRows(cell->getHeight().getStorage()),
-                              cell->getType().isCoreFiller(),
+                              isFillerMaster(*cell),
                               kUnknownVt};
   }
 
@@ -133,7 +187,7 @@ InfrastructurePlacementView::InfrastructurePlacementView(
     const MasterInfo info{id,
                           cell->getWidth().getStorage(),
                           heightInRows(cell->getHeight().getStorage()),
-                          cell->getType().isCoreFiller(),
+                          isFillerMaster(*cell),
                           kUnknownVt};
     filler_master_ids_.push_back(id);
     master_cells_[id] = cell;
@@ -146,11 +200,10 @@ InfrastructurePlacementView::InfrastructurePlacementView(
     }
     if (!info.isFiller) {
       addProblem(Severity::Fatal, "ConfiguredMasterNotFiller",
-                 cat("configured master ", id, " is not a core filler"));
+                 cat("configured master ", id, " is not a filler master"));
     }
   }
 
-  std::set<MasterId> checkerMasters;
   for (const ipl::MasterInput& input : checker.masters()) {
     const MasterId id = static_cast<MasterId>(input.masterId);
     const MasterInfo checkerInfo{id,
@@ -158,7 +211,7 @@ InfrastructurePlacementView::InfrastructurePlacementView(
                                  heightInRows(input.height),
                                  input.isFiller,
                                  vtOfMaster(checker, input)};
-    checkerMasters.insert(id);
+    checker_master_ids_.insert(id);
     auto [it, inserted] = masters_.emplace(id, checkerInfo);
     if (!inserted) {
       if (it->second.width != checkerInfo.width
@@ -174,12 +227,23 @@ InfrastructurePlacementView::InfrastructurePlacementView(
   filler_master_ids_.erase(
       std::unique(filler_master_ids_.begin(), filler_master_ids_.end()),
       filler_master_ids_.end());
-  for (const MasterId id : filler_master_ids_) {
-    if (checkerMasters.count(id) == 0) {
-      addProblem(Severity::Fatal, "CheckerMissingConfiguredMaster",
-                 cat("checker has no model for configured filler master ", id));
-    }
-  }
+  // A configured candidate the checker cannot model cannot be validated by
+  // the oracle -- every overlay using it would come back invalid. Exclude it
+  // (Warning, not Fatal): the repair stays usable with the modeled subset,
+  // and the diagnostic tells RD which masters the checker must learn.
+  filler_master_ids_.erase(
+      std::remove_if(filler_master_ids_.begin(), filler_master_ids_.end(),
+                     [this](MasterId id) {
+                       if (checker_master_ids_.count(id) != 0) {
+                         return false;
+                       }
+                       addProblem(
+                           Severity::Warning, "CheckerMissingConfiguredMaster",
+                           cat("checker has no model for configured filler "
+                               "master ", id, " -> excluded from candidates"));
+                       return true;
+                     }),
+      filler_master_ids_.end());
 
   const eUTL::Rect& core = network.getCore();
   for (const auto& nodePtr : network.getNodes()) {
@@ -200,13 +264,7 @@ InfrastructurePlacementView::InfrastructurePlacementView(
     }
 
     const DbCoord absoluteY = node->getBottom().v + core.getYL().getStorage();
-    RowId containingRow = -1;
-    for (const auto& [candidate, frame] : frames) {
-      if (absoluteY >= frame.yLo && absoluteY < frame.yHi) {
-        containingRow = candidate;
-        break;
-      }
-    }
+    const RowId containingRow = rowContaining(absoluteY);
     if (containingRow < 0) {
       addProblem(Severity::Fatal, "NodeOutsideRows",
                  cat("node ", node->getId(), " is not in a legal row"));
@@ -221,7 +279,7 @@ InfrastructurePlacementView::InfrastructurePlacementView(
                  cat("node ", node->getId(), " references master ", masterId));
       continue;
     }
-    const bool isFiller = cell->getType().isCoreFiller();
+    const bool isFiller = isFillerMaster(*cell);
     if (node->isFiller() != isFiller) {
       addProblem(Severity::Fatal, "FillerClassificationMismatch",
                  cat("node ", node->getId(), " filler flag disagrees with master"));
@@ -237,10 +295,15 @@ InfrastructurePlacementView::InfrastructurePlacementView(
                           absoluteX - frames.at(containingRow).originX,
                           toPlannerOrient(node->getOrient()),
                           isFiller};
+    // A placed filler whose master has no checker VT (no implant shapes, or
+    // unparseable family) simply cannot be swapped: candidate filtering
+    // already excludes it, and the checker sees the same committed geometry
+    // in baseline and candidates, so legality stays sound. Warning, not
+    // Fatal -- one odd filler must not disable repair for the whole design.
     if (placed.isFiller && info->vt == kUnknownVt) {
-      addProblem(Severity::Fatal, "CheckerMissingPlacedFillerMaster",
+      addProblem(Severity::Warning, "CheckerMissingPlacedFillerMaster",
                  cat("placed filler ", id, " uses master ", masterId,
-                     " without checker VT metadata"));
+                     " without checker VT metadata -> not swappable"));
     }
     instances_[id] = placed;
     leaf_cells_[id] = node->getDbInst();
@@ -285,7 +348,7 @@ InfrastructurePlacementView::InfrastructurePlacementView(
   }
 
   for (const auto& [id, infra] : instances_) {
-    if (checkerMasters.count(infra.masterId) != 0
+    if (checker_master_ids_.count(infra.masterId) != 0
         && checker_instance_ids_.count(id) == 0) {
       addProblem(Severity::Fatal, "InfrastructureInstanceMissingFromChecker",
                  cat("infrastructure instance ", id,

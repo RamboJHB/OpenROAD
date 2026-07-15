@@ -279,7 +279,11 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
   const PhysCell& inst = desMgr->getPhysCell(cellId);
   ndi.setId(id);
   ndi.setDbInst(cellId);
+  // Filler predicate must match ImplantLayerChecker::initFromUDM's
+  // MasterInput.isFiller (isCoreFiller || isPadFiller) -- the repair adapter
+  // cross-checks the two flags per instance.
   ndi.setType(inst.getPhysMaster().getType().isCoreFiller()
+                      || inst.getPhysMaster().getType().isPadFiller()
                   ? Node::FILLER
                   : Node::CELL);
   auto master = getMaster(inst.getPhysMaster().getLibCellId());
@@ -313,6 +317,7 @@ bool Network::updateNode(Node* ndi,
   auto master = getMaster(physLibCell.getLibCellId());
   ndi->setMaster(master);
   ndi->setType(physLibCell.getType().isCoreFiller()
+                       || physLibCell.getType().isPadFiller()
                    ? Node::FILLER
                    : Node::CELL);
   ndi->setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);

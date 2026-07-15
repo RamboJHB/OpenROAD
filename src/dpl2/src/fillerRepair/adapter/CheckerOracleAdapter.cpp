@@ -5,6 +5,8 @@
 
 #include <algorithm>
 
+#include "InfrastructurePlacementView.h"  // toUdmOrient
+
 namespace dpl2 {
 namespace fillerRepair {
 namespace adapter {

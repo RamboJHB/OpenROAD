@@ -25,6 +25,15 @@ spec 与本文冲突时以 spec 为准。
 
 未完成项:构建/CMake 接线;checker 为 `fillerSetting` 中未实例化候选 master 建模;真实 UDM E2E。本轮按用户要求未编译、未运行 UDM-dependent tests。
 
+**复审修复(同日,AGENTS D24)**:isFiller 谓词与 checker 统一
+(isCoreFiller||isPadFiller,view + Network::addNode/updateNode,否则 pad-filler
+master 假 Fatal);node 行归属改二分(原 O(nodes×rows));precheck segment 循环改
+sweep(原密行 O(N²));补回 `RowOriginMisaligned` 校验;
+`CheckerMissingConfiguredMaster`(候选剔除)与 `CheckerMissingPlacedFillerMaster`
+(不可 swap)降级 Warning,避免 brick 整个 repair;view 暴露
+`checkerModelsMaster()`,`FillerVtRepair` 精确区分 TargetMasterUnknown /
+TargetMasterNotModeled。本地 81+10+ASan 全绿。
+
 
 ## 1. 项目一句话
 

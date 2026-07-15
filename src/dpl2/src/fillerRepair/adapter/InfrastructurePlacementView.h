@@ -57,6 +57,12 @@ class InfrastructurePlacementView : public PlacementView
   MasterId masterIdOf(const eLIB::PhysLibCell& master) const;
   eUNL::LeafCellID leafCellOf(InstanceId instanceId) const;
   const eLIB::PhysLibCell* physLibCellOf(MasterId masterId) const;
+  // True when the checker carries an implant model for this master -- only
+  // such masters can appear in overlay requests the checker can validate.
+  bool checkerModelsMaster(MasterId masterId) const
+  {
+    return checker_master_ids_.count(masterId) != 0;
+  }
 
  private:
   void addProblem(Severity severity,
@@ -71,6 +77,7 @@ class InfrastructurePlacementView : public PlacementView
   std::map<InstanceId, PlacedInstance> instances_;
   std::map<InstanceId, eUNL::LeafCellID> leaf_cells_;
   std::set<InstanceId> checker_instance_ids_;
+  std::set<MasterId> checker_master_ids_;
   std::map<RowId, std::vector<PlacedInstance>> by_row_;
   std::vector<MasterId> filler_master_ids_;
   std::vector<Diagnostic> setup_diagnostics_;

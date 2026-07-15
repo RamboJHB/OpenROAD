@@ -38,6 +38,25 @@ FillerVtRepair(desMgr, network, checker, fillerSetting)
 - planner/checker `MasterId` = `LibCellID::getIndexValue()`。
 - `ImplantLayerChecker::initFromUDM` 已改用这两个稳定索引;不再重放枚举顺序。
 - view 构造时逐项比较 checker 与 infrastructure 的 master、instance、row、x、orientation 和 filler flag;不一致即 `isReady()==false`。
+- **isFiller 谓词统一为 checker 的定义**:`isCoreFiller() || isPadFiller()`
+  (view 的 `isFillerMaster` helper 与 `Network::addNode/updateNode` 一致);
+  改任何一侧都要同步另一侧,否则 master/instance 交叉校验假 Fatal。
+- 行归属用 y 排序二分;同 y 多段 row 取行序第一条(与 initFromUDM 相同的
+  tie-break,保证 rowId 对齐)。行原点 X 不一致 → `RowOriginMisaligned` Fatal
+  (planner 窗口与 checker 跨行比较都假设各行共享一个 x 原点)。
+
+## setup diagnostics 严重级语义
+
+- **Fatal(拒绝服务,`isReady()==false`)**:几何/ID 交叉校验失败——两边
+  对同一 id 的宽高/isFiller/位置/orientation 各执一词,继续跑必然错。
+- **Warning(降级继续)**:`CheckerMissingConfiguredMaster`(该候选从
+  candidate 集剔除,repair 用 checker 可建模的子集继续;等 RD 让 checker
+  建模未实例化 master 后自动恢复);`CheckerMissingPlacedFillerMaster`
+  (该 filler 不可 swap,但 baseline/candidate 看到同样的 committed 几何,
+  合法性不受影响)。
+- `FillerVtRepair` 的 target 侧诊断:`TargetMasterUnknown`(不在 infra master
+  表)/ `TargetMasterNotModeled`(在表里但 checker 无 implant 模型,经
+  `checkerModelsMaster()` 判定)。
 
 ## Candidate 与 precheck
 

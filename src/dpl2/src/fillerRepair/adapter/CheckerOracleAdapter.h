@@ -32,7 +32,7 @@
 
 #include "../CheckerApi.h"
 #include "../Log.h"
-#include "InfrastructurePlacementView.h"
+#include "../PlacementView.h"
 #include "drc/ImplantLayerChecker.h"
 
 namespace dpl2 {

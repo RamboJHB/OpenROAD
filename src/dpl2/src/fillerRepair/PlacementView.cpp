@@ -6,7 +6,9 @@
 #include "Log.h"
 
 #include <algorithm>
+#include <set>
 #include <tuple>
+#include <utility>
 
 namespace dpl2::fillerRepair {
 
@@ -138,18 +140,40 @@ SiteCoverageResult PlacementView::checkSiteCoverage(const DebugLog& log) const
 
     std::sort(cuts.begin(), cuts.end());
     cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+
+    // Sweep instead of scanning every instance per segment (dense rows made
+    // that O(N^2)): every span boundary is a cut, so a span overlaps segment
+    // [cuts[i], cuts[i+1]) iff span.xl <= cuts[i] < span.xh -- maintain that
+    // active set incrementally. std::set keeps ids sorted for the issues.
+    std::vector<std::pair<DbCoord, InstanceId>> starts;
+    std::vector<std::pair<DbCoord, InstanceId>> ends;
+    starts.reserve(clippedSpans.size());
+    ends.reserve(clippedSpans.size());
+    for (size_t j = 0; j < clippedSpans.size(); ++j) {
+      if (!clippedSpans[j].empty()) {
+        starts.emplace_back(clippedSpans[j].xl, instances[j].id);
+        ends.emplace_back(clippedSpans[j].xh, instances[j].id);
+      }
+    }
+    std::sort(starts.begin(), starts.end());
+    std::sort(ends.begin(), ends.end());
+
+    std::set<InstanceId> active;
+    size_t nextStart = 0;
+    size_t nextEnd = 0;
     for (size_t i = 0; i + 1 < cuts.size(); ++i) {
       const XInterval segment{cuts[i], cuts[i + 1]};
       if (segment.empty()) {
         continue;
       }
-      std::vector<InstanceId> active;
-      for (size_t j = 0; j < instances.size(); ++j) {
-        if (clippedSpans[j].overlaps(segment)) {
-          active.push_back(instances[j].id);
-        }
+      while (nextEnd < ends.size() && ends[nextEnd].first <= segment.xl) {
+        active.erase(ends[nextEnd].second);
+        ++nextEnd;
       }
-      std::sort(active.begin(), active.end());
+      while (nextStart < starts.size() && starts[nextStart].first <= segment.xl) {
+        active.insert(starts[nextStart].second);
+        ++nextStart;
+      }
       if (active.empty()) {
         addIssue(CoverageIssueKind::Gap, rowId, segment.xl, segment.xh, {});
       } else if (active.size() > 1) {
@@ -157,7 +181,7 @@ SiteCoverageResult PlacementView::checkSiteCoverage(const DebugLog& log) const
                  rowId,
                  segment.xl,
                  segment.xh,
-                 std::move(active));
+                 {active.begin(), active.end()});
       }
     }
   }

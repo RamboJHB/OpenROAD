@@ -109,9 +109,15 @@ FillerVtRepairResult FillerVtRepair::repair(eUNL::LeafCellID targetCell,
   const MasterId newMasterId = view_->masterIdOf(newMaster);
   if (newMasterId < 0) {
     result.diagnostics.push_back(makeDiag(
+        Severity::Fatal, "TargetMasterUnknown",
+        "the target's new master is not in the infrastructure master table"));
+    return result;
+  }
+  if (!view_->checkerModelsMaster(newMasterId)) {
+    result.diagnostics.push_back(makeDiag(
         Severity::Fatal, "TargetMasterNotModeled",
-        "the target's new master carries no implant shapes -> the checker "
-        "cannot model this place"));
+        cat("the checker has no implant model for new master ", newMasterId,
+            " -> the overlay place cannot be validated")));
     return result;
   }
   const PlacedInstance* inst =
@@ -136,8 +142,7 @@ FillerVtRepairResult FillerVtRepair::repair(eUNL::LeafCellID targetCell,
       (newMaster.getHeight().getStorage() + view_->rowHeight() - 1)
           / view_->rowHeight(),
       1);
-  if (inst->isFiller || oldMaster->isFiller
-      || newMaster.getType().isCoreFiller()) {
+  if (inst->isFiller || oldMaster->isFiller || replacement->isFiller) {
     result.diagnostics.push_back(makeDiag(
         Severity::Fatal, "TargetNotStdCell",
         "target and replacement master must both be standard cells"));

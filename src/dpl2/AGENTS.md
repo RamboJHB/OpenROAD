@@ -374,7 +374,40 @@ rowIds/hash 与 diagnostics 完全一致。当前 planner 81/81、checker 10/10�
 **验证边界**:按用户要求没有编译、没有运行 UDM-dependent tests。仍需真实环境完成
 构建接线,并让 checker 初始化包含 `fillerSetting` 中未实例化的候选 master。
 
-## 5. 实现要点与陷阱(接手前必读)
+### D24. D23 重构复审:一致性/规模修复(2026-07-15)
+**背景**:用户要求 review D23 落地代码,方向 = 在 UDM 上高效稳定运行、尽量
+reuse checker/infra。本地 81+10+ASan 复跑全绿后逐文件核对,修了六处:
+1. **isFiller 谓词不一致(会假 Fatal)**:checker `MasterInput.isFiller =
+   isCoreFiller()||isPadFiller()`,而 view/Network 只用 isCoreFiller() ——
+   pad-filler master 会触发 `CheckerMasterMismatch`/`FillerClassificationMismatch`
+   假阳性拒绝整个设计。统一为 checker 谓词(view 内 `isFillerMaster` helper +
+   `Network::addNode/updateNode`;Node::FILLER 本就是 D23 新引入,无下游依赖)。
+2. **行归属 O(nodes×rows) 线性扫**:每 node 全量扫 row frames,真实设计
+   (1e6 node × 1e3 row)不可接受。改 y 排序 + `upper_bound` 二分;同 y 多段
+   row 沿用 checker initFromUDM 的"行序第一条"tie-break,保持 rowId 对齐。
+3. **precheck segment 循环 O(N²/行)**:每 segment 线性扫全行实例;密行
+   (~2000 cell)+全设计扫描不可接受。改增量 sweep(边界即 cuts,active set
+   用 `std::set` 保持 id 有序),输出与旧实现逐字节一致(81 测试锁行为)。
+4. **行原点 X 对齐校验丢失**:planner 窗口与 checker 的跨行比较都假设各行
+   x 可直接比较(行相对系共享一个原点);D23 删 bridge 时把这条校验删丢了。
+   补回 `RowOriginMisaligned` Fatal。
+5. **过严 Fatal 降级(稳定性)**:`CheckerMissingConfiguredMaster` 改
+   Warning + 从候选集剔除(checker 还不能建模未实例化 master 前,配置表
+   几乎必含此类项,Fatal 会 brick 整个 repair;剔除后引擎用可建模子集继续,
+   诊断告诉 RD 缺哪些);`CheckerMissingPlacedFillerMaster` 改 Warning
+   (该 filler 只是不可 swap,baseline/candidate 看到同样的 committed 几何,
+   合法性判定不受影响)。
+6. **target master 诊断精确化**:view 的 master 表 = Network ∪ fillerSetting ∪
+   checker,`masterIdOf>=0` 不再等价"checker 可建模"。view 暴露
+   `checkerModelsMaster()`,`FillerVtRepair` 区分 `TargetMasterUnknown`(不在
+   infra 表)与 `TargetMasterNotModeled`(checker 无 implant 模型);
+   `TargetNotStdCell` 判定改用 view 元数据(单一事实源)。
+   连带:`CheckerOracleAdapter.h` 只依赖抽象 `PlacementView`(UDM 头不再
+   经它扩散)。
+**没动的**(有意):`instancesInRow` 按值返回(接口契约,量级可接受);
+precheck 每次构造 view 重扫(view 本身 O(design) 重建,同阶;等真实数据
+证明是热点再上 revision 缓存);coverage 不含非 core cell(macro cutout
+仍是 row span 的已知缺口,见 adapter README 确认项 3)。
 
 - **对接 blocker(D17/D18)**:checker core 已在 fake-UDM boundary 下直编译并
   10/10 + ASan 全绿(list-only API + rowIds + guard scan + mixed batch 见
