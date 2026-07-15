@@ -3,7 +3,7 @@
 > 写给负责测试拓展的 AI。真实 checker core 已有独立 harness(见下),但尚未通过
 > adapter 接入 engine;等待对接期间继续把纯 planner 各
 > 子模块(PlacementView coverage / Signature / Window / Swap generation / Ranker / SubsetSearch /
-> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 81 个 planner 测试全绿
+> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 80 个 planner 测试全绿
 > (`test/run_tests.sh`,`-Wall -Wextra -Werror`;ASan 同样全绿)。
 > **进度(2026-07-13)**:P0、可由当前接口表达的 P1、P2 五项不变量均完成。
 > P1 仅余 `ranker_majority_per_band`,它受 `MasterInfo` 只有单 `vt` 的数据模型
@@ -41,7 +41,7 @@
    (拆分时保持单二进制、单注册表,run_tests.sh 一并更新)。
 7. 定期跑 ASan 版本(见 §5 命令);新测试合入前至少跑一次。
 
-## 1. 现有覆盖(planner 81 个 + checker 10 个,勿重复)
+## 1. 现有覆盖(planner 80 个 + checker 10 个,勿重复)
 
 - Swap 构造/校验、canonicalKey、wire 转换(3)
 - PlacementView coverage:全覆盖 OK、gap、overlap/offgrid/illegal、engine fatal 短路、多行确定性、
@@ -49,8 +49,8 @@
 - fake checker 协议与规则:echo/order、invalid 隔离、intra/inter 检测、
   guard 过滤、target override(6)
 - Signature:normalize、匹配、relatedness、rule-distance fallback(4)
-- Window:L0 membership/精确集合、bridge 条件、设计边界、guard 两圈 ring、
-  unfixable 横纵 ring 边界(7)
+- Window:L0 membership/精确集合、bridge 条件、设计边界、guard 两圈 ring(6;
+  unfixable ring 单元测试已随 hint 移除,2026-07-15 瘦身)
 - adaptive-L1 #8:每步 K 限制/不 sweep 整段、blocking 侧方向、耦合行 ±1、
   fixed boundary、远端 filler E2E 解、完整枚举后 blocking 不变截止(3 个新增;
   旧 L1 boundary case 已替换)。
@@ -58,7 +58,7 @@
   domain 内序(filler-domain)(3);
   枚举顺序/完备性(1);#9 回归 filler cap 不挤出(1)
 - Engine E2E/不变量:原有 9 项 + batch-size 不变、全文确定性、guard-only 不编辑、
-  预算上限、unfixable hint 仍可由 L1 解;复杂 3 行/8-domain/桥接干扰场景验证
+  预算上限、无 ring filler 仍可由 adaptive-L1 解;复杂 3 行/8-domain/桥接干扰场景验证
   高优先 VT pair 与 domain-tail 第三 VT pair 均在 21 次 checker call 内成功(16)
 - Gate:cache 单次评估、delta 分类分支(2)
 - V2.1 批 1 回归:unexplained illegal、baseline mismatch、multiset、
@@ -71,7 +71,7 @@
   过滤(4);raw API 保留无关 baseline 并携带 rowIds(1);planner/checker 类型同 TU
   共存、invalid batch 隔离、同 x 不同行 hash + guard 裁剪(3);64-candidate
   clean/residual/new/invalid 混合批重复执行后 violation 顺序/hash/诊断确定(1)。
-  独立 harness,不计入上述 planner 81 个。
+  独立 harness,不计入上述 planner 80 个。
 
 ## 2. 待补测试(按优先级;名字用建议的 case 名)
 
@@ -127,8 +127,6 @@
   右贴、上下行与加宽 anchor span 重叠)。✅
 - `window_at_design_edges`:anchor 在 row 0 / 顶行、x 在行首尾时 rows±1、
   guard rows±2、ring 的 clamp 行为。✅
-- `unfixable_ring_boundary`:filler 恰在 ring 内第 2 个 instance(true)/
-  第 3 个(false);行方向 ±2(true)/±3(false)。✅
 
 **SubsetSearch** ✅ 全部完成:complete/budget 边界、overflow clamp、size-3 cap
 与笛卡尔积顺序;2026-07-13 将 `space == budget` 的 contract 断言改为强制并修复
@@ -155,9 +153,9 @@
 - `engine_never_edits_guard_only`:所有发出的 `fillerChanges` 的 instanceId
   必须属于当时窗口 editableFillers。✅
 - `engine_budget_ceiling`:任何 case 下 requestCount ≤ 窗口数 × 预算。✅
-- `engine_unfixable_hint_but_solved`:ring 内无 filler、但 L1 能拉到可修
-  filler 且 oracle 判 clean → **hint Warning 存在且 hasSolution=true**
-  (V2.1 #6 降级的正向收益)。✅
+- `engine_adaptive_solves_beyond_ring`(原 engine_unfixable_hint_but_solved):
+  violation 近旁无 filler、但 adaptive-L1 能拉到可修 filler 且 oracle 判 clean →
+  hasSolution=true(hint 断言已随瘦身移除)。✅
 - `engine_complex_ranked_pair_fast`:3 行、8 个 filler domain、两条跨行 violation
   与 direct/bridge/coupled decoy;首选 VT pair 在 21 次调用内成功,反转 snapshot
   顺序后解、调用数和 batch 数不变。✅
@@ -201,7 +199,7 @@ cd src/dpl2/src/fillerRepair/test
 ./run_tests.sh                     # 全量,-Werror
 ./run_tests.sh <name-substr>       # 过滤
 FR_VERBOSE=1 ./run_tests.sh <case> # 带 [fr] 决策链日志
-SANITIZE=address ./run_tests.sh    # 81 cases + ASan
+SANITIZE=address ./run_tests.sh    # 80 cases + ASan
 
 # 真实 checker core(fake UDM boundary,生产 checker 源码原样编译)
 cd src/dpl2/src/drc/test

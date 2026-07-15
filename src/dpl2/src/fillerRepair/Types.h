@@ -192,7 +192,6 @@ enum class CheckStatus
 {
   Checked,
   InvalidOverlay,
-  Unsupported,
   CheckerError
 };
 

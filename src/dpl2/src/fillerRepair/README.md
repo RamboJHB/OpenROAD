@@ -10,10 +10,10 @@ runs end-to-end against the fakes in `fake/`.
 
 > **V2.1 rollout (spec §0), three batches:** **batch 1 (OracleGate correctness,
 > #1/#2/#3/#4/#5/#10) DONE.** **Batch 2: #6/#7/#8/#11 DONE**
-> (unfixable→warning, dropped L2, adaptive-L1, dropped final check).
+> (unfixable→warning→removed in the 2026-07-15 slimming, dropped L2, adaptive-L1, dropped final check).
 > **Batch 3: #9 filler-domain enumeration DONE** (ranker
 > returns `FillerDomain`s; caps count fillers); **#12 precheck upstreaming
-> pending** (goes with the adapter). 79 planner tests green. Plan and pointers in
+> pending** (goes with the adapter). 80 planner tests green. Plan and pointers in
 > `src/dpl2/HandOff.md`. Dependency topology (checker calls engine, engine
 > calls checker through its own abstract oracle — no cycle) is pinned in spec
 > §3.3.
@@ -102,7 +102,7 @@ SANITIZE=address ./run_tests.sh
 ## Status vs spec §11 TODO
 
 TODO 1–11 and all V2.1 engine revisions are implemented for the current
-single-VT planner projection (79 deterministic tests green).
+single-VT planner projection (80 deterministic tests green).
 TODO 12 (real checker/infra adapter + CMake) is pending. The spec is at **V2.1**;
 folding the 12 revisions into this code is tracked as three batches in
 `src/dpl2/HandOff.md`.
@@ -113,7 +113,7 @@ folding the 12 revisions into this code is tracked as three batches in
 | 2 | Fake checker + fake candidate provider, protocol locked by tests | done |
 | 3 | 100% utility pre-check with fatal short-circuit | done (V2.1 #12: move authority to infra cache) |
 | 4 | Violation normalization + signature matching | done |
-| 5 | Window builder + guardRegion + unfixable check | done (V2.1 #6/#7/#8: warning-only, drop L2, adaptive-L1) |
+| 5 | Window builder + guardRegion | done (V2.1 #6/#7/#8: drop L2, adaptive-L1; the unfixable hint was later removed as noise) |
 | 6 | Swap generator (atomic swaps only) | done |
 | 7 | Ranker (filler domains, third-VT demotion in-domain) | done for current single-VT projection; true P/N per-band majority awaits adapter metadata |
 | 8 | Subset searcher (filler combos × domain assignments) | done; V2.1 #9 applied (caps count fillers); exact `space == budget` completeness fixed |

@@ -206,8 +206,6 @@ FillerVtRepairResult FillerVtRepair::repair(eUNL::LeafCellID targetCell,
   // 5) Map accepted swaps back to UDM handles.
   for (const FillerChange& change : planned.changes) {
     UdmFillerChange out;
-    out.instanceId = change.instanceId;
-    out.newMasterId = change.newMasterId;
     out.cellId = view_->leafCellOf(change.instanceId);
     out.newMaster = view_->physLibCellOf(change.newMasterId);
     if (!out.cellId.isValid() || out.newMaster == nullptr) {

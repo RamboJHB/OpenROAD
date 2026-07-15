@@ -924,7 +924,7 @@ void testRelatedness()
   CHECK(!fr::isRelatedToOverlay(farRow, overlay, 1));
 }
 
-// --- TODO 5: window builder + guard + unfixable ------------------------------
+// --- TODO 5: window builder + guard --------------------------------------
 
 // Two-row fixture (ScenarioA): anchor std cell 102 [10,14) row0; the VT2
 // bridge filler 203 [9,11) row1 sits under it. When opto changes 102 to VT2,
@@ -1135,45 +1135,6 @@ void testWindowAtDesignEdges()
   CHECK(topWindow.guardRegion.x.xh <= 8);
 }
 
-void testUnfixableRingBoundary()
-{
-  // Vt Type: 1 | Widths: {4} | cell type: 1=std, 0=filler
-  // Filler position varies between horizontal ring 2/3 and row distance 2/3.
-  fr::NormalizedViolation violation;
-  violation.rowIds = {0};
-  violation.xRange = {0, 4};
-
-  fr::FakeDesign horizontalNear = makeLibrary();
-  horizontalNear.addRow(0, 0, 16)
-      .place(100, cellMaster(kVt1), 0, 0)
-      .place(101, cellMaster(kVt1), 0, 4)
-      .place(102, fillerMaster(4, kVt1), 0, 8)
-      .place(103, cellMaster(kVt1), 0, 12);
-  CHECK(fr::hasFillerNearViolation(violation, horizontalNear));
-
-  fr::FakeDesign horizontalFar = makeLibrary();
-  horizontalFar.addRow(0, 0, 16)
-      .place(100, cellMaster(kVt1), 0, 0)
-      .place(101, cellMaster(kVt1), 0, 4)
-      .place(102, cellMaster(kVt1), 0, 8)
-      .place(103, fillerMaster(4, kVt1), 0, 12);
-  CHECK(!fr::hasFillerNearViolation(violation, horizontalFar));
-
-  fr::FakeDesign verticalNear = makeLibrary();
-  verticalNear.addRow(0, 0, 4)
-      .place(200, cellMaster(kVt1), 0, 0)
-      .addRow(2, 0, 4)
-      .place(202, fillerMaster(4, kVt1), 2, 0);
-  CHECK(fr::hasFillerNearViolation(violation, verticalNear));
-
-  fr::FakeDesign verticalFar = makeLibrary();
-  verticalFar.addRow(0, 0, 4)
-      .place(300, cellMaster(kVt1), 0, 0)
-      .addRow(3, 0, 4)
-      .place(303, fillerMaster(4, kVt1), 3, 0);
-  CHECK(!fr::hasFillerNearViolation(violation, verticalFar));
-}
-
 void testWindowAdaptiveAddsKOnBlockingSide()
 {
   fr::FakeDesign design = makeTwoRowDesign();
@@ -1279,13 +1240,12 @@ void testGuardRegionTwoCellRing()
   CHECK(window.guardRegion.x.xh >= window.x.xh);
 }
 
-void testEngineUnfixableFastFail()
+void testEngineNoEditableFillerZeroCalls()
 {
-  // A row of std cells only: a violation there has no filler in its ring.
-  // V2.1 #6: this is now a warning hint, not a fast-fail. The engine still
-  // returns no solution and makes zero checker calls -- but because the search
-  // finds no editable filler, not because of an early abort. The
-  // UnfixableByTypeSwap diagnostic is still emitted (now as a hint).
+  // A row of std cells only: no filler can enter any window. The engine
+  // returns no solution with ZERO checker calls -- because the search finds
+  // no editable filler, never via an early abort (V2.1 #6 dropped the
+  // ring-based fast-fail; the hint itself was later removed as noise).
   fr::FakeDesign design = makeLibrary();
   design.addRow(0, 0, 16)
       .place(100, cellMaster(kVt1), 0, 0)
@@ -1307,12 +1267,7 @@ void testEngineUnfixableFastFail()
   const auto result = engine.repair(request);
   CHECK(!result.hasSolution);
   CHECK(result.changes.empty());
-  bool sawUnfixable = false;
-  for (const auto& diag : result.diagnostics) {
-    sawUnfixable |= diag.code == "UnfixableByTypeSwap";
-  }
-  CHECK(sawUnfixable);
-  CHECK_EQ(checker.requestCount(), 0);  // fail before any checker call
+  CHECK_EQ(checker.requestCount(), 0);  // no editable filler -> no calls
 }
 
 void testEngineEmptySnapshotIsSuccess()
@@ -2733,7 +2688,7 @@ class AdaptiveSolutionChecker : public fr::ImplantOverlayChecker
   }
 };
 
-void testEngineUnfixableHintButSolved()
+void testEngineAdaptiveSolvesBeyondRing()
 {
   // Vt Type: {1,2} | Widths: {2,4} | cell type: 1=std, 0=filler
   // The violation ring covers three std cells; L0 starts at filler 142 and
@@ -2768,16 +2723,12 @@ void testEngineUnfixableHintButSolved()
   if (!result.changes.empty()) {
     CHECK_EQ(result.changes.front().instanceId, 141);
   }
-  bool sawHint = false;
   bool sawAdaptiveSolution = false;
   for (const auto& diagnostic : result.diagnostics) {
-    sawHint |= diagnostic.severity == fr::Severity::Warning
-               && diagnostic.code == "UnfixableByTypeSwap";
     sawAdaptiveSolution |= diagnostic.code == "Solution"
                            && diagnostic.message.find("adaptive-L1")
                                   != std::string::npos;
   }
-  CHECK(sawHint);
   CHECK(sawAdaptiveSolution);
 }
 
@@ -3111,14 +3062,14 @@ void testGateStatusNotCheckedCarriesOn()
   const fr::Overlay bad = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
   const fr::Overlay clean = {*fr::makeSwap(design, 501, fillerMaster(2, kVt2))};
 
-  fr::CheckResult unsupported;
-  unsupported.status = fr::CheckStatus::Unsupported;
-  unsupported.isLegal = false;
+  fr::CheckResult invalid;
+  invalid.status = fr::CheckStatus::InvalidOverlay;
+  invalid.isLegal = false;
 
   ResultScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] =
       ResultScriptedChecker::checked({original});
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(bad))] = unsupported;
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(bad))] = invalid;
   checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(clean))] =
       ResultScriptedChecker::checked();
 
@@ -3535,13 +3486,12 @@ int main(int argc, char** argv)
       {"window_L0_exact_membership", testWindowL0ExactMembership},
       {"window_bridge_conditions_each", testWindowBridgeConditionsEach},
       {"window_at_design_edges", testWindowAtDesignEdges},
-      {"unfixable_ring_boundary", testUnfixableRingBoundary},
       {"window_adaptive_adds_k_on_blocking_side",
        testWindowAdaptiveAddsKOnBlockingSide},
       {"window_adaptive_coupled_rows_and_fixed_boundary",
        testWindowAdaptiveCoupledRowsAndFixedBoundary},
       {"guard_region_two_cell_ring", testGuardRegionTwoCellRing},
-      {"engine_unfixable_fast_fail", testEngineUnfixableFastFail},
+      {"engine_no_editable_filler_zero_calls", testEngineNoEditableFillerZeroCalls},
       {"engine_empty_snapshot_is_success", testEngineEmptySnapshotIsSuccess},
       {"swap_generator_basic", testSwapGeneratorBasic},
       {"swap_generator_no_usable_master", testSwapGeneratorNoUsableMaster},
@@ -3576,8 +3526,8 @@ int main(int argc, char** argv)
       {"engine_definitive_reflects_last_window",
        testEngineDefinitiveReflectsLastWindow},
       {"engine_budget_ceiling", testEngineBudgetCeiling},
-      {"engine_unfixable_hint_but_solved",
-       testEngineUnfixableHintButSolved},
+      {"engine_adaptive_solves_beyond_ring",
+       testEngineAdaptiveSolvesBeyondRing},
       {"engine_adaptive_l1_finds_far_filler",
        testEngineAdaptiveL1FindsFarFiller},
       {"engine_adaptive_cutoff_unchanged_blocking",

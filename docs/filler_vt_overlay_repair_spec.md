@@ -34,7 +34,7 @@ V2 定稿并完成 planner 实现(TODO 1–11,35 个确定性测试)后,拿到�
 | 4 | 正确性 | pre-existing 的窗口内/相关 violation 被无条件 `continue` 忽略,比 spec 宽松 | 并入 #2 baseline 一致性门(而非在 classify 里对 pre-existing 重判 relatedness) | §6.8 |
 | 5 | 正确性 | halo relatedness 的 `ruleDistance` 只取 original 最大 requiredValue,新违例规则更大时被误判 unrelated 放行 | 判新违例时取 `max(原始最大, 该违例 requiredValue)` | §6.2、§6.8 |
 | 10 | 正确性 | `anyDefinitive` 用 OR 累积,L0 完备 + L1 截断仍会宣称 definitive | definitive 只按**最后实际搜索窗口**的完备性断言 | §6.7、§6.9 |
-| 6 | 简化 | `UnfixableByTypeSwap` 用无 oracle 的 ring 论证做 hard abort,与 checker-as-oracle 有张力,收益极小 | 降级为 Warning 提示,不提前终止,仍走正常搜索 | §6.2 |
+| 6 | 简化 | `UnfixableByTypeSwap` 用无 oracle 的 ring 论证做 hard abort,与 checker-as-oracle 有张力,收益极小 | 降级为 Warning 提示,不提前终止,仍走正常搜索(2026-07-15 瘦身:提示整体移除——不影响任何决策路径,无 filler 时搜索本就零 checker call 返回 NoEditableFiller) | §6.2 |
 | 7 | 简化 | 单 cluster 下 L2 恒等于 L1、ExpansionCutoff 必触发,名义三级实际两级 | 删 L2,窗口模型改为 L0 + adaptive-L1 | §3.2、§6.3、§7 |
 | 8 | 简化 | L1 一次扩到 fixed/core 边界可吞整条 filler run,`3^k>预算` 立即退化为截断枚举 | 改渐进扩窗:每步向 blocking 侧扩 K≈2 个 filler,尽量维持完备枚举 | §6.3 |
 | 11 | 简化 | final full-overlay check 用相同 cacheKey,必然 cache 命中,零验证增益 | 删除该步;clean 一经 §6.8 判定即返回 | §6.4、§6.9 |
@@ -597,14 +597,11 @@ instanceId,保证 merge/split 时代 instance 被销毁后判定依然成立。�
 自身 requiredValue)`——新违例可能来自 requiredValue 更大的规则,只用原始值会把它
 误判成 unrelated 而放行(V2.1 修订 #5)。
 
-**swap-unfixable 提示**(借鉴 DAC'23 [Zou et al.] 的 unsolvable violation 分类
-思想,弱化为保守启发):若某条 original violation 的 xWindow 外扩 two-cell ring 内
-不存在任何 editable filler,则它很可能无法被 swap 影响。**V2.1 修订 #6:此判定
-降级为 Warning 诊断提示(`UnfixableByTypeSwap`),不再 fast-fail 提前终止**——
-"ring 内无 filler ⇏ 更远 filler 经连续 implant run 一定无法影响"这一推断在 planner
-侧没有 oracle 佐证,与 checker-as-oracle 有张力;而它的实际收益极小(此种 case 下
-L0 本就 `NoEditableFiller` 跳过、零 checker call)。因此保留提示帮助上游区分
-"结构性大概率不可修"与"搜索无解",但仍进入正常搜索路径,由 ④OracleGate 作终判。
+**swap-unfixable 判定(已移除)**:V1 曾借鉴 DAC'23 [Zou et al.] 用 "violation
+外扩 two-cell ring 内无 editable filler" 做 hard abort;V2.1 修订 #6 因其无 oracle
+佐证降级为 Warning 提示;2026-07-15 瘦身把提示也移除了——它不影响任何决策路径
+(无 filler 时搜索本就 `NoEditableFiller`、零 checker call 返回无解),属于最低
+spec 要求之外的功能。不可修的终判只有一个来源:④OracleGate 的正常搜索结果。
 这类 case 通常意味着需要 merge/split(§8.1)或上游回退该 opto 改动。
 
 ### 6.3 开窗:L0 → adaptive-L1 与 guardRegion
@@ -919,8 +916,8 @@ gate 语义:
   此 case 为防御性,附录 A),返回 no usable master diagnostics;fixed cell 约束冲突。
 - 必须扩窗(L0 不够,渐进扩窗后修好);枚举预算耗尽触发扩窗;扩窗到顶返回 no
   solution 且 diagnostics 带 best overlay 与 remaining violations。
-- swap-unfixable 提示:violation 外扩 ring 内无 editable filler,diagnostics 带
-  `UnfixableByTypeSwap` Warning,但仍进入正常搜索(不再 fast-fail,V2.1 #6)。
+- 无 editable filler:纯 std cell 行内的 violation,引擎零 checker call 返回
+  无解(`NoEditableFiller` 路径;unfixable 提示已随瘦身移除,见 §6.2)。
 - 扩窗截止:扩窗后无新增 editable filler/move 时停止扩窗,不烧剩余预算。
 - anchor-follow 首发:典型单/双 filler case 在首个 batch 内 clean。
 - 小窗口完备枚举:窗口内确无解时,枚举完 3^k 空间后**确定性**扩窗;definitive 只

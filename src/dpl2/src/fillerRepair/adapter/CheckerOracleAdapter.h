@@ -12,9 +12,9 @@
 //    (rowHi+1)*rowHeight - 1 so a touching adjacent row is NOT pulled in --
 //    mirrors the checker test harness);
 //  - protocol synthesis: the planner's requestId is echoed back by INDEX
-//    (result i belongs to request i); a batch is grouped by identical
-//    (targetPlace, guardRegion) -- the engine always sends one group per
-//    batch, but mixed groups are handled correctly by sub-batching;
+//    (result i belongs to request i); a batch must share one
+//    (targetPlace, guardRegion) -- the engine sends exactly that shape by
+//    construction, a mixed batch is rejected as CheckerProtocolError;
 //  - violation enrichment: kind from ruleSource, relation from relationship,
 //    participants synthesized from violation.instances via the view
 //    (masterId/rowId/xRange/isFiller/isTarget);

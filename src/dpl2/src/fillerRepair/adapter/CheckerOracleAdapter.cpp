@@ -135,81 +135,84 @@ std::vector<CheckResult> CheckerOracleAdapter::checkPlaceWithOverlays(
     const std::vector<OverlayCheckRequest>& requests)
 {
   std::vector<CheckResult> results(requests.size());
+  if (requests.empty()) {
+    return results;
+  }
 
-  // Group consecutive requests sharing (targetPlace, guardRegion) -- the
-  // engine's batches are homogeneous by construction, so this is one group
-  // per call; the loop stays correct if that ever changes.
-  size_t begin = 0;
-  while (begin < requests.size()) {
-    size_t end = begin + 1;
-    const auto sameGroup = [&](const OverlayCheckRequest& a,
-                               const OverlayCheckRequest& b) {
-      return a.targetPlace.instanceId == b.targetPlace.instanceId
-             && a.targetPlace.masterId == b.targetPlace.masterId
-             && a.targetPlace.rowId == b.targetPlace.rowId
-             && a.targetPlace.x == b.targetPlace.x
-             && a.targetPlace.orientation == b.targetPlace.orientation
-             && a.guardRegion.x.xl == b.guardRegion.x.xl
-             && a.guardRegion.x.xh == b.guardRegion.x.xh
-             && a.guardRegion.rowLo == b.guardRegion.rowLo
-             && a.guardRegion.rowHi == b.guardRegion.rowHi;
-    };
-    while (end < requests.size()
-           && sameGroup(requests[begin], requests[end])) {
-      ++end;
-    }
-
-    const ipl::CheckRequest target =
-        toCheckRequest(requests[begin].targetPlace);
-    const ::Rect guard = toGuardRect(requests[begin].guardRegion);
-    std::vector<std::vector<ipl::FillerChange>> changes;
-    changes.reserve(end - begin);
-    for (size_t i = begin; i < end; ++i) {
-      std::vector<ipl::FillerChange> list;
-      list.reserve(requests[i].fillerChanges.size());
-      for (const FillerChange& change : requests[i].fillerChanges) {
-        list.push_back(ipl::FillerChange{
-            static_cast<ipl::InstanceId>(change.instanceId),
-            static_cast<ipl::MasterId>(change.newMasterId)});
-      }
-      changes.push_back(std::move(list));
-    }
-
-    const std::vector<ipl::CheckResult> raw =
-        checker_.checkPlaceWithOverlays(target, guard, changes);
-    log_.msg("adapter",
-             cat("overlay batch: ", changes.size(), " candidate(s) -> ",
-                 raw.size(), " result(s)"));
-
-    for (size_t i = begin; i < end; ++i) {
-      CheckResult& out = results[i];
-      // Order IS the correlation (list-only contract); echo the planner id.
-      out.requestId = requests[i].requestId;
-      const size_t rawIndex = i - begin;
-      if (rawIndex >= raw.size()) {
-        out.status = CheckStatus::CheckerError;
-        out.diagnostics.push_back(makeDiag(
+  // The wire API is one (target, guard) + N candidates, and the engine sends
+  // exactly that shape by construction. A mixed batch is a protocol error --
+  // reject it loudly instead of quietly splitting it.
+  const OverlayCheckRequest& first = requests.front();
+  for (const OverlayCheckRequest& request : requests) {
+    const bool same =
+        request.targetPlace.instanceId == first.targetPlace.instanceId
+        && request.targetPlace.masterId == first.targetPlace.masterId
+        && request.targetPlace.rowId == first.targetPlace.rowId
+        && request.targetPlace.x == first.targetPlace.x
+        && request.targetPlace.orientation == first.targetPlace.orientation
+        && request.guardRegion.x.xl == first.guardRegion.x.xl
+        && request.guardRegion.x.xh == first.guardRegion.x.xh
+        && request.guardRegion.rowLo == first.guardRegion.rowLo
+        && request.guardRegion.rowHi == first.guardRegion.rowHi;
+    if (!same) {
+      for (size_t i = 0; i < requests.size(); ++i) {
+        results[i].requestId = requests[i].requestId;
+        results[i].status = CheckStatus::CheckerError;
+        results[i].diagnostics.push_back(makeDiag(
             Severity::Fatal, "CheckerProtocolError",
-            cat("checker returned ", raw.size(), " result(s) for ",
-                changes.size(), " candidate(s)")));
-        continue;
+            "mixed (targetPlace, guardRegion) in one overlay batch"));
       }
-      const ipl::CheckResult& r = raw[rawIndex];
-      out.status = statusOf(r);
-      out.isLegal = r.isLegal;
-      for (const ipl::Diagnostic& diag : r.diagnostics) {
-        // The checker has no severity; validation failures already flip the
-        // status to InvalidOverlay, so Warning keeps classify() usable.
-        out.diagnostics.push_back(
-            makeDiag(Severity::Warning, diag.status, diag.message));
-      }
-      out.violations.reserve(r.violations.size());
-      for (const ipl::Violation& v : r.violations) {
-        out.violations.push_back(
-            toPlannerViolation(v, requests[i].targetPlace.instanceId));
-      }
+      return results;
     }
-    begin = end;
+  }
+
+  const ipl::CheckRequest target = toCheckRequest(first.targetPlace);
+  const ::Rect guard = toGuardRect(first.guardRegion);
+  std::vector<std::vector<ipl::FillerChange>> changes;
+  changes.reserve(requests.size());
+  for (const OverlayCheckRequest& request : requests) {
+    std::vector<ipl::FillerChange> list;
+    list.reserve(request.fillerChanges.size());
+    for (const FillerChange& change : request.fillerChanges) {
+      list.push_back(ipl::FillerChange{
+          static_cast<ipl::InstanceId>(change.instanceId),
+          static_cast<ipl::MasterId>(change.newMasterId)});
+    }
+    changes.push_back(std::move(list));
+  }
+
+  const std::vector<ipl::CheckResult> raw =
+      checker_.checkPlaceWithOverlays(target, guard, changes);
+  log_.msg("adapter",
+           cat("overlay batch: ", changes.size(), " candidate(s) -> ",
+               raw.size(), " result(s)"));
+
+  for (size_t i = 0; i < requests.size(); ++i) {
+    CheckResult& out = results[i];
+    // Order IS the correlation (list-only contract); echo the planner id.
+    out.requestId = requests[i].requestId;
+    if (i >= raw.size()) {
+      out.status = CheckStatus::CheckerError;
+      out.diagnostics.push_back(makeDiag(
+          Severity::Fatal, "CheckerProtocolError",
+          cat("checker returned ", raw.size(), " result(s) for ",
+              changes.size(), " candidate(s)")));
+      continue;
+    }
+    const ipl::CheckResult& r = raw[i];
+    out.status = statusOf(r);
+    out.isLegal = r.isLegal;
+    for (const ipl::Diagnostic& diag : r.diagnostics) {
+      // The checker has no severity; validation failures already flip the
+      // status to InvalidOverlay, so Warning keeps classify() usable.
+      out.diagnostics.push_back(
+          makeDiag(Severity::Warning, diag.status, diag.message));
+    }
+    out.violations.reserve(r.violations.size());
+    for (const ipl::Violation& v : r.violations) {
+      out.violations.push_back(
+          toPlannerViolation(v, first.targetPlace.instanceId));
+    }
   }
   return results;
 }

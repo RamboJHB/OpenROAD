@@ -41,14 +41,12 @@ namespace dpl2 {
 namespace fillerRepair {
 namespace adapter {
 
-// One accepted filler swap in UDM terms (plus the checker-frame ids for
-// logging / cross-checks). Commit stays with the infrastructure.
+// One accepted filler swap in UDM terms. Commit stays with the
+// infrastructure.
 struct UdmFillerChange
 {
   eUNL::LeafCellID cellId;
   const eLIB::PhysLibCell* newMaster = nullptr;
-  InstanceId instanceId = 0;
-  MasterId newMasterId = 0;
 };
 
 struct FillerVtRepairResult

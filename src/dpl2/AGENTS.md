@@ -39,7 +39,7 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
-| 测试 | planner 81 个,`-Werror` + ASan 全绿;真实 checker core 10 个(`src/drc/test/run_tests.sh`,含 list-only residual 与 64-candidate 混合批测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
+| 测试 | planner 80 个,`-Werror` + ASan 全绿;真实 checker core 10 个(`src/drc/test/run_tests.sh`,含 list-only residual 与 64-candidate 混合批测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
 | checker(`src/drc/`) | **终版契约已落地(D21)**:RD 2026-07-13 交付(UDM extraction 内联)+ 用户钉死 list-only——`checkPlaceWithOverlays` 输出 guard 内全量违例,无 blocking 过滤、无查重(重复允许但确定性);scan 正确性修正与 `DPL2_FAKE_UDM` 边界重新套用。wire:顺序关联、无 status、batch=单 target+N 变更。**adapter 前 engine 仍只接 fake;infra 版 planner 迁移在即** |
 | infrastructure adapter | **2026-07-15 重构完成**:`InfrastructurePlacementView` / `CheckerOracleAdapter` / `FillerVtRepair`;placement/precheck 来自 Network Objects,candidate 来自 fillerSetting,稳定 ID 已接 checker。未编译;剩余 build/E2E 与 checker candidate catalog |
 
@@ -128,7 +128,8 @@ layer-agnostic checker 是 no-op。
   里都出现 → repair 恒失败。正确修法:并入 #2 的 baseline 一致性门——按 §2.3
   假设,窗口内/相关的 pre-existing 本就不该存在,出现即输入异常,
   `BaselineMismatch` fatal。
-- **#6(unfixable fast-fail)**:不删逻辑,**降级为 Warning hint**。ring 论证
+- **#6(unfixable fast-fail)**:不删逻辑,**降级为 Warning hint**(后于
+  2026-07-15 瘦身整体移除,见 D25——hint 不影响任何决策路径)。ring 论证
   大概率安全但无 oracle 佐证(ring 按 instance 计数、规则按 DBU,安全性依赖
   规则尺度小);而收益极小——没有附近 filler 时 L0 本就 NoEditableFiller、
   零 checker call。降级近乎免费的保险。
@@ -409,6 +410,34 @@ precheck 每次构造 view 重扫(view 本身 O(design) 重建,同阶;等真实�
 证明是热点再上 revision 缓存);coverage 不含非 core cell(macro cutout
 仍是 row span 的已知缺口,见 adapter README 确认项 3)。
 
+### D25. 瘦身:只保留最低 spec 要求内的功能(2026-07-15,用户授权)
+**原则**(用户钉死):不影响最低 spec 完成要求;spec 最低要求之外的功能
+(如 precheck 的 issue 分类之于"100% utility 检查")属可删项。
+**删了**:
+- **unfixable hint 整体移除**(engine stage 2b + `hasFillerNearViolation` +
+  spec §0#6/§6.2/§10 同步):#6 降级后它只剩一条不影响决策的 Warning——无
+  filler 时搜索本就零 checker call 返回 NoEditableFiller。测试 81→80:删
+  `unfixable_ring_boundary` 单元测试;`engine_unfixable_fast_fail` 改名
+  `engine_no_editable_filler_zero_calls`(锁零调用语义)、
+  `engine_unfixable_hint_but_solved` 改名 `engine_adaptive_solves_beyond_ring`
+  (锁 adaptive 语义),两者不再断言 hint。
+- `CheckStatus::Unsupported`(无人产生)、`FakeDesign::allMasters()`(无调用)、
+  `UdmFillerChange.instanceId/newMasterId`(commit 只需 cellId+newMaster)。
+- `CheckerOracleAdapter` 的 mixed-batch 分组循环 → 单组协议校验(engine 按
+  构造只发同 (target,guard) 批;mixed = CheckerProtocolError,不静默拆分)。
+- `CHECKER_REPAIR_CONTRACT.md` 历史改动 1–6 段收敛为一行索引(细节在 git),
+  新增"稳定 ID 增补 + 待 RD 事项"两节(203→49 行)。
+**没删**(有意保留 + 理由):
+- **precheck 的 Gap/Overlap/OffGrid/IllegalOccupant 分类**:这不是超额功能——
+  100% utility = "每个 site 恰好一次覆盖",overlap 与 gap 同为其反例;分类
+  只是诊断措辞,检测本身零额外成本(sweep 已 O(N log N)),且 80 测试锁定。
+- OracleGate cache(自适应扩窗重枚举同候选,省 checker call 的核心)。
+- view 构造期交叉校验(集成初期保命绳;跑稳后可降为抽样/verbose-only)。
+- FakeUdmCandidateProvider 的目录构建(测试地基;等集成编译反馈回来后若
+  要继续瘦身,把 appendix-A 目录折进 FakeDesign、删 describeMasters 层)。
+
+## 5. 实现要点与陷阱(接手前必读)
+
 - **对接 blocker(D17/D18)**:checker core 已在 fake-UDM boundary 下直编译并
   10/10 + ASan 全绿(list-only API + rowIds + guard scan + mixed batch 见
   `drc/CHECKER_REPAIR_CONTRACT.md`),但**真实 UDM extraction 与 adapter 完成**前,
@@ -456,6 +485,6 @@ precheck 每次构造 view 重扫(view 本身 O(design) 重建,同阶;等真实�
 - commit:小步单主题,`fillerRepair:` / `drc:` / `docs:` 前缀,message 讲清因果。
 - 语义改动顺序:spec → 代码+测试 → HandOff/README 状态 → 本文决策日志。
 - 每次改动 `./run_tests.sh` 必须全绿;合入前跑一次 ASan。
-- fake 与既有 81+10 测试不许删、不许改语义(测试暴露 bug 走 TestPlan §4 流程)。
+- fake 与既有 80+10 测试不许删、不许改语义(测试暴露 bug 走 TestPlan §4 流程;经用户授权的瘦身除外,须同步 spec 与本文)。
 - 修改 `drc/ImplantLayerChecker.{h,cpp}`/helper 时保留现有代码(删除 → 注释),
   新类型 additive 扩展。

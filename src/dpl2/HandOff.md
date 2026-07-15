@@ -34,6 +34,12 @@ sweep(原密行 O(N²));补回 `RowOriginMisaligned` 校验;
 `checkerModelsMaster()`,`FillerVtRepair` 精确区分 TargetMasterUnknown /
 TargetMasterNotModeled。本地 81+10+ASan 全绿。
 
+**瘦身(同日,AGENTS D25)**:移除 unfixable hint(engine/Window/spec/测试)、
+`CheckStatus::Unsupported`、`FakeDesign::allMasters`、`UdmFillerChange` 冗余 id
+字段;`CheckerOracleAdapter` mixed-batch 分组改为协议校验;
+`CHECKER_REPAIR_CONTRACT.md` 历史段收敛为终版契约 + 稳定 ID 增补。planner
+测试 81→80(删 ring 单元测试;两个引擎测试改锁 NoEditableFiller/adaptive 语义)。
+
 
 ## 1. 项目一句话
 
@@ -131,8 +137,9 @@ finding,按 xWindow 相对窗口选择左/右;相关行及其 ±1 行每侧每�
 才能找到的解、unchanged-blocking cutoff 与 last-window definitive。
 
 **2.3 swap-unfixable 降级(#6)✅** — `FillerRepairEngine.cpp` stage 2b。原来
-`hasFillerNearViolation` 失败会提前 `return`(hard fail)。已改为:不提前 return,
-只 push 一条 **Warning** 诊断,继续正常搜索。`hasFillerNearViolation` 保留作 hint。
+`hasFillerNearViolation` 失败会提前 `return`(hard fail)。先改为 Warning hint;
+**2026-07-15 瘦身整体移除**(hint 不影响决策路径,无 filler 时搜索本就零
+checker call 返回 NoEditableFiller;spec §6.2 已同步)。
 
 **2.4 删 finalCheck(#11)✅** — `FillerRepairEngine.cpp` foundClean 分支 +
 `OracleGate::finalCheck`。finalCheck 用相同 cacheKey → 必然 cache 命中 → 零验证增益。
@@ -229,7 +236,7 @@ FR_VERBOSE=1 ./run_tests.sh <case>   # 完整逻辑链日志
 |---|---|
 | `docs/filler_vt_overlay_repair_spec.md` | 权威 spec(V2.1);§0 = 本轮 12 项修订记录 |
 | `src/dpl2/src/fillerRepair/OracleGate.{h,cpp}` | 批 1 战场:baseline-delta 门 + 协议校验 + cache |
-| `src/dpl2/src/fillerRepair/FillerRepairEngine.{h,cpp}` | 主循环:窗口升级、definitive 语义(#10)、swap-unfixable(#6)、finalCheck(#11) |
+| `src/dpl2/src/fillerRepair/FillerRepairEngine.{h,cpp}` | 主循环:窗口升级、definitive 语义(#10) |
 | `src/dpl2/src/fillerRepair/Window.{h,cpp}` | 批 2 战场:L0/L1、guardRegion、adaptive-L1(#8)、删 L2(#7) |
 | `src/dpl2/src/fillerRepair/Ranker.{h,cpp}` / `SubsetSearch.{h,cpp}` | 批 3 战场:filler-domain 枚举(#9) |
 | `src/dpl2/src/fillerRepair/Signature.{h,cpp}` | signature / relatedness;ruleDistance(#5) |

@@ -73,11 +73,4 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                   int fillersPerRow,
                                   const DebugLog& log);
 
-// Swap-unfixable hint (spec 6.2, adopted from DAC'23): true when at least one
-// filler lies within a two-instance ring of the violation's footprint on its
-// rows ±2. When false, a swap is unlikely to help -- but V2.1 #6 uses this only
-// as a warning hint, not a fast-fail (the ring argument has no oracle backing).
-bool hasFillerNearViolation(const NormalizedViolation& violation,
-                            const PlacementView& view);
-
 }  // namespace dpl2::fillerRepair

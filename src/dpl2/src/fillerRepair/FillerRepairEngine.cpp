@@ -121,26 +121,6 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
   const std::vector<NormalizedViolation> violations =
       normalizeViolations(request, view_, log_);
 
-  // Stage 2b (spec 6.2): swap-unfixable HINT. V2.1 #6 downgraded this from a
-  // fast-fail to a warning: "no filler in the two-instance ring" has no oracle
-  // backing (it does not prove a farther filler can't matter through a
-  // contiguous implant run), and the payoff was tiny -- with no nearby filler
-  // the search itself reports NoEditableFiller with zero checker calls anyway.
-  // Keep the hint for upstream triage; let the normal search reach the verdict.
-  for (size_t i = 0; i < violations.size(); ++i) {
-    if (!hasFillerNearViolation(violations[i], view_)) {
-      result.diagnostics.push_back(makeDiag(
-          Severity::Warning,
-          "UnfixableByTypeSwap",
-          cat("violation#", i, " rule=", violations[i].raw.ruleId,
-              " footprint=", show(violations[i].xRange),
-              " has no filler within its two-instance ring (hint only)")));
-      log_.msg("engine",
-               cat("violation#", i, " has no nearby filler -> "
-                   "UnfixableByTypeSwap hint (search continues)"));
-    }
-  }
-
   const DbCoord ruleDistance =
       estimateRuleDistance(request.violations, view_.siteWidth());
   OracleGate gate(checker_, request.targetPlace, request.violations,

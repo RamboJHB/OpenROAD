@@ -308,20 +308,4 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                         log);
 }
 
-bool hasFillerNearViolation(const NormalizedViolation& violation,
-                            const PlacementView& view)
-{
-  const RowId lo = violation.rowIds.front() - 2;
-  const RowId hi = violation.rowIds.back() + 2;
-  for (const RowId rowId : clampRows(view, lo, hi)) {
-    for (const PlacedInstance& inst :
-         instancesInRing(view, rowId, violation.xRange, 2)) {
-      if (inst.isFiller) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
 }  // namespace dpl2::fillerRepair

@@ -65,17 +65,6 @@ class FakeDesign : public PlacementView
     return *this;
   }
 
-  // Master ids in deterministic order, useful for test inspection.
-  std::vector<MasterId> allMasters() const
-  {
-    std::vector<MasterId> ids;
-    ids.reserve(masters_.size());
-    for (const auto& [id, info] : masters_) {
-      ids.push_back(id);
-    }
-    return ids;
-  }
-
   // PlacementView -----------------------------------------------------------
 
   std::vector<RowId> rows() const override
