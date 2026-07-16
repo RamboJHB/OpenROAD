@@ -13,7 +13,7 @@ runs end-to-end against the fakes in `fake/`.
 > (unfixable→warning→removed in the 2026-07-15 slimming, dropped L2, adaptive-L1, dropped final check).
 > **Batch 3: #9 filler-domain enumeration DONE** (ranker
 > returns `FillerDomain`s; caps count fillers); **#12 precheck upstreaming
-> pending** (goes with the adapter). 83 planner tests green. Plan and pointers in
+> pending** (goes with the adapter). 87 planner tests green. Plan and pointers in
 > `src/dpl2/HandOff.md`. Dependency topology (checker calls engine, engine
 > calls checker through its own abstract oracle — no cycle) is pinned in spec
 > §3.3.
@@ -102,7 +102,7 @@ SANITIZE=address ./run_tests.sh
 ## Status vs spec §11 TODO
 
 TODO 1–11 and all V2.1 engine revisions are implemented for the current
-single-VT planner projection (83 deterministic tests green).
+single-VT planner projection (87 deterministic tests green).
 TODO 12 (real checker/infra adapter + CMake) is pending. The spec is at **V2.1**;
 folding the 12 revisions into this code is tracked as three batches in
 `src/dpl2/HandOff.md`.

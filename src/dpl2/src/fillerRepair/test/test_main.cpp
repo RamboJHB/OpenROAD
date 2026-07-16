@@ -1270,6 +1270,80 @@ void testEngineNoEditableFillerZeroCalls()
   CHECK_EQ(checker.requestCount(), 0);  // no editable filler -> no calls
 }
 
+class ReentrantChecker : public fr::ImplantOverlayChecker
+{
+ public:
+  fr::FillerRepairEngine* engine = nullptr;
+  const fr::FillerRepairRequest* request = nullptr;
+  fr::Violation original;
+  fr::FillerRepairResult inner;
+  bool fired = false;
+
+  fr::CheckResult checkPlaceWithOverlay(
+      const fr::OverlayCheckRequest& r) override
+  {
+    if (!fired && engine != nullptr && request != nullptr) {
+      fired = true;
+      inner = engine->repair(*request);  // illegal callback (spec 3.3)
+    }
+    fr::CheckResult result;
+    result.requestId = r.requestId;
+    result.status = fr::CheckStatus::Checked;
+    if (r.fillerChanges.empty()) {
+      result.violations = {original};  // baseline reproduces the snapshot
+    }
+    result.isLegal = result.violations.empty();
+    return result;
+  }
+  std::vector<fr::CheckResult> checkPlaceWithOverlays(
+      const std::vector<fr::OverlayCheckRequest>& requests) override
+  {
+    std::vector<fr::CheckResult> results;
+    for (const auto& r : requests) {
+      results.push_back(checkPlaceWithOverlay(r));
+    }
+    return results;
+  }
+};
+
+void testEngineReentrantRepairRefused()
+{
+  // Spec 3.3: the overlay API is a pure query; a checker calling back into
+  // repair() on the same engine gets a fatal ReentrantRepair result, and
+  // the outer repair completes normally.
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 12)
+      .place(100, cellMaster(kVt1), 0, 0)
+      .place(140, fillerMaster(4, kVt1), 0, 4)
+      .place(103, cellMaster(kVt2), 0, 8);
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0},
+      {4, 8});
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 103);
+  request.violations = {original};
+
+  ReentrantChecker checker;
+  checker.original = original;
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  fr::FillerRepairEngine engine(design, checker, config);
+  checker.engine = &engine;
+  checker.request = &request;
+
+  const auto result = engine.repair(request);
+  CHECK(checker.fired);
+  CHECK(!checker.inner.hasSolution);
+  bool sawReentrant = false;
+  for (const auto& diag : checker.inner.diagnostics) {
+    sawReentrant |= diag.severity == fr::Severity::Fatal
+                    && diag.code == "ReentrantRepair";
+  }
+  CHECK(sawReentrant);
+  CHECK(result.hasSolution);  // the outer repair is unaffected
+}
+
 void testEngineEmptySnapshotIsSuccess()
 {
   RowFixture f = makeCoveredRow();
@@ -1570,6 +1644,40 @@ void testRankerMajorityPerBand()
   CHECK_EQ(ranked[0].options[2].newVt, kVt1);  // third VT, retained last
 }
 
+void testRankerMajoritySkipsMissingMaster()
+{
+  // Defensive: an instance whose master is unknown to the view must not
+  // crash the majority vote. The zero-width ghost abuts the filler exactly
+  // at its left edge (span [4,4) -> xh == filler.xl), which is the shape
+  // that dereferenced a null MasterInfo before the guard.
+  fr::FakeDesign design = makeLibrary();
+  design.addMaster(fillerMaster(2, 4), 2, 1, /*isFiller=*/true, 4);
+  design.addRow(0, 0, 12)
+      .place(800, cellMaster(kVt1), 0, 0)
+      .place(801, fillerMaster(2, 4), 0, 4)
+      .place(666, /*masterId=*/9999, 0, 4)  // unknown master, zero width
+      .place(802, cellMaster(kVt1), 0, 6);
+
+  const std::vector<fr::Swap> swaps = {
+      *fr::makeSwap(design, 801, fillerMaster(2, kVt1)),
+      *fr::makeSwap(design, 801, fillerMaster(2, kVt2)),
+  };
+  fr::TargetPlace anchor;
+  anchor.masterId = cellMaster(kVt2);
+  const auto ranked = fr::rankFillers(swaps,
+                                      anchor,
+                                      {},
+                                      {},
+                                      design,
+                                      fr::DebugLog(verbose()));
+  CHECK_EQ(ranked.size(), 1u);
+  if (ranked.size() != 1 || ranked[0].options.size() != 2) {
+    return;
+  }
+  CHECK_EQ(ranked[0].options[0].newVt, kVt2);  // anchor vote
+  CHECK_EQ(ranked[0].options[1].newVt, kVt1);  // majority from real neighbors
+}
+
 void testCandidatesBandPolarityLayoutMustMatch()
 {
   // Same size and a known different VT is not enough: a swap keeps position
@@ -1588,6 +1696,42 @@ void testCandidatesBandPolarityLayoutMustMatch()
   if (!result.candidates.empty()) {
     CHECK_EQ(result.candidates.front().masterId, 11);
   }
+}
+
+void testCandidatesPolarityOnlyFilterDiagnosed()
+{
+  // When every size/VT-compatible replacement is dropped ONLY by the
+  // polarity-layout filter, the result must say so (broken polarity
+  // metadata would otherwise hide behind a generic NoUsableMaster).
+  fr::FakeDesign design;
+  design.setSiteWidth(1);
+  design.addMaster(10, 2, 1, /*isFiller=*/true, kVt1, fr::BandPolarity::N)
+      .addMaster(12, 2, 1, /*isFiller=*/true, kVt3, fr::BandPolarity::P);
+  design.addRow(0, 0, 2).place(100, 10, 0, 0);
+
+  const auto result = design.getUsableMasterCandidates({100});
+  CHECK(result.candidates.empty());
+  bool sawPolarity = false;
+  for (const auto& diag : result.diagnostics) {
+    sawPolarity |= diag.code == "PolarityLayoutFiltered";
+  }
+  CHECK(sawPolarity);
+}
+
+void testFakeDesignCachesFollowMutation()
+{
+  // The reference-returning queries are served from caches; every mutator
+  // must invalidate them (this locks the dirty-flag contract).
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 8).place(100, cellMaster(kVt1), 0, 0);
+  CHECK_EQ(design.instancesInRow(0).size(), 1u);
+  design.place(101, fillerMaster(4, kVt1), 0, 4);
+  CHECK_EQ(design.instancesInRow(0).size(), 2u);
+  design.remove(100);
+  CHECK_EQ(design.instancesInRow(0).size(), 1u);
+  CHECK_EQ(design.rows().size(), 1u);
+  design.addRow(1, 0, 8);
+  CHECK_EQ(design.rows().size(), 2u);
 }
 
 void testFakeUdmBottomPolarityDerived()
@@ -3589,6 +3733,7 @@ int main(int argc, char** argv)
        testWindowAdaptiveCoupledRowsAndFixedBoundary},
       {"guard_region_two_cell_ring", testGuardRegionTwoCellRing},
       {"engine_no_editable_filler_zero_calls", testEngineNoEditableFillerZeroCalls},
+      {"engine_reentrant_repair_refused", testEngineReentrantRepairRefused},
       {"engine_empty_snapshot_is_success", testEngineEmptySnapshotIsSuccess},
       {"swap_generator_basic", testSwapGeneratorBasic},
       {"swap_generator_no_usable_master", testSwapGeneratorNoUsableMaster},
@@ -3597,8 +3742,14 @@ int main(int argc, char** argv)
       {"ranker_filler_key_isolated", testRankerFillerKeyIsolated},
       {"ranker_domain_order_isolated", testRankerDomainOrderIsolated},
       {"ranker_majority_per_band", testRankerMajorityPerBand},
+      {"ranker_majority_skips_missing_master",
+       testRankerMajoritySkipsMissingMaster},
       {"candidates_band_polarity_layout_must_match",
        testCandidatesBandPolarityLayoutMustMatch},
+      {"candidates_polarity_only_filter_diagnosed",
+       testCandidatesPolarityOnlyFilterDiagnosed},
+      {"fake_design_caches_follow_mutation",
+       testFakeDesignCachesFollowMutation},
       {"fake_udm_bottom_polarity_derived", testFakeUdmBottomPolarityDerived},
       {"enumeration_order_and_completeness", testEnumerationOrderAndCompleteness},
       {"enumeration_filler_domain_not_crowded_out",

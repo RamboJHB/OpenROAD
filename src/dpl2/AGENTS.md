@@ -39,7 +39,7 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
-| 测试 | planner 83 个,`-Werror` + ASan 全绿;真实 checker core 10 个(`src/drc/test/run_tests.sh`,含 list-only residual 与 64-candidate 混合批测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
+| 测试 | planner 87 个,`-Werror` + ASan 全绿;真实 checker core 10 个(`src/drc/test/run_tests.sh`,含 list-only residual 与 64-candidate 混合批测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
 | checker(`src/drc/`) | **终版契约已落地(D21)**:RD 2026-07-13 交付(UDM extraction 内联)+ 用户钉死 list-only——`checkPlaceWithOverlays` 输出 guard 内全量违例,无 blocking 过滤、无查重(重复允许但确定性);scan 正确性修正与 `DPL2_FAKE_UDM` 边界重新套用。wire:顺序关联、无 status、batch=单 target+N 变更。**adapter 前 engine 仍只接 fake;infra 版 planner 迁移在即** |
 | infrastructure adapter | **2026-07-15 重构完成**:`InfrastructurePlacementView` / `CheckerOracleAdapter` / `FillerVtRepair`;placement/precheck 来自 Network Objects,candidate 来自 fillerSetting,稳定 ID 已接 checker。未编译;剩余 build/E2E 与 checker candidate catalog |
 
@@ -163,11 +163,11 @@ gate/signature 的单元测试(配 ScriptedChecker)。
 **教训**:凡是"engine 输入应来自 checker"的数据,测试也让它来自 checker,
 否则测试锁的是假契约。ASan 抓到了这个段错误——合入前跑 ASan 值得。
 
-### D12. 输出 all-or-nothing(**用户未拍板的开放决策**)
-现状:修不干净 → `hasSolution=false` + BestOverlay 诊断,不返回 partial。
-用户问过"修不掉的 violation 能否一起返回",给过三选项:A 维持 / B 显式
-partial 模式 / C 结构化残留违例字段。**我推荐 C,用户尚未回复。动
-`FillerRepairResult` 前必须先问。**
+### D12. 输出 all-or-nothing(**已拍板:A,终版**,2026-07-15)
+用户裁定:**只输出 A**——修不干净 → `hasSolution=false` + BestOverlay 诊断,
+不返回 partial、不加结构化残留字段。`FillerRepairResult` 维持现状,commit 侧
+永远只见 oracle-clean 解。曾给过 B(partial 模式)/ C(结构化残留字段)两个
+备选,均否决;除非用户重新开口,不要再提。
 
 ### D13. 12-master 库事实 → 三项搜索精化
 库:`F_FILL{8,4,3,2}_63S6T9{R,L,UL}_1`,**每宽度 3 VT 齐全**(用户先给了不全
@@ -197,7 +197,7 @@ V2.1 文本的定义;代价是个别多解 case 的"首个 clean"换人——用
 只认自己的抽象 `ImplantOverlayChecker`(CheckerApi.h)+ 自有 UDM-free wire
 类型;checker 的 repair 入口构造 engine 并把自己包进 `CheckerOracleAdapter`
 注入(adapter 兼做类型换皮,checker 侧持有)。运行时无递归的保障是协议红线:
-overlay API 是纯查询(const),**禁止内部触发 repair**;repair 入口加不可重入
+overlay API 是纯查询(const),**禁止内部触发 repair**;repair 入口已加不可重入
 assert。构建:libfillerRepair 零依赖 ← checker;adapter 随 checker 目标。
 **否决备选**:并入 checker(毁独立测试)、双向抽象(空转)、std::function
 (类型面弱)、orchestrator 拥有两者(最干净但当前集成事实是 checker 驱动;
@@ -470,6 +470,43 @@ engine/infra,集成点自选。
 **测试**:+3(`ranker_majority_per_band` 同行/跨行权重区分场景、
 `candidates_band_polarity_layout_must_match`、
 `fake_udm_bottom_polarity_derived`),planner 83/83 + ASan、checker 10/10。
+
+### D27. 风险修复 + runtime 优化 + 多线程安全(2026-07-15,用户指令)
+**用户指令**:D12 拍板 A;算法侧修复此前 review 出的风险项;优化 runtime;
+算法要多线程 safe。
+**风险修复(算法侧三项)**:
+- **Ranker null guard**:majority 投票对 `masterInfo()==nullptr` 的邻居跳过
+  (原裸解引用;生产路径经两道上游防线不可达,但 ranker 不应依赖它们)。
+  回归:`ranker_majority_skips_missing_master`(零宽幽灵实例贴 filler 左缘,
+  正是旧代码 deref null 的形状)。
+- **polarity 淘汰可见性**:当所有同尺寸异 VT 候选**只**因 polarity layout 被
+  滤光时,报 `PolarityLayoutFiltered` Warning(而非笼统 NoUsableMaster)——
+  polarity 元数据(layer 名解析)坏掉时不再静默假"无解"。
+- **重入 guard(spec §3.3 落地)**:`FillerRepairEngine::repair` 入口
+  `std::atomic<bool>` exchange;重入/同实例并发 → fatal `ReentrantRepair`
+  结果(RAII 清理)。回归:`engine_reentrant_repair_refused`(checker 回调
+  repair,内层拿 fatal、外层正常完成)。
+**runtime 优化(核心 = 消灭热路径拷贝)**:
+- `PlacementView` 三个查询改**引用返回**并钉进契约:`instancesInRow`(planner
+  最热查询——precheck/开窗/rank 每步都调,真实行几千实例,按值返回的拷贝是
+  planner 主要成本)、`rows()`(每步 clamp 都调,禁止每次重建)、
+  `fillerMasterIds()`(契约升级为"有序去重",provider 默认实现随之删掉每次
+  调用的 sort/unique 拷贝)。
+- `InfrastructurePlacementView`:row_list_ 构造期预计算;`emptyInstances()`
+  静态空表兜底缺行。
+- `FakeDesign`(test-only):mutator 置 dirty flag、查询时重建缓存桶;回归
+  `fake_design_caches_follow_mutation` 锁失效语义。
+**线程模型(钉进 spec §3.3)**:
+- view 构造后不可变,const 查询对并发读者安全;coverage 惰性缓存改
+  `std::call_once`(原 mutable optional 有数据竞争)。
+- 并发 repair = **每线程一个 engine 实例**,共享同一 view + 同一 oracle
+  adapter;engine 无共享可变状态(guard 即并发误用检测)。
+- **checker 不是线程安全的**(实测:const overlay 路径改 mutable
+  `nextCandIntervalId_`/`nextCandShapeId_`)→ `CheckerOracleAdapter` 持
+  mutex 串行化 checker 调用;planner 侧无锁。checker call 本就是 runtime
+  主项,串行化不损害单线程性能,并发时 planner 侧工作仍可重叠。
+- `FakeDesign` 明确单线程(test-only,可变 builder)。
+**测试**:83→87(上述 4 个回归),87/87 + ASan、checker 10/10。
 
 ## 5. 实现要点与陷阱(接手前必读)
 

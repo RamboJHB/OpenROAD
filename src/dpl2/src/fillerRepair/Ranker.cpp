@@ -24,19 +24,30 @@ VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
   const XInterval span = instanceSpan(view, inst);
   std::map<VtId, int> votes;
 
+  // Defensive: an instance with a missing master must not crash the vote
+  // (upstream validation makes it unreachable in production, but the ranker
+  // must not rely on two layers above it).
   for (const PlacedInstance& other : view.instancesInRow(inst.rowId)) {
     if (other.id == inst.id) {
       continue;
     }
+    const MasterInfo* master = view.masterInfo(other.masterId);
+    if (master == nullptr) {
+      continue;
+    }
     const XInterval otherSpan = instanceSpan(view, other);
     if (otherSpan.xh == span.xl || otherSpan.xl == span.xh) {
-      votes[view.masterInfo(other.masterId)->vt] += 2;
+      votes[master->vt] += 2;
     }
   }
   for (const RowId rowId : {inst.rowId - 1, inst.rowId + 1}) {
     for (const PlacedInstance& other : view.instancesInRow(rowId)) {
+      const MasterInfo* master = view.masterInfo(other.masterId);
+      if (master == nullptr) {
+        continue;
+      }
       if (instanceSpan(view, other).overlaps(span)) {
-        votes[view.masterInfo(other.masterId)->vt] += 1;
+        votes[master->vt] += 1;
       }
     }
   }

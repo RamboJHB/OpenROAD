@@ -47,6 +47,13 @@ shapes 派生、fake 同规则);候选过滤加 **同 bottom-polarity layout** �
 (spec §5.3);Ranker majority **按 band-slot 计权**(同行 2 票/跨行 1 票,
 spec §6.6 待办项闭环)。planner 测试 80→83。
 
+**风险修复 + runtime + 多线程(同日,AGENTS D27)**:D12 拍板 A(终版);
+Ranker null guard、`PolarityLayoutFiltered` 诊断、repair 入口原子重入 guard;
+`PlacementView` 三查询改引用返回(热路径拷贝清零,`fillerMasterIds` 契约升级
+有序去重);线程模型钉死——view 不可变 + `call_once` coverage、每线程一个
+engine、adapter 串行化 checker(其 const 路径改 mutable 计数器,非线程安全)。
+planner 测试 83→87。
+
 
 ## 1. 项目一句话
 
@@ -174,11 +181,10 @@ size-2 组合存在"(旧语义下 cap=2 只覆盖 f1 的两个 option,size-2 一
 复核**(这同时化解 `rowLegalSpan` 单区间表达不了 macro/blockage 多段的问题——窗口
 内单段假设成立,多段由 adapter 报 issue)。此项随 §4 的 adapter 对接一起做。
 
-### 未决:输出格式(需先问用户)
+### 输出格式:已拍板 A(终版,2026-07-15,AGENTS D12)
 
-当前是 all-or-nothing(修不干净 → `hasSolution=false` + BestOverlay 诊断)。用户问过
-"能否把修不掉的 violation 一起返回",给过 A(维持)/ B(部分修复模式)/ C(结构化
-残留 violation 字段),我推荐 C,**用户尚未拍板**。动 `FillerRepairResult` 前先问。
+all-or-nothing 维持:修不干净 → `hasSolution=false` + BestOverlay 诊断,不返回
+partial、不加结构化残留字段。`FillerRepairResult` 不再动。
 
 ## 4. checker / infra 依赖(**不是我们的任务**,但 engine 依赖这些契约成立)
 
@@ -204,7 +210,7 @@ engine 接真 checker 前,这些必须由 checker/infra 侧就位。记录在此
 4. **依赖拓扑已钉死(spec §3.3 / AGENTS D15)**:checker 调 engine(具体、单向
    编译依赖),engine 调 checker 只经自己的抽象 oracle 接口——无编译环;
    `checkPlaceWithOverlay[s]` 是纯查询、禁止内部触发 repair——无运行时递归。
-   repair 入口建议加不可重入 assert。candidate provider 的真实实现坐在 checker
+   repair 入口已加原子不可重入 guard(重入 → fatal ReentrantRepair,D27)。candidate provider 的真实实现坐在 checker
    的 master 表上,数据通路已由 `fake/FakeUdmCandidateProvider`(AGENTS D16)
    预演:VT = implant layer family(parseLayerName),绝不解析 master 名。
 
@@ -258,7 +264,7 @@ FR_VERBOSE=1 ./run_tests.sh <case>   # 完整逻辑链日志
 1. **构建/CMake 接线**:加入 `PlacementView.cpp`、`InfrastructurePlacementView.cpp` 和其余 planner/adapter sources;本轮按要求未编译。
 2. **checker candidate catalog**:确保 `fillerSetting` 中未实例化 replacement master 进入 checker master table;当前 view 会以 `CheckerMissingConfiguredMaster` 明确拒绝。
 3. **真实 UDM E2E**:验证 row origin、multi-height、macro/blockage legal segments、target overlay 与 result mapping。
-4. **per-band metadata / 产品输出格式**:等待真实 API 和用户拍板。
+4. ~~per-band metadata / 产品输出格式~~ **均已关闭**:per-band 已落地(D26);输出格式拍板 A(D12 终版)。
 
 FakeDesign、FakeDesign candidate catalog、FakeImplantChecker、Scripted/Misbehaving checker
 均是 planner 单测边界,继续保留。`FakeUdmCandidateProvider` 在真实 provider E2E

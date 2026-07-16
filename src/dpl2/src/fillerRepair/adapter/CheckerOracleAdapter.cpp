@@ -181,8 +181,12 @@ std::vector<CheckResult> CheckerOracleAdapter::checkPlaceWithOverlays(
     changes.push_back(std::move(list));
   }
 
-  const std::vector<ipl::CheckResult> raw =
-      checker_.checkPlaceWithOverlays(target, guard, changes);
+  std::vector<ipl::CheckResult> raw;
+  {
+    // Serialize the checker (its const overlay path mutates internal ids).
+    std::lock_guard<std::mutex> lock(checker_mutex_);
+    raw = checker_.checkPlaceWithOverlays(target, guard, changes);
+  }
   log_.msg("adapter",
            cat("overlay batch: ", changes.size(), " candidate(s) -> ",
                raw.size(), " result(s)"));

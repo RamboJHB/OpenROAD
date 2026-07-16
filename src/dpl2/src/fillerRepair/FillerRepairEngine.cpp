@@ -79,6 +79,23 @@ FillerRepairResult FillerRepairEngine::repair(const FillerRepairRequest& request
 {
   FillerRepairResult result;
 
+  // Spec 3.3: the overlay API is a pure query and must never call back into
+  // repair, and one engine instance never runs two repairs at once
+  // (concurrent repairs = one engine per thread over a shared immutable
+  // view). Turn a violation into a fatal result instead of corrupted state.
+  if (repair_active_.exchange(true, std::memory_order_acq_rel)) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Fatal, "ReentrantRepair",
+        "repair() re-entered on this engine instance (oracle callback or "
+        "concurrent use) -> refused"));
+    return result;
+  }
+  struct ActiveGuard
+  {
+    std::atomic<bool>& flag;
+    ~ActiveGuard() { flag.store(false, std::memory_order_release); }
+  } activeGuard{repair_active_};
+
   log_.msg("engine",
            cat("repair start: anchor inst=", request.targetPlace.instanceId,
                " master=", request.targetPlace.masterId,

@@ -61,7 +61,7 @@ Region FillerVtRepair::snapshotGuard(const TargetPlace& target) const
   Region guard;
   guard.x = XInterval{target.x - halo, target.x + width + halo};
 
-  const std::vector<RowId> rows = view_->rows();
+  const std::vector<RowId>& rows = view_->rows();
   const RowId minRow = rows.empty() ? 0 : rows.front();
   const RowId maxRow = rows.empty() ? 0 : rows.back();
   guard.rowLo = std::max<RowId>(

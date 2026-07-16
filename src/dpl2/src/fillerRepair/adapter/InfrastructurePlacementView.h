@@ -4,6 +4,7 @@
 #pragma once
 
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -25,6 +26,12 @@ eUTL::PhysOrientation toUdmOrient(Orient orient);
 // Single immutable boundary shared by precheck, candidate generation and
 // checker/planner id conversion. Placement geometry comes from infrastructure
 // Objects; checker tables contribute only implant metadata and validation.
+//
+// Thread model: immutable after construction; const queries are safe for
+// concurrent readers (the lazily computed coverage result is guarded by
+// std::call_once). NOTE this does NOT extend to the checker: concurrent
+// repairs must still share ONE CheckerOracleAdapter, which serializes
+// checker calls (the checker's const overlay path mutates internal ids).
 class InfrastructurePlacementView : public PlacementView
 {
  public:
@@ -40,13 +47,13 @@ class InfrastructurePlacementView : public PlacementView
     return setup_diagnostics_;
   }
 
-  std::vector<RowId> rows() const override;
+  const std::vector<RowId>& rows() const override { return row_list_; }
   XInterval rowLegalSpan(RowId rowId) const override;
   DbCoord siteWidth() const override { return site_width_; }
-  std::vector<PlacedInstance> instancesInRow(RowId rowId) const override;
+  const std::vector<PlacedInstance>& instancesInRow(RowId rowId) const override;
   const PlacedInstance* instance(InstanceId id) const override;
   const MasterInfo* masterInfo(MasterId id) const override;
-  std::vector<MasterId> fillerMasterIds() const override
+  const std::vector<MasterId>& fillerMasterIds() const override
   {
     return filler_master_ids_;
   }
@@ -79,9 +86,12 @@ class InfrastructurePlacementView : public PlacementView
   std::set<InstanceId> checker_instance_ids_;
   std::set<MasterId> checker_master_ids_;
   std::map<RowId, std::vector<PlacedInstance>> by_row_;
+  std::vector<RowId> row_list_;  // keys of row_spans_, precomputed
   std::vector<MasterId> filler_master_ids_;
   std::vector<Diagnostic> setup_diagnostics_;
-  mutable std::optional<SiteCoverageResult> coverage_cache_;
+  // Lazy coverage result; call_once keeps concurrent readers safe.
+  mutable std::once_flag coverage_once_;
+  mutable SiteCoverageResult coverage_cache_;
 };
 
 }  // namespace dpl2::fillerRepair::adapter

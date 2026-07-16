@@ -28,6 +28,7 @@
 
 #pragma once
 
+#include <mutex>
 #include <vector>
 
 #include "../CheckerApi.h"
@@ -63,6 +64,12 @@ class CheckerOracleAdapter : public ImplantOverlayChecker
   const PlacementView& view_;
   DbCoord row_height_ = 1;
   const DebugLog& log_;
+  // The checker's const overlay path mutates internal counters
+  // (nextCandIntervalId_/nextCandShapeId_ are mutable), so concurrent
+  // checkPlaceWithOverlays on ONE checker instance is not safe. Concurrent
+  // repair threads share this adapter, and the adapter serializes the
+  // checker; everything planner-side stays lock-free.
+  mutable std::mutex checker_mutex_;
 };
 
 }  // namespace adapter

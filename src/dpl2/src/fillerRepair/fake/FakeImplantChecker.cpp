@@ -146,7 +146,7 @@ CheckResult FakeImplantChecker::evaluate(const OverlayCheckRequest& request) con
   }
 
   // --- Rule evaluation over the overlaid design.
-  const std::vector<RowId> rowIds = design_.rows();
+  const std::vector<RowId>& rowIds = design_.rows();
   std::map<RowId, std::vector<Run>> runsByRow;
   for (const RowId rowId : rowIds) {
     runsByRow[rowId] = buildRuns(rowId, request, overlay);

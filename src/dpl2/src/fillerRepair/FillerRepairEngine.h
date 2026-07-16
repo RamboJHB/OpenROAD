@@ -22,6 +22,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include "CheckerApi.h"
 #include "Log.h"
 #include "PlacementView.h"
@@ -57,6 +59,9 @@ class FillerRepairEngine
   ImplantOverlayChecker& checker_;
   RepairConfig config_;
   DebugLog log_;
+  // Guards spec 3.3's no-reentrancy contract AND flags concurrent use of one
+  // engine instance; concurrent repairs use one engine per thread.
+  std::atomic<bool> repair_active_{false};
 };
 
 }  // namespace dpl2::fillerRepair

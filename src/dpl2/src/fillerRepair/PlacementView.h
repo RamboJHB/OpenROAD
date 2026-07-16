@@ -7,6 +7,12 @@
 // real adapter wraps the UDM-backed design; fake/FakeDesign.h implements it
 // for unit tests. The planner never mutates the design -- commit stays with
 // the infrastructure (spec section 3.1).
+//
+// Thread model: after construction a production view is an immutable
+// snapshot -- all const methods must be safe for CONCURRENT readers (any
+// internal lazy cache must synchronize itself), and returned references stay
+// valid for the view's lifetime. FakeDesign (test-only) keeps mutable
+// builders and is single-threaded by design.
 
 #pragma once
 
@@ -51,8 +57,10 @@ class PlacementView
  public:
   virtual ~PlacementView() = default;
 
-  // Sorted ascending.
-  virtual std::vector<RowId> rows() const = 0;
+  // Sorted ascending. The reference stays valid for the view's lifetime;
+  // window building and guard clamping call this on every step, so
+  // implementations must NOT rebuild the list per call.
+  virtual const std::vector<RowId>& rows() const = 0;
 
   // Legal std-cell site range of a row in DBU. Macros/blockages/core cutouts
   // must already be excluded by the adapter (spec section 6.1); anything a
@@ -61,19 +69,29 @@ class PlacementView
 
   virtual DbCoord siteWidth() const = 0;
 
-  // Sorted by x ascending. Contract for multi-height (future): an instance
-  // spanning several rows is reported by every row it occupies. V1 designs
-  // are single-height.
-  virtual std::vector<PlacedInstance> instancesInRow(RowId rowId) const = 0;
+  // Sorted by x ascending (ties by id). Contract for multi-height (future):
+  // an instance spanning several rows is reported by every row it occupies.
+  // V1 designs are single-height. Returned by reference: this is the
+  // planner's hottest query (precheck, window building, ranking) and rows
+  // hold thousands of instances on real designs -- per-call copies are the
+  // dominant planner cost, so implementations must return stored buckets.
+  virtual const std::vector<PlacedInstance>& instancesInRow(
+      RowId rowId) const = 0;
 
   // nullptr when unknown.
   virtual const PlacedInstance* instance(InstanceId id) const = 0;
   virtual const MasterInfo* masterInfo(MasterId id) const = 0;
 
-  virtual std::vector<MasterId> fillerMasterIds() const = 0;
+  // Configured replacement universe, sorted ascending and unique (the
+  // default candidate filter relies on that order for determinism).
+  virtual const std::vector<MasterId>& fillerMasterIds() const = 0;
   virtual MasterCandidateResult getUsableMasterCandidates(
       const MasterCandidateRequest& request) const;
   virtual SiteCoverageResult checkSiteCoverage(const DebugLog& log) const;
+
+ protected:
+  // Shared "no such row" result so implementations can return a reference.
+  static const std::vector<PlacedInstance>& emptyInstances();
 };
 
 // Occupied x span of a placed instance (width comes from its master).

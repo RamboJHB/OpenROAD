@@ -3,7 +3,7 @@
 > 写给负责测试拓展的 AI。真实 checker core 已有独立 harness(见下),但尚未通过
 > adapter 接入 engine;等待对接期间继续把纯 planner 各
 > 子模块(PlacementView coverage / Signature / Window / Swap generation / Ranker / SubsetSearch /
-> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 83 个 planner 测试全绿
+> OracleGate / Engine 主循环)的测试覆盖做扎实。当前 87 个 planner 测试全绿
 > (`test/run_tests.sh`,`-Wall -Wextra -Werror`;ASan 同样全绿)。
 > **进度(2026-07-15)**:P0、P1、P2 五项不变量均完成。原 P1 尾项
 > `ranker_majority_per_band` 已随 per-band 集成落地(AGENTS D26:checker 实测
@@ -42,7 +42,7 @@
    (拆分时保持单二进制、单注册表,run_tests.sh 一并更新)。
 7. 定期跑 ASan 版本(见 §5 命令);新测试合入前至少跑一次。
 
-## 1. 现有覆盖(planner 83 个 + checker 10 个,勿重复)
+## 1. 现有覆盖(planner 87 个 + checker 10 个,勿重复)
 
 - Swap 构造/校验、canonicalKey、wire 转换(3)
 - PlacementView coverage:全覆盖 OK、gap、overlap/offgrid/illegal、engine fatal 短路、多行确定性、
@@ -72,7 +72,7 @@
   过滤(4);raw API 保留无关 baseline 并携带 rowIds(1);planner/checker 类型同 TU
   共存、invalid batch 隔离、同 x 不同行 hash + guard 裁剪(3);64-candidate
   clean/residual/new/invalid 混合批重复执行后 violation 顺序/hash/诊断确定(1)。
-  独立 harness,不计入上述 planner 83 个。
+  独立 harness,不计入上述 planner 87 个。
 
 ## 2. 待补测试(按优先级;名字用建议的 case 名)
 
@@ -95,9 +95,9 @@
 - `gate_batch_extra_result_rejected`:返回条数 > 请求条数 → protocol error。
 - `gate_single_wrong_echo_on_baseline`:baseline 单发接口 echo 错 id →
   abort(现在只测了批量路径)。
-- `gate_status_not_checked_carries_on`:批内一个 request 返回
-  `CheckerError`/`Unsupported` → 该 candidate 不入选,同批其他正常评估,
-  搜索继续(隔离语义在 gate 层的体现)。
+- `gate_status_not_checked_carries_on`:批内一个 request 返回非 Checked
+  状态(如 `InvalidOverlay`;`Unsupported` 枚举值已随瘦身删除)→ 该 candidate
+  不入选,同批其他正常评估,搜索继续(隔离语义在 gate 层的体现)。
 
 **classify 分支补漏**
 - `gate_fatal_diag_makes_unusable`:`status==Checked` 但 diagnostics 里带
@@ -143,6 +143,10 @@
   1 票);测试构造同行/跨行票数竞争(per-cell 平票 → per-band 同行胜)。配套
   `candidates_band_polarity_layout_must_match`(polarity layout 过滤)与
   `fake_udm_bottom_polarity_derived`(bottom polarity 派生锚定最底 shape)。
+- D27 回归(2026-07-15):`ranker_majority_skips_missing_master`(null guard)、
+  `candidates_polarity_only_filter_diagnosed`(PolarityLayoutFiltered)、
+  `engine_reentrant_repair_refused`(spec §3.3 重入 guard)、
+  `fake_design_caches_follow_mutation`(引用返回查询的缓存失效契约)。
 
 **Swap generation (`Swap`)**
 - `swapgen_rejected_candidate_diag`:provider 返回一个通不过 makeSwap 校验的
@@ -203,7 +207,7 @@ cd src/dpl2/src/fillerRepair/test
 ./run_tests.sh                     # 全量,-Werror
 ./run_tests.sh <name-substr>       # 过滤
 FR_VERBOSE=1 ./run_tests.sh <case> # 带 [fr] 决策链日志
-SANITIZE=address ./run_tests.sh    # 83 cases + ASan
+SANITIZE=address ./run_tests.sh    # 87 cases + ASan
 
 # 真实 checker core(fake UDM boundary,生产 checker 源码原样编译)
 cd src/dpl2/src/drc/test

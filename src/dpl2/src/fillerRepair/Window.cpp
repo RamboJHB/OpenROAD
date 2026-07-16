@@ -18,7 +18,7 @@ std::vector<PlacedInstance> instancesInRing(const PlacementView& view,
                                             const XInterval& x,
                                             int ring)
 {
-  const std::vector<PlacedInstance> all = view.instancesInRow(rowId);
+  const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
   std::vector<PlacedInstance> result;
 
   // Index range overlapping x.
@@ -237,7 +237,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
   const int step = std::max(1, fillersPerRow);
 
   for (const RowId rowId : rowSet) {
-    const std::vector<PlacedInstance> all = view.instancesInRow(rowId);
+    const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
     DbCoord leftFrontier = current.x.xl;
     DbCoord rightFrontier = current.x.xh;
     bool hasSeed = false;

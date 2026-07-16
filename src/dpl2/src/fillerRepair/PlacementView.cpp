@@ -31,6 +31,12 @@ const char* kindName(CoverageIssueKind kind)
 
 }  // namespace
 
+const std::vector<PlacedInstance>& PlacementView::emptyInstances()
+{
+  static const std::vector<PlacedInstance> kEmpty;
+  return kEmpty;
+}
+
 MasterCandidateResult PlacementView::getUsableMasterCandidates(
     const MasterCandidateRequest& request) const
 {
@@ -64,10 +70,10 @@ MasterCandidateResult PlacementView::getUsableMasterCandidates(
     return result;
   }
 
-  std::vector<MasterId> configured = fillerMasterIds();
-  std::sort(configured.begin(), configured.end());
-  configured.erase(std::unique(configured.begin(), configured.end()), configured.end());
-  for (const MasterId id : configured) {
+  // fillerMasterIds() is sorted unique by contract -> candidates come out
+  // ascending and deterministic without a per-call sort.
+  int polarityFiltered = 0;
+  for (const MasterId id : fillerMasterIds()) {
     const MasterInfo* candidate = masterInfo(id);
     if (candidate == nullptr) {
       result.diagnostics.push_back(makeDiag(
@@ -83,16 +89,31 @@ MasterCandidateResult PlacementView::getUsableMasterCandidates(
     if (id != inst->masterId && candidate->isFiller
         && candidate->vt != kUnknownVt && candidate->vt != current->vt
         && candidate->width == current->width
-        && candidate->height == current->height
-        && candidate->bottomBandPolarity == current->bottomBandPolarity) {
+        && candidate->height == current->height) {
+      if (candidate->bottomBandPolarity != current->bottomBandPolarity) {
+        ++polarityFiltered;
+        continue;
+      }
       result.candidates.push_back(MasterCandidate{id});
     }
   }
   if (result.candidates.empty()) {
-    result.diagnostics.push_back(makeDiag(
-        Severity::Info, "NoUsableMaster",
-        cat("no configured same-size VT replacement for instance ",
-            request.fillerInstanceId)));
+    // Distinguish "the library has nothing" from "everything size/VT
+    // compatible was dropped by the polarity-layout filter": the latter
+    // pattern usually means the polarity metadata (layer-name parse) is
+    // broken, and silently reporting NoUsableMaster would hide it.
+    if (polarityFiltered > 0) {
+      result.diagnostics.push_back(makeDiag(
+          Severity::Warning, "PolarityLayoutFiltered",
+          cat(polarityFiltered, " same-size VT replacement(s) for instance ",
+              request.fillerInstanceId,
+              " dropped only by the band-polarity layout filter")));
+    } else {
+      result.diagnostics.push_back(makeDiag(
+          Severity::Info, "NoUsableMaster",
+          cat("no configured same-size VT replacement for instance ",
+              request.fillerInstanceId)));
+    }
   }
   return result;
 }
@@ -119,7 +140,7 @@ SiteCoverageResult PlacementView::checkSiteCoverage(const DebugLog& log) const
 
   for (const RowId rowId : rows()) {
     const XInterval legal = rowLegalSpan(rowId);
-    const std::vector<PlacedInstance> instances = instancesInRow(rowId);
+    const std::vector<PlacedInstance>& instances = instancesInRow(rowId);
     std::vector<XInterval> clippedSpans;
     clippedSpans.reserve(instances.size());
     std::vector<DbCoord> cuts{legal.xl, legal.xh};

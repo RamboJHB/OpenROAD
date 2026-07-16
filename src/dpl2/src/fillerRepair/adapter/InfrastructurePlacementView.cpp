@@ -185,6 +185,11 @@ InfrastructurePlacementView::InfrastructurePlacementView(
     return (y >= it->yLo && y < it->yHi) ? it->rowId : -1;
   };
 
+  row_list_.reserve(row_spans_.size());
+  for (const auto& [id, span] : row_spans_) {
+    row_list_.push_back(id);
+  }
+
   const auto heightInRows = [this](DbCoord height) {
     return row_height_ > 0
                ? std::max<DbCoord>((height + row_height_ - 1) / row_height_, 1)
@@ -397,10 +402,13 @@ bool InfrastructurePlacementView::isValid() const
 SiteCoverageResult InfrastructurePlacementView::checkSiteCoverage(
     const DebugLog& log) const
 {
-  if (!coverage_cache_.has_value()) {
+  // Same-size swaps never change coverage and the view is an immutable
+  // snapshot, so one computation serves every repair on this view;
+  // call_once keeps concurrent repair threads safe.
+  std::call_once(coverage_once_, [&] {
     coverage_cache_ = PlacementView::checkSiteCoverage(log);
-  }
-  return *coverage_cache_;
+  });
+  return coverage_cache_;
 }
 
 void InfrastructurePlacementView::addProblem(Severity severity,
@@ -410,24 +418,17 @@ void InfrastructurePlacementView::addProblem(Severity severity,
   setup_diagnostics_.push_back(makeDiag(severity, code, message));
 }
 
-std::vector<RowId> InfrastructurePlacementView::rows() const
-{
-  std::vector<RowId> result;
-  for (const auto& [id, span] : row_spans_) result.push_back(id);
-  return result;
-}
-
 XInterval InfrastructurePlacementView::rowLegalSpan(RowId id) const
 {
   const auto it = row_spans_.find(id);
   return it == row_spans_.end() ? XInterval{} : it->second;
 }
 
-std::vector<PlacedInstance> InfrastructurePlacementView::instancesInRow(
+const std::vector<PlacedInstance>& InfrastructurePlacementView::instancesInRow(
     RowId id) const
 {
   const auto it = by_row_.find(id);
-  return it == by_row_.end() ? std::vector<PlacedInstance>{} : it->second;
+  return it == by_row_.end() ? emptyInstances() : it->second;
 }
 
 const PlacedInstance* InfrastructurePlacementView::instance(InstanceId id) const

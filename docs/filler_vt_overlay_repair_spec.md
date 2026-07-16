@@ -222,12 +222,20 @@ checkPlace(检测) → checker 的 repair 入口
 ```
 
 协议红线(并入 §5.2):`checkPlaceWithOverlay[s]` 是**纯查询**,禁止在内部
-触发 repair;repair 只能从检测/修复入口进入。防御:repair 入口加不可重入
-assert(in-repair flag)。overlay API 本身 const、不 mutate DB,不会再进
+触发 repair;repair 只能从检测/修复入口进入。防御(2026-07-15 已落地):
+repair 入口带原子 in-repair guard,重入/同实例并发 → fatal `ReentrantRepair`
+结果而非未定义行为。overlay API 本身 const、不 mutate DB,不会再进
 commit/检测路径,递归按构造不可能。
 
 **生命周期**:engine 纯 planner、per-request 状态自隔离,checker 每次修复调用
 就地构造(便宜);adapter 无状态(包 this)。
+
+**线程模型(2026-07-15)**:view 构造后不可变,const 查询对并发读者安全
+(coverage 惰性缓存用 `std::call_once` 保护);引用返回的查询(rows /
+instancesInRow / fillerMasterIds)在 view 生命周期内有效。并发 repair =
+每线程一个 engine 实例,共享同一个 view 与同一个 oracle adapter;adapter
+串行化 checker 调用(checker 的 const overlay 路径会改 mutable 内部计数器,
+同一 checker 实例并发调用不安全)。planner 侧无共享可变状态、无锁。
 
 **否决的备选**:(a) 把 engine 并进 checker 类——毁掉纯 planner 的独立
 编译/测试(当前全部单测不依赖 UDM/CMake 的能力就没了);(b) checker 也只认
