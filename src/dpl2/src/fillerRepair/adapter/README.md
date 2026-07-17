@@ -1,74 +1,47 @@
-# fillerRepair infrastructure boundary
+# fillerRepair/adapter — 统一 infrastructure 边界
 
-更新日期: 2026-07-15。
+更新:2026-07-15(FINAL checker 对齐,AGENTS D28)。
 
-## 当前结构
+## 唯一组件
 
-真实集成只保留三个组件:
+`adapter/PlacementView`(一个类,原 FillerVtRepair / InfrastructurePlacementView /
+CheckerOracleAdapter 三件套已删除):
 
-| 组件 | 职责 |
+- **planner 视图**(`fillerRepair::PlacementView`):行/实例/master/候选查询,
+  数据来自 **Grid + Network + PhysDesMgr**(与 checker 相同的依赖);
+- **oracle**(`fillerRepair::ImplantOverlayChecker`):**直接调用**
+  `ipl::ImplantLayerChecker::checkPlaceWithOverlays`,无中间对象;
+- **repair 入口**:`repair(LeafCellID target, const PhysLibCell& newMaster)
+  -> RepairOutcome{hasSolution, ipl::FillerChanges, diagnostics}`。
+
+## 与 FINAL checker 的对齐点
+
+| 项 | 约定 |
 |---|---|
-| `InfrastructurePlacementView` | 从 `Network/Node/Master` 建只读 placement 快照;从 `fillerSetting` 取得唯一候选 master 集;缓存同一快照的 full-utility precheck;用稳定 `LeafCellID`/`LibCellID` 索引与 checker 表交叉校验 |
-| `CheckerOracleAdapter` | 在 planner wire types 与原生 `ImplantLayerChecker` overlay API 之间转换;不筛选、不去重、不判断 DRC |
-| `FillerVtRepair` | 组装 view、oracle 和 engine;解析 target;取得初始 snapshot;把结果映回 `LeafCellID` 和 `PhysLibCell*` |
+| id 空间 | `InstanceId = Node::getId()`,`MasterId = Master::getId()`(Network 索引) |
+| wire | 候选 = `FillerChanges`(`FillerCellRecord{op=Replace, cell_id_, orig_lib_cell_, new_lib_cell_, origin}` 列表);结果按序关联 |
+| 契约 | checker 内部自算空-overlay baseline 并过滤 old(blocking 形态);engine 的 baseline-delta gate 在其上仍一致(快照/baseline/候选同源) |
+| Relationship | 只有 IntraRow / InterRow(planner 枚举已同步) |
+| 元数据 | checker 只暴露 getNodes/getLayers/siteWidth/getDiags → VT/polarity 由 PhysLibCell implant shapes × `getLayers()` 名字匹配推导(与 checker 同一 parse) |
+| init 诊断 | checker 把持久 init diagnostics 前缀进每个结果并计入 isLegal;边界层按 `getDiags().size()` 剥离前缀,只让请求级诊断决定候选状态 |
+| 坐标 | RowId = PhysRow 迭代序(含 pad 行);x 相对行原点;colId = x/siteWidth;guard y = rowId*rowHeight 合成系(isInGuard 语义) |
+| 线程 | 视图不可变 + call_once coverage;每线程一个 engine;checker 调用在本类内 mutex 串行(其 const 路径改 mutable 计数器) |
 
-旧的 `UdmIdBridge`、checker-backed placement snapshot、独立 candidate provider 和独立 precheck cache 已删除。它们的职责全部收敛进同一个 immutable `InfrastructurePlacementView`,避免 placement、coverage、candidate 和 ID 来自不同快照。
+## tier-1 本地构建(fake UDM)
 
-## 调用顺序
+`src/dpl2/test/build_all.sh`:编译真实 infrastructure(network/Object/
+architecture/Padding/fillerSetting)+ FINAL checker + RD Helper + planner +
+本边界,链接 `test/support/grid_link_stubs.cpp`(Grid 行表功能性实现),跑
+E2E smoke(`test/smoke_main.cpp`)。fake UDM 数据模型:
+`src/drc/test/support/include/fake_udm.h`(DesignDb 可注入 tech/masters/
+rows/cells,`activate()` 挂 Session)。
 
-```text
-FillerVtRepair(desMgr, network, checker, fillerSetting)
-  -> InfrastructurePlacementView
-       -> rows: PhysDesMgr row geometry
-       -> instances: Network::getNodes()
-       -> masters: Network::getMasters() + fillerSetting
-       -> VT metadata: checker.masters()
-       -> stable id cross-check: LeafCellID / LibCellID
-       -> cached checkSiteCoverage()
-  -> CheckerOracleAdapter
-  -> FillerRepairEngine(view, oracle)
-       -> view.checkSiteCoverage()
-       -> view.getUsableMasterCandidates()
-       -> Swap generation / rank / subset / oracle gate
-```
+排除项(集成环境才编):`DePlace.cpp`(缺 PaddingChecker/EdgeSpacingChecker/
+PlacementDRC 实现)、`Grid.cpp`(需 tbb + PhysNet visitor)。
 
-## 稳定 ID
+## 集成环境待确认
 
-- planner/checker `InstanceId` = `LeafCellID::getIndexValue()`。
-- planner/checker `MasterId` = `LibCellID::getIndexValue()`。
-- `ImplantLayerChecker::initFromUDM` 已改用这两个稳定索引;不再重放枚举顺序。
-- view 构造时逐项比较 checker 与 infrastructure 的 master、instance、row、x、orientation 和 filler flag;不一致即 `isReady()==false`。
-- **isFiller 谓词统一为 checker 的定义**:`isCoreFiller() || isPadFiller()`
-  (view 的 `isFillerMaster` helper 与 `Network::addNode/updateNode` 一致);
-  改任何一侧都要同步另一侧,否则 master/instance 交叉校验假 Fatal。
-- 行归属用 y 排序二分;同 y 多段 row 取行序第一条(与 initFromUDM 相同的
-  tie-break,保证 rowId 对齐)。行原点 X 不一致 → `RowOriginMisaligned` Fatal
-  (planner 窗口与 checker 跨行比较都假设各行共享一个 x 原点)。
-
-## setup diagnostics 严重级语义
-
-- **Fatal(拒绝服务,`isReady()==false`)**:几何/ID 交叉校验失败——两边
-  对同一 id 的宽高/isFiller/位置/orientation 各执一词,继续跑必然错。
-- **Warning(降级继续)**:`CheckerMissingConfiguredMaster`(该候选从
-  candidate 集剔除,repair 用 checker 可建模的子集继续;等 RD 让 checker
-  建模未实例化 master 后自动恢复);`CheckerMissingPlacedFillerMaster`
-  (该 filler 不可 swap,但 baseline/candidate 看到同样的 committed 几何,
-  合法性不受影响)。
-- `FillerVtRepair` 的 target 侧诊断:`TargetMasterUnknown`(不在 infra master
-  表)/ `TargetMasterNotModeled`(在表里但 checker 无 implant 模型,经
-  `checkerModelsMaster()` 判定)。
-
-## Candidate 与 precheck
-
-- candidate universe **只来自** `fillerSetting::getFillerMasters()`。
-- `PlacementView` 的共享过滤负责:当前实例必须是 filler、候选必须是 filler、同宽同高、VT 已知且不同、排除当前 master、**同 R0 系 bottom-band polarity layout**(spec §5.3;layout 相反 = 每 band 落错 track,checker 必拒)、稳定排序。
-- **per-band 元数据**:`MasterInfo.bottomBandPolarity` 由本 view 从 checker `MasterInput.shapes`(rebuilt band shapes)最底 shape 的 layer polarity 派生(镜像 `rebuildMasterShapes` 锚定规则);VT family 每 master 唯一(checker `master_implant_family_mismatch`),band 间只有 polarity 交替。
-- coverage 只遍历 infrastructure `Network::getNodes()`;包括 checker 没有 implant shape 的普通 core cell,不再合成负 ID coverage extras。
-- multi-height node 会出现在其覆盖的每一行;每行使用自己的 row origin 计算相对 x。
-
-## 仍需集成环境确认
-
-1. dpl2 构建目标加入 `PlacementView.cpp`、`InfrastructurePlacementView.cpp`、其余 fillerRepair sources 与 checker adapter。
-2. checker 必须建模 `fillerSetting` 中所有可能的 replacement master。当前 `initFromUDM` 仍从已放置实例收集 master;未实例化候选会触发 `CheckerMissingConfiguredMaster`,需要 RD 提供 master catalog 输入或扩展初始化入口。
-3. row legal span 当前来自 row bbox;macro/blockage cutout 若不是由 Grid/row segmentation 提供,应在 infrastructure snapshot 中补齐。
-4. 本轮按要求没有编译、没有运行 UDM-dependent tests;首次集成先检查 setup diagnostics,再运行真实 overlay E2E。
+1. 真实 `dpl2/PlacementDRC.h` 到位后删 fake(`src/drc/test/support/include/dpl2/`)。
+2. `Session/Design/LibAcc` 等 fake 接口拼写与真 UDM 逐一核对(编译即验证)。
+3. smoke 的行奇偶约定(偶数行 MX 翻转)与真实设计一致性。
+4. macro/blockage 的 rowLegalSpan 多段化(仍未建模)。

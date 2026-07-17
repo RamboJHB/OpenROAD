@@ -39,9 +39,9 @@ repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)
 |---|---|
 | Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
 | planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
-| 测试 | planner 87 个,`-Werror` + ASan 全绿;真实 checker core 10 个(`src/drc/test/run_tests.sh`,含 list-only residual 与 64-candidate 混合批测试),`-Werror` + ASan 全绿;fake-UDM provider 4 个 |
-| checker(`src/drc/`) | **终版契约已落地(D21)**:RD 2026-07-13 交付(UDM extraction 内联)+ 用户钉死 list-only——`checkPlaceWithOverlays` 输出 guard 内全量违例,无 blocking 过滤、无查重(重复允许但确定性);scan 正确性修正与 `DPL2_FAKE_UDM` 边界重新套用。wire:顺序关联、无 status、batch=单 target+N 变更。**adapter 前 engine 仍只接 fake;infra 版 planner 迁移在即** |
-| infrastructure adapter | **2026-07-15 重构完成**:`InfrastructurePlacementView` / `CheckerOracleAdapter` / `FillerVtRepair`;placement/precheck 来自 Network Objects,candidate 来自 fillerSetting,稳定 ID 已接 checker。未编译;剩余 build/E2E 与 checker candidate catalog |
+| 测试 | planner 87 个(`-Werror` + ASan 全绿);**真实链路 E2E smoke**(`test/build_all.sh`:fake UDM → 真 checker init(desMgr) → 统一边界 repair,含确定性断言,ASan 全绿)。旧 drc harness 10 例已退役(锁的 list-only 契约被终版取代;checker 行为测试归 RD 的 Helper 路径) |
+| checker(`src/drc/`) | **FINAL 版(2026-07-15 RD 交付,D28)**:ctor `(Grid*, Network*)` 经 Session 自动 `init(desMgr)`;id 空间 = `Node::getId()`/`Master::getId()`;wire = `FillerCellRecord{op,cell_id_(LeafCellID),new_lib_cell_(LibCellID)}`;**回到 blocking 过滤形态**(内部自算 baseline 过滤 old,list-only 契约 D21 被 RD 终版取代);`Relationship` 只剩 IntraRow/InterRow;公开访问器只剩 getNodes/getLayers/siteWidth/getDiags。测试注入走 RD 的 `ImplantLayerCheckerHelper`(friend) |
+| 统一边界(`adapter/PlacementView`) | **一个类替代原三件套**(D28):同时是 planner 的 PlacementView、oracle(直调 ipl checker)与 repair 入口;依赖 Grid+Network+desMgr(与 checker 相同);**本地可编译可跑**(tier-1 fake UDM),真实链路 E2E smoke 全绿 + ASan |
 
 关键 commit(倒序):#9 filler-domain(见 git log 最新)→ `d293265` AGENTS/TestPlan
 → `a7de6f0` 批 2 部分(#6/#7/#11)→ `c1bafce` 批 1(6 个正确性修复 + 5 回归测试)
@@ -507,6 +507,53 @@ engine/infra,集成点自选。
   主项,串行化不损害单线程性能,并发时 planner 侧工作仍可重叠。
 - `FakeDesign` 明确单线程(test-only,可变 builder)。
 **测试**:83→87(上述 4 个回归),87/87 + ASan、checker 10/10。
+
+### D28. 对齐 FINAL checker + 统一边界 + tier-1 fake UDM(2026-07-15)
+**用户指令**:①PlacementView 作为与 infrastructure 的唯一对接点,checker 直接
+调用,统一 FillerVtRepair/InfrastructurePlacementView 等多名字;我们与 checker
+同样依赖 Grid 和 Network。②checker 是最终版,数据结构与它对齐。③做第一档
+fake UDM(缺头补头、接口名对齐、实现可 fake)。
+**FINAL checker 事实**(全部核实自 2026-07-15 drop):
+- ctor `(Grid*, Network*)`,构造时经 `eUNL::Session` 当前 design 自动
+  `init(desMgr)`(完整 UDM 提取);`initialize(ImplantInput)` 删除,测试注入
+  走 RD 的 `ImplantLayerCheckerHelper`(checker/Grid 的 friend)。
+- **id 空间再变**:`InstanceId = Node::getId()`、`MasterId = Master::getId()`
+  (Network 内部索引;不再是 LeafCellID/LibCellID index)。
+- **wire**:`FillerChange` → `dpl2::FillerCellRecord{op_(Replace/Delete/Add),
+  cell_id_(LeafCellID), origin_x_/y_, orig_lib_cell_, new_lib_cell_}`;
+  checker 内部经 `network_->getNodeId()/getMasterId()` 换算。
+- **blocking 过滤回归**:`checkPlaceWithOverlays` 内部自算空-overlay baseline,
+  对每候选过滤 old(containsViolation)+ 保留 touchesInstance——**D21 的
+  list-only 契约被 RD 终版取代,按用户指令对齐、不再争论**。engine 的
+  baseline-delta gate 仍成立:快照/baseline/候选同走一个 API,世界观一致。
+- `Relationship` 删 IntraInstance(planner 枚举同步删);`masters()/
+  placedInsts()/rows()/rules()` 等访问器移除,只剩 getNodes/getLayers/
+  siteWidth/getDiags → 元数据(VT/polarity)改由 PhysLibCell shapes ×
+  getLayers() 名字匹配自行推导(同一 parse,不会与 oracle 分歧)。
+- **持久 init diagnostics 会前缀进每个结果并计入 isLegal** → 边界层剥离
+  前缀(init_diag_count),否则任何 init 诊断让所有候选恒 illegal。
+**统一边界**:`adapter/PlacementView`(一个类,fillerRepair::PlacementView +
+ImplantOverlayChecker 双继承)= 视图 + oracle 直调 + `repair(LeafCellID,
+PhysLibCell&) -> RepairOutcome{FillerChanges}`。原三件套删除。行归属/frame
+与 checker init 逐步同构(全行 y-bounds 首匹配、pad 行计入 RowId 序)。
+**tier-1 fake UDM**(`test/build_all.sh` + `src/drc/test/support/include/`):
+- fake_udm.h 升级为**可注数据的内存模型**(DesignDb:tech/masters/rows/
+  cells + Session 注入),接口名与真 UDM 一致;boost 系统安装(集成环境本就有);
+  fake 头:utl/Logger(spdlog 不可得)、dpl2/PlacementDRC.h(真头未交付)。
+- 编译目标 = 真实 infra(network/Object/architecture/Padding/fillerSetting)
+  + FINAL checker + Helper + planner + 统一边界。**排除**:DePlace.cpp(缺
+  PaddingChecker/EdgeSpacingChecker 头)与 Grid.cpp(要 tbb/PhysNet visitor);
+  Grid 链接符号由 support/grid_link_stubs.cpp 按行表功能性实现。
+- **E2E smoke 全绿 + ASan**:3 行 fixture(偶数行 MX 翻转对齐 track 奇偶),
+  T(VTL→VTH) 制造 MW,engine 9 次 checker 调用找到单 filler swap 解,两次
+  运行逐字段一致,输出 FillerCellRecord。
+**RD 代码修的编译错**([fillerRepair-fix] 标注):network.h getNode(idx) 用错
+变量/addNode(unique_ptr<Node*>) 双重指针/成员名拼写;FillerCellRecord 头字段
+new_cell_id_ vs cpp new_lib_cell_;DePlace.h 重复 getGrid() 重载;Objects.h
+Master ID/Id 宏与 Group::getRects 值/指针;network.cpp clearEdgeS。
+**退役**:旧 drc harness 10 例(锁已不存在的 list-only 契约;checker 行为
+测试责任在 RD,支撑它的 fake 树保留并升级为 tier-1 共用)。planner fake/ 与
+87 测试**保留**(第二档迁移等用户发令)。
 
 ## 5. 实现要点与陷阱(接手前必读)
 

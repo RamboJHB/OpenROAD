@@ -25,8 +25,6 @@ const char* kindName(ViolationKind kind)
 const char* relationName(ViolationRelation relation)
 {
   switch (relation) {
-    case ViolationRelation::IntraInstance:
-      return "intraInst";
     case ViolationRelation::IntraRow:
       return "intraRow";
     case ViolationRelation::InterRow:

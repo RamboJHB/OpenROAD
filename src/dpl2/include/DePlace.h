@@ -122,7 +122,9 @@ class DePlace
   Network* getNetwork() { return network_.get(); };
   const Network* getNetwork() const { return network_.get(); };
   Grid* getGrid() const { return grid_.get(); };
-  const Grid getGrid() const { return grid_.get(); };
+  // [fillerRepair-fix] removed duplicate `const Grid getGrid() const`
+  // overload: same signature as above (return type is not an overload
+  // discriminator) and an incomplete by-value return type.
  private:
   using bgPoint
       = boost::geometry::model::d2::point_xy<int,

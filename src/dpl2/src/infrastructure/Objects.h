@@ -46,7 +46,8 @@ class Master
   void addEdge(const MasterEdge& edge);
   void setBBox(const Rect& box);
   void clearEdges();
-  ADD_SETTER_GETTER_PP(int, ID, id_);
+  // [fillerRepair-fix] was `ID`: call sites use setId/getId.
+  ADD_SETTER_GETTER_PP(int, Id, id_);
   ADD_SETTER_GETTER_PP(LibCellID, DbMaster, db_master_);
   ADD_SETTER_GETTER_PP(int, BottomPowerType, bottom_pwr_);
   ADD_SETTER_GETTER_PP(int, TopPowerType, top_pwr_);
@@ -157,7 +158,8 @@ class Node
 class Group
 {
  public:
-  const std::vector<Rect*>& getRects() const;
+  // [fillerRepair-fix] impl stores/returns values, not pointers.
+  const std::vector<Rect>& getRects() const;
   std::vector<Node*> getCells() const;
   const Rect& getBBox() const;
 
@@ -172,7 +174,7 @@ class Group
  private:
   int id_{0};
   std::string name_;
-  std::vector<Rect*> region_boundaries_;
+  std::vector<Rect> region_boundaries_;
   std::vector<Node*> cells_;
   Rect boundary_;
   double util_{0.0};

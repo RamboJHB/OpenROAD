@@ -194,7 +194,7 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   auto master_pwrs = getMasterPwrs(db_master);
   master->setTopPowerType(master_pwrs.first);
   master->setBottomPowerType(master_pwrs.second);
-  master->clearEdgeS();
+  master->clearEdges();  // [fillerRepair-fix] was clearEdgeS
   if (!drc_engine->hasCellEdgeSpacingTable()) {
     return master;
   }

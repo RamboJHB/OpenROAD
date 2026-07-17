@@ -47,6 +47,17 @@ shapes 派生、fake 同规则);候选过滤加 **同 bottom-polarity layout** �
 (spec §5.3);Ranker majority **按 band-slot 计权**(同行 2 票/跨行 1 票,
 spec §6.6 待办项闭环)。planner 测试 80→83。
 
+**FINAL checker 对齐 + 统一边界 + tier-1 fake UDM(2026-07-15 晚,AGENTS D28)**:
+RD 交付最终版 checker(ctor `(Grid*,Network*)` + Session 自动 init(desMgr)、
+id=Node/Master::getId()、wire=FillerCellRecord、blocking 过滤回归、
+IntraInstance 删除、访问器收敛)。按用户指令:数据结构全面对齐;
+`adapter/PlacementView` 一个类统一原三件套(视图+oracle 直调+repair 入口,
+依赖 Grid+Network+desMgr,与 checker 相同);tier-1 fake UDM 落地——
+`test/build_all.sh` 编译真实 infra+checker+Helper+planner+统一边界并跑
+**真实链路 E2E smoke(全绿+ASan)**。旧 drc harness 10 例退役(list-only 契约
+已不存在)。planner 87 + smoke 为当前基线。第二档(删 fillerRepair/fake/ 并
+迁移 87 测试)等用户发令。
+
 **风险修复 + runtime + 多线程(同日,AGENTS D27)**:D12 拍板 A(终版);
 Ranker null guard、`PolarityLayoutFiltered` 诊断、repair 入口原子重入 guard;
 `PlacementView` 三查询改引用返回(热路径拷贝清零,`fillerMasterIds` 契约升级
@@ -70,14 +81,14 @@ rewrite(merge/split)**。代码里不允许出现 Move / FillerRewrite 抽象。
 |---|---|---|
 | Spec **V2.1**(含 §0 修订记录) | `docs/filler_vt_overlay_repair_spec.md` | 定稿 |
 | 纯 planner engine(TODO 1–11) | `src/dpl2/src/fillerRepair/` | V2.1 engine 项全部落地;exact-budget 修复、planner 自持基础类型、P1/P2 边界补强完成;81 个确定性测试全绿;复杂 3-row/8-domain pair 在 21 次 checker call 内成功 |
-| checker + standalone harness | `src/dpl2/src/drc/` | DRC 算法未改;initFromUDM ID assignment 已改为稳定 LeafCellID/LibCellID 索引。历史 harness 10/10 + ASan;本轮未重跑 |
+| checker(FINAL) | `src/dpl2/src/drc/` | 2026-07-15 终版:见 AGENTS D28;测试注入走 RD `ImplantLayerCheckerHelper`;旧 harness 已退役,fake-UDM 支撑树升级为 tier-1 共用(`src/drc/test/support/include/`) |
 | fake checker / design / candidate provider | `src/dpl2/src/fillerRepair/fake/` | 继续用于单元测试 |
-| infrastructure adapter | `src/dpl2/src/fillerRepair/adapter/` | 2026-07-15 重构完成:统一 PlacementView + oracle + entry;未编译,剩余 build/E2E 与 checker candidate catalog |
+| 统一边界 | `src/dpl2/src/fillerRepair/adapter/PlacementView.{h,cpp}` | 一个类 = 视图 + oracle 直调 + repair 入口;**本地可编译可跑**:`src/dpl2/test/build_all.sh`(E2E smoke + ASan 全绿) |
 
-**关键认知**:engine 与 spec 都已对齐 **V2.1**。下面三批说明保留作审阅历史;
-当前剩余工作 = adapter 在集成环境的编译/debug 迭代(入口
-`adapter/FillerVtRepair.h` 顶部有 wiring 示例)。V1 存档
-spec(`spec_v1` / `addendum_v1`)已删除(冗余)。
+**关键认知**:engine 与 spec 都已对齐 **V2.1**,统一边界已在本地对 FINAL
+checker 跑通 E2E(`src/dpl2/test/smoke_main.cpp` 就是 wiring 范例)。下面三批
+说明保留作审阅历史;剩余 = 集成环境真实 UDM 验证 + 第二档(删 fake/、87 测试
+迁移,等用户发令)。V1 存档 spec 已删除(冗余)。
 
 ## 3. 三批工作(按此顺序;每批做完跑 `test/run_tests.sh` 必须全绿)
 

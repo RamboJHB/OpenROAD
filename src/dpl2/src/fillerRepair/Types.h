@@ -155,9 +155,10 @@ enum class ViolationKind
   MinSpacing
 };
 
+// Mirrors the FINAL checker's ipl::Relationship exactly (IntraInstance was
+// removed from the checker; do not reintroduce it here).
 enum class ViolationRelation
 {
-  IntraInstance,
   IntraRow,
   InterRow
 };

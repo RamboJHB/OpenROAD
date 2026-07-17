@@ -66,7 +66,9 @@ struct FillerCellRecord {
   UvDist origin_x_;
   UvDist origin_y_;
   LibCellID orig_lib_cell_;
-  LibCellID new_cell_id_;
+  // [fillerRepair-fix] renamed from new_cell_id_: the cpp consumes
+  // change.new_lib_cell_ (validateOverlayRequest / overlay scan).
+  LibCellID new_lib_cell_;
 };
 
 namespace ipl {

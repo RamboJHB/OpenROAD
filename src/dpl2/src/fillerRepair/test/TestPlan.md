@@ -12,12 +12,11 @@
 > **V2.1 #9(filler-domain 枚举)已落地**:Ranker 返回 `FillerDomain`、
 > SubsetSearch 枚举 filler 组合 × domain 赋值、cap 按 filler 数——本计划中
 > Ranker/SubsetSearch 的测试一律按该语义写。
-> **真实 checker 进度(2026-07-12)**:`src/dpl2/src/drc/test/run_tests.sh`
-> 直接编译生产 `ImplantLayerChecker.cpp`,仅以 `DPL2_FAKE_UDM` 跳过自动 UDM
-> extraction,4 个 dense overlay 用例(width/spacing × intra/inter-row)加
-> raw/baseline/rowIds、planner/checker 类型共存、invalid batch 隔离、
-> row/hash/guard 回归、64-candidate 混合批确定性,共 10 个全绿;
-> `SANITIZE=address ./run_tests.sh` 也全绿。checker 与 engine 尚未做 TODO 12 adapter。
+> **真实 checker(2026-07-15 FINAL,AGENTS D28)**:旧 drc harness 10 例已
+> 退役(它锁的 list-only 契约被 RD 终版的 blocking 形态取代;checker 行为
+> 测试归 RD 的 `ImplantLayerCheckerHelper` 路径)。真实链路覆盖 =
+> `src/dpl2/test/build_all.sh` 的 E2E smoke(fake UDM → 真 checker
+> init(desMgr) → 统一边界 repair,确定性断言,ASan 全绿)。
 >
 > 先读:`src/dpl2/AGENTS.md`(项目记忆与红线)→ spec §0/§6/§10
 > (`docs/filler_vt_overlay_repair_spec.md`)→ 本文。

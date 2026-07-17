@@ -59,7 +59,7 @@ runs end-to-end against the fakes in `fake/`.
 | `fake/FakeDesign.h` | In-memory `PlacementView` with fluent builders |
 | `fake/FakeUdmCandidateProvider.h/.cpp` | UDM-style test master catalog (layers named `FAMILY_POLARITY`, band shapes) with the checker's derivation rules — VT = implant-layer family, never the master name; `describeMasters(ids)` -> width/VT per id; registers its catalog into `FakeDesign`; ships the appendix-A 12-master library |
 | `fake/FakeImplantChecker.h/.cpp` | Rule-parameterized oracle locking the request/result protocol |
-| `adapter/` | `InfrastructurePlacementView` + `CheckerOracleAdapter` + `FillerVtRepair`; see `adapter/README.md` |
+| `adapter/PlacementView.h/.cpp` | THE unified infrastructure boundary (AGENTS D28): planner view + direct ipl-checker oracle + `repair()` entry in one class; aligned to the FINAL checker (FillerCellRecord wire, Node/Master::getId() id spaces, blocking contract); locally built and smoke-tested via `src/dpl2/test/build_all.sh` |
 | `test/` | Unit tests + runner |
 
 ## Conventions
@@ -90,13 +90,13 @@ runs end-to-end against the fakes in `fake/`.
 Standalone (STL only) until dpl2 joins the CMake build (spec §11 TODO 12):
 
 ```sh
-test/run_tests.sh              # quiet
+test/run_tests.sh              # planner unit suite (fakes), quiet
 FR_VERBOSE=1 test/run_tests.sh # with the [fr] debug transcript
 SANITIZE=address test/run_tests.sh
 
-cd ../drc/test
-./run_tests.sh                 # real checker core, fake UDM boundary, 8 cases
-SANITIZE=address ./run_tests.sh
+../../test/build_all.sh        # tier-1: real infra + FINAL checker + unified
+                               # boundary against the fake UDM, E2E smoke
+SANITIZE=address ../../test/build_all.sh
 ```
 
 ## Status vs spec §11 TODO
