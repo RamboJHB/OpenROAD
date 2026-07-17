@@ -46,6 +46,7 @@ class Master
   void addEdge(const MasterEdge& edge);
   void setBBox(const Rect& box);
   void clearEdges();
+  ADD_SETTER_GETTER_PP(int, ID, id_);
   ADD_SETTER_GETTER_PP(LibCellID, DbMaster, db_master_);
   ADD_SETTER_GETTER_PP(int, BottomPowerType, bottom_pwr_);
   ADD_SETTER_GETTER_PP(int, TopPowerType, top_pwr_);
@@ -53,6 +54,7 @@ class Master
   const PhysLibCell* getPhysLibCell() const { return phys_lib_cell_; }
 
  private:
+  int id_{0};
   LibCellID db_master_;
   const PhysLibCell* phys_lib_cell_{nullptr};
   Rect boundary_box_;

@@ -121,7 +121,8 @@ class DePlace
   PhysDesMgr* getDesMgr() { return desMgr_; }
   Network* getNetwork() { return network_.get(); };
   const Network* getNetwork() const { return network_.get(); };
-
+  Grid* getGrid() const { return grid_.get(); };
+  const Grid getGrid() const { return grid_.get(); };
  private:
   using bgPoint
       = boost::geometry::model::d2::point_xy<int,

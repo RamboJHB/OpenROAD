@@ -183,6 +183,7 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   const int id = masters_.size();
   masters_.emplace_back(std::move(umaster));
   master_to_idx_[masterId] = id;
+  master->setId(id);
   master->setDbMaster(masterId);
   master->setPhysLibCell(&db_master);
 

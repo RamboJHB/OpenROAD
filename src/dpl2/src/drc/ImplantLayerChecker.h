@@ -50,9 +50,28 @@ using eUTL::PhysOrientationE;
 using eUTL::PhysOrientation;
 
 namespace dpl2 {
-namespace ipl {
+class Network;
+class Master;
 
+// replace holders for filler masters with new master ids
+enum class OpType : uint8_t {
+  Replace = 0,
+  Delete = 1,
+  Add = 2,
+};
+
+struct FillerCellRecord {
+  OpType op_;
+  LeafCellID cell_id_;
+  UvDist origin_x_;
+  UvDist origin_y_;
+  LibCellID orig_lib_cell_;
+  LibCellID new_cell_id_;
+};
+
+namespace ipl {
 class TestImplantCmd;
+class ImplantLayerCheckerHelper;
 
 using Dbu = int32_t;
 using LayerId = int32_t;
@@ -68,24 +87,14 @@ enum class Polarity {N, P};
 enum class Family {VTS, VTL, VTH, VTUL, Unknown};
 enum class RuleSource {Width, Spacing, Lef58Width, Lef58Spacing, Count};
 enum class RuleDirection {Any, Horizontal, Vertical};
+enum class Relationship {IntraRow, InterRow, Count};
+enum class OutcomeStatus {Satisfied, Violated, NotApplicable, Skipped};
 
-constexpr std::array<const char*,
-                     static_cast<size_t>(RuleSource::Count)>
-    kRuleSourceNames{
-        "WIDTH",
-        "SPACING",
-        "LEF58_WIDTH",
-        "LEF58_SPACING",
-    };
+constexpr std::array<char*, (unsigned)Relationship::Count> kRelationshipNames{"intra_row",    "inter_row",};
+inline std::string toString(Relationship rel) {return std::string(kRelationshipNames[(unsigned)rel]);}
 
-inline std::string toString(RuleSource source)
-{
-  const auto index = static_cast<size_t>(source);
-  if (index >= kRuleSourceNames.size()) {
-    return "UNKNOWN";
-  }
-  return std::string(kRuleSourceNames[index]);
-}
+constexpr std::array<const char*, (unsigned)RuleSource::Count> kRuleSourceNames{"WIDTH", "SPACING", "LEF58_WIDTH", "LEF58_SPACING"};
+inline std::string toString(RuleSource source) {return std::string(kRuleSourceNames[(unsigned)source]);}
 
 struct XInterval
 {
@@ -145,9 +154,9 @@ struct MasterInterval
   std::string skipReason;
 };
 
-struct MasterInput
+struct MasterItem
 {
-  MasterId masterId = 0;
+  MasterId masterId = 0; //Legacy field for test purposes, to be removed in future
   Dbu width = 0;
   Dbu height = 0;
   std::vector<MasterShape> shapes;     // rebuilt band shapes (output of rebuildMasterShapes)
@@ -155,16 +164,6 @@ struct MasterInput
   Dbu siteHeight = 0;                  // site height from the master's site type
   bool isFiller = false;
   std::vector<MasterInterval> intervals;
-};
-
-struct PlacedInst
-{
-  InstanceId instanceId = 0;
-  MasterId masterId = 0;
-  RowId rowId = 0;
-  ColId colId = 0;
-  PhysOrientation orientation = PhysOrientationE::R0;
-  bool isFiller = false;
 };
 
 struct SlotRef
@@ -183,19 +182,6 @@ struct TrackPattern
   std::optional<Polarity> activeInterRowKind(RowId rowA, RowId rowB) const;
 };
 
-struct ImplantInput
-{
-  std::vector<ImplantLayer> layers;
-  std::vector<Rule> rules;
-  std::unordered_map<std::string, std::vector<LayerId>> groups;
-  std::vector<MasterInput> masters;
-  std::vector<PlacedInst> placedInsts;
-  std::vector<RowId> rows;
-  TrackPattern tracks;
-  Dbu rowHeight = 0;
-  Dbu siteWidth = 0;
-};
-
 // Local rect type with Dbu coordinates for checker-internal use.
 // Avoids incompatibilities with eUTL::Rect (whose members are UvDist).
 struct CheckerRect
@@ -205,26 +191,6 @@ struct CheckerRect
   Dbu xh = 0;
   Dbu yh = 0;
 };
-
-enum class Relationship {IntraInstance, IntraRow, InterRow, Count};
-enum class OutcomeStatus {Satisfied, Violated, NotApplicable, Skipped};
-
-constexpr std::array<const char*,
-                     static_cast<size_t>(Relationship::Count)>
-    kRelationshipNames{
-        "intra_instance",
-        "intra_row",
-        "inter_row",
-    };
-
-inline std::string toString(Relationship relationship)
-{
-  const auto index = static_cast<size_t>(relationship);
-  if (index >= kRelationshipNames.size()) {
-    return "unknown";
-  }
-  return std::string(kRelationshipNames[index]);
-}
 
 struct Violation
 {
@@ -238,7 +204,7 @@ struct Violation
   Dbu measuredValue = 0;
   Dbu requiredValue = 0;
   XInterval xWindow;
-  Relationship relationship = Relationship::IntraInstance;
+  Relationship relationship = Relationship::IntraRow;
   std::string status = "detected";
   std::string layerName;
   XInterval targetInterval;
@@ -263,11 +229,12 @@ struct CheckRequest
   PhysOrientation orientation = PhysOrientationE::R0;
 };
 
-struct FillerChange
-{
-  InstanceId instanceId = 0;
-  MasterId newMasterId = 0;
-};
+// Tye aliases for namespace level types
+using LayerGroupMap = std::unordered_map<std::string, std::vector<LayerId>>;
+using RowIdVec = std::vector<RowId>;
+using FillerChanges = std::vector<FillerCellRecord>;
+using ViolationVec = std::vector<Violation>;
+using DiagVec = std::vector<Diagnostic>;
 
 struct CommitRequest
 {
@@ -290,54 +257,29 @@ struct UpdateResult
 class ImplantLayerChecker final : public DRCChecker
 {
  public:
-  explicit ImplantLayerChecker(Grid* grid);
+  ImplantLayerChecker(Grid* grid, Network* network);
   ~ImplantLayerChecker();
 
-  bool initialize(const ImplantInput& input);
-
-  bool check(const Node* cell,
-             GridX x,
-             GridY y,
-             const PhysOrientation& orient) const override;
+  bool check(const Node* cell, GridX x, GridY y, const PhysOrientation& orient) const override;
 
   CheckResult checkPlace(const CheckRequest& request) const;
   CheckResult checkDirect(const CheckRequest& request) const;
-  std::vector<CheckResult> checkPlaceWithOverlays(
-      const CheckRequest& request,
-      const Rect& guardRegion,
-      const std::vector<std::vector<FillerChange>>& fillerChanges) const;
+  std::vector<CheckResult> checkPlaceWithOverlays(const CheckRequest& request, const Rect& guardRegion, const std::vector<FillerChanges>& fillerChanges) const;
+  
+  void printStats(std::ostream& os) const;
+  Dbu siteWidth() const {return siteWidth_;}
+  const std::vector<std::unique_ptr<Node>>& getNodes() const;
+  const std::vector<ImplantLayer>& getLayers() const {return layers_;}
+  
   UpdateResult commitPlace(const CommitRequest& request);
-
-  const std::vector<Diagnostic>& initDiagnostics() const;
-  const std::map<InstanceId, PlacedInst>& placedInsts() const;
-  Dbu siteWidth() const;
+  const std::vector<Diagnostic>& getDiags() const {return diagnostics_;}
   size_t mergedShapeCount() const;
 
-  // Accessors for ImplantInput-level data
-  const std::vector<ImplantLayer>& layers() const {return layers_;}
-  const std::vector<Rule>& rules() const {return rules_;}
-  const std::vector<MasterInput>& masters() const {return masters_;}
-  const std::vector<RowId>& rows() const {return rows_;}
-  const TrackPattern& tracks() const {return tracks_;}
-
-  // Print initialization summary (replaces helper->toString())
-  void printInitSummary(std::ostream& os) const;
-
-  // Generate statistics string from an ImplantInput (static)
-  static std::string inputToString(const ImplantInput& data);
-
-  static std::string toString(RuleSource source);
-  static std::string toString(Relationship relationship);
-
-  // for debug
-  bool dump(const std::string& filePath) const;
-  bool load(const std::string& filePath);
-
   friend class TestImplantCmd;
+  friend class ImplantLayerCheckerHelper;
 
  private:
-  // Initialize by extracting data directly from UDM PhysDesMgr
-  bool initFromUDM(const PhysDesMgr& desMgr);
+  bool init(PhysDesMgr* desMgr);
 
   // Shared keys and indexes.
   struct BucketKey
@@ -399,7 +341,7 @@ class ImplantLayerChecker final : public DRCChecker
     RuleSource ruleKind = RuleSource::Width;
     LayerId primaryLayer = 0;
     std::optional<LayerId> secondaryLayer;
-    Relationship relationship = Relationship::IntraInstance;
+    Relationship relationship = Relationship::IntraRow;
     int targetMergedShapeId = 0;
     std::optional<int> neighborMergedShapeId;
     RowId rowId = 0;
@@ -473,111 +415,61 @@ class ImplantLayerChecker final : public DRCChecker
     XInterval x;
   };
 
-  // Helper methods moved from ImplantLayerCheckerHelper
-  static void parseLayerName(const std::string& name,
-                             Family& family,
-                             Polarity& polarity);
+  //type aliases for commonly used vectors of the above types
+  using MergedShapes = std::vector<MergedShape>;
+  using PlacedIntervals = std::vector<PlacedInterval>;
+  using ScanRectVec = std::vector<ScanRect>;
+  using ScanShapeVec = std::vector<ScanShape>;
+  using ScanOutcomeVec = std::vector<ScanOutcome>;
+  using RuleOutcomeVec = std::vector<RuleOutcome>;
+
+  //Helper methods for 
+  static void parseLayerName(const std::string& name, Family& family, Polarity& polarity); // could be used in Repair engine 
   LayerId findLayerId(eLIB::TechLayerRelativeID relId) const;
   void buildTrackPattern();
   void rebuildMasterShapes();
+  
+  //build masterItems_ from Network (relies on Master::getPhysLibCell())
+  // must be called after layers_ and tracks_ are populated
+  void buildMasters();
 
   // Shared initialization and geometry normalization.
-  bool buildRules(const std::vector<ImplantLayer>& layers,
-                  const std::unordered_map<std::string, std::vector<LayerId>>& groups,
-                  const std::vector<Rule>& rules);
-  bool buildMasters(const std::vector<MasterInput>& masters);
-  bool buildPlaced(const std::vector<PlacedInst>& placedInsts);
-  bool buildPlacedInst(InstanceId instanceId,
-                       MasterId masterId,
-                       RowId rowId,
-                       Dbu x,
-                       PhysOrientation orientation,
-                       bool isFiller);
+  bool buildRules(const std::vector<ImplantLayer>& layers, const LayerGroupMap& groups, const std::vector<Rule>& rules);
+  bool buildMstIntervals();
+  bool buildPlacedInst(const Node* node, RowId rowId, Dbu x);
 
-  std::vector<PlacedInterval> instantiate(
-      InstanceId instanceId,
-      MasterId masterId,
-      RowId rowId,
-      Dbu x,
-      PhysOrientation orientation,
-      bool isCandidate) const;
+  PlacedIntervals instantiate(InstanceId instanceId, MasterId masterId, RowId rowId, Dbu x, PhysOrientation orientation, bool isCandidate) const;
 
   // Fast indexed check.
-  std::vector<MergedShape> mergeShapes(
-      const std::vector<PlacedInterval>& intervals,
-      bool isCandidate) const;
-  std::vector<MergedShape> mergeSortedShapes(
-      const std::vector<PlacedInterval>& intervals,
-      bool isCandidate) const;
-  std::vector<MergedShape> mergeGroupShapes(
-      const std::vector<PlacedInterval>& intervals,
-      bool isCandidate) const;
+  MergedShapes mergeShapes(const PlacedIntervals& intervals, bool isCandidate) const;
+  MergedShapes mergeSortedShapes(const PlacedIntervals& intervals, bool isCandidate) const;
+  MergedShapes mergeGroupShapes(const PlacedIntervals& intervals, bool isCandidate) const;
 
-  std::vector<MergedShape> findNeighbors(
-      const MergedShape& target,
-      const Rule& rule,
-      Relationship relationship,
-      CheckMode mode,
-      const std::vector<MergedShape>& targetShapes,
-      const std::set<InstanceId>& excludedInstances) const;
+  MergedShapes findNeighbors(const MergedShape& target, const Rule& rule, Relationship relationship, CheckMode mode, const MergedShapes& targetShapes, const std::set<InstanceId>& excludedInstances) const;
 
-  std::vector<RuleOutcome> evalRule(
-      const Rule& rule,
-      const std::vector<MergedShape>& targetShapes,
-      CheckMode mode,
-      const std::set<InstanceId>& excludedInstances) const;
+  RuleOutcomeVec evalRule(const Rule& rule, const MergedShapes& targetShapes, CheckMode mode, const std::set<InstanceId>& excludedInstances) const;
 
-  std::vector<Violation> makeViolations(
-      const std::vector<RuleOutcome>& outcomes) const;
+  ViolationVec makeViolations(const RuleOutcomeVec& outcomes) const;
 
   bool isSameCommittedPose(const CheckRequest& request) const;
-  std::vector<MergedShape> committedTargetShapes(InstanceId instanceId) const;
+  MergedShapes committedTargetShapes(InstanceId instanceId) const;
 
   // Direct scan check.
   std::vector<ScanRect> scanSnapshot(const CheckRequest& request) const;
-  std::vector<ScanRect> scanSnapshot(
-      const CheckRequest& request,
-      const std::set<InstanceId>& excludedInstances) const;
-  std::vector<ScanRect> scanOverlaySnapshot(
-      const CheckRequest& request,
-      const Rect& guardRegion,
-      const std::vector<FillerChange>& fillerChanges,
-      bool useNewFillers,
-      const std::set<InstanceId>& excludedInstances) const;
-  std::vector<ScanRect> scanInst(const PlacedInst& instance,
-                                 bool isCandidate) const;
-  std::vector<ScanShape> scanShapes(
-      const std::vector<ScanRect>& rects) const;
-  std::vector<ScanShape> scanNeighbors(
-      const ScanShape& target,
-      const Rule& rule,
-      Relationship relationship,
-      const std::vector<ScanShape>& shapes) const;
-  std::vector<ScanOutcome> scanRule(
-      const Rule& rule,
-      const std::vector<ScanShape>& shapes) const;
-  std::vector<Violation> scanViolations(
-      const std::vector<ScanOutcome>& outcomes) const;
-  // [fillerRepair-fix] Contract pinned 2026-07-13: reports the guard-clipped
-  // violation list only -- no old-violation filtering, no duplicate collapse.
-  CheckResult checkPlaceWithOverlay(
-      const CheckRequest& request,
-      const Rect& guardRegion,
-      const std::vector<FillerChange>& fillerChanges) const;
-  CheckResult checkOverlayRegion(
-      const CheckRequest& request,
-      const Rect& guardRegion,
-      const std::vector<FillerChange>& fillerChanges,
-      bool useNewFillers) const;
+  ScanRectVec scanSnapshot(const CheckRequest& request, const std::set<InstanceId>& excludedInstances) const;
+  ScanRectVec scanOverlaySnapshot(const CheckRequest& request, const Rect& guardRegion, const FillerChanges& fillerChanges, bool useNewFillers, const std::set<InstanceId>& excludedInstances) const;
+  ScanRectVec scanInst(InstanceId instanceId, MasterId masterId, RowId rowId, ColId colId, PhysOrientation orientation, bool isCandidate) const;
+  ScanShapeVec scanShapes(const ScanRectVec& rects) const;
+  ScanShapeVec scanNeighbors(const ScanShape& target, const Rule& rule, Relationship relationship, const ScanShapeVec& shapes) const;
+  ScanOutcomeVec scanRule(const Rule& rule, const ScanShapeVec& shapes) const;
+  ViolationVec scanViolations(const ScanOutcomeVec& outcomes) const;
+  CheckResult checkPlaceWithOverlay(const CheckRequest& request, const Rect& guardRegion, const FillerChanges& fillerChanges, const ViolationVec& oldViolations) const;
+  CheckResult checkOverlayRegion(const CheckRequest& request, const Rect& guardRegion, const FillerChanges& fillerChanges, bool useNewFillers) const;
 
   bool scanSlotPolarityOk(const ScanRect& rect) const;
   bool scanContained(const ScanOutcome& specific,
                      const ScanOutcome& broad) const;
-  bool scanIntersectCoverage(
-      const Rule& rule,
-      const ScanShape& target,
-      const ScanShape& neighbor,
-      const std::vector<ScanShape>& shapes) const;
+  bool scanIntersectCoverage(const Rule& rule, const ScanShape& target, const ScanShape& neighbor, const ScanShapeVec& shapes) const;
 
   // Committed-state maintenance.
   void rebuildShapes();
@@ -585,70 +477,53 @@ class ImplantLayerChecker final : public DRCChecker
   void rebuildGroupBuckets(const std::set<GroupKey>& groups);
   void insertIntervals(const std::vector<PlacedInterval>& intervals);
   void removeInstance(InstanceId instanceId);
-  void insertFootprint(const PlacedInst& instance);
+  void insertFootprint(const Node* node, RowId rowId, Dbu x, PhysOrientation orientation);
   void removeFootprint(InstanceId instanceId);
   BucketKey bucketFor(const PlacedInterval& interval) const;
   std::set<BucketKey> bucketsForInstance(InstanceId instanceId) const;
-  std::set<BucketKey> bucketsForIntervals(
-      const std::vector<PlacedInterval>& intervals) const;
+  std::set<BucketKey> bucketsForIntervals(const PlacedIntervals& intervals) const;
   std::set<GroupKey> groupKeysForBucket(const BucketKey& key) const;
   void eraseShapeRefs(const MergedShape& shape);
 
   const MergedShape* findShape(int mergedShapeId) const;
-  std::optional<Diagnostic> overlapDiag(
-      InstanceId instanceId,
-      MasterId masterId,
-      RowId rowId,
-      Dbu x,
-      std::optional<InstanceId> excludedInstanceId) const;
+  std::optional<Diagnostic> overlapDiag(const Node* node, RowId rowId, Dbu x, std::optional<InstanceId> excludedInstanceId) const;
   OverlapInfo overlapInfo(
       const CheckRequest& request) const;
   bool slotPolarityOk(const PlacedInterval& interval) const;
-  bool isFillerInstance(const PlacedInst& instance) const;
-  bool isFillerMaster(MasterId masterId) const;
-  std::vector<Diagnostic> validateOverlayRequest(
-      const CheckRequest& request,
-      const std::vector<FillerChange>& fillerChanges) const;
-  bool isInGuard(const XInterval& xWindow,
-                 const std::vector<RowId>& rowIds,
-                 const Rect& guard) const;
+  bool isFillerInstance(const Node* node) const;
+  DiagVec validateOverlayRequest(const CheckRequest& request, const FillerChanges& fillerChanges) const;
+  bool touchesInstance(const Violation& violation,
+                       InstanceId instanceId) const;
+  bool containsViolation(const Violation& oldViolation,
+                         const Violation& newViolation) const;
+  bool isInGuard(const XInterval& xWindow, const RowIdVec& rowIds, const Rect& guard) const;
   void finishViolation(Violation& violation) const;
-  bool layerPolarityMatches(LayerId layer, Polarity polarity) const;
   bool isContainedContext(const RuleContext& specific,
                           const RuleContext& broad) const;
-  bool hasIntersectCoverage(const Rule& rule,
-                            const MergedShape& target,
-                            const MergedShape& neighbor) const;
-  bool groupFails(const Rule& rule,
-                  const MergedShape& target,
-                  const MergedShape& neighbor,
-                  Relationship relationship,
-                  const XInterval& xWindow,
-                  const std::set<InstanceId>& excludedInstances) const;
-  bool scanGroupFails(const Rule& rule,
-                      const ScanShape& target,
-                      const ScanShape& neighbor,
-                      Relationship relationship,
-                      const XInterval& xWindow,
-                      const std::vector<ScanShape>& shapes) const;
+  bool hasIntersectCoverage(const Rule& rule, const MergedShape& target, const MergedShape& neighbor) const;
+  bool groupFails(const Rule& rule, const MergedShape& target, const MergedShape& neighbor, Relationship relationship, const XInterval& xWindow, const std::set<InstanceId>& excludedInstances) const;
+  bool scanGroupFails(const Rule& rule, const ScanShape& target, const ScanShape& neighbor, Relationship relationship, const XInterval& xWindow, const ScanShapeVec& shapes) const;
   bool ruleAppliesTo(const Rule& rule,
                      Relationship relationship) const;
   Dbu queryRadius(const Rule& rule) const;
 
   std::vector<ImplantLayer> layers_;
   std::vector<Rule> rules_;
-  std::unordered_map<std::string, std::vector<LayerId>> groups_;
-  std::vector<MasterInput> masters_;
-  mutable std::vector<PlacedInst> placedInsts_;  // cached by placedInsts() in UDM flow
+  LayerGroupMap groups_;
   std::vector<RowId> rows_;
   TrackPattern tracks_;
   Dbu rowHeight_ = 0;
   Dbu siteWidth_ = 1;
 
+  //infras
+  Network* network_ = nullptr;
+
+  //Implant data per Master, indexed by MasterId( aligned with network::masters)
+  std::vector<MasterItem> masterItems_;  // Master shapes and intervals.
+
   // Shared normalized data.
   RuleIndex ruleIndex_;  // Layers, rules, groups, and query radii.
   std::vector<Diagnostic> diagnostics_;  // Initialization diagnostics.
-  std::map<InstanceId, PlacedInst> instances_;  // Current placements.
   std::unordered_map<std::string, GroupId> groupIds_;  // Active group ids.
   std::unordered_map<GroupId, std::vector<LayerId>> groupLayers_;  // Group members.
   std::unordered_map<LayerId, std::vector<GroupId>> layerGroups_;  // Layer-to-groups map.
@@ -669,7 +544,6 @@ class ImplantLayerChecker final : public DRCChecker
   mutable int nextCandShapeId_ = -1;  // Temporary candidate shape ids.
 
   std::map<eLIB::TechLayerRelativeID, LayerId> techLayerToCheckerId_;
-  std::unordered_map<MasterId, size_t> masterIdToIndex_;
 };
 
 }  // namespace ipl

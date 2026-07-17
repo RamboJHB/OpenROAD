@@ -30,6 +30,29 @@ class Network
   void addNode(LeafCellID cellId, const PhysDesMgr* desMgr);
   Node* getNode(LeafCellID cellId);
   const Node* getNode(LeafCellID cellId) const;
+  Node* getNode(int idx) const {
+     return (id >= 0 && id< static_cast<int>(nodes_.size())) ? nodes_[id].get() : nullptr; 
+  }
+  Master* getMaster(int idx) const {
+     return (idx >= 0 && idx< static_cast<int>(masters_.size())) ? masters_[idx].get() : nullptr; 
+  }
+  int getNodeId(LeafCellID cellId) const {
+    int ret = -1;
+    auto it = inst_to_node_idx_.find(cellId);
+    if (it != inst_to_node_idx_.end()) {
+      return it->second;
+    }
+    return ret;
+  }
+  int getMasterId(LibCellID db_master) const {
+    int ret = -1;
+    auto it = master_to_idx_.find(db_master);
+    if (it != master_to_idx_.end()) {
+      return it->second;
+    }
+    return ret;
+  }
+
   bool updateNode(Node* ndi,
                   const PhysDesMgr* desMgr,
                   const PhysLibCell& physLibCell);
@@ -42,6 +65,16 @@ class Network
   Master* addMaster(const PhysLibCell& db_master,
                     const Grid* grid,
                     const PlacementDRC* drc_engine);
+  void addNode(std::unique_ptr<Node*> n) {
+    inst_to_node_idx__[n->getDbInst()] = nodes_.size();
+    nodes_.emplace_back(std::move(n));
+    cells_cnt_++;
+  }
+
+  void addMaster(std::unique_ptr<Master*> m) {
+    master_to_idx__[m->getDbMaster()] = masters_.size();
+    masters_.emplace_back(std::move(m));
+  }
 
  private:
   int cells_cnt_ = 0;

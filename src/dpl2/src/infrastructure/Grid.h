@@ -18,6 +18,9 @@ namespace dpl2 {
 class TestGridCmd;
 class TestObjectsCmd;
 class DePlace;
+namespace ipl {
+  class ImplantLayerCheckerHelper;
+}
 }
 
 namespace dpl2 {
@@ -109,7 +112,8 @@ class Grid
       const std::function<void(Pixel* pixel, bool padded)>& visitor) const;
   void visitCellBoundaries(
       Node& cell,
-      const std::function<void(Pixel* pixel, int edgeDirection, GridX x, GridY y)>& visitor)
+      const std::function<
+      void(Pixel* pixel, int edgeDirection, GridX x, GridY y)>& visitor)
       const;
 
   GridY getRowCount() const { return row_count_; }
@@ -140,10 +144,13 @@ class Grid
 
   bool isMultiHeight(const PhysLibCell& master) const;
 
+
+
  private:
   friend class TestGridCmd;
   friend class TestObjectsCmd;
   friend class DePlace;
+  friend class ipl::ImplantLayerCheckerHelper;
   // Maps a site to the right orientation to use in a given row
   using SiteToOrientation = std::map<std::string, PhysOrientation>;
 
