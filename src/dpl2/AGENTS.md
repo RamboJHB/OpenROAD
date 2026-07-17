@@ -1,609 +1,89 @@
-# AGENTS.md — Filler VT Overlay Repair 项目记忆(dpl2)
+# AGENTS.md — dpl2 filler repair project memory
 
-> 本文件是给 AI agent(和人)的**项目记忆总档**:做了什么、为什么这么决策、
-> 否决过哪些备选、还剩什么坑、下一步怎么走。目标是没有聊天记录也能无缝接手。
-> 事实以 git 历史与 spec 为准;本文负责"为什么"。
->
-> **文档分工**(避免重复维护):
-> - `docs/filler_vt_overlay_repair_spec.md` — **权威 spec(V2.1)**,算法/接口/
->   协议的唯一裁判;§0 是 12 项修订的索引表。
-> - `src/dpl2/HandOff.md` — 可执行任务清单(三批工作,file:line 级指引)。
-> - `src/dpl2/src/fillerRepair/README.md` — 模块速览与 TODO 状态表。
-> - `src/dpl2/src/fillerRepair/test/TestPlan.md` — 测试拓展作业指导书。
-> - 本文 — 决策记忆。改动语义时,spec 先行,然后同步 HandOff/README,最后在
->   本文追加决策记录。
+Updated: 2026-07-18. Branch: `claude/wizardly-carson-secahu`.
 
----
+Read `docs/filler_vt_overlay_repair_spec.md`, `src/dpl2/HandOff.md`,
+`src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md` and the adapter/test READMEs
+before changing this feature.
 
-## 1. 项目一句话与边界
+## Project status
 
-设计 100% utility(所有 site 被 std cell/filler 覆盖);opto/ECO **一次只改一个
-std cell 的 VT**;周围 filler 保留旧 implant type,产生 implant 层 MW/MS 违例
-(MS 分 P/N band;规则尺度约 1 site)。checker 把 violation snapshot 交给
-repair engine;engine **只用同宽同高同位置的 filler master 换型(swap)** 找一组
-`FillerChange`,交回 checker 用 overlay 验证;clean 则 infrastructure commit。
+The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
 
-硬边界:
-- engine 是 **deterministic pure planner**:不碰 DB、不判 DRC(checker-as-oracle)、
-  同输入同输出。
-- 开发只在 `src/dpl2/`(`fillerRepair/` 为主,`drc/` 只放共享类型与 checker 侧
-  脚手架)+ `docs/`。
-- **checker 的实现不是本项目责任**(用户明确划界);checker 事实只作为 engine
-  依赖的契约记录。
-- 词汇红线:本阶段只有 **swap**,下一阶段才是 **rewrite**(merge/split)。代码中
-  不允许出现 Move / FillerRewrite 抽象(它们是论文概念,用户明确否决过,见 §4-D3)。
-
-## 2. 现状(2026-07-15,分支 `claude/wizardly-carson-secahu`)
-
-| 部分 | 状态 |
+| Area | State |
 |---|---|
-| Spec | **V2.1 定稿**(§0 修订记录 = 12 项 review 裁定);V1 存档已删(冗余) |
-| planner(`src/fillerRepair/`) | TODO 1–11 + V2.1 engine 修订全部实现;批 1、批 2(#6/#7/#8/#11)、批 3 #9 全落地;仅 #12 adapter/precheck 上收未做 |
-| 测试 | planner 87 个(`-Werror` + ASan 全绿);**真实链路 E2E smoke**(`test/build_all.sh`:fake UDM → 真 checker init(desMgr) → 统一边界 repair,含确定性断言,ASan 全绿)。旧 drc harness 10 例已退役(锁的 list-only 契约被终版取代;checker 行为测试归 RD 的 Helper 路径) |
-| checker(`src/drc/`) | **FINAL 版(2026-07-15 RD 交付,D28)**:ctor `(Grid*, Network*)` 经 Session 自动 `init(desMgr)`;id 空间 = `Node::getId()`/`Master::getId()`;wire = `FillerCellRecord{op,cell_id_(LeafCellID),new_lib_cell_(LibCellID)}`;**回到 blocking 过滤形态**(内部自算 baseline 过滤 old,list-only 契约 D21 被 RD 终版取代);`Relationship` 只剩 IntraRow/InterRow;公开访问器只剩 getNodes/getLayers/siteWidth/getDiags。测试注入走 RD 的 `ImplantLayerCheckerHelper`(friend) |
-| 统一边界(`adapter/PlacementView`) | **一个类替代原三件套**(D28):同时是 planner 的 PlacementView、oracle(直调 ipl checker)与 repair 入口;依赖 Grid+Network+desMgr(与 checker 相同);**本地可编译可跑**(tier-1 fake UDM),真实链路 E2E smoke 全绿 + ASan |
+| Planner | OracleGate fixes, adaptive-L1, filler domains, per-band ranking/filtering and deterministic output complete |
+| Unit tests | 87/87 normal and ASan |
+| Infrastructure | `RepairInfrastructure` builds production Network/Grid from PhysDesMgr data |
+| Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
+| Adapter | one `adapter::PlacementView` = view + direct oracle + repair entry |
+| E2E | fake UDM is the only data substitute; normal/ASan and `-Werror` pass |
+| CMake | standalone CMake/CTest target passes normal and ASan |
 
-关键 commit(倒序):#9 filler-domain(见 git log 最新)→ `d293265` AGENTS/TestPlan
-→ `a7de6f0` 批 2 部分(#6/#7/#11)→ `c1bafce` 批 1(6 个正确性修复 + 5 回归测试)
-→ `df18536` spec V2.1 + 删 V1 存档 → `b5dd6b2` HandOff 初版 → `b7b72ab` checker
-脚手架 → 更早为 planner 实现史。
+The old list-only/raw contract, three-object adapter, Helper-injected Grid,
+Grid link stubs, fake PlacementDRC and test DePlace/Network shims are retired.
 
-## 3. 演进时间线(为什么会走到 V2.1)
+## Fixed decisions
 
-1. **V1 spec**(greedy prefix + beam、W0-W5 六级窗口、cluster 划分/合并/重试)
-   → review 后判定机制过多、magic knob 过多。
-2. **V2 重写**:统一成"排序枚举 + batch 验证 + baseline-delta 唯一判定";
-   窗口砍成 L0/L1/L2;单 cluster;签名钉死。期间吸收:12-master 库事实
-   (每宽度 3 VT 齐全)→ 三项搜索精化(anchor-follow 靠排序、第三 VT 降权、
-   小窗口 3^k 完备枚举);DAC'23 论文 → unfixable 判定与扩窗截止准则。
-3. **实现 TODO 1–11** + 35 测试;导入真实 checker 源码打脚手架。
-4. **Reviewer 复审**(拿到 checker 实现后,用户提供 12 条批评逐条裁定)→
-   **V2.1**:OracleGate 正确性 > 窗口简化 > 搜索域建模。裁定全文见 spec §0;
-   实施拆三批,批 1 全落地、批 2 落地 3/4。
+1. The planner is deterministic, non-mutating and UDM-free.
+2. This stage supports same-position/same-size filler swaps only.
+3. `ImplantLayerChecker` is the only DRC oracle.
+4. `adapter::PlacementView` is the only production planner boundary.
+5. Placement/precheck data comes from `PhysDesMgr`.
+6. Candidates come only from `fillerSetting::getFillerMasters()`.
+7. Instance/master IDs are `Node::getId()` / `Master::getId()`; physical wire
+   handles are `LeafCellID` / `LibCellID` in `FillerCellRecord`.
+8. All placed, target-new and configured filler masters are registered before
+   checker construction, including uninstantiated masters.
+9. Checker batches use one target/guard plus ordered `FillerChanges`; checker
+   computes the empty-overlay baseline and returns blocking violations.
+10. Rebuild infrastructure/checker/adapter after a design commit.
 
-## 4. 决策日志(决策 / 思考过程 / 否决的备选)
+## Production infrastructure boundary
 
-### D1. checker-as-oracle,engine 不复刻 DRC
-**决策**:合法性只来自 checker;engine 只做窗口/枚举/分类。
-**为什么**:MW/MS/P-N/PRL 语义复杂且会漂移,复刻 = 双份真相,必然分叉。
-**否决备选**:DAC'23 式本地规则模型做主判定。保留其思想为 Ranker backlog
-(model-guided proposal):模型不准只多花 checker call,不影响正确性。
+`RepairInfrastructure::build(desMgr, leafCellIds, fillerSetting,
+targetNewMaster)`:
 
-### D2. 排序枚举替代 greedy+beam(V2 核心选型)
-**决策**:①生成 ②排序 ③按 (size, rank字典序) 枚举子集 ④oracle 门 ⑤首 clean 早停。
-**为什么**:greedy 是 size-1 枚举、seed 是人工 size-2/3、beam 是大空间启发式——
-三者本是同一枚举的特例;统一后没有 partial 打分、没有 survivor 配额,MW 非单调
-(必须两 filler 联动)只是普通 size-2 子集。
-**否决备选**:保留 beam 为主路径(留作 escape hatch 接口位,spec §8.3,不实现)。
+- validates `fillerSetting` and `PhysDesMgr` belong to the same design;
+- derives core/rows and real Grid state from `PhysDesMgr`;
+- creates deterministic Network master IDs in LibCellID order;
+- imports Nodes by reading each supplied LeafCellID back through PhysDesMgr;
+- includes uninstantiated target/candidate masters;
+- paints production Grid occupancy.
 
-### D3. 只做 swap,不引入 Move/FillerRewrite 抽象 ⚠️ 用户强修正
-**决策**:原子操作就是 `Swap`(= FillerChange 语义 + row/span/VT 元数据)。
-**过程教训**:实现初期我引入了论文式 Move 抽象 + FillerRewrite + 冲突判定 +
-adapter 转换,被用户明确叫停("你做多了,我们只做 swap!")。操作演进钉死为
-两步:swap(本阶段)→ rewrite(下一阶段);merge/split 的抽象与 API 升级
-届时同批做,现在做是投机。
-**残留**:canonicalKey 仅作 checker-call cache key 存活;"冲突"按构造不可能
-(枚举按 filler 分组)。
+The caller owns hierarchy traversal and supplies leaf IDs. No placement
+properties are accepted from the caller.
 
-### D4. wire format 保留 V1 `FillerChange`;v2 升级为 primitive-op 形态(future)
-**决策**:现在不改 API;merge/split 时代升级为 `remove(instanceId)* +
-add(master,row,x,orient,overlayId)*`,overlayId 由请求方分配、checker echo。
-**为什么**:swap-only 下 FillerChange 零歧义;op 形态消解"overlay 新建 filler
-没有 instanceId、participant 无法引用"的协议难题,且与 commit 原语同构。
-**否决备选**:现在就上 FillerRewrite 结构——multi-height 行对齐、id 分配流程
-未定,投机 API。
-**配套职责裁定**:overlay 删/建的**语义半**(tiling 规划,删哪些/放哪些)归
-engine,**机械半**(candidate context 应用与规则执行)归 checker——tiling
-知识不泄漏进 oracle,checker 索引不泄漏出 checker。
+## Thread/lifetime model
 
-### D5. 类型二元性是设计决定,靠薄 adapter,不"统一"
-**决策**:`fillerRepair::Types.h` 持有与 `ipl::` 结构同构的 UDM-free wire 类型;
-基础 id + XInterval 由 `fillerRepair/BaseTypes.h` 自持;checker 保留独立 `ipl::`
-类型,adapter 显式转换。checker harness 在同一 TU include 两边防止 ODR 回归。
-**为什么**:`ipl::CheckRequest` 内嵌 `eUTL::PhysOrientation`(UDM),UDM 头进
-planner 就毁掉纯度与独立编译测试。
-**三个已知转换坑**(adapter 必须单测):`Orient`↔`PhysOrientation`;
-x(DBU)↔`PlacedInst.columnId`(**site 单位**,`x=columnId*siteWidth`);
-`Region`(row-based)↔`CheckerRect`(y-based,`y=rowId*rowHeight`)。
+The infrastructure, checker and adapter form one immutable design snapshot.
+Use one engine per thread. Adapter coverage is protected by `call_once` and
+checker calls are serialized. `RepairInfrastructure` is intentionally
+one-build; create another object for a new revision.
 
-### D6. baseline-delta 是唯一 accept 门;guard 进 cache key
-**决策**:每窗口先跑空-overlay baseline(同 targetPlace/guard),candidate 与之
-做 delta;cache key = guard + canonicalKey(同 overlay 换 guard 是不同问题)。
-**为什么**:checker 不维护违例历史、不做 original/new 分类——分类责任全在
-engine,才能对 checker 的实现细节免疫。
-**halo 规则**:窗口内新增 → 拒;halo 相关新增 → 拒;halo 无关 pre-existing →
-永不否决(否则邻区历史违例把一切可行解全毙掉)。
+## Tests
 
-### D7. 签名必须含 implant layer;不按几何位置去重
-**决策**:signature = (ruleId, kind, relation, primaryLayer, secondaryLayer,
-sorted rowIds) + xWindow 容差(重叠 ≥ 短窗一半,或距离 ≤ 1 site)。
-**为什么**:P/N band 在同一 x 间隙产生两条 MS,除 layer 外全同——按位置去重
-直接违反问题事实(用户图例明确)。layer 未填时默认 0/nullopt,对
-layer-agnostic checker 是 no-op。
+```sh
+src/dpl2/src/fillerRepair/test/run_tests.sh
+SANITIZE=address src/dpl2/src/fillerRepair/test/run_tests.sh
+src/dpl2/test/build_all.sh
+SANITIZE=address src/dpl2/test/build_all.sh
+```
 
-### D8. V2.1 十二项裁定(用户提出 12 条批评,我逐条对代码核实后裁定)
-全表见 spec §0。**特殊处理的三条**及理由:
-- **#4(pre-existing related halo)**:观察成立但**处方换掉**。原处方"对
-  related pre-existing 也否决"会让那条 baseline 里就有的违例在每个 candidate
-  里都出现 → repair 恒失败。正确修法:并入 #2 的 baseline 一致性门——按 §2.3
-  假设,窗口内/相关的 pre-existing 本就不该存在,出现即输入异常,
-  `BaselineMismatch` fatal。
-- **#6(unfixable fast-fail)**:不删逻辑,**降级为 Warning hint**(后于
-  2026-07-15 瘦身整体移除,见 D25——hint 不影响任何决策路径)。ring 论证
-  大概率安全但无 oracle 佐证(ring 按 instance 计数、规则按 DBU,安全性依赖
-  规则尺度小);而收益极小——没有附近 filler 时 L0 本就 NoEditableFiller、
-  零 checker call。降级近乎免费的保险。
-- **#11(finalCheck)**:**删除**而非升级成 expanded-guard 认证。相同 cacheKey
-  → 必然 cache 命中 → 零验证增益;expanded-guard 有真实价值但每次 +2 call
-  (新 guard 要新 baseline),留到 batch opto/多 guard 时代按实测预算决定。
+The final E2E source list contains production Grid/Network/importer/checker/
+adapter/planner and fake UDM headers only. Private test doubles remain confined
+to the standalone 87-case planner unit executable for fault injection; never
+link them into E2E or production targets.
 
-### D9. BaselineMismatch 门的 scoping(批 1 实现时的关键决策)
-**决策**:"originals 必须在 baseline 复现"只对 **in-guard** originals 生效;
-"不得有意外违例"只对 **in-window** 的 baseline 违例生效(halo 的意外违例
-= 允许的无关 pre-existing)。
-**为什么**:baseline 是在 guardRegion 内收集的;original 落在本级窗口 guard 之外
-时"看不到"是正常的(L0 小窗口 + 多违例分散的场景),不 scope 会在扩窗前
-误报 mismatch 把可修 case 判死。
-**配套**:门内匹配也是消耗式一对一(与 #3 同语义),一条 baseline finding
-不能同时满足两条 originals。
+Local dependencies are Boost, TBB, C++20 and CMake. On Apple ASan, use the
+static Homebrew TBB archive as encoded in both build entry points.
 
-### D10. definitive 语义 = 最后实际搜索的窗口(#10)
-**决策**:`lastSearchedDefinitive` 每轮赋值(不是 `|=` 累积);ExpansionCutoff
-提前 break 时沿用 break 前那轮的值。
-**为什么**:L0 完备只证明 L0 无解;L1 截断后仍宣称 definitive 是错误陈述,
-上游会据此放弃本可通过加预算/扩窗找到的解。
+## Change rules
 
-### D11. 测试快照从 checker 派生,不手搓(批 1 落地时的教训)
-**事件**:BaselineMismatch 门落地后,`engine_ignores_unrelated_halo_violation`
-段错误——它手搓的 snapshot violation 缺 layer 字段,与 fake checker 在 baseline
-里产生的同一违例签名不匹配 → 门(正确地)拒绝。
-**决策**:E2E 测试的 snapshot 一律用 checker 生成(窄 guard 圈出目标违例),
-与生产一致(生产里 snapshot 本来就出自 checker)。手搓 Violation 只用于
-gate/signature 的单元测试(配 ScriptedChecker)。
-**教训**:凡是"engine 输入应来自 checker"的数据,测试也让它来自 checker,
-否则测试锁的是假契约。ASan 抓到了这个段错误——合入前跑 ASan 值得。
-
-### D12. 输出 all-or-nothing(**已拍板:A,终版**,2026-07-15)
-用户裁定:**只输出 A**——修不干净 → `hasSolution=false` + BestOverlay 诊断,
-不返回 partial、不加结构化残留字段。`FillerRepairResult` 维持现状,commit 侧
-永远只见 oracle-clean 解。曾给过 B(partial 模式)/ C(结构化残留字段)两个
-备选,均否决;除非用户重新开口,不要再提。
-
-### D13. 12-master 库事实 → 三项搜索精化
-库:`F_FILL{8,4,3,2}_63S6T9{R,L,UL}_1`,**每宽度 3 VT 齐全**(用户先给了不全
-清单后更正;R/L/UL 含义按业界惯例推断为 RVT/LVT/ULVT,**待 library 团队确认**)。
-推论:每 filler 恒 2 候选 → anchor-follow 恒可构造(排序实现,无种子机制)、
-第三 VT 降权(降权不剔除,犄角场景仍可达)、3^k ≤ 预算时完备枚举("窗口内
-无解"成为确定性结论)。算法不 hard-code 这张表,一切以 provider 运行时返回为准。
-
-### D14. #9 落地:filler-domain 接口与枚举顺序语义(实现时决策)
-**决策**:`rankFillers` 返回 `std::vector<FillerDomain>`——filler 级排序键只留
-{direct, bridge, width, position},VT 选择特征(anchorVote/第三 VT 降级)下沉为
-**domain 内排序**(anchor VT → 邻接 majority → 稳定 id,第三 VT 垫底);
-`enumerateOverlays` 按 (size, filler 组合字典序, domain 笛卡尔积・末位变最快)
-枚举,memberCap 数 filler。
-**顺序语义变化(有意为之)**:size-1 从旧的"全体主选 → 全体第三 VT"变为
-"逐 filler 展开完整 domain"(f1 的第三 VT 先于 f2 的主选)。这正是 spec §6.6
-V2.1 文本的定义;代价是个别多解 case 的"首个 clean"换人——用户 5 行 grid 的
-首解从 3013→vt1 变为 2012→vt0,**两者都是 oracle 验证的 delta-clean**,engine
-契约是"钉死枚举序中的第一个 clean",测试已更新并注明。
-**否决备选**:保留扁平 swap 列表、只把 cap 换算成 filler 数——不行,那仍无法
-表达"入选 filler 带完整 domain",第三 VT 仍可能被前缀挤出。
-**附带简化**:同 filler 冲突按构造不可能,枚举里的 dup 检查删除。
-
-### D15. checker↔engine"互相依赖"的消解(spec §3.3)
-**问题**:checker 调 engine 生成 solution,engine 调 checker 验证 overlay。
-**裁定**:依赖倒置,engine 是底层,编译依赖恒为 checker→engine 单向:engine
-只认自己的抽象 `ImplantOverlayChecker`(CheckerApi.h)+ 自有 UDM-free wire
-类型;checker 的 repair 入口构造 engine 并把自己包进 `CheckerOracleAdapter`
-注入(adapter 兼做类型换皮,checker 侧持有)。运行时无递归的保障是协议红线:
-overlay API 是纯查询(const),**禁止内部触发 repair**;repair 入口已加不可重入
-assert。构建:libfillerRepair 零依赖 ← checker;adapter 随 checker 目标。
-**否决备选**:并入 checker(毁独立测试)、双向抽象(空转)、std::function
-(类型面弱)、orchestrator 拥有两者(最干净但当前集成事实是 checker 驱动;
-engine 对谁驱动不敏感,future option)、再拆共享库(两侧已有各自基础类型,无必要)。
-
-### D16. Fake-UDM candidate provider(adapter 预演,`fake/FakeUdmCandidateProvider.*`)
-**目的**:真 provider 将坐在 checker 的 master 表上(buildMasters 从 UDM 构建),
-先把那条数据通路 UDM-free 地预演一遍,给 adapter 定型。
-**关键忠实点**(参考 `ImplantLayerChecker.cpp buildMasters` + helper):VT =
-master 的 implant shape 所在 layer 的 **family**(`parseLayerName`:按最后一个
-'_' 拆,VTS/VTL/VTH/VTUL + N/P),**绝不解析 master 名字**;单 master 混族 →
-unusable(`master_implant_family_mismatch`);宽度 DBU 必须 site 对齐;shape 必须
-铺满 master 宽;每行两个 half-row band shape(极性不影响 VT 推导)。
-**VtId 映射钉死**:family 枚举序 VTS=0/VTL=1/VTH=2/VTUL=3,推导失败 kUnknownVt。
-**API**:`describeMasters(ids)`(逐 id 宽度/VT/usable/reason,输入序保持)+
-engine 的 `getUsableMasterCandidates`(同宽高、usable、filler、非当前,id 升序)
-+ `registerInto(FakeDesign)`(保证 view 与 provider 的 master 数据一致——engine
-构造 Swap 时会对 view.masterInfo 校验)。附录 A 12-master 库内置
-(`addAppendixALibrary`,R→VTS/L→VTL/UL→VTUL 为待 library 确认的假定映射)。
-**教训(测试)**:E2E 场景要么把解做成唯一(用规则约束排除掉其他 clean),
-要么按 D14 锁"枚举序第一个 clean"并注明——第一版场景里 602→VTS 也是合法解,
-被 engine 先找到,不是 bug。
-
-### D17. 2026-07-12 checker 更新版的审查结论(commit 见 git log)
-**事实**:checker RD 交付新版 `ImplantLayerChecker.{h,cpp}`,helper 删除、类型
-内联(`Dbu` 替代 `DbCoord`、新增 `ColId`,CheckRequest/PlacedInst 改用 site 单位
-colId)、接入 dpl2 legalizer(DRCChecker/Grid)、**overlay API 真实现**:
-`checkPlaceWithOverlays(request, guard, vector<vector<FillerChange>>)`,batch 内部
-先算一次 baseline(旧 filler),逐候选 validate(dup/非 filler/尺寸不符 → 诊断 +
-isLegal=false,per-candidate 隔离)、全设计快照 + guard 内规则评估限定 + guard
-裁剪,`Violation` 带签名 hash(= 我们 §6.2 的键,好消息)。结构上正是 HandOff
-§3.2 推荐的路线。**按原样合入,未改他们一行代码。**
-**两条契约项(engine 对接的 blocker,已在 checker 侧改好——见
-`drc/CHECKER_REPAIR_CONTRACT.md`,均带 `[fillerRepair-fix]` 标记;待 RD review)**:
-(1) blocking 过滤(touchesInstance ∪ 非 old)会吞掉"未修好但不触及 target"的
-original——§1.2 bridge-MW 类必踩;xWindow 包含判 old 还会隐藏"缩小未消除"。
-**改法**:新增 `checkPlaceWithOverlaysRaw`——复用 `checkOverlayRegion` 返回 guard
-内全量违例、不过滤,delta 归 engine;原 blocking 形态保留给 legalizer。
-(2) `Violation.rowIds` 从未填充。**改法**:`scanRule`×2 + `scanViolations` +
-`makeViolations` 补填。附带修 `validateOverlayRequest` 头/实现不一致(编译 bug)。
-我改的是 RD 的文件,只保住两条语义,形态他们可换。
-**连带决策(2026-07-13 已落实前置)**:planner 基础类型已迁到
-`fillerRepair/BaseTypes.h`,不再 include/alias `ipl`;adapter 可在两套独立类型间
-显式转换,checker harness 的共存编译测试已通过。`drc/ImplantBaseTypes.h` 已无代码
-引用,待 checker RD/CMake 集成确认后删除。requestId 取消 → 关联按顺序,engine 协议校验届时改
-size+order,adapter 按 index 合成 id。participants 缺失 → adapter 从
-violation.instances + placedInsts 合成。
-
-### D18. 真实 checker standalone harness 与 guard 扫描修复(2026-07-12)
-**测试边界**:`src/drc/test/run_tests.sh` 用 test-only fake UDM/mini-gtest,但直接
-编译生产 `ImplantLayerChecker.cpp`;`DPL2_FAKE_UDM` 只关闭 Session 自动初始化与
-缺失 helper 的 extraction,测试显式注入 `ImplantInput`。因此规则/index/overlay/
-violation 路径是真 checker,不是 FakeImplantChecker。dense 8×200 的 MW/MS ×
-intra/inter-row 4 例 + raw/baseline/rowIds、类型共存、invalid batch、row/hash/guard
-共 8 例在 `-Werror` 与 ASan 下全绿。
-
-**编译漂移**:首次直编译暴露 `evaluate/evalRule`、`findNeighbors` 参数、
-`ScanOutcome.instances/instanceIds`、`RowInput/RowId` 四组头实现不一致,已按 cpp
-实现与真实容器类型对齐。
-
-**行为根因**:guard committed rect 曾全部标成 candidate,随后 neighbors 又跳过
-candidate,所以 inter-row/spacing false clean;反向仅保留 committed 又会漏掉
-换型后残留在 committed shape 上的新违例。另一个 bug 是 candidate/context 同层
-接触 interval 被强制分段,制造 false MW/MS。裁定为 guard-wide scan:context 只按
-guard 裁剪,所有 shape 可作 target/neighbor,同层接触几何跨 provenance 合并,
-`containsCandidate` 仅保留为 OR 元数据;双向 pair 扫描按签名/窗口/参与者去重;
-末端 blocking/raw 各自按契约输出。
-
-**仍未完成**:真实 UDM extraction(原 helper 已删但等价实现未交付)、完整 dpl2
-CMake/依赖闭包、checker↔engine adapter(TODO 12)。用户提供的 DePlace/network
-文件已归位,但它们的完整构建仍依赖其余 infrastructure/UDM 文件。
-
-### D19. #8 adaptive-L1 落地(2026-07-12)
-**决策**:删掉 L1 一次 sweep 到 fixed/core boundary 的实现。L0 搜完未 clean 时,
-OracleGate 的 best summary 携带实际 `blockingViolations`(residual originals +
-in-window/related-halo new);Window 按它们相对当前 x 的位置确定左/右,在 blocking
-rows 及 ±1 耦合行上每侧每行最多加入配置 K 个连续 filler(默认 2),遇 non-filler
-立即停。每步重新 generate/rank/enumerate,所以 `plan.complete` 按新 domain 重算。
-
-**截止**:下一步没有新增 editable filler → 截止;扩窗后的窗口完成完整枚举且
-blocking violation multiset 按 pinned signature 与上一步相同 → 截止。后者只在
-当前窗口 complete 时启用,截断窗口不能据此宣称更远 filler 无关。最终 definitive
-仍只取最后实际搜索窗口(D10)。
-
-**测试**:旧 `window_L1_extends_to_fixed_boundary` 被 K 限制测试替换;新增耦合行+
-fixed boundary、adaptive 才能找到远端 filler 的 E2E、unchanged-blocking cutoff;
-原 last-window definitive 回归改用 K=6 直接造截断 adaptive window。planner
-总数 79,普通/ASan 全绿。
-
-### D20. 2026-07-13 planner hardening 与测试扩展
-**实现**:修复 SubsetSearch 在 `space == budget` 时已枚举完整却误标 truncated 的
-边界;`plan.complete` 现在由完整空间与实际 emitted 数共同决定。PreCheck 改为按
-coverage segment 扫描,多重 overlap 的 `CoverageIssue.instances` 带完整、排序后的
-参与者,最终 issue 按 row/x 确定排序。planner runner 原生支持
-`SANITIZE=address`。
-
-**类型**:新增 `fillerRepair/BaseTypes.h`,消除 planner 对
-`drc/ImplantBaseTypes.h` 的依赖。当时 checker 生产源码未修改;本轮后续只调整 initFromUDM 稳定 ID,DRC 算法未动;checker test TU
-验证两套 header 共存。
-
-**测试**:planner 63→79,补完可由当前接口表达的 P1/P2 项;checker 5→8。普通与
-ASan 全绿。未伪造 `ranker_majority_per_band`:当前 `MasterInfo` 只有单 `vt`,必须等
-真实 adapter 提供 P/N band 元数据。bridge-MW 专用 checker fixture 与真实
-UDM/adapter E2E 仍待完成。
-
-### D20. 对 2026-07-12 批次(#8 + checker harness + 类型解耦)的 review(修 3 处)
-**总评**:批次质量高——adaptive-L1 忠实 spec §6.3(终止性有保证:单调增长 +
-双 cutoff)、fake-UDM 边界干净(`DPL2_FAKE_UDM` 只圈 ctor 与 initFromUDM)、
-`Types.h` 类型解耦正是 D17 要求的方向、checker 的 scan 语义修正
-(candidate 不再抑制 target/neighbor、同层接触合并)方向正确且有 8 测试佐证。
-**review 修掉的三处**:
-(1) **去重放错路径**:方向/band 重复折叠只加在 `makeViolations`(fast path,
-不产生该类重复),真正产生重复的 `scanViolations` 没有 → raw API 一条物理违例
-报两次。抽 `sortAndDedupViolations` 两处共用 + 比较器 hash/participants
-tiebreak(重复必相邻)。
-(2) **guard 边界截断幽灵违例**:新的精确-guard 快照裁剪把跨边界 run 切断,
-断口上捏造 width 违例(测试窗两侧各 3 条)。修法:快照纳入按
-guard + max(queryRadius) 外扩(纵向 +1 行),结果裁剪仍用精确 guard——
-padded 边缘的断口离精确 guard ≥ 1 radius,必被结果裁剪丢弃。
-(3) **缺 raw-vs-blocking 契约测试**:补 `BlockingHidesResidualButRawReports`
-(bridge 场景:target 离开 F1 run,残留违例 participants 不含 target;
-blocking 判 isLegal=true = false accept 实锤,raw 恰好报一条、fix 后干净)。
-它同时用精确计数锁死 (1)(2)。
-**附带**:删孤儿 `drc/ImplantBaseTypes.h`(D17 解耦后零引用);发现他们的
-contract 文档声称"scanViolations 折叠重复"超前于代码——修复后文档为真。
-**教训**:声称的行为要有精确计数的测试钉住(`.empty()`/presence 断言抓不住
-重复和幽灵);guard 类空间裁剪永远要问"跨边界的几何被切断后会不会说谎"。
-
-### D21. 终版 checker 契约:list-only、无过滤、无查重(2026-07-13 用户钉死)
-**事实**:RD 交付新版 checker(UDM extraction 内联,暂为 final 版,回到 blocking
-形态);用户随即裁定:**checker 只输出 violation list,不做查重**。
-**落地**:`checkPlaceWithOverlays` 每候选返回 guard 内全量违例;blocking 过滤
-(touchesInstance/containsViolation)整体删除;不做重复折叠(D20-1 的
-`sortAndDedupViolations` 不再引入——**注意与 D20 的差异**:那时的裁定是"checker
-去重",用户现在明确"不查重",以用户为准)。raw/blocking 二分终结:主 API 即
-raw。**重复契约**:同一物理违例可出现多条(band/方向),但必须确定性;engine
-的一对一 multiset 匹配容忍一致性重复,**前提 originals 快照与 baseline 同源**
-(集成时必须保证快照也来自这个 API)。
-**连带**:重新套用 D20 的 scan 正确性修正(committed 不标 candidate、不按
-provenance 切 run、target 不按 candidate 过滤、快照 padded-guard 纳入)与
-fake-UDM 编译边界;fixture 只保留 F1 规则(F2/F3 的职责是切断 F1 run,它们的
-规则会暴露 fixture 故意留下的单 site 残条,而所有断言只针对 F1);dense 测试
-改用每窗口窄 guard(list-only 下全设计 guard 会正确地带出所有别处违例)。
-**用户预告的方向**:infrastructure 即将更新,planner/engine 将迁移到**基于
-infra 的版本,无视 UDM 依赖**——adapter 的对手方从 UDM/checker 内表变成 infra
-API,D5/D17 的类型自持决策正好为此铺路。
-
-### D22. 复杂搜索性能/成功率回归(2026-07-15)
-**目的**:在不修改 repair engine 与 checker 语义的前提下,用确定性调用次数同时
-钉住搜索速度和较深 domain 解的成功率;不使用受机器负载影响的 wall-clock 阈值。
-**planner fixture**:3 行 100% 覆盖、8 个 editable filler domain、两条跨行
-violation,混入 direct/bridge/coupled decoy,完整候选计划 127 个。最高排序 VT pair
-在候选 #16 被发现,含 baseline/final check 共 21 次 checker call;反转 snapshot
-顺序后 solution/call/batch 完全一致。要求 domain-tail 第三 VT pair 时在候选 #19
-发现,总调用仍为 21,证明降序但不剪枝。
-**生产 checker fixture**:8×200 dense layout 一批 64 个候选,循环混合 clean、
-residual、new violation、invalid duplicate;连续执行两批后分类、violation 顺序、
-rowIds/hash 与 diagnostics 完全一致。当前 planner 81/81、checker 10/10。
-
-### D23. Infrastructure-backed PlacementView consolidation (2026-07-15)
-**用户指令**:placement/precheck 基于 infrastructure Objects;candidate 只来自
-`fillerSetting`;ID 与 checker 统一;合并 Swap/SwapGenerator 与 Types/BaseTypes。
-
-**落地**:
-- `InfrastructurePlacementView` 从 `Network/Node/Master` 建 immutable snapshot,
-  从 `fillerSetting` 建 candidate allow-list,从 checker master 表补 VT 并交叉校验。
-- `InstanceId=LeafCellID index`,`MasterId=LibCellID index`;checker init 同步使用稳定 ID,
-  删除枚举 replay bridge。
-- `PlacementView` 同时提供 `checkSiteCoverage` 与
-  `getUsableMasterCandidates`;engine 不再持有 candidate provider。
-- `SwapGenerator` 并入 `Swap`;`BaseTypes` 和 candidate wire types 并入 `Types`。
-- 删除旧 checker-backed view、UDM bridge、独立 provider/precheck 及 fake provider。
-- planner 搜索/rank/subset/oracle gate 算法不变。
-
-**验证边界**:按用户要求没有编译、没有运行 UDM-dependent tests。仍需真实环境完成
-构建接线,并让 checker 初始化包含 `fillerSetting` 中未实例化的候选 master。
-
-### D24. D23 重构复审:一致性/规模修复(2026-07-15)
-**背景**:用户要求 review D23 落地代码,方向 = 在 UDM 上高效稳定运行、尽量
-reuse checker/infra。本地 81+10+ASan 复跑全绿后逐文件核对,修了六处:
-1. **isFiller 谓词不一致(会假 Fatal)**:checker `MasterInput.isFiller =
-   isCoreFiller()||isPadFiller()`,而 view/Network 只用 isCoreFiller() ——
-   pad-filler master 会触发 `CheckerMasterMismatch`/`FillerClassificationMismatch`
-   假阳性拒绝整个设计。统一为 checker 谓词(view 内 `isFillerMaster` helper +
-   `Network::addNode/updateNode`;Node::FILLER 本就是 D23 新引入,无下游依赖)。
-2. **行归属 O(nodes×rows) 线性扫**:每 node 全量扫 row frames,真实设计
-   (1e6 node × 1e3 row)不可接受。改 y 排序 + `upper_bound` 二分;同 y 多段
-   row 沿用 checker initFromUDM 的"行序第一条"tie-break,保持 rowId 对齐。
-3. **precheck segment 循环 O(N²/行)**:每 segment 线性扫全行实例;密行
-   (~2000 cell)+全设计扫描不可接受。改增量 sweep(边界即 cuts,active set
-   用 `std::set` 保持 id 有序),输出与旧实现逐字节一致(81 测试锁行为)。
-4. **行原点 X 对齐校验丢失**:planner 窗口与 checker 的跨行比较都假设各行
-   x 可直接比较(行相对系共享一个原点);D23 删 bridge 时把这条校验删丢了。
-   补回 `RowOriginMisaligned` Fatal。
-5. **过严 Fatal 降级(稳定性)**:`CheckerMissingConfiguredMaster` 改
-   Warning + 从候选集剔除(checker 还不能建模未实例化 master 前,配置表
-   几乎必含此类项,Fatal 会 brick 整个 repair;剔除后引擎用可建模子集继续,
-   诊断告诉 RD 缺哪些);`CheckerMissingPlacedFillerMaster` 改 Warning
-   (该 filler 只是不可 swap,baseline/candidate 看到同样的 committed 几何,
-   合法性判定不受影响)。
-6. **target master 诊断精确化**:view 的 master 表 = Network ∪ fillerSetting ∪
-   checker,`masterIdOf>=0` 不再等价"checker 可建模"。view 暴露
-   `checkerModelsMaster()`,`FillerVtRepair` 区分 `TargetMasterUnknown`(不在
-   infra 表)与 `TargetMasterNotModeled`(checker 无 implant 模型);
-   `TargetNotStdCell` 判定改用 view 元数据(单一事实源)。
-   连带:`CheckerOracleAdapter.h` 只依赖抽象 `PlacementView`(UDM 头不再
-   经它扩散)。
-**没动的**(有意):`instancesInRow` 按值返回(接口契约,量级可接受);
-precheck 每次构造 view 重扫(view 本身 O(design) 重建,同阶;等真实数据
-证明是热点再上 revision 缓存);coverage 不含非 core cell(macro cutout
-仍是 row span 的已知缺口,见 adapter README 确认项 3)。
-
-### D25. 瘦身:只保留最低 spec 要求内的功能(2026-07-15,用户授权)
-**原则**(用户钉死):不影响最低 spec 完成要求;spec 最低要求之外的功能
-(如 precheck 的 issue 分类之于"100% utility 检查")属可删项。
-**删了**:
-- **unfixable hint 整体移除**(engine stage 2b + `hasFillerNearViolation` +
-  spec §0#6/§6.2/§10 同步):#6 降级后它只剩一条不影响决策的 Warning——无
-  filler 时搜索本就零 checker call 返回 NoEditableFiller。测试 81→80:删
-  `unfixable_ring_boundary` 单元测试;`engine_unfixable_fast_fail` 改名
-  `engine_no_editable_filler_zero_calls`(锁零调用语义)、
-  `engine_unfixable_hint_but_solved` 改名 `engine_adaptive_solves_beyond_ring`
-  (锁 adaptive 语义),两者不再断言 hint。
-- `CheckStatus::Unsupported`(无人产生)、`FakeDesign::allMasters()`(无调用)、
-  `UdmFillerChange.instanceId/newMasterId`(commit 只需 cellId+newMaster)。
-- `CheckerOracleAdapter` 的 mixed-batch 分组循环 → 单组协议校验(engine 按
-  构造只发同 (target,guard) 批;mixed = CheckerProtocolError,不静默拆分)。
-- `CHECKER_REPAIR_CONTRACT.md` 历史改动 1–6 段收敛为一行索引(细节在 git),
-  新增"稳定 ID 增补 + 待 RD 事项"两节(203→49 行)。
-**没删**(有意保留 + 理由):
-- **precheck 的 Gap/Overlap/OffGrid/IllegalOccupant 分类**:这不是超额功能——
-  100% utility = "每个 site 恰好一次覆盖",overlap 与 gap 同为其反例;分类
-  只是诊断措辞,检测本身零额外成本(sweep 已 O(N log N)),且 80 测试锁定。
-- OracleGate cache(自适应扩窗重枚举同候选,省 checker call 的核心)。
-- view 构造期交叉校验(集成初期保命绳;跑稳后可降为抽样/verbose-only)。
-- FakeUdmCandidateProvider 的目录构建(测试地基;等集成编译反馈回来后若
-  要继续瘦身,把 appendix-A 目录折进 FakeDesign、删 describeMasters 层)。
-
-### D26. per-band P/N 集成:polarity 是 band 自由度,VT family 不是(2026-07-15)
-**用户指令**:per-band P/N 参照 checker 中 Family 的赋值方式,核实后集成进
-engine/infra,集成点自选。
-**核实结论**(读 checker 实现):
-- `parseLayerName`:layer 名按**最后一个 '_'** 切分,前缀 = Family
-  (VTS/VTL/VTH/VTUL),后缀 = Polarity(P/p → P,其余 N)——用户理解正确,
-  VT 来自 master implant layer。
-- **family 每 master 唯一**:`buildMasters` 混 family 直接
-  `master_implant_family_mismatch` 判 unusable → "per-band VT" 中 VT 不随
-  band 变;**band 间自由度只有 polarity**。
-- `rebuildMasterShapes`:每行两个半行 band shape,bottom polarity 锚定在
-  最底 raw shape 的 layer,向上 N/P 交替;放置时 MX/R180 翻转 band。
-- 跨行边界只有一个 active polarity(`activeKindByBoundary`,行奇偶决定)
-  → ±1 行邻居只经 facing band 对交互。
-**集成点(三处)**:
-1. **元数据**:`MasterInfo.bottomBandPolarity`(R0 系;`Types.h` 新增
-   `BandPolarity{N,P}`)。infra 侧 `InfrastructurePlacementView` 从
-   checker `MasterInput.shapes`(rebuilt band shapes)最底 shape 的 layer
-   polarity 派生;fake 侧 `FakeUdmCandidateProvider::derive` 同规则,
-   `registerInto` 传给 `FakeDesign.addMaster`(新可选参,默认 N)。
-2. **候选过滤**(`PlacementView::getUsableMasterCandidates`):候选须与当前
-   master **同 bottom polarity layout**——swap 保持位置和 orientation,layout
-   相反 = 每个 band 落错 track,checker 必以 polarity mismatch 拒绝,提供它
-   只烧 call。spec §5.3 已补此约束。
-3. **Ranker majority per band-slot**(spec §6.6 待办项):family 齐 band 一致
-   → per-band 计数体现为权重:同行贴邻 2 票(两 band 都相邻)、±1 行 1 票
-   (只有 facing band)。tie 仍取小 VT id。既有测试无一翻转(旧 fixture 中
-   同行/跨行票数从未同时竞争)。
-**为什么不做 per-slot 取向翻转 helper**:majority 是双 band 求和,MX 翻转在
-求和下不变;polarity 过滤只比 R0 系 layout(swap 不动 orientation)。翻转
-规则已写进 MasterInfo 注释,留给未来真正 per-slot 的消费者。
-**测试**:+3(`ranker_majority_per_band` 同行/跨行权重区分场景、
-`candidates_band_polarity_layout_must_match`、
-`fake_udm_bottom_polarity_derived`),planner 83/83 + ASan、checker 10/10。
-
-### D27. 风险修复 + runtime 优化 + 多线程安全(2026-07-15,用户指令)
-**用户指令**:D12 拍板 A;算法侧修复此前 review 出的风险项;优化 runtime;
-算法要多线程 safe。
-**风险修复(算法侧三项)**:
-- **Ranker null guard**:majority 投票对 `masterInfo()==nullptr` 的邻居跳过
-  (原裸解引用;生产路径经两道上游防线不可达,但 ranker 不应依赖它们)。
-  回归:`ranker_majority_skips_missing_master`(零宽幽灵实例贴 filler 左缘,
-  正是旧代码 deref null 的形状)。
-- **polarity 淘汰可见性**:当所有同尺寸异 VT 候选**只**因 polarity layout 被
-  滤光时,报 `PolarityLayoutFiltered` Warning(而非笼统 NoUsableMaster)——
-  polarity 元数据(layer 名解析)坏掉时不再静默假"无解"。
-- **重入 guard(spec §3.3 落地)**:`FillerRepairEngine::repair` 入口
-  `std::atomic<bool>` exchange;重入/同实例并发 → fatal `ReentrantRepair`
-  结果(RAII 清理)。回归:`engine_reentrant_repair_refused`(checker 回调
-  repair,内层拿 fatal、外层正常完成)。
-**runtime 优化(核心 = 消灭热路径拷贝)**:
-- `PlacementView` 三个查询改**引用返回**并钉进契约:`instancesInRow`(planner
-  最热查询——precheck/开窗/rank 每步都调,真实行几千实例,按值返回的拷贝是
-  planner 主要成本)、`rows()`(每步 clamp 都调,禁止每次重建)、
-  `fillerMasterIds()`(契约升级为"有序去重",provider 默认实现随之删掉每次
-  调用的 sort/unique 拷贝)。
-- `InfrastructurePlacementView`:row_list_ 构造期预计算;`emptyInstances()`
-  静态空表兜底缺行。
-- `FakeDesign`(test-only):mutator 置 dirty flag、查询时重建缓存桶;回归
-  `fake_design_caches_follow_mutation` 锁失效语义。
-**线程模型(钉进 spec §3.3)**:
-- view 构造后不可变,const 查询对并发读者安全;coverage 惰性缓存改
-  `std::call_once`(原 mutable optional 有数据竞争)。
-- 并发 repair = **每线程一个 engine 实例**,共享同一 view + 同一 oracle
-  adapter;engine 无共享可变状态(guard 即并发误用检测)。
-- **checker 不是线程安全的**(实测:const overlay 路径改 mutable
-  `nextCandIntervalId_`/`nextCandShapeId_`)→ `CheckerOracleAdapter` 持
-  mutex 串行化 checker 调用;planner 侧无锁。checker call 本就是 runtime
-  主项,串行化不损害单线程性能,并发时 planner 侧工作仍可重叠。
-- `FakeDesign` 明确单线程(test-only,可变 builder)。
-**测试**:83→87(上述 4 个回归),87/87 + ASan、checker 10/10。
-
-### D28. 对齐 FINAL checker + 统一边界 + tier-1 fake UDM(2026-07-15)
-**用户指令**:①PlacementView 作为与 infrastructure 的唯一对接点,checker 直接
-调用,统一 FillerVtRepair/InfrastructurePlacementView 等多名字;我们与 checker
-同样依赖 Grid 和 Network。②checker 是最终版,数据结构与它对齐。③做第一档
-fake UDM(缺头补头、接口名对齐、实现可 fake)。
-**FINAL checker 事实**(全部核实自 2026-07-15 drop):
-- ctor `(Grid*, Network*)`,构造时经 `eUNL::Session` 当前 design 自动
-  `init(desMgr)`(完整 UDM 提取);`initialize(ImplantInput)` 删除,测试注入
-  走 RD 的 `ImplantLayerCheckerHelper`(checker/Grid 的 friend)。
-- **id 空间再变**:`InstanceId = Node::getId()`、`MasterId = Master::getId()`
-  (Network 内部索引;不再是 LeafCellID/LibCellID index)。
-- **wire**:`FillerChange` → `dpl2::FillerCellRecord{op_(Replace/Delete/Add),
-  cell_id_(LeafCellID), origin_x_/y_, orig_lib_cell_, new_lib_cell_}`;
-  checker 内部经 `network_->getNodeId()/getMasterId()` 换算。
-- **blocking 过滤回归**:`checkPlaceWithOverlays` 内部自算空-overlay baseline,
-  对每候选过滤 old(containsViolation)+ 保留 touchesInstance——**D21 的
-  list-only 契约被 RD 终版取代,按用户指令对齐、不再争论**。engine 的
-  baseline-delta gate 仍成立:快照/baseline/候选同走一个 API,世界观一致。
-- `Relationship` 删 IntraInstance(planner 枚举同步删);`masters()/
-  placedInsts()/rows()/rules()` 等访问器移除,只剩 getNodes/getLayers/
-  siteWidth/getDiags → 元数据(VT/polarity)改由 PhysLibCell shapes ×
-  getLayers() 名字匹配自行推导(同一 parse,不会与 oracle 分歧)。
-- **持久 init diagnostics 会前缀进每个结果并计入 isLegal** → 边界层剥离
-  前缀(init_diag_count),否则任何 init 诊断让所有候选恒 illegal。
-**统一边界**:`adapter/PlacementView`(一个类,fillerRepair::PlacementView +
-ImplantOverlayChecker 双继承)= 视图 + oracle 直调 + `repair(LeafCellID,
-PhysLibCell&) -> RepairOutcome{FillerChanges}`。原三件套删除。行归属/frame
-与 checker init 逐步同构(全行 y-bounds 首匹配、pad 行计入 RowId 序)。
-**tier-1 fake UDM**(`test/build_all.sh` + `src/drc/test/support/include/`):
-- fake_udm.h 升级为**可注数据的内存模型**(DesignDb:tech/masters/rows/
-  cells + Session 注入),接口名与真 UDM 一致;boost 系统安装(集成环境本就有);
-  fake 头:utl/Logger(spdlog 不可得)、dpl2/PlacementDRC.h(真头未交付)。
-- 编译目标 = 真实 infra(network/Object/architecture/Padding/fillerSetting)
-  + FINAL checker + Helper + planner + 统一边界。**排除**:DePlace.cpp(缺
-  PaddingChecker/EdgeSpacingChecker 头)与 Grid.cpp(要 tbb/PhysNet visitor);
-  Grid 链接符号由 support/grid_link_stubs.cpp 按行表功能性实现。
-- **E2E smoke 全绿 + ASan**:3 行 fixture(偶数行 MX 翻转对齐 track 奇偶),
-  T(VTL→VTH) 制造 MW,engine 9 次 checker 调用找到单 filler swap 解,两次
-  运行逐字段一致,输出 FillerCellRecord。
-**RD 代码修的编译错**([fillerRepair-fix] 标注):network.h getNode(idx) 用错
-变量/addNode(unique_ptr<Node*>) 双重指针/成员名拼写;FillerCellRecord 头字段
-new_cell_id_ vs cpp new_lib_cell_;DePlace.h 重复 getGrid() 重载;Objects.h
-Master ID/Id 宏与 Group::getRects 值/指针;network.cpp clearEdgeS。
-**退役**:旧 drc harness 10 例(锁已不存在的 list-only 契约;checker 行为
-测试责任在 RD,支撑它的 fake 树保留并升级为 tier-1 共用)。planner fake/ 与
-87 测试**保留**(第二档迁移等用户发令)。
-
-## 5. 实现要点与陷阱(接手前必读)
-
-- **对接 blocker(D17/D18)**:checker core 已在 fake-UDM boundary 下直编译并
-  10/10 + ASan 全绿(list-only API + rowIds + guard scan + mixed batch 见
-  `drc/CHECKER_REPAIR_CONTRACT.md`),但**真实 UDM extraction 与 adapter 完成**前,
-  engine 仍只接 `fake/FakeImplantChecker`。对接时用 `checkPlaceWithOverlaysRaw`,不用
-  blocking 形态的 `checkPlaceWithOverlay[s]`。
-- **checker 字段契约(D17 后)**:新版 `Violation` 的 rowIds 与签名 hash 已填充;
-  participants 不存在,adapter 从 `violation.instances` + `placedInsts` 合成;
-  kind 从 ruleSource 推导,relation = relationship。
-- **单位**:planner 全 DBU、半开区间 `[xl,xh)`;checker 的
-  `PlacedInst.colId` / `CheckRequest.colId` 是 **site 单位**
-  (`x = colId * siteWidth`)。adapter 换算是头号 bug 温床。
-- **类型边界(D17/D20)**:planner 已自持 `Types.h`;checker `ipl::` 类型独立。
-  adapter 必须显式做范围/单位转换,不可重新共享同命名空间结构。
-- **fake checker 语义是简化**(run-based):用户 5 行 grid 在 MW=MS=1 下 fake
-  报的违例与用户预期的不同——这不是 bug,是 oracle 边界;测试锁"对给定
-  oracle 的确定性行为"。
-- **debug print 契约**:`[fr][stage]` 因→果 + 数据变化,`FR_VERBOSE=1` 打开;
-  别写废话。改代码时保持该风格(用户明确要求)。
-- 测试基建:`test/run_tests.sh`(-Werror);ASan 命令见 TestPlan.md §5;
-  名字过滤 `./run_tests.sh <substr>`。
-
-## 6. 已知问题 / 风险(除三批未完项外)
-
-1. **签名 xWindow 容差 vs 真 checker 抖动**:BaselineMismatch 门依赖签名匹配;
-   若真 checker 跨 snapshot 的 xWindow 抖动 > 1 site,门可能误触发。集成时若见
-   噪声,加 config(容差可调或门降级为 Error)——先观察再动,不预做。
-2. **`rowLegalSpan` 单区间**表达不了 macro/blockage 多段 legal segment;#12
-   上收 infra + 窗口局部复核会大幅缓解,真多段时由 adapter 报 issue。
-3. **R/L/UL 含义未经 library 团队确认**(见 D13);影响仅注释/文档,不影响算法。
-4. **adaptive K 是启发式参数**:默认每相关行/侧 K=2;只影响扩窗速度与 checker
-   call 分布,不改变 accept gate。若真设计的跨行耦合需要更大步长,通过 config
-   调整,不在算法里 hard-code 工艺值。
-
-## 7. 下一步(优先级序)
-
-0. **构建与真实 E2E**:把 `PlacementView.cpp`、`InfrastructurePlacementView.cpp` 和 fillerRepair/adapter sources 接入 dpl2 build;本轮按要求未编译。
-1. **checker candidate catalog**:`initFromUDM` 当前仍主要从 placed masters 建表;必须确保 `fillerSetting` 中未实例化 replacement master 也进入 checker。
-2. **row/Grid 复用**:真实 macro/blockage cutout 应由 infrastructure Grid/legal segments 提供给 immutable view。
-3. **per-band metadata 与产品输出决策**:等待真实 API 与用户选择。
-
-## 8. 工作方式(硬约束)
-
-- 分支:`claude/wizardly-carson-secahu`(fork RamboJHB/OpenROAD),只在此分支
-  开发/commit/push。
-- commit:小步单主题,`fillerRepair:` / `drc:` / `docs:` 前缀,message 讲清因果。
-- 语义改动顺序:spec → 代码+测试 → HandOff/README 状态 → 本文决策日志。
-- 每次改动 `./run_tests.sh` 必须全绿;合入前跑一次 ASan。
-- fake 与既有 80+10 测试不许删、不许改语义(测试暴露 bug 走 TestPlan §4 流程;经用户授权的瘦身除外,须同步 spec 与本文)。
-- 修改 `drc/ImplantLayerChecker.{h,cpp}`/helper 时保留现有代码(删除 → 注释),
-  新类型 additive 扩展。
+- Keep planner algorithms unchanged unless a production-chain regression
+  demonstrates a planner defect.
+- Checker algorithm changes remain checker-RD-owned. Record any checker source
+  compatibility edit in `CHECKER_REPAIR_CONTRACT.md`.
+- Do not restore deleted fakes/stubs or add another production abstraction.
+- Run planner and E2E normal + ASan before commit.
+- Keep changes in `src/dpl2/` and the authoritative spec unless scope expands.

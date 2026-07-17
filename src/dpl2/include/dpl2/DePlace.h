@@ -60,12 +60,12 @@ namespace dpl2 {
 
 class Grid;
 class Node;
-class Pixel;
+struct Pixel;
 class PixelPt;
-class GridPt;
-class GridRect;
-class DbuPt;
-class DbuRect;
+struct GridPt;
+struct GridRect;
+struct DbuPt;
+struct DbuRect;
 class Padding;
 class Network;
 class TestDePlaceCmd;

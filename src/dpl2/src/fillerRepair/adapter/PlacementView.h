@@ -148,8 +148,6 @@ class PlacementView final : public fillerRepair::PlacementView,
   FillerCellRecord toFillerCellRecord(const FillerChange& change) const;
   Region snapshotGuard(const TargetPlace& target) const;
 
-  eUNL::PhysDesMgr* des_mgr_ = nullptr;
-  Grid* grid_ = nullptr;
   Network* network_ = nullptr;
   const ipl::ImplantLayerChecker* checker_ = nullptr;
   Config config_;

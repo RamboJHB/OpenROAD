@@ -1,123 +1,77 @@
-# fillerRepair — Filler VT Overlay Repair Planner
+# fillerRepair — filler VT overlay repair planner
 
-Implements the pure repair planner from `docs/filler_vt_overlay_repair_spec.md`.
-Development is confined to `src/dpl2`; the checker integrates into the
-infrastructure side. The real checker overlay API has landed, and the UDM/infra
-integration layer is written under `adapter/` (copy-paste-ready for the
-integration environment — NOT compiled in this repo; see `adapter/README.md`
-for wiring and the `[VERIFY-UDM]` checklist). The locally-built planner still
-runs end-to-end against the fakes in `fake/`.
+Updated: 2026-07-18.
 
-> **V2.1 rollout (spec §0), three batches:** **batch 1 (OracleGate correctness,
-> #1/#2/#3/#4/#5/#10) DONE.** **Batch 2: #6/#7/#8/#11 DONE**
-> (unfixable→warning→removed in the 2026-07-15 slimming, dropped L2, adaptive-L1, dropped final check).
-> **Batch 3: #9 filler-domain enumeration DONE** (ranker
-> returns `FillerDomain`s; caps count fillers); **#12 precheck upstreaming
-> pending** (goes with the adapter). 87 planner tests green. Plan and pointers in
-> `src/dpl2/HandOff.md`. Dependency topology (checker calls engine, engine
-> calls checker through its own abstract oracle — no cycle) is pinned in spec
-> §3.3.
->
-> **Checker status (contract FINAL, 2026-07-13):** the user pinned the overlay
-> contract to **list-only, no filtering, no dedup** — `checkPlaceWithOverlays`
-> returns every guard-clipped violation per candidate (the blocking filter and
-> its helpers are deleted; the raw/blocking split is gone — the one API IS
-> raw). Duplicates (per band/direction) are allowed but deterministic; the
-> engine's one-to-one multiset matching tolerates them as long as the original
-> snapshot and the baseline come from this same API. The 2026-07-13 RD drop
-> carries the inline UDM extraction; the scan-correctness fixes and the
-> `DPL2_FAKE_UDM` boundary are re-applied on top (see
-> `drc/CHECKER_REPAIR_CONTRACT.md`). Standalone harness: 9 cases green under
-> `-Werror` and ASan. Locally the engine stays on the fakes.
-> **Adapter (2026-07-14, AGENTS D23):** the infra drop landed and the full
-> UDM/infra adapter stack is written under `adapter/` — it compiles only in
-> the integration environment; next step is iterating on the user's
-> compile/debug feedback against the `[VERIFY-UDM]` checklist.
+This directory contains the deterministic, non-mutating, swap-only V2.1
+planner. After an ECO proposes a new standard-cell master, it searches
+same-position/same-size filler replacements and asks the implant checker to
+validate atomic overlays. It never implements DRC or commits the database.
 
-> **Infrastructure alignment (2026-07-15):** candidate lookup and coverage
-> precheck now come from one `PlacementView` snapshot. Production placement is
-> based on infrastructure `Network/Node/Master`; candidate ids come only from
-> `fillerSetting`; checker/planner ids use stable LeafCellID/LibCellID indexes.
-> `SwapGenerator` is merged into `Swap`, and `BaseTypes` into `Types`. The old
-> replay bridge/provider/precheck adapters are deleted. Per request, this
-> refactor was not compiled and UDM-dependent tests were not run.
+## Production chain
 
-## Layout
-
-| Path | Content |
-|---|---|
-| `Types.h` | Planner ids/intervals, candidate query types, checker wire types and planner result/coverage types |
-| `PlacementView.h/.cpp` | Single read-only boundary for placement, `fillerSetting` candidate filtering and full-utility coverage precheck |
-| `CheckerApi.h` | Abstract `ImplantOverlayChecker` (spec §5.2 protocol) |
-| `Swap.h/.cpp` | Atomic swap, validation, canonical key and candidate-to-swap generation |
-| `Signature.h/.cpp` | Violation normalization, pinned signature matching, change-relatedness (spec §6.2) |
-| `Window.h/.cpp` | L0 builder + adaptive-L1: grow K contiguous fillers per blocking side/relevant row, coupled rows ±1, fixed-boundary and unchanged-blocking cutoffs; guardRegion two-cell ring (spec §6.2/6.3) |
-| `Ranker.h/.cpp` | Ranks fillers (direct/bridge/width/position) and returns `FillerDomain`s — each filler's full master domain, VT-preference ordered with the third VT demoted within the domain; realizes anchor-follow (spec §6.6, V2.1 #9) |
-| `SubsetSearch.h/.cpp` | Enumerates filler combinations × per-domain assignments in pinned order; member caps count fillers; complete-space rule (spec §6.7, V2.1 #9) |
-| `OracleGate.h/.cpp` | Baseline + batched checker calls, protocol validation, result cache, baseline-delta gate (spec §6.8). V2.1 batch-1 target: two-way self-consistency, BaselineMismatch gate, multiset delta, per-violation ruleDistance (#1–#5) |
-| `FillerRepairEngine.h/.cpp` | Planner entry + pipeline skeleton (spec §3.2) |
-| `fake/FakeDesign.h` | In-memory `PlacementView` with fluent builders |
-| `fake/FakeUdmCandidateProvider.h/.cpp` | UDM-style test master catalog (layers named `FAMILY_POLARITY`, band shapes) with the checker's derivation rules — VT = implant-layer family, never the master name; `describeMasters(ids)` -> width/VT per id; registers its catalog into `FakeDesign`; ships the appendix-A 12-master library |
-| `fake/FakeImplantChecker.h/.cpp` | Rule-parameterized oracle locking the request/result protocol |
-| `adapter/PlacementView.h/.cpp` | THE unified infrastructure boundary (AGENTS D28): planner view + direct ipl-checker oracle + `repair()` entry in one class; aligned to the FINAL checker (FillerCellRecord wire, Node/Master::getId() id spaces, blocking contract); locally built and smoke-tested via `src/dpl2/test/build_all.sh` |
-| `test/` | Unit tests + runner |
-
-## Conventions
-
-- Base ids (`DbCoord`, `InstanceId`, `MasterId`, `RowId`, `LayerId`) and
-  `XInterval` and candidate wire types are owned by `fillerRepair/Types.h`. The checker owns its
-  distinct `ipl::` types; the adapter must convert explicitly. The checker
-  harness includes both headers in one translation unit to prevent the old ODR
-  collision from returning. The now-unreferenced `drc/ImplantBaseTypes.h` is
-  retained until checker RD/build integration confirms it can be removed.
-  `PlacedInstance` / `MasterInfo` remain adapter-side projections of the
-  infrastructure `Node` / `Master` classes.
-- The operation vocabulary is **swap** (this stage) and **rewrite** (future).
-  There is no generic "Move" abstraction.
-
-- All x coordinates are DBU; intervals are half-open `[xl, xh)`; `Region` row
-  ranges are inclusive. The wire-level `Rect` conversion is an adapter concern.
-- The planner is deterministic and never mutates the design; commit belongs to
-  the infrastructure.
-- The fake checker's MW/MS model is a deliberate simplification. Planner code
-  must not depend on its details — that is the checker-as-oracle boundary.
-- Debug prints (`RepairConfig::verbose`, `[fr][stage] ...`) state cause →
-  effect with the concrete data involved, so a transcript reads as the
-  engine's decision chain.
-
-## Build & test
-
-Standalone (STL only) until dpl2 joins the CMake build (spec §11 TODO 12):
-
-```sh
-test/run_tests.sh              # planner unit suite (fakes), quiet
-FR_VERBOSE=1 test/run_tests.sh # with the [fr] debug transcript
-SANITIZE=address test/run_tests.sh
-
-../../test/build_all.sh        # tier-1: real infra + FINAL checker + unified
-                               # boundary against the fake UDM, E2E smoke
-SANITIZE=address ../../test/build_all.sh
+```text
+PhysDesMgr + leaf IDs + fillerSetting + target new master
+                         |
+                RepairInfrastructure
+                         |
+                  Network + Grid
+                         |
+             adapter::PlacementView
+                 |               |
+           planner view    final checker oracle
+                 \               /
+                 FillerRepairEngine
+                         |
+                ipl::FillerChanges
 ```
 
-## Status vs spec §11 TODO
+The final E2E uses fake UDM only to provide tech/library/placement data. Every
+component below that data boundary is production code.
 
-TODO 1–11 and all V2.1 engine revisions are implemented for the current
-single-VT planner projection (87 deterministic tests green).
-TODO 12 (real checker/infra adapter + CMake) is pending. The spec is at **V2.1**;
-folding the 12 revisions into this code is tracked as three batches in
-`src/dpl2/HandOff.md`.
+## Main files
 
-| # | Item | Status |
-|---|---|---|
-| 1 | Planner API, `Swap` struct, overlay cache key | done |
-| 2 | Fake checker + fake candidate provider, protocol locked by tests | done |
-| 3 | 100% utility pre-check with fatal short-circuit | done (V2.1 #12: move authority to infra cache) |
-| 4 | Violation normalization + signature matching | done |
-| 5 | Window builder + guardRegion | done (V2.1 #6/#7/#8: drop L2, adaptive-L1; the unfixable hint was later removed as noise) |
-| 6 | Swap generator (atomic swaps only) | done |
-| 7 | Ranker (filler domains, third-VT demotion in-domain) | done incl. P/N per-band majority weighting (same-row 2 votes, cross-row 1; family is uniform per master by checker construction, so polarity is the only per-band degree of freedom -- carried as MasterInfo.bottomBandPolarity and enforced by candidate filtering) |
-| 8 | Subset searcher (filler combos × domain assignments) | done; V2.1 #9 applied (caps count fillers); exact `space == budget` completeness fixed |
-| 9 | Oracle gate (batch, cache, baseline-delta, protocol validation) | done; V2.1 #1–#5 correctness fixes applied (batch 1) |
-| 10 | Window escalation + diagnostics | done; V2.1 #10 applied; #11 final check dropped (batch 2) |
-| 11 | Full spec test set | done for current fake-checker scope (79 planner + 8 real-checker-core tests) |
-| 12 | Real checker adapter + CMake integration | pending |
+| Path | Purpose |
+|---|---|
+| `Types.h` | planner IDs, geometry, changes, diagnostics and results |
+| `PlacementView.h/.cpp` | abstract placement view and utility coverage check |
+| `CheckerApi.h` | planner-owned checker oracle interface |
+| `Swap.h/.cpp` | atomic filler swap generation/validation |
+| `Signature.h/.cpp` | violation normalization, matching and relatedness |
+| `Window.h/.cpp` | L0/adaptive-L1 windows and guards |
+| `Ranker.h/.cpp` | deterministic filler/domain ranking |
+| `SubsetSearch.h/.cpp` | filler combinations × domain assignments |
+| `OracleGate.h/.cpp` | batch/cache/baseline-delta acceptance |
+| `FillerRepairEngine.h/.cpp` | repair pipeline |
+| `adapter/PlacementView.h/.cpp` | production view/oracle/repair boundary |
+| `fake/` | private standalone-unit-test doubles; never linked into E2E |
+
+Production infrastructure construction is in
+`../infrastructure/RepairInfrastructure.{h,cpp}`.
+
+## Data contract
+
+- physical placement and precheck inputs: `PhysDesMgr`;
+- candidate allow-list: `fillerSetting::getFillerMasters()`;
+- topology and checker IDs: production Network;
+- VT/polarity: physical implant shapes matched to checker layers;
+- legality: final checker;
+- output: `ipl::FillerChanges` / `FillerCellRecord`.
+
+All placed masters, the proposed target master and all configured filler
+masters are registered before checker construction.
+
+## Verification
+
+```sh
+# planner unit tests
+test/run_tests.sh
+SANITIZE=address test/run_tests.sh
+
+# from src/dpl2
+test/build_all.sh
+SANITIZE=address test/build_all.sh
+```
+
+The E2E also has `src/dpl2/test/CMakeLists.txt` and a CTest registration.
+Current result: planner 87/87 normal+ASan; fake-UDM-only E2E normal+ASan;
+all production-chain sources compile with `-Wall -Wextra -Werror`.

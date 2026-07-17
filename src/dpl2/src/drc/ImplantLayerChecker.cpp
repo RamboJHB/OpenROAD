@@ -512,6 +512,7 @@ void ImplantLayerChecker::insertIntervals(const PlacedIntervals& intervals)
 void ImplantLayerChecker::insertFootprint(const Node* node, RowId rowId, Dbu x,
     PhysOrientation orientation)
 {
+    (void) orientation;
     const MasterId masterId = node->getMaster()->getId();
     const InstanceId instanceId = node->getId();
     if (masterId < 0 ||
@@ -524,7 +525,6 @@ void ImplantLayerChecker::insertFootprint(const Node* node, RowId rowId, Dbu x,
         return;
     }
 
-    const ColId colId = siteWidth_ > 0 ? static_cast<ColId>(x / siteWidth_) : 0;
     const int rowSpan = std::max<Dbu>(
         1, (m.height + rowHeight_ - 1) / rowHeight_);
     const Footprint footprint{
@@ -873,6 +873,7 @@ bool ImplantLayerChecker::check(const Node* node,
                                 GridY y,
                                 const PhysOrientation& orient) const
 {
+    (void) y;
     if (!node || !network_ || !grid_) {
         return false;
     }
@@ -3625,6 +3626,7 @@ void ImplantLayerChecker::printStats(std::ostream& os) const
             case RuleSource::Spacing:     os << "SPACING"; break;
             case RuleSource::Lef58Width:  os << "LEF58_WIDTH"; break;
             case RuleSource::Lef58Spacing: os << "LEF58_SPACING"; break;
+            case RuleSource::Count:       os << "COUNT"; break;
         }
         os << " primaryLayer=" << rule.primaryLayer
            << " minValue=" << rule.minValue;

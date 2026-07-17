@@ -2,8 +2,8 @@
 // implementations are in-memory data models tests can populate).
 //
 // Scope: everything the repair chain compiles against --
-// infrastructure (network/Grid/architecture/Padding/fillerSetting), the
-// final ipl::ImplantLayerChecker (+Helper), and fillerRepair/adapter.
+// infrastructure (Network/Grid/RepairInfrastructure/fillerSetting), the
+// final ipl::ImplantLayerChecker, and fillerRepair/adapter.
 // NOT a behavioral UDM: only the accessors those files call are modeled.
 //
 // Data flow for tests: build a fake_udm::DesignDb (tech layers, lib cells,
@@ -58,6 +58,10 @@ class UvDist
   {
     return UvDist(static_cast<int64_t>(a.value_) - b.value_);
   }
+  friend UvDist operator-(UvDist value)
+  {
+    return UvDist(-static_cast<int64_t>(value.value_));
+  }
 
  private:
   int32_t value_ = 0;
@@ -92,6 +96,13 @@ class Rect
   void setYH(UvDist v) { _yh = v; }
   UvDist dx() const { return _xh - _xl; }
   UvDist dy() const { return _yh - _yl; }
+  void move(UvDist dx, UvDist dy)
+  {
+    _xl = _xl + dx;
+    _xh = _xh + dx;
+    _yl = _yl + dy;
+    _yh = _yh + dy;
+  }
   Point2D center() const
   {
     return Point2D(
@@ -252,6 +263,7 @@ class TechShape
   TechShape(Type type, const eUTL::Rect& rect) : type_(type), rect_(rect) {}
   Type getType() const { return type_; }
   const eUTL::Rect& getRect() const { return rect_; }
+  eUTL::Rect getBbox(bool) const { return rect_; }
 
   Type type_ = RECT;
   eUTL::Rect rect_;
@@ -260,9 +272,20 @@ class TechShape
 class TechLayer
 {
  public:
+  class RoutingIndex
+  {
+   public:
+    explicit RoutingIndex(int value = -1) : value_(value) {}
+    int getNumValue() const { return value_; }
+
+   private:
+    int value_ = -1;
+  };
+
   bool isImplant() const { return is_implant_; }
   bool isRouting() const { return is_routing_; }
-  int getRoutingIdx() const { return routing_idx_; }
+  bool isOverlap() const { return is_overlap_; }
+  RoutingIndex getRoutingIdx() const { return RoutingIndex(routing_idx_); }
   const std::string& getName() const { return name_; }
   TechLayerID getId() const
   {
@@ -274,6 +297,7 @@ class TechLayer
   std::string name_;
   bool is_implant_ = false;
   bool is_routing_ = false;
+  bool is_overlap_ = false;
   int routing_idx_ = -1;
   int rel_id_ = -1;
   eUTL::UvDist width_;
@@ -475,6 +499,8 @@ class PhysLibCell
   const TechSite* getTechSite() const { return site_; }
   const std::vector<PhysLibPort*>& getPorts() const { return ports_; }
   const std::vector<MacroEdge>& getEdgeTypeVec() const { return edges_; }
+  bool hasSitePattern() const { return !site_patterns_.empty(); }
+  const std::vector<int>& getSitePatterns() const { return site_patterns_; }
 
   eUTL::UvDist width_;
   eUTL::UvDist height_;
@@ -484,6 +510,7 @@ class PhysLibCell
   const TechSite* site_ = nullptr;
   std::vector<PhysLibPort*> ports_;
   std::vector<MacroEdge> edges_;
+  std::vector<int> site_patterns_;
 };
 
 class PhysLib
@@ -577,6 +604,8 @@ class PhysRow
   eUTL::PhysOrientation orient_ = eUTL::PhysOrientationE::R0;
 };
 
+class PhysBlockage;
+
 class PhysDesMgr
 {
  public:
@@ -586,6 +615,14 @@ class PhysDesMgr
   {
     const auto it = cells_.find(cellId);
     return it != cells_.end() ? PhysCell(&it->second) : PhysCell();
+  }
+  const std::deque<PhysBlockage>& getPhysBlockageIter() const;
+
+  template <typename Arena, typename Visitor>
+  void iterateAllPhysNets(Arena&, Visitor&, bool, bool) const
+  {
+    // The fake-UDM fixture has no routed nets.  This is data, not a Grid
+    // behavioral substitute: production Grid still executes its real scan.
   }
 
   // --- test-population helpers ---
@@ -629,9 +666,6 @@ class PhysDesMgr
   std::map<LeafCellID, PhysCellData> cells_;
 };
 
-class PhysBlockage
-{
-};
 class PhysCellImpl
 {
 };
@@ -641,12 +675,78 @@ class PhysPin
 class PhysWire
 {
 };
-class PhysSWire
+enum class ShapeUsageE
 {
+  SIGNAL,
+  DRCFILL
 };
+
+struct PhysNetID : fake_udm::IdBase
+{
+  using fake_udm::IdBase::IdBase;
+};
+
+enum class UnlIterStatus
+{
+  CONTINUE,
+  STOP
+};
+
+template <typename Object, typename Id>
+class UnlBaseVisitor
+{
+ public:
+  virtual ~UnlBaseVisitor() = default;
+  virtual bool filter(const Object&, const Id&) = 0;
+  virtual UnlIterStatus visit(const Object&, const Id&) = 0;
+};
+
 class PhysShape
 {
+ public:
+  bool isVia() const { return is_via_; }
+  ShapeUsageE getUsage() const { return usage_; }
+  const eUTL::Rect& getRect() const { return rect_; }
+  eLIB::TechLayerID getLayer() const { return layer_; }
+
+  bool is_via_ = false;
+  ShapeUsageE usage_ = ShapeUsageE::SIGNAL;
+  eUTL::Rect rect_;
+  eLIB::TechLayerID layer_;
 };
+
+class PhysSWire
+{
+ public:
+  const std::vector<PhysShape>& getShapes() const { return shapes_; }
+  std::vector<PhysShape> shapes_;
+};
+
+class PhysNet
+{
+ public:
+  bool hasSWire() const { return has_swire_; }
+  const PhysSWire& getSWire() const { return swire_; }
+
+  bool has_swire_ = false;
+  PhysSWire swire_;
+};
+
+class PhysBlockage
+{
+ public:
+  bool isSoft() const { return is_soft_; }
+  const std::vector<eLIB::TechShape>& getShapes() const { return shapes_; }
+
+  bool is_soft_ = false;
+  std::vector<eLIB::TechShape> shapes_;
+};
+
+inline const std::deque<PhysBlockage>& PhysDesMgr::getPhysBlockageIter() const
+{
+  static const std::deque<PhysBlockage> kNoBlockages;
+  return kNoBlockages;
+}
 class HierManager
 {
 };

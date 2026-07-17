@@ -8,10 +8,18 @@
 #include "infrastructure/Objects.h"
 #include "infrastructure/architecture.h"
 
+#if __has_include("dpl2/PlacementDRC.h")
+#include "dpl2/PlacementDRC.h"
+#define DPL2_HAS_PLACEMENT_DRC 1
+#else
+#define DPL2_HAS_PLACEMENT_DRC 0
+#endif
+
 namespace dpl2 {
 
 namespace {
 
+#if DPL2_HAS_PLACEMENT_DRC
 std::vector<Rect> difference(const Rect& parent_segment,
                              const std::vector<Rect>& segs)
 {
@@ -103,6 +111,7 @@ Rect getBoundarySegment(const Rect& bbox, const eLIB::MacroEdgeDir dir)
   }
   return segment;
 }
+#endif
 
 std::pair<int, int> getMasterPwrs(const eLIB::PhysLibCell& master)
 {
@@ -170,8 +179,7 @@ const Master* Network::getMaster(LibCellID db_master) const
 }
 
 Master* Network::addMaster(const PhysLibCell& db_master,
-                           const Grid* grid,
-                           const PlacementDRC* drc_engine)
+                           const Grid* grid)
 {
   LibCellID masterId = db_master.getLibCellId();
   const auto it = master_to_idx_.find(masterId);
@@ -195,6 +203,25 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   master->setTopPowerType(master_pwrs.first);
   master->setBottomPowerType(master_pwrs.second);
   master->clearEdges();  // [fillerRepair-fix] was clearEdgeS
+  return master;
+}
+
+Master* Network::addMaster(const PhysLibCell& db_master,
+                           const Grid* grid,
+                           const PlacementDRC* drc_engine)
+{
+  const auto existing = master_to_idx_.find(db_master.getLibCellId());
+  if (existing != master_to_idx_.end()) {
+    return masters_[existing->second].get();
+  }
+  Master* master = addMaster(db_master, grid);
+#if !DPL2_HAS_PLACEMENT_DRC
+  (void) drc_engine;
+  return master;
+#else
+  if (drc_engine == nullptr) {
+    return master;
+  }
   if (!drc_engine->hasCellEdgeSpacingTable()) {
     return master;
   }
@@ -202,6 +229,7 @@ Master* Network::addMaster(const PhysLibCell& db_master,
     return master;
   }
 
+  Rect bbox(UvDist(0), UvDist(0), db_master.getWidth(), db_master.getHeight());
   std::map<eLIB::MacroEdgeDir, std::vector<Rect>> typed_segs;
   int num_rows = grid->gridHeight(db_master).v;
 
@@ -254,6 +282,7 @@ Master* Network::addMaster(const PhysLibCell& db_master,
     }
   }
   return master;
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////

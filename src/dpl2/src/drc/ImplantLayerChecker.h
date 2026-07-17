@@ -92,7 +92,8 @@ enum class RuleDirection {Any, Horizontal, Vertical};
 enum class Relationship {IntraRow, InterRow, Count};
 enum class OutcomeStatus {Satisfied, Violated, NotApplicable, Skipped};
 
-constexpr std::array<char*, (unsigned)Relationship::Count> kRelationshipNames{"intra_row",    "inter_row",};
+constexpr std::array<const char*, (unsigned)Relationship::Count>
+    kRelationshipNames{"intra_row", "inter_row"};
 inline std::string toString(Relationship rel) {return std::string(kRelationshipNames[(unsigned)rel]);}
 
 constexpr std::array<const char*, (unsigned)RuleSource::Count> kRuleSourceNames{"WIDTH", "SPACING", "LEF58_WIDTH", "LEF58_SPACING"};

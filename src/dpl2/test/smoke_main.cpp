@@ -9,20 +9,16 @@
 // Swapping ONE adjacent VTL filler to the VTH filler master heals it
 // (either filler works; the engine picks deterministically).
 
-#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <iterator>
-#include <memory>
 #include <string>
+#include <vector>
 
 #include "drc/ImplantLayerChecker.h"
-#include "drc/ImplantLayerCheckerHelper.h"
 #include "fillerRepair/adapter/PlacementView.h"
-#include "infrastructure/Grid.h"
-#include "infrastructure/Objects.h"
+#include "infrastructure/RepairInfrastructure.h"
 #include "infrastructure/fillerSetting.h"
-#include "infrastructure/network.h"
 
 namespace {
 
@@ -131,71 +127,57 @@ int main()
   }
   db.activate();
 
-  // --- infrastructure: Network (ours) + Grid (via the RD helper, which is a
-  // friend of Grid and populates its row maps; its internal network is
-  // unused here) -------------------------------------------------------------
-  dpl2::Network network;
-  for (size_t i = 0; i < std::size(kMasters); ++i) {
-    auto master = std::make_unique<dpl2::Master>();
-    master->setId(static_cast<int>(i));  // MasterId space = Master::getId()
-    master->setDbMaster(eLIB::LibCellID(0, kMasters[i].libIndex));
-    master->setPhysLibCell(
-        &db.design.lib_acc_.getPhysLibCell(kMasters[i].libIndex));
-    network.addMaster(std::move(master));
-  }
-  {
-    int nodeId = 0;
-    for (const Placement& p : kPlacements) {
-      const auto specIt =
-          std::find_if(std::begin(kMasters), std::end(kMasters),
-                       [&](const MasterSpec& m) {
-                         return m.libIndex == p.libIndex;
-                       });
-      auto node = std::make_unique<dpl2::Node>();
-      node->setId(nodeId++);
-      node->setDbInst(eUNL::LeafCellID(0, p.cellIndex));
-      node->setMaster(network.getMaster(
-          static_cast<int>(std::distance(std::begin(kMasters), specIt))));
-      node->setLeft(dpl2::DbuX{p.x});
-      node->setBottom(dpl2::DbuY{p.row * kRowHeight});
-      node->setWidth(dpl2::DbuX{specIt->width});
-      node->setHeight(dpl2::DbuY{kRowHeight});
-      node->setOrient(p.row % 2 == 0 ? eUTL::PhysOrientationE::MX
-                                     : eUTL::PhysOrientationE::R0);
-      node->setPlaced(true);
-      node->setType(specIt->isFiller ? dpl2::Node::FILLER : dpl2::Node::CELL);
-      network.addNode(std::move(node));
-    }
-  }
-
-  dpl2::ipl::ImplantInput gridInput;
-  gridInput.siteWidth = kSiteWidth;
-  gridInput.rowHeight = kRowHeight;
-  gridInput.rows = {0, 1, 2};
-  dpl2::ipl::PlacedInst sizing;
-  sizing.colId = kRowSites - 1;
-  gridInput.placedInsts.push_back(sizing);
-  dpl2::ipl::ImplantLayerCheckerHelper gridHelper;
-  gridHelper.initialize(gridInput);
-
-  // --- the real checker: constructor pulls the Session design and runs the
-  // full init(desMgr) UDM extraction over the fake data ----------------------
-  dpl2::ipl::ImplantLayerChecker checker(gridHelper.getGrid(), &network);
-
   // --- ECO filler allow list (the candidate universe, AGENTS D23) -----------
   dpl2::fillerSetting fillerSetting(&db.design);
   fillerSetting.addFillerCell("FL2 FH2 FS2");
 
+  // --- production infrastructure import ------------------------------------
+  // The test provides only UDM data + cell handles.  Network masters/nodes,
+  // Grid geometry and occupancy are all built by production infrastructure.
+  std::vector<eUNL::LeafCellID> leafCells;
+  leafCells.reserve(std::size(kPlacements));
+  for (const Placement& p : kPlacements) {
+    leafCells.emplace_back(0, p.cellIndex);
+  }
+  dpl2::RepairInfrastructure infrastructure;
+  const bool infraReady = infrastructure.build(
+      db.design.getPhysDesMgr(), leafCells, fillerSetting,
+      db.design.lib_acc_.getPhysLibCell(2));  // target new master TH4
+  for (const std::string& diag : infrastructure.diagnostics()) {
+    std::printf("[smoke][infra] %s\n", diag.c_str());
+  }
+  expect(infraReady, "production infrastructure snapshot is ready");
+  expect(infrastructure.network()->getNodes().size() == std::size(kPlacements),
+         "Network nodes were imported from PhysDesMgr");
+  expect(infrastructure.network()->getMasters().size() == std::size(kMasters),
+         "placed, target and getFillerMasters masters were registered");
+
+  // --- the real checker: constructor pulls the Session design and runs the
+  // full init(desMgr) UDM extraction over the fake data ----------------------
+  dpl2::ipl::ImplantLayerChecker checker(infrastructure.grid(),
+                                         infrastructure.network());
+
   // --- unified boundary + repair --------------------------------------------
   PlacementView::Config config;
   config.verbose = std::getenv("FR_VERBOSE") != nullptr;
-  PlacementView view(db.design.getPhysDesMgr(), gridHelper.getGrid(), &network,
-                     &checker, &fillerSetting, config);
+  PlacementView view(db.design.getPhysDesMgr(), infrastructure.grid(),
+                     infrastructure.network(), &checker, &fillerSetting,
+                     config);
   for (const auto& diag : view.setupDiagnostics()) {
     std::printf("[smoke][setup] %s: %s\n", diag.code.c_str(),
                 diag.message.c_str());
   }
   expect(view.isReady(), "unified PlacementView is ready");
+  const int targetNodeId =
+      infrastructure.network()->getNodeId(eUNL::LeafCellID(0, 112));
+  const auto* targetInstance = view.instance(targetNodeId);
+  expect(targetInstance != nullptr && targetInstance->rowId == 1
+             && targetInstance->x == 8,
+         "PlacementView precheck geometry comes from PhysDesMgr");
+  const std::vector<dpl2::fillerRepair::MasterId>& candidates =
+      view.fillerMasterIds();
+  expect(candidates == std::vector<dpl2::fillerRepair::MasterId>({3, 4, 5}),
+         "candidate universe comes from getFillerMasters");
 
   const auto runRepair = [&](const char* label) -> RepairOutcome {
     RepairOutcome outcome =

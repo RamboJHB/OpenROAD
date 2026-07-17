@@ -2,6 +2,7 @@
 #include "Grid.h"
 
 #include <phys/physNet.hh>
+#include <tbb/task_arena.h>
 
 #include "boost/polygon/polygon.hpp"  // NOLINT(misc-include-cleaner) Boost polygon
 #include "boost/polygon/polygon_90_set_data.hpp"
@@ -215,12 +216,12 @@ void Grid::markBlocked(PhysDesMgr* desMgr)
         : addBlockedLayers(a), desMgr(d) {}
 
     bool filter(const eUNL::PhysNet& net,
-        const eUNL::PhysNetID& netId) override {
+        const eUNL::PhysNetID&) override {
       return net.hasSWire();
     }
 
     eUNL::UnlIterStatus visit(const eUNL::PhysNet& net,
-        const eUNL::PhysNetID& netId) override {
+        const eUNL::PhysNetID&) override {
       const eUNL::PhysSWire& swire = net.getSWire();
       for (const eUNL::PhysShape& sbox : swire.getShapes()) {
         if (sbox.isVia() || sbox.getUsage() == eUNL::ShapeUsageE::DRCFILL) {
@@ -291,7 +292,7 @@ Pixel* Grid::gridPixel(GridX grid_x, GridY grid_y) const
 void Grid::visitDbRows(const PhysDesMgr* desMgr,
                 const std::function<void(const PhysRow&)>& func) const
 {
-  for (const auto& row : desMgr_->getPhysRowIter()) {
+  for (const auto& row : desMgr->getPhysRowIter()) {
     if (row.getSite().getIsPad() == false) {
       func(row);
     }
@@ -518,7 +519,7 @@ void Grid::visitCellPixels(
   bool have_obstructions = false;
   const Rect core = getCore();
 
-  for (const PhysLibObs& lib_obs : obstructions) {
+  for (const eLIB::PhysLibObs& lib_obs : obstructions) {
     const auto& tech_obs = lib_obs.getShapes(inst.getOrient());
     for (const auto& obs : tech_obs) {
       if (desMgr_->getTopTech().getTechLayer(obs.first).isOverlap()) {
@@ -561,7 +562,7 @@ void Grid::visitCellPixels(
   }
 }
 
-void Grid::visitCellBoundaryPixels(
+void Grid::visitCellBoundaries(
     Node& cell,
     const std::function<
         void(Pixel* pixel, int edgeDirection, GridX x, GridY y)>& visitor)
@@ -599,7 +600,7 @@ void Grid::visitCellBoundaryPixels(
   bool have_obstructions = false;
   const Rect core = getCore();
 
-  for (const PhysLibObs& lib_obs : obstructions) {
+  for (const eLIB::PhysLibObs& lib_obs : obstructions) {
     const auto& layer_obs = lib_obs.getShapes(inst.getOrient());
     for (const auto& obs : layer_obs) {
       if (desMgr_->getTopTech().getTechLayer(obs.first).isOverlap()) {

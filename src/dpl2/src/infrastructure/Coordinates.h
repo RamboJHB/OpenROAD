@@ -227,17 +227,17 @@ inline DbuY gridToDbu(GridY y, DbuY scale)
     return DbuY{y.v * scale.v};
 }
 
-static int divRound(const int dividend, const int divisor)
+inline int divRound(const int dividend, const int divisor)
 {
     return round(static_cast<double>(dividend) / divisor);
 }
 
-static int divCeil(const int dividend, const int divisor)
+inline int divCeil(const int dividend, const int divisor)
 {
     return ceil(static_cast<double>(dividend) / divisor);
 }
 
-static int divFloor(const int dividend, const int divisor)
+inline int divFloor(const int dividend, const int divisor)
 {
     return dividend / divisor;
 }

@@ -7,12 +7,16 @@
 // request (all fillerChanges together), re-checks in target-local scope, and
 // collects violations at least inside guardRegion. It never mutates the DB.
 //
-// Protocol the planner relies on (enforced by tests against the fake, and
-// required from the real checker):
+// Protocol the planner relies on. The production adapter synthesizes this
+// protocol over the final checker's ordered-result API:
 //  - every CheckResult echoes its request's requestId;
 //  - correctness must not depend on batch result order;
 //  - one invalid request only affects its own CheckResult;
 //  - status != Checked always carries diagnostics.
+//
+// These request ids/status values are planner-internal. The final checker has
+// neither field; adapter::PlacementView correlates by result order and maps
+// request diagnostics to InvalidOverlay/CheckerError.
 
 #pragma once
 

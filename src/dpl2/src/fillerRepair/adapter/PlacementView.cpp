@@ -81,17 +81,16 @@ PlacementView::PlacementView(eUNL::PhysDesMgr* desMgr,
                              const ipl::ImplantLayerChecker* checker,
                              const dpl2::fillerSetting* fillerSetting,
                              Config config)
-    : des_mgr_(desMgr),
-      grid_(grid),
-      network_(network),
+    : network_(network),
       checker_(checker),
       config_(config),
       log_(config.verbose)
 {
   config_.repair.verbose = config_.repair.verbose || config_.verbose;
-  if (desMgr == nullptr || network == nullptr || checker == nullptr) {
+  if (desMgr == nullptr || grid == nullptr || network == nullptr
+      || checker == nullptr) {
     addProblem(Severity::Fatal, "MissingDependency",
-               "PlacementView needs desMgr, network and checker");
+               "PlacementView needs desMgr, grid, network and checker");
     return;
   }
 
