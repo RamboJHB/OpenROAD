@@ -163,25 +163,27 @@ Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
 ```sh
 src/dpl2/src/fillerRepair/test/run_tests.sh
 SANITIZE=address src/dpl2/src/fillerRepair/test/run_tests.sh
-src/dpl2/test/build_all.sh
-SANITIZE=address src/dpl2/test/build_all.sh
+src/dpl2/src/fillerRepair/test/run_e2e_tests.sh
+SANITIZE=address src/dpl2/src/fillerRepair/test/run_e2e_tests.sh
 
 cmake -S src/dpl2/test -B src/dpl2/test/build-cmake
 cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-All 81 planner cases and the 6 production E2E cases are GoogleTests. The E2E
-uses fake UDM only as test data and links supplied Grid/Network,
+All 81 planner cases and 33 production E2E cases are GoogleTests. The portable
+E2E source/runner and test-only fake UDM include tree live in
+`src/dpl2/src/fillerRepair/test`, and
+`sources.cmake` exports `DPL2_FILLER_REPAIR_E2E_TEST_SOURCE` for destination
+CMake wiring. It uses fake UDM only as data and links supplied Grid/Network,
 RepairInfrastructure, final checker, FillerRepairEngine and internal planner.
-It covers clean/gap/overlap precheck, opto-blocking return values,
-deterministic repair, byte-equivalent physical snapshots before/after both
-APIs, persistent-checker-diagnostic stripping, configured-master/Network
-consistency, fail-closed behavior after failed init, and the first-non-pad-row
-origin baseline.
+Each behavior has three independently discovered cases; every case constructs
+at least five standard rows. Coverage includes clean/gap/overlap precheck,
+opto-blocking values, deterministic/non-mutating repair, persistent checker
+diagnostics, candidate-universe failures and first-non-pad-row validation.
 
-2026-07-18 result: planner 81/81 normal and ASan; E2E 6/6 normal and ASan;
-full CTest 87/87 normal and ASan; all targets passed Werror.
+2026-07-18 result: planner 81/81 normal and ASan; E2E 33/33 normal and ASan;
+full CTest 114/114 normal and ASan; all targets passed Werror.
 
 ## Integration risks
 

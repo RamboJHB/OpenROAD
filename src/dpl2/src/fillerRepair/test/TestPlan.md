@@ -7,8 +7,8 @@ Updated: 2026-07-18.
 | Tier | Command | Boundary |
 |---|---|---|
 | Planner unit | `src/dpl2/src/fillerRepair/test/run_tests.sh` | 81 individually registered GoogleTests with private planner doubles |
-| Production E2E | `src/dpl2/test/build_all.sh` | 6 GoogleTests; fake UDM data with supplied infra/checker and production engine/planner |
-| Full CTest | `src/dpl2/test/CMakeLists.txt` | 87 discovered GoogleTests |
+| Production E2E | `src/dpl2/src/fillerRepair/test/run_e2e_tests.sh` | 33 GoogleTests; fake UDM data with supplied infra/checker and production engine/planner |
+| Full CTest | `src/dpl2/test/CMakeLists.txt` | 114 discovered GoogleTests |
 | Real-UDM compile gate | `cmake -DDPL2_TEST_USE_FAKE_UDM=OFF ...` | `dpl2_filler_repair_compile_check`: all supplied + production sources against real UDM headers |
 
 Normal and AddressSanitizer runs are required. Production builds use
@@ -25,6 +25,12 @@ Included: production RepairInfrastructure, Grid/Network, fillerSetting, final
 ImplantLayerChecker, FillerRepairEngine, internal FillerRepairPlanner and all search
 stages (compile lists from `src/fillerRepair/sources.cmake`). Fake UDM
 provides tech/library/row/cell data only.
+
+`e2e_test.cpp`, `run_e2e_tests.sh`, this plan and the only test-only fake UDM
+include tree live below `fillerRepair/test`, so an entire-directory port carries
+the tests and data provider with the implementation. `sources.cmake` exports
+`DPL2_FILLER_REPAIR_E2E_TEST_SOURCE`; the destination CMake only adds that
+source and selects the support include root for its production-chain GTest.
 
 Excluded: `fillerRepair/fake/*` and every other test double.
 
@@ -46,6 +52,9 @@ files remain unmodified.
 Each case snapshots all fixture cell origins, masters, status and orientation
 before/after precheck and requires equality. The tests do not pass target,
 newMaster or candidate information to precheck, proving that scope separation.
+
+Clean, gap and overlap are each instantiated for Canonical, ShiftedOrigin and
+FarShiftedOrigin: three independently discovered testcases per behavior.
 
 ## Required repair cases
 
@@ -69,13 +78,18 @@ newMaster or candidate information to precheck, proving that scope separation.
 - `FR_VERBOSE=1` enables the deterministic `[fr][stage]` algorithm transcript;
   normal test runs remain silent apart from GoogleTest output.
 
+Every repair/init behavior above is also instantiated for the three shared-row
+origins. Row-origin validation has three dedicated cases (aligned shifted,
+pad-before-standard and misaligned-after-pad). Thus every E2E behavior owns at
+least three testcases, and every fixture constructs at least five standard rows.
+
 ## Commands
 
 ```sh
 src/dpl2/src/fillerRepair/test/run_tests.sh
 SANITIZE=address src/dpl2/src/fillerRepair/test/run_tests.sh
-src/dpl2/test/build_all.sh
-SANITIZE=address src/dpl2/test/build_all.sh
+src/dpl2/src/fillerRepair/test/run_e2e_tests.sh
+SANITIZE=address src/dpl2/src/fillerRepair/test/run_e2e_tests.sh
 
 cmake -S src/dpl2/test -B src/dpl2/test/build-cmake
 cmake --build src/dpl2/test/build-cmake -j2
@@ -89,8 +103,8 @@ cmake --build src/dpl2/test/build-cmake-asan -j2
 ctest --test-dir src/dpl2/test/build-cmake-asan --output-on-failure
 ```
 
-2026-07-18 results: planner 81/81 normal and ASan; production E2E 6/6 normal
-and ASan; full CTest 87/87 normal and ASan; Werror clean; compile-check mode
+2026-07-18 results: planner 81/81 normal and ASan; production E2E 33/33 normal
+and ASan; full CTest 114/114 normal and ASan; Werror clean; compile-check mode
 configured and built against the UDM-compatible headers.
 
 ## Regression rules

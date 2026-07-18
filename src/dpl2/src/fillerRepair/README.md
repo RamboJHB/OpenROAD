@@ -61,15 +61,17 @@ hand-copied file list. Migration steps live in `src/dpl2/HandOff.md`.
 ```sh
 test/run_tests.sh
 SANITIZE=address test/run_tests.sh
-
-# from src/dpl2
-test/build_all.sh
-SANITIZE=address test/build_all.sh
+test/run_e2e_tests.sh
+SANITIZE=address test/run_e2e_tests.sh
 ```
 
-The 81 planner cases and 6 production E2E cases are GoogleTests. The test
-CMake selects fake UDM only through `dpl2_test_udm` include/link settings; the
-same source graph compiles against real UDM with:
+The 81 planner cases and 33 production E2E cases are GoogleTests. E2E source,
+runner, plan and the only test-only fake UDM include tree all live in
+`fillerRepair/test`, so they move with the code;
+`sources.cmake` exports `DPL2_FILLER_REPAIR_E2E_TEST_SOURCE` for the destination
+CMake. Every behavior has three cases and each fixture has at least five
+standard rows. Test CMake selects fake UDM only through `dpl2_test_udm`
+include/link settings; the same source graph compiles against real UDM with:
 
 ```sh
 cmake -S test -B test/build/real-udm \
@@ -85,4 +87,4 @@ whose test data comes from fake UDM by design.
 No production source has a fake UDM dependency or compile-time branch. The E2E
 uses fake UDM as the test-data provider only; supplied infrastructure/checker
 and production fillerRepair compile with `-Wall -Wextra -Werror`. Current
-result: planner 81/81 and full CTest 87/87, normal+ASan.
+result: planner 81/81, E2E 33/33 and full CTest 114/114, normal+ASan.

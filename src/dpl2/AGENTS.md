@@ -17,8 +17,8 @@ The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
 | Infrastructure | `fillerRepair/RepairInfrastructure` builds production Network/Grid from PhysDesMgr data; empty `getFillerMasters()` errors out |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
 | Production API | one `FillerRepairEngine` = precheck + private view/oracle + repair; fails closed before a successful `init()` |
-| E2E | 6 cases; fake UDM is the only data substitute; normal/ASan and `-Werror` pass |
-| CMake | standalone GoogleTest/CTest harness passes 87/87 normal and ASan; compile lists live in `src/fillerRepair/sources.cmake`; `DPL2_TEST_USE_FAKE_UDM=OFF` builds the real-UDM compile gate |
+| E2E | 33 cases in `fillerRepair/test/e2e_test.cpp`; every behavior has 3 cases and every fixture has at least 5 standard rows; fake UDM is the only data substitute |
+| CMake | standalone GoogleTest/CTest harness passes 114/114 normal and ASan; source/test lists live in `src/fillerRepair/sources.cmake`; `DPL2_TEST_USE_FAKE_UDM=OFF` builds the real-UDM compile gate |
 
 ## Fixed decisions
 
@@ -64,14 +64,15 @@ is intentionally one-build; create another object for a new revision.
 ```sh
 src/dpl2/src/fillerRepair/test/run_tests.sh
 SANITIZE=address src/dpl2/src/fillerRepair/test/run_tests.sh
-src/dpl2/test/build_all.sh
-SANITIZE=address src/dpl2/test/build_all.sh
+src/dpl2/src/fillerRepair/test/run_e2e_tests.sh
+SANITIZE=address src/dpl2/src/fillerRepair/test/run_e2e_tests.sh
 ```
 
-The final E2E source list contains production Grid/Network/importer/checker/
-engine/planner and fake UDM headers only. Private test doubles remain confined
-to the standalone planner unit executable for fault injection; never
-link them into E2E or production targets.
+The E2E source, runner and only fake-UDM include tree live under
+`fillerRepair/test`, so they travel with the directory being ported. Its target
+contains production Grid/Network/importer/checker/engine/planner and fake UDM
+headers only. Private planner doubles remain confined to the unit executable;
+never link them into E2E or production targets.
 
 The destination ports only `fillerRepair/`; existing infrastructure/checker
 must remain unmodified. Fake versus real UDM is selected only through the test

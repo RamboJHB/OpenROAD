@@ -1,22 +1,19 @@
 #!/usr/bin/env bash
-# Builds and runs the 81 GoogleTest planner cases.
-# Usage: test/run_tests.sh
-#        FR_VERBOSE=1 test/run_tests.sh
-#        test/run_tests.sh --gtest_filter='FillerRepairPlanner.*adaptive*'
-#        SANITIZE=address test/run_tests.sh
+# Builds and runs the production-chain GoogleTest carried by fillerRepair.
+# Fake UDM supplies test data only; infra/checker/repair sources are production.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 dpl2_root="$(cd "$script_dir/../../.." && pwd)"
 
 asan=OFF
-build_name=planner-gtest
+build_name=e2e-gtest
 if [[ "${SANITIZE:-}" == "address" ]]; then
   asan=ON
-  build_name=planner-gtest-asan
+  build_name=e2e-gtest-asan
   if [[ "$(uname -s)" == "Darwin" ]]; then
     # Homebrew GoogleTest is an unsanitized static archive. libc++ container
-    # annotations otherwise report inside GoogleTest discovery, not our code.
+    # annotations otherwise report inside discovery rather than project code.
     export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_container_overflow=0"
   fi
 fi
@@ -27,5 +24,5 @@ cmake -S "$dpl2_root/test" -B "$build_dir" \
   -DDPL2_ENABLE_ASAN="$asan" \
   -DDPL2_TEST_FAKE_UDM_INCLUDE_DIR="$script_dir/support/include" \
   -DDPL2_TEST_USE_FAKE_UDM=ON
-cmake --build "$build_dir" --target dpl2_filler_repair_planner_test --parallel
-"$build_dir/dpl2_filler_repair_planner_test" "$@"
+cmake --build "$build_dir" --target dpl2_filler_repair_e2e --parallel
+ctest --test-dir "$build_dir" --output-on-failure -R '^e2e\.'

@@ -12,7 +12,7 @@ include(GoogleTest)
 option(DPL2_ENABLE_ASAN "Build fillerRepair tests with AddressSanitizer" OFF)
 option(DPL2_TEST_USE_FAKE_UDM "Use the test-only UDM-compatible headers" ON)
 set(DPL2_TEST_FAKE_UDM_INCLUDE_DIR
-    "${CMAKE_CURRENT_LIST_DIR}/../src/drc/test/support/include" CACHE PATH
+    "${CMAKE_CURRENT_LIST_DIR}/../src/fillerRepair/test/support/include" CACHE PATH
     "Test-only UDM-compatible include root")
 set(DPL2_TEST_UDM_INCLUDE_DIRS "" CACHE STRING
     "Real UDM include directories used when DPL2_TEST_USE_FAKE_UDM=OFF")
@@ -107,12 +107,13 @@ if(DPL2_TEST_USE_FAKE_UDM)
     dpl2_filler_repair_e2e
     ${DPL2_SUPPLIED_CHAIN_SOURCES}
     ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES}
-    smoke_main.cpp)
+    ${DPL2_FILLER_REPAIR_E2E_TEST_SOURCE})
   target_link_libraries(dpl2_filler_repair_e2e PRIVATE GTest::gtest_main)
   dpl2_configure_chain_target(dpl2_filler_repair_e2e)
   gtest_discover_tests(
     dpl2_filler_repair_e2e
     TEST_PREFIX "e2e."
+    NO_PRETTY_VALUES
     DISCOVERY_TIMEOUT 30)
 else()
   # Real-UDM mode: the E2E's data provider IS the fake UDM, so there is no

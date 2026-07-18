@@ -890,7 +890,11 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 
 当前 81 个 pure-planner cases 已转换为独立 GoogleTests,使用 isolated planner
 test doubles;integration GoogleTest 只 fake UDM 数据,使用 supplied Network/Grid、
-final checker 与 production FillerRepairEngine。6 个 E2E,完整 CTest 共 87 项。
+final checker 与 production FillerRepairEngine。33 个 E2E,完整 CTest 共 114 项。
+E2E source/runner 和唯一的 test-only fake UDM include tree 位于
+`src/dpl2/src/fillerRepair/test`,随整个 fillerRepair 目录一起移植;每类 production
+behavior 有 3 个独立 testcase,每个 fixture 至少 5 行 standard-cell placement。
+`sources.cmake` 输出 E2E source 路径供目的地 CMake 接线。
 
 fake UDM 与真实 UDM 使用相同 namespace、type name、method signature 和测试所需
 placement 行为。`src/dpl2/test/CMakeLists.txt` 的 `dpl2_test_udm` interface target
@@ -963,7 +967,7 @@ gate 语义:
   `RepairInfrastructure` 从 PhysDesMgr 构建 snapshot;fake-UDM-only GoogleTest
   E2E 与 standalone CMake/CTest 接入;编译清单唯一定义在
   `src/fillerRepair/sources.cmake`。
-- 81 个 planner unit tests + 6 个 production E2E tests 全为 GoogleTest;
+- 81 个 planner unit tests + 33 个 production E2E tests 全为 GoogleTest;
   precheck/repair 均 non-mutating;production 交付只含 fillerRepair,
   supplied infrastructure/checker 零修改。普通版和 ASan 全绿。
   详见 `src/dpl2/HandOff.md` 与 `src/fillerRepair/test/TestPlan.md`。

@@ -10,6 +10,7 @@
 #                                          destination build adds: planner +
 #                                          UDM-facing facade + infrastructure
 #                                          snapshot builder
+#   DPL2_FILLER_REPAIR_E2E_TEST_SOURCE      co-located production E2E GoogleTest
 
 set(DPL2_FILLER_REPAIR_PLANNER_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/PlacementView.cpp"
@@ -25,3 +26,8 @@ set(DPL2_FILLER_REPAIR_PRODUCTION_SOURCES
     ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
     "${CMAKE_CURRENT_LIST_DIR}/FillerRepairEngine.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/RepairInfrastructure.cpp")
+
+# Test source travels with fillerRepair so a destination port can copy this
+# directory and wire one GoogleTest target without finding files elsewhere.
+set(DPL2_FILLER_REPAIR_E2E_TEST_SOURCE
+    "${CMAKE_CURRENT_LIST_DIR}/test/e2e_test.cpp")
