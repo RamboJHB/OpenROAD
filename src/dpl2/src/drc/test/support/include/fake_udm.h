@@ -2,8 +2,9 @@
 // implementations are in-memory data models tests can populate).
 //
 // Scope: everything the repair chain compiles against --
-// infrastructure (Network/Grid/RepairInfrastructure/fillerSetting), the
-// final ipl::ImplantLayerChecker, and the fillerRepair production sources.
+// infrastructure (Network/Grid/fillerSetting), the final
+// ipl::ImplantLayerChecker, and the fillerRepair production sources
+// (engine + RepairInfrastructure).
 // NOT a behavioral UDM: only the accessors those files call are modeled.
 //
 // Data flow for tests: build a fake_udm::DesignDb (tech layers, lib cells,

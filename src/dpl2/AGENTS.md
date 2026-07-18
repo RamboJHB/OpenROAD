@@ -14,11 +14,11 @@ The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
 |---|---|
 | Planner | adaptive-L1, filler domains, per-band ranking/filtering and deterministic output complete |
 | Unit tests | 81/81 GoogleTests normal and ASan |
-| Infrastructure | `RepairInfrastructure` builds production Network/Grid from PhysDesMgr data |
+| Infrastructure | `fillerRepair/RepairInfrastructure` builds production Network/Grid from PhysDesMgr data; empty `getFillerMasters()` errors out |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
 | Production API | one `FillerRepairEngine` = precheck + private view/oracle + repair; fails closed before a successful `init()` |
-| E2E | 5 cases; fake UDM is the only data substitute; normal/ASan and `-Werror` pass |
-| CMake | standalone GoogleTest/CTest harness passes 86/86 normal and ASan; compile lists live in `src/fillerRepair/sources.cmake` |
+| E2E | 6 cases; fake UDM is the only data substitute; normal/ASan and `-Werror` pass |
+| CMake | standalone GoogleTest/CTest harness passes 87/87 normal and ASan; compile lists live in `src/fillerRepair/sources.cmake`; `DPL2_TEST_USE_FAKE_UDM=OFF` builds the real-UDM compile gate |
 
 ## Fixed decisions
 

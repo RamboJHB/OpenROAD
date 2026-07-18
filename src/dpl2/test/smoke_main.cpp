@@ -22,7 +22,7 @@
 
 #include "drc/ImplantLayerChecker.h"
 #include "fillerRepair/FillerRepairEngine.h"
-#include "infrastructure/RepairInfrastructure.h"
+#include "fillerRepair/RepairInfrastructure.h"
 #include "infrastructure/fillerSetting.h"
 
 namespace {
@@ -390,6 +390,38 @@ TEST(FillerRepairProduction, ConfiguredMasterMissingFromNetworkFailsInit)
   FillerRepairEngine engine(infrastructure.grid(), infrastructure.network());
   EXPECT_FALSE(engine.init(db.design.getPhysDesMgr(), &checker,
                            &engineSetting));
+}
+
+// Regression: an empty filler allow list can never produce a swap, so both
+// the snapshot builder and the engine must error out instead of building a
+// state that only fails later.
+TEST(FillerRepairProduction, EmptyFillerAllowListErrorsOut)
+{
+  using dpl2::fillerRepair::FillerRepairEngine;
+
+  fake_udm::DesignDb db;
+  buildDesign(db);
+
+  // Infrastructure level: build() refuses an empty allow list.
+  dpl2::fillerSetting emptySetting(&db.design);
+  dpl2::RepairInfrastructure rejected;
+  EXPECT_FALSE(rejected.build(db.design.getPhysDesMgr(), allLeafCells(),
+                              emptySetting,
+                              db.design.lib_acc_.getPhysLibCell(2)));
+  EXPECT_FALSE(rejected.diagnostics().empty());
+
+  // Engine level: a good snapshot + an empty allow list still fails init.
+  dpl2::fillerSetting goodSetting(&db.design);
+  goodSetting.addFillerCell("FL2 FH2 FS2");
+  dpl2::RepairInfrastructure infrastructure;
+  ASSERT_TRUE(infrastructure.build(db.design.getPhysDesMgr(), allLeafCells(),
+                                   goodSetting,
+                                   db.design.lib_acc_.getPhysLibCell(2)));
+  dpl2::ipl::ImplantLayerChecker checker(infrastructure.grid(),
+                                         infrastructure.network());
+  FillerRepairEngine engine(infrastructure.grid(), infrastructure.network());
+  EXPECT_FALSE(engine.init(db.design.getPhysDesMgr(), &checker,
+                           &emptySetting));
 }
 
 // Regression: after a missing or failed init() every public API fails closed.

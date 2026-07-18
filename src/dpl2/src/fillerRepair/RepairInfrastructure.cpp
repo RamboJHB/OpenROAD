@@ -35,6 +35,12 @@ bool RepairInfrastructure::build(
     fail("fillerSetting and PhysDesMgr do not describe the same design");
     return false;
   }
+  if (fillerSettings.getFillerMasters().empty()) {
+    // Without a configured allow list the engine could never offer a swap;
+    // fail here instead of building a snapshot that only rejects later.
+    fail("fillerSetting::getFillerMasters() is empty");
+    return false;
+  }
   if (leafCells.empty()) {
     fail("no leaf cells supplied for Network import");
     return false;

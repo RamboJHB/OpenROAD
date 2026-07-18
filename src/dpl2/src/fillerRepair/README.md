@@ -30,6 +30,7 @@ opto/infrastructure.
 | Path | Purpose |
 |---|---|
 | `FillerRepairEngine.h/.cpp` | production API, private view/oracle conversion, precheck and repair |
+| `RepairInfrastructure.h/.cpp` | builds the production Network/Grid snapshot from PhysDesMgr |
 | `PlannerEngine.h/.cpp` | internal deterministic search pipeline |
 | `OracleGate.h/.cpp` | internal checker abstraction, batching, cache and baseline-delta gate |
 | `PlacementView.h/.cpp` | planner-only read view and candidate filter |
@@ -41,9 +42,8 @@ opto/infrastructure.
 Planner `OverlayCheckRequest`, `CheckStatus` and requestId stay internal to
 `OracleGate`; the public API uses final checker `CheckResult`, `Diagnostic`,
 `FillerChanges` and `FillerCellRecord`. Destination builds compile
-`DPL2_FILLER_REPAIR_PRODUCTION_SOURCES` from `sources.cmake` (plus
-`infrastructure/RepairInfrastructure.cpp` when using the supplied snapshot
-builder) -- never a hand-copied file list.
+`DPL2_FILLER_REPAIR_PRODUCTION_SOURCES` from `sources.cmake` -- never a
+hand-copied file list. Migration steps live in `src/dpl2/HandOff.md`.
 
 ## Verification
 
@@ -56,9 +56,9 @@ test/build_all.sh
 SANITIZE=address test/build_all.sh
 ```
 
-The 81 planner cases and 5 production E2E cases are GoogleTests. The test
+The 81 planner cases and 6 production E2E cases are GoogleTests. The test
 CMake selects fake UDM only through `dpl2_test_udm` include/link settings; the
-same source graph can use real UDM with:
+same source graph compiles against real UDM with:
 
 ```sh
 cmake -S test -B test/build/real-udm \
@@ -67,7 +67,11 @@ cmake -S test -B test/build/real-udm \
   -DDPL2_TEST_UDM_LIBRARIES='<real libraries or CMake targets>'
 ```
 
+In real-UDM mode the harness builds `dpl2_filler_repair_compile_check` (all
+supplied + production sources against real UDM headers) instead of the E2E,
+whose test data comes from fake UDM by design.
+
 No production source has a fake UDM dependency or compile-time branch. The E2E
 uses fake UDM as the test-data provider only; supplied infrastructure/checker
 and production fillerRepair compile with `-Wall -Wextra -Werror`. Current
-result: planner 81/81 and full CTest 86/86, normal+ASan.
+result: planner 81/81 and full CTest 87/87, normal+ASan.

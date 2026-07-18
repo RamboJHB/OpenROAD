@@ -7,6 +7,10 @@
 // read from PhysDesMgr.  This keeps hierarchy traversal (which is owned by the
 // embedding application) outside the repair module while ensuring tests and
 // production use exactly the same Network/Grid construction code.
+//
+// The class lives in the fillerRepair delivery but stays in namespace dpl2:
+// it builds and owns plain dpl2 infrastructure objects (Grid/Network) that
+// callers hand to ImplantLayerChecker and FillerRepairEngine alike.
 
 #pragma once
 
@@ -14,10 +18,10 @@
 #include <string>
 #include <vector>
 
-#include "Grid.h"
-#include "Padding.h"
-#include "fillerSetting.h"
-#include "network.h"
+#include "infrastructure/Grid.h"
+#include "infrastructure/Padding.h"
+#include "infrastructure/fillerSetting.h"
+#include "infrastructure/network.h"
 
 namespace dpl2 {
 

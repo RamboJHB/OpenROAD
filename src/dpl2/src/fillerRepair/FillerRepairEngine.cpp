@@ -412,6 +412,13 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
         std::unique(filler_master_ids_.begin(), filler_master_ids_.end()),
         filler_master_ids_.end());
   }
+  if (filler_master_ids_.empty()) {
+    // Empty allow list (or nothing usable in it) means repair could never
+    // offer a swap -- fail init instead of failing every later repair.
+    addProblem(Severity::Fatal, "NoConfiguredFillerMaster",
+               "fillerSetting::getFillerMasters() yields no usable filler "
+               "master");
+  }
 
   // --- placed instances: Network nodes with the checker's exact filters and
   // frame (state from the PhysCell, x relative to the row origin).
@@ -975,6 +982,23 @@ std::vector<CoverageFinding> findGapAndOverlap(eUNL::PhysDesMgr* desMgr,
     ++rowId;
   }
 
+  // y-sorted index over the rows so each node binary-searches its overlapped
+  // rows instead of scanning all of them (real designs: 1e5..1e6 nodes x 1e3
+  // rows made the full scan the dominant precheck cost).
+  std::vector<size_t> order(rows.size());
+  for (size_t i = 0; i < order.size(); ++i) {
+    order[i] = i;
+  }
+  std::sort(order.begin(), order.end(), [&rows](size_t a, size_t b) {
+    return rows[a].yl != rows[b].yl ? rows[a].yl < rows[b].yl
+                                    : rows[a].id < rows[b].id;
+  });
+  std::vector<int64_t> sortedYl;
+  sortedYl.reserve(order.size());
+  for (const size_t idx : order) {
+    sortedYl.push_back(rows[idx].yl);
+  }
+
   for (const auto& nodePtr : network->getNodes()) {
     if (nodePtr == nullptr) {
       continue;
@@ -993,7 +1017,18 @@ std::vector<CoverageFinding> findGapAndOverlap(eUNL::PhysDesMgr* desMgr,
     const int64_t cellXh = cellXl + cell.getPhysMaster().getWidth().getStorage();
     const int64_t cellYl = origin.getY().getStorage();
     const int64_t cellYh = cellYl + cell.getPhysMaster().getHeight().getStorage();
-    for (RowData& row : rows) {
+
+    // First y-sorted position whose row could still overlap [cellYl, cellYh):
+    // start at the first row with yl > cellYl and walk back over rows whose
+    // span still crosses cellYl (at most one for non-overlapping rows).
+    size_t pos = static_cast<size_t>(
+        std::upper_bound(sortedYl.begin(), sortedYl.end(), cellYl)
+        - sortedYl.begin());
+    while (pos > 0 && rows[order[pos - 1]].yh > cellYl) {
+      --pos;
+    }
+    for (; pos < order.size() && rows[order[pos]].yl < cellYh; ++pos) {
+      RowData& row = rows[order[pos]];
       if (cellYl >= row.yh || cellYh <= row.yl) {
         continue;
       }

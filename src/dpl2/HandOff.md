@@ -5,10 +5,11 @@ Updated: 2026-07-18. Branch: `claude/wizardly-carson-secahu`.
 ## Result
 
 The destination already supplies complete infrastructure and checker sources.
-Production migration therefore copies only `src/dpl2/src/fillerRepair/` and
-adds its production `.cpp` files to the destination's existing target. No
-infrastructure/checker source or API change is required, and this change set
-keeps both directories at zero diff.
+Production migration therefore copies only `src/dpl2/src/fillerRepair/`
+(which now contains `RepairInfrastructure.{h,cpp}` as well) and optionally
+`src/dpl2/test/` for the harness, then adds the `sources.cmake` list to the
+destination's existing target. No infrastructure/checker source or API change
+is required, and this change set keeps both directories at zero diff.
 
 The production boundary is now one checker-style class:
 
@@ -78,22 +79,63 @@ empty changes. The final checker remains the only DRC oracle.
 `RepairInfrastructure` registers placed, target-new and configured candidate
 masters before checker/engine construction, including uninstantiated masters.
 
-## Destination build wiring
+## Migration to the destination environment
 
-The compile list is defined once in `src/fillerRepair/sources.cmake`:
+What to copy (two directories, nothing else):
+
+1. `src/dpl2/src/fillerRepair/` -> next to the destination's existing
+   `infrastructure/` and `drc/` directories (the production sources include
+   `infrastructure/...` and `drc/ImplantLayerChecker.h` relative to that
+   common source root). This directory now contains the complete production
+   delivery including `RepairInfrastructure.{h,cpp}`, plus `fake/` and
+   `test/` subdirectories that are used ONLY by the standalone harness.
+2. `src/dpl2/test/` -> anywhere (standalone CMake project); only needed to
+   run the harness in the destination environment.
+
+Production wiring (their CMake, 2 lines):
 
 ```cmake
-include(src/fillerRepair/sources.cmake)
+include(<srcroot>/fillerRepair/sources.cmake)
 target_sources(<owning-target> PRIVATE ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES})
 ```
 
-Add the list to the target that already owns Grid/Network/checker (plus
-`infrastructure/RepairInfrastructure.cpp` when using the supplied snapshot
-builder). Do not hand-copy file names -- the test harness includes the same
-file, so the two lists cannot drift. Do not add `fillerRepair/fake/*`,
-`fillerRepair/test/*`, or a fake UDM include path to a production target. No
-production source uses a fake/real UDM conditional; it includes the real UDM
-names already used by infra/checker.
+`<owning-target>` is the target that already compiles Grid/Network/checker,
+so its UDM include paths and libraries apply to our sources unchanged. The
+only modifications that may be needed on their side:
+
+- the common source root must be on the include path (theirs already is if
+  `infrastructure/...`-style includes work today);
+- C++17 or newer for the production sources (the harness builds them at 17
+  for the planner and 20 for the chain).
+
+Do not hand-copy file names -- the test harness includes the same
+`sources.cmake`, so the two lists cannot drift. Do not add
+`fillerRepair/fake/*`, `fillerRepair/test/*`, or a fake UDM include path to a
+production target. No production source uses a fake/real UDM conditional; it
+includes the real UDM names already used by infra/checker.
+
+Harness wiring in the destination environment:
+
+```sh
+# 1) Compile gate against REAL UDM (no fake anywhere):
+cmake -S <copied test dir> -B build-real \
+  -DDPL2_TEST_USE_FAKE_UDM=OFF \
+  -DDPL2_TEST_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
+  -DDPL2_TEST_UDM_LIBRARIES='<real UDM libs/targets>'
+cmake --build build-real   # builds dpl2_filler_repair_compile_check
+
+# 2) Full test run (fake UDM is the data provider; default mode):
+cmake -S <copied test dir> -B build-test
+cmake --build build-test && ctest --test-dir build-test
+```
+
+In real-UDM mode there is no runnable E2E (its DATA comes from fake UDM), so
+the harness builds `dpl2_filler_repair_compile_check` instead: every supplied
+and production source compiling and linking against the real UDM headers is
+the migration gate. The harness expects the copied `test/` directory to sit
+next to `src/` as in this repo (`../src` relative layout); if the destination
+places it elsewhere, adjust `DPL2_SRC` at the top of `test/CMakeLists.txt` --
+that is the only expected edit.
 
 ## Build and verification
 

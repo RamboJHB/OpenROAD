@@ -7,8 +7,9 @@ Updated: 2026-07-18.
 | Tier | Command | Boundary |
 |---|---|---|
 | Planner unit | `src/dpl2/src/fillerRepair/test/run_tests.sh` | 81 individually registered GoogleTests with private planner doubles |
-| Production E2E | `src/dpl2/test/build_all.sh` | 5 GoogleTests; fake UDM data with supplied infra/checker and production engine/planner |
-| Full CTest | `src/dpl2/test/CMakeLists.txt` | 86 discovered GoogleTests |
+| Production E2E | `src/dpl2/test/build_all.sh` | 6 GoogleTests; fake UDM data with supplied infra/checker and production engine/planner |
+| Full CTest | `src/dpl2/test/CMakeLists.txt` | 87 discovered GoogleTests |
+| Real-UDM compile gate | `cmake -DDPL2_TEST_USE_FAKE_UDM=OFF ...` | `dpl2_filler_repair_compile_check`: all supplied + production sources against real UDM headers |
 
 Normal and AddressSanitizer runs are required. Production builds use
 `-Wall -Wextra -Werror`.
@@ -29,8 +30,10 @@ Excluded: `fillerRepair/fake/*` and every other test double.
 
 The fake UDM include tree mirrors real UDM namespaces, names, signatures and
 fixture-visible behavior. `dpl2_test_udm` is an interface target that switches
-only include/link configuration. With `DPL2_TEST_USE_FAKE_UDM=OFF`, real UDM is
-selected through `DPL2_TEST_UDM_INCLUDE_DIRS` / `DPL2_TEST_UDM_LIBRARIES`.
+only include/link configuration. With `DPL2_TEST_USE_FAKE_UDM=OFF`, real UDM
+is selected through `DPL2_TEST_UDM_INCLUDE_DIRS` / `DPL2_TEST_UDM_LIBRARIES`;
+in that mode the E2E (whose DATA is fake UDM) is replaced by the
+`dpl2_filler_repair_compile_check` static library over the same source graph.
 There is no fake-related production `#ifdef`, and infrastructure/checker source
 files remain unmodified.
 
@@ -56,6 +59,8 @@ newMaster or candidate information to precheck, proving that scope separation.
 - Persistent checker init diagnostics (duplicated per result by the checker)
   never mark candidates illegal; repair still succeeds.
 - A configured filler master absent from the Network fails `init()`.
+- An empty `getFillerMasters()` allow list errors out in both
+  `RepairInfrastructure::build()` and `FillerRepairEngine::init()`.
 - Before/after a failed `init()`, `precheck()` and `repair()` fail closed.
 - The row-origin frame check baselines on the first NON-pad row: pad rows may
   sit anywhere; a misaligned standard row is refused even behind a pad row.
@@ -82,8 +87,9 @@ cmake --build src/dpl2/test/build-cmake-asan -j2
 ctest --test-dir src/dpl2/test/build-cmake-asan --output-on-failure
 ```
 
-2026-07-18 results: planner 81/81 normal and ASan; production E2E 5/5 normal
-and ASan; full CTest 86/86 normal and ASan; Werror clean.
+2026-07-18 results: planner 81/81 normal and ASan; production E2E 6/6 normal
+and ASan; full CTest 87/87 normal and ASan; Werror clean; compile-check mode
+configured and built against the UDM-compatible headers.
 
 ## Regression rules
 

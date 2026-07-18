@@ -75,35 +75,53 @@ gtest_discover_tests(
   TEST_PREFIX "planner."
   DISCOVERY_TIMEOUT 30)
 
-# Standalone E2E rehearsal. Infrastructure and checker are compiled exactly as
-# supplied by dpl2; only UDM headers/linkage come through dpl2_test_udm.
-add_executable(
-  dpl2_filler_repair_e2e
-  "${DPL2_SRC}/infrastructure/Grid.cpp"
-  "${DPL2_SRC}/infrastructure/Object.cpp"
-  "${DPL2_SRC}/infrastructure/network.cpp"
-  "${DPL2_SRC}/infrastructure/architecture.cpp"
-  "${DPL2_SRC}/infrastructure/Padding.cpp"
-  "${DPL2_SRC}/infrastructure/fillerSetting.cpp"
-  "${DPL2_SRC}/infrastructure/RepairInfrastructure.cpp"
-  "${DPL2_SRC}/drc/ImplantLayerChecker.cpp"
-  ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES}
-  smoke_main.cpp)
-target_include_directories(
-  dpl2_filler_repair_e2e
-  PRIVATE "${DPL2_SRC}" "${CMAKE_CURRENT_LIST_DIR}/../include")
-target_include_directories(
-  dpl2_filler_repair_e2e SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
-target_link_libraries(
-  dpl2_filler_repair_e2e PRIVATE GTest::gtest_main dpl2_test_udm)
-if(DPL2_ENABLE_ASAN AND APPLE AND EXISTS "/opt/homebrew/opt/tbb/lib/libtbb.a")
-  target_link_libraries(
-    dpl2_filler_repair_e2e PRIVATE "/opt/homebrew/opt/tbb/lib/libtbb.a")
+# Supplied infrastructure/checker sources, compiled exactly as delivered by
+# dpl2; only UDM headers/linkage come through dpl2_test_udm.
+set(DPL2_SUPPLIED_CHAIN_SOURCES
+    "${DPL2_SRC}/infrastructure/Grid.cpp"
+    "${DPL2_SRC}/infrastructure/Object.cpp"
+    "${DPL2_SRC}/infrastructure/network.cpp"
+    "${DPL2_SRC}/infrastructure/architecture.cpp"
+    "${DPL2_SRC}/infrastructure/Padding.cpp"
+    "${DPL2_SRC}/infrastructure/fillerSetting.cpp"
+    "${DPL2_SRC}/drc/ImplantLayerChecker.cpp")
+
+function(dpl2_configure_chain_target target)
+  target_include_directories(
+    ${target}
+    PRIVATE "${DPL2_SRC}" "${CMAKE_CURRENT_LIST_DIR}/../include")
+  target_include_directories(${target} SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
+  target_link_libraries(${target} PRIVATE dpl2_test_udm)
+  if(DPL2_ENABLE_ASAN AND APPLE AND EXISTS "/opt/homebrew/opt/tbb/lib/libtbb.a")
+    target_link_libraries(${target} PRIVATE "/opt/homebrew/opt/tbb/lib/libtbb.a")
+  else()
+    target_link_libraries(${target} PRIVATE TBB::tbb)
+  endif()
+  dpl2_configure_test(${target} 20)
+endfunction()
+
+if(DPL2_TEST_USE_FAKE_UDM)
+  # Standalone E2E: fake UDM provides the test DATA, everything else is the
+  # production chain.
+  add_executable(
+    dpl2_filler_repair_e2e
+    ${DPL2_SUPPLIED_CHAIN_SOURCES}
+    ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES}
+    smoke_main.cpp)
+  target_link_libraries(dpl2_filler_repair_e2e PRIVATE GTest::gtest_main)
+  dpl2_configure_chain_target(dpl2_filler_repair_e2e)
+  gtest_discover_tests(
+    dpl2_filler_repair_e2e
+    TEST_PREFIX "e2e."
+    DISCOVERY_TIMEOUT 30)
 else()
-  target_link_libraries(dpl2_filler_repair_e2e PRIVATE TBB::tbb)
+  # Real-UDM mode: the E2E's data provider IS the fake UDM, so there is no
+  # runnable E2E here. Instead verify that every supplied and production
+  # source compiles and links against the real UDM headers -- the migration
+  # gate for the destination environment.
+  add_library(
+    dpl2_filler_repair_compile_check STATIC
+    ${DPL2_SUPPLIED_CHAIN_SOURCES}
+    ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES})
+  dpl2_configure_chain_target(dpl2_filler_repair_compile_check)
 endif()
-dpl2_configure_test(dpl2_filler_repair_e2e 20)
-gtest_discover_tests(
-  dpl2_filler_repair_e2e
-  TEST_PREFIX "e2e."
-  DISCOVERY_TIMEOUT 30)

@@ -6,12 +6,10 @@
 # spelling out the files, so the two can never drift.
 #
 #   DPL2_FILLER_REPAIR_PLANNER_SOURCES     pure planner, no UDM dependency
-#   DPL2_FILLER_REPAIR_PRODUCTION_SOURCES  planner + the UDM-facing facade;
-#                                          this is the complete compile list a
-#                                          destination build has to add
-#                                          (plus infrastructure/RepairInfrastructure.cpp
-#                                          when the caller does not build its
-#                                          own Network/Grid snapshot)
+#   DPL2_FILLER_REPAIR_PRODUCTION_SOURCES  the complete compile list a
+#                                          destination build adds: planner +
+#                                          UDM-facing facade + infrastructure
+#                                          snapshot builder
 
 set(DPL2_FILLER_REPAIR_PLANNER_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/PlacementView.cpp"
@@ -25,4 +23,5 @@ set(DPL2_FILLER_REPAIR_PLANNER_SOURCES
 
 set(DPL2_FILLER_REPAIR_PRODUCTION_SOURCES
     ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-    "${CMAKE_CURRENT_LIST_DIR}/FillerRepairEngine.cpp")
+    "${CMAKE_CURRENT_LIST_DIR}/FillerRepairEngine.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/RepairInfrastructure.cpp")
