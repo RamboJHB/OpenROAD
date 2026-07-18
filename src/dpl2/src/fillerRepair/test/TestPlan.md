@@ -7,8 +7,8 @@ Updated: 2026-07-18.
 | Tier | Command | Boundary |
 |---|---|---|
 | Planner unit | `src/dpl2/src/fillerRepair/test/run_tests.sh` | 81 individually registered GoogleTests with private planner doubles |
-| Production E2E | `src/dpl2/src/fillerRepair/test/run_e2e_tests.sh` | 42 GoogleTests; fake UDM data with supplied infra/checker types and production engine/planner |
-| Full CTest | `src/dpl2/test/CMakeLists.txt` | 123 discovered GoogleTests |
+| Production E2E | `src/dpl2/src/fillerRepair/test/run_e2e_tests.sh` | 43 GoogleTests; fake UDM data with supplied infra/checker types and production engine/planner |
+| Full CTest | `src/dpl2/test/CMakeLists.txt` | 124 discovered GoogleTests |
 | Real-UDM compile gate | `cmake -DDPL2_TEST_USE_FAKE_UDM=OFF ...` | `dpl2_filler_repair_compile_check`: all supplied + production sources against real UDM headers |
 
 Normal and AddressSanitizer runs are required. Production builds use
@@ -83,17 +83,22 @@ FarShiftedOrigin: three independently discovered testcases per behavior.
 - Before/after a failed `init()`, `precheck()` and `repair()` fail closed.
 - Null borrowed Grid/Network fails init with `missing_infrastructure`.
 - A second `init()` is rejected without damaging the first ready snapshot.
-- The row-origin frame check baselines on the first NON-pad row: pad rows may
-  sit anywhere; a misaligned standard row is refused even behind a pad row.
+- Frame gates: a trailing pad row (any origin) is accepted; a LEADING pad row
+  is refused by the frame-coherence gate (`RowFrameMismatch`) because the
+  checker's Grid frame skips pad rows while its init/track frame does not; a
+  standard row off the shared origin frame stays refused
+  (`RowOriginMisaligned`/`ColFrameMismatch`), with the origin baseline on the
+  first NON-pad row.
 - Planner tests continue covering adaptive-L1, ranking, subset enumeration,
   budgets, cache, baseline-delta and malformed internal oracle protocol.
 - `FR_VERBOSE=1` enables the deterministic `[fr][stage]` algorithm transcript;
   normal test runs remain silent apart from GoogleTest output.
 
 Every repair/init behavior above is also instantiated for the three shared-row
-origins. Row-origin validation has three dedicated cases (aligned shifted,
-pad-before-standard and misaligned-after-pad). Thus every E2E behavior owns at
-least three testcases, and every fixture constructs at least five standard rows.
+origins. Row-frame validation has four dedicated cases (aligned shifted,
+pad-before-standard refused, pad-after-standard accepted, misaligned-with-pad
+refused). Thus every E2E behavior owns at least three testcases, and every
+fixture constructs at least five standard rows.
 
 ## Commands
 
@@ -115,8 +120,8 @@ cmake --build src/dpl2/test/build-cmake-asan -j2
 ctest --test-dir src/dpl2/test/build-cmake-asan --output-on-failure
 ```
 
-2026-07-18 results: planner 81/81 normal and ASan; production E2E 42/42 normal
-and ASan; full CTest 123/123 normal and ASan; Werror clean. Compile-check mode
+2026-07-18 results: planner 81/81 normal and ASan; production E2E 43/43 normal
+and ASan; full CTest 124/124 normal and ASan; Werror clean. Compile-check mode
 is configured against the UDM-compatible headers.
 
 ## Regression rules

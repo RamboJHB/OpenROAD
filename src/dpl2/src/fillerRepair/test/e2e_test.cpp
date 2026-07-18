@@ -128,8 +128,13 @@ struct DesignSetup
   // init while no master ever touches these layers.
   bool unusedRuleLayers = false;
   // Prepends a pad row (below the core, first in iteration order) so the
-  // first PhysRow is NOT a standard-cell row.
+  // first PhysRow is NOT a standard-cell row. The engine's frame-coherence
+  // gate must refuse this layout: the checker's Grid frame skips pad rows,
+  // so every standard row would disagree with the iteration frame.
   bool padRowFirst = false;
+  // Appends a pad row (above the core, last in iteration order). Standard
+  // rows keep identical indices in both frames -> must stay accepted.
+  bool padRowLast = false;
   int64_t padRowOriginX = 0;
   // Per-standard-row origin X; placed cells shift with their row.
   std::array<int64_t, kStandardRows> rowOriginX{0, 0, 0, 0, 0};
@@ -176,6 +181,10 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup = {})
   for (int row = 0; row < kStandardRows; ++row) {
     db.desMgr().addRow(setup.rowOriginX[static_cast<size_t>(row)],
                        row * kRowHeight, kSiteWidth, kRowHeight, kRowSites);
+  }
+  if (setup.padRowLast) {
+    db.desMgr().addRow(setup.padRowOriginX, kStandardRows * kRowHeight,
+                       kSiteWidth, kRowHeight, kRowSites, /*isPad=*/true);
   }
   // Row alternation convention: the track pattern expects P at the bottom
   // band on EVEN rows and N on odd rows (buildTrackPattern), indexed over ALL
@@ -617,19 +626,37 @@ RowOriginCase alignedShiftedRows()
 
 RowOriginCase padBeforeStandardRows()
 {
+  // A leading pad row shifts every standard row by one between the PhysRow
+  // iteration frame and the checker's Grid frame (which skips pads); the
+  // engine's frame-coherence gate must refuse init (RowFrameMismatch).
+  // Before that gate existed the suite proved init accepted this layout while
+  // the checker compared mixed frames silently.
   DesignSetup setup;
   setup.padRowFirst = true;
   setup.padRowOriginX = 5;
-  return {"PadBeforeStandardRows", setup, true};
+  return {"PadBeforeStandardRows", setup, false};
 }
 
-RowOriginCase misalignedStandardRowAfterPad()
+RowOriginCase padAfterStandardRows()
 {
+  // A trailing pad row keeps standard-row indices identical in both frames;
+  // its origin never joins the shared-origin check.
   DesignSetup setup;
-  setup.padRowFirst = true;
+  setup.padRowLast = true;
+  setup.padRowOriginX = 5;
+  return {"PadAfterStandardRows", setup, true};
+}
+
+RowOriginCase misalignedStandardRowWithPad()
+{
+  // Trailing pad keeps both row frames coincident, so this case isolates the
+  // shared-origin gate: one standard row off the frame must be refused
+  // (RowOriginMisaligned / ColFrameMismatch), pad row origin notwithstanding.
+  DesignSetup setup;
+  setup.padRowLast = true;
   setup.padRowOriginX = 5;
   setup.rowOriginX = {0, 0, 0, 3, 0};
-  return {"MisalignedStandardRowAfterPad", setup, false};
+  return {"MisalignedStandardRowWithPad", setup, false};
 }
 
 class FillerRepairRowOriginE2E
@@ -639,7 +666,9 @@ class FillerRepairRowOriginE2E
 
 }  // namespace
 
-// Three five-row cases prove the x-frame baseline uses the first non-pad row.
+// Five-row cases prove the x-frame baseline uses the first non-pad row AND
+// that the iteration/Grid row frames must coincide (leading pad refused,
+// trailing pad accepted).
 TEST_P(FillerRepairRowOriginE2E, FirstNonPadRowDefinesSharedXFrame)
 {
   const RowOriginCase& testCase = GetParam();
@@ -660,7 +689,8 @@ INSTANTIATE_TEST_SUITE_P(
     FiveRowOriginCases,
     FillerRepairRowOriginE2E,
     ::testing::Values(alignedShiftedRows(), padBeforeStandardRows(),
-                      misalignedStandardRowAfterPad()),
+                      padAfterStandardRows(),
+                      misalignedStandardRowWithPad()),
     [](const ::testing::TestParamInfo<RowOriginCase>& info) {
       return info.param.name;
     });

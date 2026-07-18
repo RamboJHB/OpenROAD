@@ -49,11 +49,6 @@ class ProductionView final : public PlacementView,
                  Grid* grid,
                  Network* network,
                  const ipl::ImplantLayerChecker* checker,
-                 const std::vector<const eLIB::PhysLibCell*>& fillerMasters);
-  ProductionView(eUNL::PhysDesMgr* desMgr,
-                 Grid* grid,
-                 Network* network,
-                 const ipl::ImplantLayerChecker* checker,
                  const std::vector<const eLIB::PhysLibCell*>& fillerMasters,
                  Config config);
 
@@ -174,21 +169,6 @@ ViolationRelation toRelation(ipl::Relationship relationship)
 }
 
 }  // namespace
-
-ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
-                               Grid* grid,
-                               Network* network,
-                               const ipl::ImplantLayerChecker* checker,
-                               const std::vector<const eLIB::PhysLibCell*>&
-                                   fillerMasters)
-    : ProductionView(desMgr,
-                     grid,
-                     network,
-                     checker,
-                     fillerMasters,
-                     Config())
-{
-}
 
 ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
                              Grid* grid,
@@ -465,6 +445,36 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
     if (xOffset < 0) {
       addProblem(Severity::Fatal, "NodeLeftOfRowOrigin",
                  cat("node ", node->getId(), " lies left of its row origin"));
+      continue;
+    }
+
+    // Frame-coherence gate. The checker mixes two frames: its init/track
+    // pattern and our request wire use PhysRow ITERATION order with x
+    // relative to the row origin, while its overlay scan resolves committed
+    // neighbours and swapped fillers through Grid (gridSnapDownY/gridX:
+    // non-pad rows by y, core-relative). The chain is only correct when the
+    // two coincide for every placed node -- i.e. pad rows do not precede
+    // standard rows, iteration order is y-sorted, and the shared row origin
+    // is the core edge. On any other design the checker would compare mixed
+    // frames SILENTLY; refuse the snapshot loudly here instead.
+    const RowId gridRow = static_cast<RowId>(grid->gridSnapDownY(node).v);
+    if (gridRow != rowId) {
+      addProblem(Severity::Fatal, "RowFrameMismatch",
+                 cat("node ", node->getId(), " is row ", rowId,
+                     " by PhysRow iteration but row ", gridRow,
+                     " by Grid y-snap; pad rows before standard rows or "
+                     "non-y-sorted row iteration is not supported"));
+      continue;
+    }
+    if (site_width_ > 0
+        && static_cast<DbCoord>(grid->gridX(node).v)
+               != xOffset / site_width_) {
+      addProblem(Severity::Fatal, "ColFrameMismatch",
+                 cat("node ", node->getId(), " is column ",
+                     xOffset / site_width_, " by its row origin but column ",
+                     static_cast<DbCoord>(grid->gridX(node).v),
+                     " by the Grid core frame; the row origin X must equal "
+                     "the core left edge"));
       continue;
     }
 

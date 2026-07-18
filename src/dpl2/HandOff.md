@@ -188,7 +188,7 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-All 81 planner cases and 42 production E2E cases are GoogleTests. The portable
+All 81 planner cases and 43 production E2E cases are GoogleTests. The portable
 E2E source/runner and test-only fake UDM include tree live in
 `src/dpl2/src/fillerRepair/test`, and
 `sources.cmake` exports `DPL2_FILLER_REPAIR_E2E_TEST_SOURCE` for destination
@@ -200,10 +200,11 @@ checker/view instances.
 Each behavior has three independently discovered cases; every case constructs
 at least five standard rows. Coverage includes clean/gap/overlap precheck,
 opto-blocking values, deterministic/non-mutating repair, persistent checker
-diagnostics, candidate-universe failures and first-non-pad-row validation.
+diagnostics, candidate-universe failures and the row/column frame gates (trailing pad
+accepted, leading pad and off-origin rows refused).
 
-2026-07-18 result: planner 81/81 normal and ASan; E2E 42/42 normal and ASan;
-full CTest 123/123 normal and ASan; all targets passed Werror.
+2026-07-18 result: planner 81/81 normal and ASan; E2E 43/43 normal and ASan;
+full CTest 124/124 normal and ASan; all targets passed Werror.
 
 ## Integration risks
 
@@ -211,6 +212,11 @@ full CTest 123/123 normal and ASan; all targets passed Werror.
 - Grid/Network/PhysDesMgr must already describe the same revision and must
   outlive the borrowing engine. Init is one-shot; construct a new engine after
   commit.
+- Supported design envelope (validated per node at init, Fatal otherwise):
+  no pad row before a standard row, y-sorted row iteration, one shared row
+  origin X equal to the core left edge, single contiguous span per row,
+  orientations R0/R180/MX/MY. See CHECKER_REPAIR_CONTRACT.md "Row/column
+  frames" for why (the checker mixes an iteration frame and a Grid frame).
 - The supplied PhysDesMgr must be the UDM Session current design because the
   final checker constructor reads Session; init validates and fails closed on
   mismatch. The UDM design/library objects must outlive the engine.

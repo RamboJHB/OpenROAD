@@ -41,6 +41,21 @@ result before classifying it; a count-based single-prefix strip is wrong.
 `FillerRepairEngine` privately converts checker and planner types and
 synthesizes planner requestId/status values from ordered results.
 
+## Row/column frames
+
+The checker internally uses TWO frames: `init(desMgr)` and the track pattern
+index rows by PhysRow ITERATION order (pad rows included) with x relative to
+the row origin, while `scanOverlaySnapshot` resolves committed neighbours and
+swapped fillers through `Grid::gridSnapDownY`/`gridX` (non-pad rows sorted by
+y, x relative to the core edge). `CheckRequest.rowId/colId` must be supplied
+in the iteration frame (it feeds the track pattern and the footprint index).
+
+The chain is consistent only when both frames coincide for every placed node:
+no pad row before a standard row, y-sorted row iteration, and the shared row
+origin X equal to the core left edge. `FillerRepairEngine::init()` validates
+this per node (`RowFrameMismatch`/`ColFrameMismatch` are Fatal) so a design
+outside that envelope fails loudly instead of being checked in mixed frames.
+
 ## Shared-state requirements
 
 PhysDesMgr, Grid, Network and one engine must describe one design revision.

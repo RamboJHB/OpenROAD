@@ -71,7 +71,7 @@ test/run_e2e_tests.sh
 SANITIZE=address test/run_e2e_tests.sh
 ```
 
-The 81 planner cases and 42 production E2E cases are GoogleTests. E2E source,
+The 81 planner cases and 43 production E2E cases are GoogleTests. E2E source,
 runner, plan and the only test-only fake UDM include tree all live in
 `fillerRepair/test`, so they move with the code;
 `sources.cmake` exports `DPL2_FILLER_REPAIR_E2E_TEST_SOURCE` for the destination
@@ -93,5 +93,5 @@ whose test data comes from fake UDM by design.
 No production source has a fake UDM dependency or compile-time branch. The E2E
 uses fake UDM as the test-data provider only; supplied infrastructure/checker
 and production fillerRepair compile with `-Wall -Wextra -Werror`. Current
-result: planner 81/81 and E2E 42/42 normal+ASan; full CTest 123/123
+result: planner 81/81 and E2E 43/43 normal+ASan; full CTest 124/124
 normal+ASan; Werror clean.
