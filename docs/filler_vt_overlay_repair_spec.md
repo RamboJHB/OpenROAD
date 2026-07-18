@@ -199,8 +199,9 @@ repair engine 内部是五层管线,每层单独可测、单独可替换:
 production 调用方只接触 `FillerRepairEngine`,不构造 PlacementView 或 adapter:
 
 ```text
-opto: engine.init(desMgr, leafCells, fillerSetting, targetNewMaster)
-  → private Grid/Network snapshot + final checker + production view
+opto: FillerRepairEngine engine(deplace->getGrid(), deplace->getNetwork())
+opto: engine.init(deplace->getDesMgr(), fillerSetting)
+  → reuse existing infrastructure + private final checker/production view
 
 opto: engine.precheck()                      [mutation 前;只查 gap/overlap]
   isLegal=false → opto 阻断
@@ -216,26 +217,29 @@ opto: engine.repair(targetCell, newMaster)   [pre-commit,不调 precheck]
 opto/infrastructure: commit
 ```
 
-view/oracle/wire 转换全部是 `FillerRepairEngine.cpp` 的 private
+若 `newMaster` 尚未实例化、因而不在现有 Network 中,`repair()` 先以幂等
+`Network::addMaster()` 注册它,再重建 private checker/view;调用方无需在 init 时
+预告 target master。view/oracle/wire 转换全部是 `FillerRepairEngine.cpp` 的 private
 implementation。planner-only `OverlayCheckRequest`/`CheckStatus`/`requestId`
 abstraction 位于 `OracleGate.h`,只供 `internal::FillerRepairPlanner` 与 unit-test
 fake 使用。production 签名只使用 final checker 的 `ipl::CheckResult`、
 `ipl::Diagnostic`、`ipl::FillerChanges`、`FillerCellRecord`。`init()` 成功前,
 `precheck()`/`repair()` 一律 fail-closed。
 
-checker overlay API 与 engine API 都是 non-mutating query。repair 拒绝同实例重入;
+checker overlay API 与 engine API 都不修改 UDM/placement。target master 的首次
+注册只扩展既有 Network 的 in-memory master registry,不修改 DB。repair 拒绝同实例重入;
 checker 调用在 engine private view 内串行化。一个 engine 私有拥有一套
-Grid/Network/checker/init snapshot,对应一个 design revision;commit 后重新构造并
-init。
+checker/view、借用一套 Grid/Network,对应一个 design revision;commit 后重新构造并 init。
 
 ### 3.4 Infrastructure alignment (2026-07-18)
 
 - 移植目的地已经提供完整 infrastructure 与 final checker;production delivery
-  **只复制 `src/dpl2/src/fillerRepair/`**。engine 内部使用并私有持有这些 supplied
-  类型,本项目不修改其 source/API,也不要求其提供本仓库的 CMake。
-- default-constructed `FillerRepairEngine` 是唯一 production repair 边界。
-- 单次 `init(PhysDesMgr*, leafCells, fillerSetting, targetNewMaster)` 建立并拥有
-  Grid/Network/final-checker/placement/master/candidate snapshot;
+  **只复制 `src/dpl2/src/fillerRepair/`**。engine 借用 supplied Grid/Network、私有
+  持有 checker/view;本项目不修改其 source/API,也不要求其提供本仓库的 CMake。
+- `FillerRepairEngine(Grid*, Network*)` 是唯一 production repair 边界;通常直接传
+  `DePlace::getGrid()` / `getNetwork()`。
+- 单次 `init(PhysDesMgr*, fillerSetting)` 绑定现有 infrastructure,注册 configured
+  filler masters 并建立 final-checker/view;不再接收 leafCells 或 targetNewMaster。
   row/site/status/origin/orientation 的 authority 是 `PhysDesMgr`。
 - `precheck()` 独立从 `PhysDesMgr` placement 与 `Network` cell universe 扫描
   gap/overlap,不检查 target、master size、candidate、ID mapping 或 implant DRC。
@@ -243,10 +247,11 @@ init。
   同宽同高、异 VT、filler-only 与相同 bottom-band polarity layout。
 - checker/planner instance/master ID 固定为 `Node::getId()` / `Master::getId()`;
   `LeafCellID` / `LibCellID` 是 production `FillerCellRecord` handle。
-- target new、placed 及 configured filler masters 必须在 checker 构造前注册到
-  Network,包括未实例化候选。
-- fake-UDM-only E2E 编译真实 Grid/Network、final checker、包含 private snapshot
-  builder 的 FillerRepairEngine 与 internal planner;不链接任何其他 test double。
+- placed masters 来自既有 Network;configured filler masters 在 init 时注册;
+  uninstantiated target new master 由 repair 首次按需注册并触发 checker/view 重建。
+- fake-UDM-only E2E 的 test-only fixture 从数据构建真实 Grid/Network,再编译 final
+  checker、复用既有 infrastructure 的 FillerRepairEngine 与 internal planner;
+  不链接任何其他 test double。
   fake 与 real UDM 只通过 test CMake include/link interface 切换,production source
   无条件编译同一套真实 UDM 名称/签名。normal/ASan/CMake/Werror 均验证。
 - production 编译清单唯一定义在 `src/fillerRepair/sources.cmake`
@@ -520,14 +525,12 @@ master 序列)可铺满该宽度"。第一版实现建议内部就按宽度建�
 ### 5.4 Production API 与 placement precheck
 
 ```cpp
-FillerRepairEngine();
+FillerRepairEngine(Grid* grid, Network* network);
 
 void setDebugLogging(bool enabled);  // optional [fr][stage], default false
 
 bool init(PhysDesMgr* desMgr,
-          const std::vector<LeafCellID>& leafCells,
-          const fillerSetting& fillerSetting,
-          const PhysLibCell& targetNewMaster);
+          const fillerSetting& fillerSetting);
 
 ipl::CheckResult precheck() const;
 
@@ -535,10 +538,12 @@ RepairOutcome repair(LeafCellID targetCell,
                      const PhysLibCell& newMaster);
 ```
 
-`init()` 是唯一初始化点:内部按 `PhysDesMgr + leafCells` 构建 Grid/Network,
-注册 placed、configured filler 与未实例化的 `targetNewMaster`,然后构造 final
-checker 和 production view。调用方不构造 repair infrastructure/checker。
-同一 engine 拒绝第二次 init;design commit 后构造新 engine。
+constructor 直接借用 dpl2/DePlace 已初始化的 Grid/Network;`init()` 验证它们与
+PhysDesMgr/fillerSetting/active UDM design 一致,注册 configured filler masters,
+然后构造 final checker 和 production view。调用方不提供 hierarchy leaf list,
+也不构造 repair-specific infrastructure/checker。`repair()` 遇到 Network 尚未包含的
+`newMaster` 时先按需注册并重建 private checker/view。同一 engine 拒绝第二次 init;
+design commit 后构造新 engine。
 
 `precheck()` 的 contract:
 
@@ -901,7 +906,7 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 
 当前 81 个 pure-planner cases 已转换为独立 GoogleTests,使用 isolated planner
 test doubles;integration GoogleTest 只 fake UDM 数据,使用 supplied Network/Grid、
-final checker 与 production FillerRepairEngine。39 个 E2E,完整 CTest 共 120 项。
+final checker 与 production FillerRepairEngine。42 个 E2E,完整 CTest 共 123 项。
 E2E source/runner 和唯一的 test-only fake UDM include tree 位于
 `src/dpl2/src/fillerRepair/test`,随整个 fillerRepair 目录一起移植;每类 production
 behavior 有 3 个独立 testcase,每个 fixture 至少 5 行 standard-cell placement。
@@ -974,11 +979,12 @@ gate 语义:
   per band-slot 计数:同行 2 票/跨行 1 票)、SubsetSearcher、OracleGate
   (batch、canonical cache、baseline-delta、best-overlay 记录)、
   last-window definitive 语义。
-- production `FillerRepairEngine` facade 私有构建并拥有 supplied
-  Grid/Network/final-checker 类型,从 PhysDesMgr 一次建立完整 snapshot;
+- production `FillerRepairEngine` facade 借用 supplied Grid/Network,私有拥有
+  final checker/view;configured filler init-time 注册、target master repair-time
+  lazy 注册;
   fake-UDM-only GoogleTest E2E 与 standalone CMake/CTest 接入;编译清单唯一定义在
   `src/fillerRepair/sources.cmake`。
-- 81 个 planner unit tests + 39 个 production E2E tests 全为 GoogleTest;
+- 81 个 planner unit tests + 42 个 production E2E tests 全为 GoogleTest;
   precheck/repair 均 non-mutating;production 交付只含 fillerRepair,
   supplied infrastructure/checker 零修改。普通版和 ASan 全绿。
   详见 `src/dpl2/HandOff.md` 与 `src/fillerRepair/test/TestPlan.md`。

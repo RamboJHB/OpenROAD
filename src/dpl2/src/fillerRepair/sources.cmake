@@ -9,7 +9,7 @@
 #   DPL2_FILLER_REPAIR_PRODUCTION_SOURCES  the complete compile list a
 #                                          destination build adds: planner +
 #                                          UDM-facing facade with its private
-#                                          snapshot builder/checker
+#                                          checker/view
 #   DPL2_FILLER_REPAIR_E2E_TEST_SOURCE      co-located production E2E GoogleTest
 
 set(DPL2_FILLER_REPAIR_PLANNER_SOURCES

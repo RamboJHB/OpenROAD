@@ -11,30 +11,32 @@ list to the destination's existing target. No infrastructure/checker source or
 API change is required, and this change set keeps both directories at zero
 diff.
 
-The production boundary is now one checker-style class:
+The production boundary is one checker-style class that reuses DePlace's
+already initialized infrastructure:
 
 ```cpp
-FillerRepairEngine();
+FillerRepairEngine(Grid* grid, Network* network);
 void setDebugLogging(bool enabled);  // optional, disabled by default
 bool init(PhysDesMgr* desMgr,
-          const std::vector<LeafCellID>& leafCells,
-          const fillerSetting& fillerSetting,
-          const PhysLibCell& targetNewMaster);
+          const fillerSetting& fillerSetting);
 ipl::CheckResult precheck() const;
 RepairOutcome repair(LeafCellID targetCell, const PhysLibCell& newMaster);
 ```
 
-`init()` privately builds and owns Grid, Network, the final checker and the
-view/oracle/wire conversion. The pure search pipeline is
+The engine borrows Grid/Network and privately owns the final checker plus the
+view/oracle/wire conversion. It does not import hierarchy cells or repaint a
+second Grid. The pure search pipeline is
 `internal::FillerRepairPlanner`. `init()` is one-shot and must succeed before
 use: until it does, `precheck()` and `repair()` fail closed
 (`precheck_not_initialized` / `engine_not_initialized`).
 
 ## Required opto sequence
 
-1. Construct one default `FillerRepairEngine` and call `init()` once with the
-   current PhysDesMgr, hierarchy leaf IDs, filler setting and proposed target
-   master. No separate repair infrastructure/checker object is constructed.
+1. Construct one `FillerRepairEngine` with `DePlace::getGrid()` and
+   `DePlace::getNetwork()`, then call `init()` once with
+   `DePlace::getDesMgr()` and the filler setting. No hierarchy leaf list,
+   proposed target master or separate repair infrastructure/checker object is
+   supplied.
 2. Before any cell mutation, call `precheck()`.
 3. If `precheck().isLegal == false`, stop. `Gap`/`Overlap` diagnostics are
    warnings for logging, but the bool is a hard blocking contract.
@@ -64,8 +66,11 @@ not call precheck again.
 
 ## Repair semantics
 
-The first implant query overlays the target new master with an empty filler
-change list. No violation returns success with empty changes. Violations enter
+If the target new master is not yet represented in Network (for example it is
+uninstantiated), repair registers it with `Network::addMaster()` and rebuilds
+its private checker/view. The first implant query then overlays the target new
+master with an empty filler change list. No violation returns success with
+empty changes. Violations enter
 the unchanged adaptive-L1/ranker/subset/cache/budget/baseline-delta planner.
 A clean solution returns `ipl::FillerChanges`; no solution returns failure and
 empty changes. The final checker remains the only DRC oracle.
@@ -87,9 +92,11 @@ default and does not affect search behavior.
 | implant legality | final `ImplantLayerChecker` |
 | commit | opto/infrastructure |
 
-Engine initialization registers placed, target-new and configured candidate
-masters before constructing its private checker, including uninstantiated
-masters.
+Placed masters come from the existing Network. Engine init idempotently
+registers configured candidate masters before constructing its private checker.
+Repair idempotently registers an uninstantiated target-new master and rebuilds
+that checker/view before querying it. These registry updates do not mutate UDM
+placement.
 
 ## Migration to the destination environment
 
@@ -119,6 +126,11 @@ only modifications that may be needed on their side:
   `infrastructure/...`-style includes work today);
 - C++17 or newer for the production sources (the harness builds them at 17
   for the planner and 20 for the chain).
+
+The reused-infrastructure boundary requires the APIs already present in this
+branch: `DePlace::getGrid()`, `getNetwork()`, `getDesMgr()` and idempotent
+`Network::addMaster(const PhysLibCell&, const Grid*)`. No RepairInfrastructure,
+leaf traversal or placement importer is copied into production.
 
 Do not hand-copy file names -- the test harness includes the same
 `sources.cmake`, so the two lists cannot drift. Do not add
@@ -176,29 +188,32 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-All 81 planner cases and 39 production E2E cases are GoogleTests. The portable
+All 81 planner cases and 42 production E2E cases are GoogleTests. The portable
 E2E source/runner and test-only fake UDM include tree live in
 `src/dpl2/src/fillerRepair/test`, and
 `sources.cmake` exports `DPL2_FILLER_REPAIR_E2E_TEST_SOURCE` for destination
 CMake wiring. It uses fake UDM only as data and links supplied
 Grid/Network/final-checker types plus FillerRepairEngine and the internal
-planner. The engine owns the repair snapshot and checker instances.
+planner. A test-only fixture wires Grid/Network from fake UDM data, matching
+the production objects normally supplied by DePlace; the engine owns only its
+checker/view instances.
 Each behavior has three independently discovered cases; every case constructs
 at least five standard rows. Coverage includes clean/gap/overlap precheck,
 opto-blocking values, deterministic/non-mutating repair, persistent checker
 diagnostics, candidate-universe failures and first-non-pad-row validation.
 
-2026-07-18 result: planner 81/81 normal and ASan; E2E 39/39 normal and ASan;
-full CTest 120/120 normal and ASan; all targets passed Werror.
+2026-07-18 result: planner 81/81 normal and ASan; E2E 42/42 normal and ASan;
+full CTest 123/123 normal and ASan; all targets passed Werror.
 
 ## Integration risks
 
 - Opto must honor the explicit precheck ordering; repair has no fallback gate.
-- One engine owns Grid/Network/checker for one PhysDesMgr revision. Its init is
-  one-shot; construct a new engine after commit.
+- Grid/Network/PhysDesMgr must already describe the same revision and must
+  outlive the borrowing engine. Init is one-shot; construct a new engine after
+  commit.
 - The supplied PhysDesMgr must be the UDM Session current design because the
   final checker constructor reads Session; init validates and fails closed on
-  mismatch. The UDM design/library objects must outlive the engine snapshot.
+  mismatch. The UDM design/library objects must outlive the engine.
 - Destination build must consume `sources.cmake`; nothing else is part of the
   production delivery.
 - Real-UDM verification still depends on the destination providing its UDM
@@ -208,3 +223,8 @@ full CTest 120/120 normal and ASan; all targets passed Werror.
   accidentally shared across engines.
 - The public facade owns production translation; planner fake/checker types
   must remain outside production targets.
+- `repair()` may idempotently add a previously uninstantiated target master to
+  Network and rebuild its private checker/view; it still never mutates UDM.
+- A destination whose `Network::addMaster` overload has a different signature
+  needs one mechanical call-site adaptation in `FillerRepairEngine.cpp`; no
+  planner or checker change is involved.

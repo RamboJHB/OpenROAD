@@ -43,10 +43,12 @@ synthesizes planner requestId/status values from ordered results.
 
 ## Shared-state requirements
 
-PhysDesMgr and one engine must describe one design revision. Engine `init()`
-privately builds Network/Grid, registers every placed master, the proposed
-target master and all `getFillerMasters()` masters, then constructs the
-checker. Construct a new engine after commit.
+PhysDesMgr, Grid, Network and one engine must describe one design revision.
+The engine borrows the initialized Grid/Network, registers all
+`getFillerMasters()` candidates, then constructs the checker. If repair first
+sees an uninstantiated target master, it registers that master in Network and
+rebuilds its private checker/view before issuing the overlay query. Construct a
+new engine after commit.
 
 The engine serializes its own checker calls because the current const overlay
 path updates internal counters. The checker is engine-owned, so cross-engine
@@ -71,8 +73,9 @@ No DRC rule or scan behavior changed. Warning-clean integration required only:
 ## Verified test boundary
 
 The final E2E uses fake UDM as data only and production Grid, Network, final
-checker, FillerRepairEngine (including its private snapshot builder) and
-planner. Normal and ASan builds pass with `-Wall -Wextra -Werror`.
+checker, FillerRepairEngine and planner. Its test-only fixture wires the
+infrastructure normally supplied by DePlace; the production engine contains no
+snapshot builder. Normal and ASan builds pass with `-Wall -Wextra -Werror`.
 
 Future checker API or semantic changes must be recorded here before engine
 changes are merged.
