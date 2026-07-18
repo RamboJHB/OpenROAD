@@ -1,30 +1,30 @@
 #!/usr/bin/env bash
-# Builds and runs the fillerRepair unit tests. Standalone (STL only) until
-# dpl2 joins the CMake build (spec section 11 TODO 12).
-# Usage: test/run_tests.sh                       run all, quiet
-#        FR_VERBOSE=1 test/run_tests.sh          all, with [fr] transcript
-#        FR_VERBOSE=1 test/run_tests.sh <name>   only cases matching <name>
-#        SANITIZE=address test/run_tests.sh      run all under AddressSanitizer
+# Builds and runs the 87 GoogleTest planner cases.
+# Usage: test/run_tests.sh
+#        FR_VERBOSE=1 test/run_tests.sh
+#        test/run_tests.sh --gtest_filter='FillerRepairPlanner.*adaptive*'
+#        SANITIZE=address test/run_tests.sh
 set -euo pipefail
-cd "$(dirname "$0")/.."
 
-BUILD_DIR=test/build
-mkdir -p "$BUILD_DIR"
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+dpl2_root="$(cd "$script_dir/../../.." && pwd)"
 
-cxx="${CXX:-c++}"
-sanitize_flags=(-O0)
+asan=OFF
+build_name=planner-gtest
 if [[ "${SANITIZE:-}" == "address" ]]; then
-  sanitize_flags+=(-fsanitize=address -fno-omit-frame-pointer)
+  asan=ON
+  build_name=planner-gtest-asan
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # Homebrew GoogleTest is an unsanitized static archive. libc++ container
+    # annotations otherwise report inside GoogleTest discovery, not our code.
+    export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_container_overflow=0"
+  fi
 fi
+build_dir="$dpl2_root/test/build/$build_name"
 
-"$cxx" -std=c++17 -Wall -Wextra -Werror -g \
-  "${sanitize_flags[@]}" \
-  PlacementView.cpp Swap.cpp Signature.cpp Window.cpp \
-  Ranker.cpp SubsetSearch.cpp OracleGate.cpp \
-  FillerRepairEngine.cpp \
-  fake/FakeImplantChecker.cpp \
-  fake/FakeUdmCandidateProvider.cpp \
-  test/test_main.cpp \
-  -o "$BUILD_DIR/fillerRepair_tests"
-
-"$BUILD_DIR/fillerRepair_tests" "$@"
+cmake -S "$dpl2_root/test" -B "$build_dir" \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DDPL2_ENABLE_ASAN="$asan" \
+  -DDPL2_TEST_USE_FAKE_UDM=ON
+cmake --build "$build_dir" --target dpl2_filler_repair_planner_test --parallel
+"$build_dir/dpl2_filler_repair_planner_test" "$@"

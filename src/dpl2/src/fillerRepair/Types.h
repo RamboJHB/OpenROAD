@@ -4,9 +4,9 @@
 // Shared base types for the filler VT overlay repair planner.
 //
 // The planner is a pure, deterministic component (spec section 3.1): it
-// depends only on the abstract interfaces in PlacementView.h / CheckerApi.h and never on the UDM database or the real checker headers.
-// Real checker / infrastructure integrations are attached later through
-// adapters; until then the fakes under fake/ implement these interfaces.
+// depends only on PlacementView plus the planner-internal oracle protocol in
+// OracleGate.h, never on UDM or the real checker headers. Test fakes implement
+// that protocol; the production FillerRepairEngine translates it privately.
 //
 // Conventions:
 //  - All x coordinates are DBU. Site alignment comes from
@@ -67,8 +67,8 @@ enum class BandPolarity : uint8_t
 };
 
 // Placement orientation. The checker draft uses eUTL::PhysOrientation (a
-// UDM type); the pure planner keeps this minimal enum and the real DB
-// adapter maps between the two.
+// UDM type); the pure planner keeps this minimal enum and the production
+// engine boundary maps between the two.
 enum class Orient : uint8_t
 {
   R0,
@@ -78,7 +78,7 @@ enum class Orient : uint8_t
 };
 
 // Planner-side guard region. The wire-level checker API uses a geometric
-// Rect; converting rows to y coordinates is the DB adapter's concern, so the
+// Rect; converting rows to y coordinates is the production boundary's concern, so the
 // pure planner keeps the row-based form everywhere.
 struct Region
 {
@@ -97,9 +97,8 @@ enum class Severity
   Fatal
 };
 
-// Stable machine-readable code + human-readable message. Codes used so far:
-//   NonFullUtility     - utility pre-check failed (placement precondition)
-//   NotImplemented     - pipeline stage not implemented yet (skeleton only)
+// Stable machine-readable code + human-readable message used inside the pure
+// planner. Production converts these to final-checker ipl::Diagnostic.
 struct Diagnostic
 {
   Severity severity = Severity::Info;
@@ -238,9 +237,7 @@ struct FillerRepairResult
 enum class CoverageIssueKind
 {
   Gap,
-  Overlap,
-  OffGrid,
-  IllegalOccupant
+  Overlap
 };
 
 struct CoverageIssue

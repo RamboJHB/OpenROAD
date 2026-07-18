@@ -1,69 +1,50 @@
-# fillerRepair — filler VT overlay repair planner
+# fillerRepair — filler VT overlay repair
 
 Updated: 2026-07-18.
 
-This directory contains the deterministic, non-mutating, swap-only V2.1
-planner. After an ECO proposes a new standard-cell master, it searches
-same-position/same-size filler replacements and asks the implant checker to
-validate atomic overlays. It never implements DRC or commits the database.
+`FillerRepairEngine` is the only production entry. It exposes a placement-only
+precheck plus pre-commit filler repair and never mutates the database.
+The destination already owns complete Grid/Network/infrastructure/checker
+implementations, so only this directory is migrated; none of those supplied
+sources is patched.
 
-## Production chain
+```cpp
+FillerRepairEngine engine(grid, network);
+engine.init(desMgr, checker, fillerSetting);
 
-```text
-PhysDesMgr + leaf IDs + fillerSetting + target new master
-                         |
-                RepairInfrastructure
-                         |
-                  Network + Grid
-                         |
-             adapter::PlacementView
-                 |               |
-           planner view    final checker oracle
-                 \               /
-                 FillerRepairEngine
-                         |
-                ipl::FillerChanges
+ipl::CheckResult placement = engine.precheck();  // opto calls before mutation
+RepairOutcome outcome = engine.repair(targetCell, newMaster);
 ```
 
-The final E2E uses fake UDM only to provide tech/library/placement data. Every
-component below that data boundary is production code.
+Precheck reports only `Gap` and `Overlap`. Warning diagnostics explain the
+location; `isLegal=false` is the hard opto-blocking value. It does not inspect
+target/master/candidates/IDs/implant DRC. Repair never calls precheck.
+
+Repair overlays `newMaster` and first asks the final checker with empty filler
+changes. A clean snapshot succeeds with empty changes; otherwise the internal
+planner searches same-position/same-size filler swaps. Commit remains with
+opto/infrastructure.
 
 ## Main files
 
 | Path | Purpose |
 |---|---|
-| `Types.h` | planner IDs, geometry, changes, diagnostics and results |
-| `PlacementView.h/.cpp` | abstract placement view and utility coverage check |
-| `CheckerApi.h` | planner-owned checker oracle interface |
-| `Swap.h/.cpp` | atomic filler swap generation/validation |
-| `Signature.h/.cpp` | violation normalization, matching and relatedness |
-| `Window.h/.cpp` | L0/adaptive-L1 windows and guards |
-| `Ranker.h/.cpp` | deterministic filler/domain ranking |
-| `SubsetSearch.h/.cpp` | filler combinations × domain assignments |
-| `OracleGate.h/.cpp` | batch/cache/baseline-delta acceptance |
-| `FillerRepairEngine.h/.cpp` | repair pipeline |
-| `adapter/PlacementView.h/.cpp` | production view/oracle/repair boundary |
-| `fake/` | private standalone-unit-test doubles; never linked into E2E |
+| `FillerRepairEngine.h/.cpp` | production API, private view/oracle conversion, precheck and repair |
+| `PlannerEngine.h/.cpp` | internal deterministic search pipeline |
+| `OracleGate.h/.cpp` | internal checker abstraction, batching, cache and baseline-delta gate |
+| `PlacementView.h/.cpp` | planner-only read view and gap/overlap coverage helper |
+| `Types.h` | planner-internal IDs, geometry and request/result types |
+| `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | unchanged search stages |
+| `fake/` | planner unit-test doubles; never linked into production/E2E |
 
-Production infrastructure construction is in
-`../infrastructure/RepairInfrastructure.{h,cpp}`.
-
-## Data contract
-
-- physical placement and precheck inputs: `PhysDesMgr`;
-- candidate allow-list: `fillerSetting::getFillerMasters()`;
-- topology and checker IDs: production Network;
-- VT/polarity: physical implant shapes matched to checker layers;
-- legality: final checker;
-- output: `ipl::FillerChanges` / `FillerCellRecord`.
-
-All placed masters, the proposed target master and all configured filler
-masters are registered before checker construction.
+The production adapter directory and standalone `CheckerApi.h` are deleted.
+Planner `OverlayCheckRequest`, `CheckStatus` and requestId stay internal to
+`OracleGate`; the public API uses final checker `CheckResult`, `Diagnostic`,
+`FillerChanges` and `FillerCellRecord`.
 
 ## Verification
 
 ```sh
-# planner unit tests
 test/run_tests.sh
 SANITIZE=address test/run_tests.sh
 
@@ -72,6 +53,18 @@ test/build_all.sh
 SANITIZE=address test/build_all.sh
 ```
 
-The E2E also has `src/dpl2/test/CMakeLists.txt` and a CTest registration.
-Current result: planner 87/87 normal+ASan; fake-UDM-only E2E normal+ASan;
-all production-chain sources compile with `-Wall -Wextra -Werror`.
+The 87 planner cases and E2E are GoogleTests. The test CMake selects fake UDM
+only through `dpl2_test_udm` include/link settings; the same source graph can
+use real UDM with:
+
+```sh
+cmake -S test -B test/build/real-udm \
+  -DDPL2_TEST_USE_FAKE_UDM=OFF \
+  -DDPL2_TEST_UDM_INCLUDE_DIRS='<real include dirs>' \
+  -DDPL2_TEST_UDM_LIBRARIES='<real libraries or CMake targets>'
+```
+
+No production source has a fake UDM dependency or compile-time branch. The E2E
+uses fake UDM as the test-data provider only; supplied infrastructure/checker
+and production fillerRepair compile with `-Wall -Wextra -Werror`. Current
+result: planner 87/87 and full CTest 88/88, normal+ASan.

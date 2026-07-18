@@ -21,10 +21,6 @@ const char* kindName(CoverageIssueKind kind)
       return "Gap";
     case CoverageIssueKind::Overlap:
       return "Overlap";
-    case CoverageIssueKind::OffGrid:
-      return "OffGrid";
-    case CoverageIssueKind::IllegalOccupant:
-      return "IllegalOccupant";
   }
   return "?";
 }
@@ -148,14 +144,6 @@ SiteCoverageResult PlacementView::checkSiteCoverage(const DebugLog& log) const
     for (const PlacedInstance& inst : instances) {
       const XInterval span = instanceSpan(*this, inst);
 
-      if ((span.xl - legal.xl) % site_width != 0) {
-        addIssue(CoverageIssueKind::OffGrid, rowId, span.xl, span.xh, {inst.id});
-      }
-      if (span.xl < legal.xl || span.xh > legal.xh) {
-        addIssue(CoverageIssueKind::IllegalOccupant, rowId, span.xl, span.xh,
-                 {inst.id});
-      }
-
       const XInterval clipped{std::max(span.xl, legal.xl),
                               std::min(span.xh, legal.xh)};
       clippedSpans.push_back(clipped);
@@ -237,7 +225,7 @@ SiteCoverageResult PlacementView::checkSiteCoverage(const DebugLog& log) const
 
   result.isFullUtility = result.issues.empty();
   if (result.isFullUtility) {
-    log.msg("precheck", "all rows fully covered -> 100% utility OK");
+    log.msg("precheck", "placement has no gap/overlap");
   } else {
     for (const CoverageIssue& issue : result.issues) {
       log.msg("precheck",
@@ -245,8 +233,8 @@ SiteCoverageResult PlacementView::checkSiteCoverage(const DebugLog& log) const
                   show(XInterval{issue.xLo, issue.xHi}), " sites=",
                   issue.siteCount, " -> precondition failure"));
       result.diagnostics.push_back(makeDiag(
-          Severity::Error,
-          "NonFullUtility",
+          Severity::Warning,
+          kindName(issue.kind),
           cat(kindName(issue.kind), " row=", issue.rowId, " x=",
               show(XInterval{issue.xLo, issue.xHi}), " sites=", issue.siteCount)));
     }

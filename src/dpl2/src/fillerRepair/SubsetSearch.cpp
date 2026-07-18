@@ -3,6 +3,8 @@
 
 #include "SubsetSearch.h"
 
+#include "PlannerEngine.h"
+
 #include <algorithm>
 #include <functional>
 

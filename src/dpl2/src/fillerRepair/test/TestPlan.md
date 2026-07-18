@@ -1,71 +1,66 @@
 # Test Plan — fillerRepair
 
-Updated: 2026-07-18. Status: complete for the V2.1 swap-only scope.
+Updated: 2026-07-18.
 
-## Test tiers
+## Tiers
 
 | Tier | Command | Boundary |
 |---|---|---|
-| Planner unit | `src/dpl2/src/fillerRepair/test/run_tests.sh` | 87 white-box planner tests; private doubles allowed |
-| Production E2E | `src/dpl2/test/build_all.sh` | fake UDM data only; real infrastructure/checker/adapter/planner |
-| CTest | `src/dpl2/test/CMakeLists.txt` | same production E2E target |
+| Planner unit | `src/dpl2/src/fillerRepair/test/run_tests.sh` | 87 individually registered GoogleTests with private planner doubles |
+| Production E2E | `src/dpl2/test/build_all.sh` | 1 GoogleTest; fake UDM data with supplied infra/checker and production engine/planner |
+| Full CTest | `src/dpl2/test/CMakeLists.txt` | 88 discovered GoogleTests |
 
-All tiers support AddressSanitizer. Production E2E also compiles with
+Normal and AddressSanitizer runs are required. Production builds use
 `-Wall -Wextra -Werror`.
 
-## Final E2E composition
+On macOS the scripts set `ASAN_OPTIONS=detect_container_overflow=0` because
+Homebrew's GoogleTest static archive is not sanitizer-instrumented; this avoids
+a libc++ annotation mismatch during test discovery. AddressSanitizer remains
+enabled for every project source and test execution.
 
-Included:
+## Production E2E composition
 
-- fake UDM tech, masters, rows and physical-cell records;
-- production `RepairInfrastructure`, Network and real `Grid.cpp`;
-- production `fillerSetting::getFillerMasters()` candidate path;
-- final `ImplantLayerChecker` initialized from the fixture `PhysDesMgr`;
-- unified `adapter::PlacementView`;
-- production `FillerRepairEngine`.
+Included: production RepairInfrastructure, Grid/Network, fillerSetting, final
+ImplantLayerChecker, FillerRepairEngine, internal PlannerEngine and all search
+stages. Fake UDM provides tech/library/row/cell data only.
 
-Excluded:
+Excluded: `fillerRepair/fake/*`, deleted production adapter, Grid stubs, fake
+PlacementDRC, Helper injection and test DePlace/Network shims.
 
-- `fillerRepair/fake/*`;
-- Grid link stubs;
-- fake PlacementDRC;
-- RD Helper Grid injection;
-- test DePlace/Network shims;
-- manually constructed Network masters/nodes in the fixture.
+The fake UDM include tree mirrors real UDM namespaces, names, signatures and
+fixture-visible behavior. `dpl2_test_udm` is an interface target that switches
+only include/link configuration. With `DPL2_TEST_USE_FAKE_UDM=OFF`, real UDM is
+selected through `DPL2_TEST_UDM_INCLUDE_DIRS` / `DPL2_TEST_UDM_LIBRARIES`.
+There is no fake-related production `#ifdef`, and infrastructure/checker source
+files remain unmodified.
 
-## Assertions
+## Required precheck cases
 
-The smoke verifies:
+1. Clean placement: `isLegal=true`, no diagnostics.
+2. Gap: `isLegal=false`, at least one `Gap` warning diagnostic.
+3. Overlap: `isLegal=false`, at least one `Overlap` warning diagnostic.
 
-1. production infrastructure builds successfully;
-2. Network nodes are imported from PhysDesMgr cell handles;
-3. placed, target-new and all configured filler masters are registered;
-4. unified adapter is ready;
-5. adapter placement/precheck geometry agrees with PhysDesMgr;
-6. candidate IDs are exactly the `getFillerMasters()` allow-list;
-7. repair finds the required VTH filler swap;
-8. output is an exact replacement `FillerCellRecord`;
-9. only a valid adjacent filler is changed;
-10. a second run produces an identical result without DB mutation.
+Each case snapshots all fixture cell origins, masters, status and orientation
+before/after precheck and requires equality. The tests do not pass target,
+newMaster or candidate information to precheck, proving that scope separation.
 
-The fixture exercises an uninstantiated target-new master and replacement
-candidate registration, three VT domains, row-orientation alternation,
-minimum-width repair and deterministic ranking.
+## Required repair cases
 
-## Unit-test isolation
+- `init()` succeeds through the single production facade.
+- Target new master is checked as an overlay with empty filler changes first.
+- A clean target overlay returns success with an empty change list.
+- Existing violating fixture returns the deterministic FH2 filler replacement.
+- Output is an exact `FillerCellRecord` in `ipl::FillerChanges`.
+- Repeated repair returns identical output.
+- Physical UDM snapshots remain unchanged after each repair.
+- Planner tests continue covering adaptive-L1, ranking, subset enumeration,
+  budgets, cache, baseline-delta and malformed internal oracle protocol.
 
-The 87 planner tests use private Design/checker/scripted doubles for exact
-window/search states and malformed-oracle protocol injection. A correct final
-checker cannot generate those fault shapes on demand. These doubles remain in
-the standalone unit executable only; they are not E2E, production or public
-adapter dependencies.
-
-## Commands and result
+## Commands
 
 ```sh
 src/dpl2/src/fillerRepair/test/run_tests.sh
 SANITIZE=address src/dpl2/src/fillerRepair/test/run_tests.sh
-
 src/dpl2/test/build_all.sh
 SANITIZE=address src/dpl2/test/build_all.sh
 
@@ -75,22 +70,23 @@ ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 
 cmake -S src/dpl2/test -B src/dpl2/test/build-cmake-asan \
   -DDPL2_ENABLE_ASAN=ON
+# macOS + Homebrew GoogleTest only; the two scripts above set this themselves:
+export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_container_overflow=0"
 cmake --build src/dpl2/test/build-cmake-asan -j2
 ctest --test-dir src/dpl2/test/build-cmake-asan --output-on-failure
 ```
 
-2026-07-18:
-
-- planner normal: 87/87;
-- planner ASan: 87/87;
-- E2E script normal: pass;
-- E2E script ASan: pass;
-- CTest normal: 1/1;
-- CTest ASan: 1/1.
+2026-07-18 results: planner 87/87 normal and ASan; production E2E normal and
+ASan; full CTest 88/88 normal and ASan; Werror clean.
 
 ## Regression rules
 
-- Fixed input must produce identical changes, diagnostics and checker calls.
-- Planner tests assert oracle handling, not independent DRC semantics.
-- New production-boundary behavior needs a fake-UDM E2E assertion.
-- No test may restore a non-UDM substitute to the E2E link target.
+- Repair must never invoke placement precheck.
+- Precheck diagnostics may be warnings, but gap/overlap must set
+  `isLegal=false` so opto can block.
+- Neither public API mutates the DB.
+- Production signatures must not expose planner requestId/status types.
+- No planner fake may enter a production/E2E link target.
+- Switching fake/real UDM must be an include/link-only CMake change.
+- Production delivery contains fillerRepair only; supplied infra/checker must
+  remain at zero diff.

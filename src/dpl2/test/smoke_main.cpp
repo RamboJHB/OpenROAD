@@ -1,6 +1,6 @@
 // Tier-1 end-to-end smoke over the REAL repair chain:
 //   fake-UDM DesignDb -> Session -> ipl::ImplantLayerChecker (real
-//   init(desMgr) UDM extraction) -> adapter::PlacementView::repair().
+//   init(desMgr) UDM extraction) -> FillerRepairEngine::{precheck,repair}.
 //
 // Scenario (siteWidth=1, rowHeight=8, WIDTH rule=6, SPACING rule=2):
 //   row1: SL[0,6) FL[6,8) T=TL[8,12) FL2[12,14) SL[14,20)   (all VTL)
@@ -11,12 +11,16 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <algorithm>
 #include <iterator>
 #include <string>
+#include <tuple>
 #include <vector>
 
+#include <gtest/gtest.h>
+
 #include "drc/ImplantLayerChecker.h"
-#include "fillerRepair/adapter/PlacementView.h"
+#include "fillerRepair/FillerRepairEngine.h"
 #include "infrastructure/RepairInfrastructure.h"
 #include "infrastructure/fillerSetting.h"
 
@@ -72,24 +76,51 @@ const Placement kPlacements[] = {
     {123, 3, 2, 18},
 };
 
-int failures = 0;
+using PhysicalSnapshot = std::vector<
+    std::tuple<int, int64_t, int64_t, int, int, int>>;
+
+PhysicalSnapshot snapshotPhysicalData(fake_udm::DesignDb& db)
+{
+  PhysicalSnapshot snapshot;
+  for (const Placement& placement : kPlacements) {
+    const eUNL::PhysCell cell
+        = db.desMgr().getPhysCell(eUNL::LeafCellID(0, placement.cellIndex));
+    const eUTL::Point2D origin = cell.getOrigin();
+    snapshot.emplace_back(
+        placement.cellIndex,
+        origin.getX().getStorage(),
+        origin.getY().getStorage(),
+        cell.getPhysMaster().getLibCellId().getIndexValue(),
+        static_cast<int>(cell.getStatus()),
+        static_cast<int>(cell.getOrient().getValue()));
+  }
+  return snapshot;
+}
+
+bool hasDiagnostic(const dpl2::ipl::CheckResult& result,
+                   const std::string& status)
+{
+  return std::any_of(result.diagnostics.begin(), result.diagnostics.end(),
+                     [&](const dpl2::ipl::Diagnostic& diagnostic) {
+                       return diagnostic.status == status;
+                     });
+}
 
 void expect(bool ok, const std::string& what)
 {
-  if (!ok) {
-    ++failures;
-    std::printf("[smoke][FAIL] %s\n", what.c_str());
-  } else {
+  SCOPED_TRACE(what);
+  EXPECT_TRUE(ok);
+  if (ok) {
     std::printf("[smoke][ok] %s\n", what.c_str());
   }
 }
 
 }  // namespace
 
-int main()
+TEST(FillerRepairProduction, FakeUdmEndToEnd)
 {
-  using dpl2::fillerRepair::adapter::PlacementView;
-  using dpl2::fillerRepair::adapter::RepairOutcome;
+  using dpl2::fillerRepair::FillerRepairEngine;
+  using dpl2::fillerRepair::RepairOutcome;
 
   // --- fake UDM design ------------------------------------------------------
   fake_udm::DesignDb db;
@@ -157,32 +188,52 @@ int main()
   dpl2::ipl::ImplantLayerChecker checker(infrastructure.grid(),
                                          infrastructure.network());
 
-  // --- unified boundary + repair --------------------------------------------
-  PlacementView::Config config;
-  config.verbose = std::getenv("FR_VERBOSE") != nullptr;
-  PlacementView view(db.design.getPhysDesMgr(), infrastructure.grid(),
-                     infrastructure.network(), &checker, &fillerSetting,
-                     config);
-  for (const auto& diag : view.setupDiagnostics()) {
-    std::printf("[smoke][setup] %s: %s\n", diag.code.c_str(),
-                diag.message.c_str());
-  }
-  expect(view.isReady(), "unified PlacementView is ready");
-  const int targetNodeId =
-      infrastructure.network()->getNodeId(eUNL::LeafCellID(0, 112));
-  const auto* targetInstance = view.instance(targetNodeId);
-  expect(targetInstance != nullptr && targetInstance->rowId == 1
-             && targetInstance->x == 8,
-         "PlacementView precheck geometry comes from PhysDesMgr");
-  const std::vector<dpl2::fillerRepair::MasterId>& candidates =
-      view.fillerMasterIds();
-  expect(candidates == std::vector<dpl2::fillerRepair::MasterId>({3, 4, 5}),
-         "candidate universe comes from getFillerMasters");
+  // --- single production boundary ------------------------------------------
+  FillerRepairEngine engine(infrastructure.grid(), infrastructure.network());
+  expect(engine.init(db.design.getPhysDesMgr(), &checker, &fillerSetting),
+         "FillerRepairEngine init succeeds");
+
+  const PhysicalSnapshot cleanBefore = snapshotPhysicalData(db);
+  const dpl2::ipl::CheckResult cleanPrecheck = engine.precheck();
+  expect(cleanPrecheck.isLegal && cleanPrecheck.diagnostics.empty(),
+         "clean placement passes gap/overlap precheck");
+  expect(snapshotPhysicalData(db) == cleanBefore,
+         "clean precheck does not mutate UDM");
+
+  eUNL::PhysCellData& moved
+      = db.desMgr().cells_[eUNL::LeafCellID(0, 111)];
+  const eUTL::Point2D originalOrigin = moved.origin;
+  moved.origin = eUTL::Point2D(eUTL::UvDist(20), eUTL::UvDist(kRowHeight));
+  const PhysicalSnapshot gapBefore = snapshotPhysicalData(db);
+  const dpl2::ipl::CheckResult gapPrecheck = engine.precheck();
+  expect(!gapPrecheck.isLegal && hasDiagnostic(gapPrecheck, "Gap"),
+         "gap precheck blocks opto with Gap warning");
+  expect(snapshotPhysicalData(db) == gapBefore,
+         "gap precheck does not mutate UDM");
+
+  moved.origin = eUTL::Point2D(eUTL::UvDist(7), eUTL::UvDist(kRowHeight));
+  const PhysicalSnapshot overlapBefore = snapshotPhysicalData(db);
+  const dpl2::ipl::CheckResult overlapPrecheck = engine.precheck();
+  expect(!overlapPrecheck.isLegal
+             && hasDiagnostic(overlapPrecheck, "Overlap"),
+         "overlap precheck blocks opto with Overlap warning");
+  expect(snapshotPhysicalData(db) == overlapBefore,
+         "overlap precheck does not mutate UDM");
+  moved.origin = originalOrigin;
+
+  const PhysicalSnapshot noRepairBefore = snapshotPhysicalData(db);
+  const RepairOutcome noRepair = engine.repair(
+      eUNL::LeafCellID(0, 112),
+      db.design.lib_acc_.getPhysLibCell(1));  // committed TL4 overlay
+  expect(noRepair.hasSolution && noRepair.changes.empty(),
+         "clean target overlay succeeds with empty filler changes");
+  expect(snapshotPhysicalData(db) == noRepairBefore,
+         "empty-change repair does not mutate UDM");
 
   const auto runRepair = [&](const char* label) -> RepairOutcome {
     RepairOutcome outcome =
-        view.repair(eUNL::LeafCellID(0, 112),
-                    db.design.lib_acc_.getPhysLibCell(2));  // TL4 -> TH4
+        engine.repair(eUNL::LeafCellID(0, 112),
+                      db.design.lib_acc_.getPhysLibCell(2));  // TL4 -> TH4
     std::printf("[smoke] %s: hasSolution=%d changes=%zu\n", label,
                 outcome.hasSolution ? 1 : 0, outcome.changes.size());
     for (const auto& record : outcome.changes) {
@@ -191,12 +242,13 @@ int main()
                   record.new_lib_cell_.getIndexValue());
     }
     for (const auto& diag : outcome.diagnostics) {
-      std::printf("[smoke]   diag %s: %s\n", diag.code.c_str(),
+      std::printf("[smoke]   diag %s: %s\n", diag.status.c_str(),
                   diag.message.c_str());
     }
     return outcome;
   };
 
+  const PhysicalSnapshot repairBefore = snapshotPhysicalData(db);
   const RepairOutcome first = runRepair("repair#1");
   expect(first.hasSolution, "repair finds a filler swap solution");
   expect(!first.changes.empty(), "solution carries FillerCellRecord changes");
@@ -209,6 +261,8 @@ int main()
                || record.cell_id_.getIndexValue() == 113,
            "swapped cell is one of the fillers next to the target");
   }
+  expect(snapshotPhysicalData(db) == repairBefore,
+         "repair does not mutate UDM");
 
   // Determinism: identical outcome on a second run over the same state.
   const RepairOutcome second = runRepair("repair#2");
@@ -222,11 +276,7 @@ int main()
                       == second.changes[i].new_lib_cell_,
            "change " + std::to_string(i) + " identical across runs");
   }
+  expect(snapshotPhysicalData(db) == repairBefore,
+         "repeated repair remains non-mutating");
 
-  if (failures == 0) {
-    std::printf("SMOKE OK\n");
-    return 0;
-  }
-  std::printf("SMOKE FAILED: %d failure(s)\n", failures);
-  return 1;
 }

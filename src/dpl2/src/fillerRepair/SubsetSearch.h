@@ -21,12 +21,13 @@
 
 #include <vector>
 
-#include "FillerRepairEngine.h"
 #include "Log.h"
 #include "Ranker.h"
 #include "Swap.h"
 
 namespace dpl2::fillerRepair {
+
+struct RepairConfig;
 
 struct EnumerationPlan
 {

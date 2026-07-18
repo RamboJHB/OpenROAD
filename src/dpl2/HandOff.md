@@ -4,131 +4,142 @@ Updated: 2026-07-18. Branch: `claude/wizardly-carson-secahu`.
 
 ## Result
 
-The swap-only filler repair project is integrated and locally verified. The
-final E2E has one test-data substitute: fake UDM. It links production
-infrastructure, final checker, unified adapter and planner.
+The destination already supplies complete infrastructure and checker sources.
+Production migration therefore copies only `src/dpl2/src/fillerRepair/` and
+adds its production `.cpp` files to the destination's existing target. No
+infrastructure/checker source or API change is required, and this change set
+keeps both directories at zero diff.
 
-```text
-fake UDM (tech / masters / rows / physical cells)
-                         |
-             RepairInfrastructure::build
-                         |
-             production Network + Grid
-                         |
-               final ImplantLayerChecker
-                         |
-           adapter::PlacementView::repair
-                         |
-                 FillerRepairEngine
-                         |
-                ipl::FillerChanges
+The production boundary is now one checker-style class:
+
+```cpp
+FillerRepairEngine(Grid* grid, Network* network);
+bool init(PhysDesMgr* desMgr,
+          const ImplantLayerChecker* checker,
+          const fillerSetting* fillerSetting);
+ipl::CheckResult precheck() const;
+RepairOutcome repair(LeafCellID targetCell, const PhysLibCell& newMaster);
 ```
 
-`src/dpl2/test/smoke_main.cpp` is the canonical wiring example.
+Production callers no longer construct an adapter or planner PlacementView.
+`adapter/PlacementView.{h,cpp}` and `CheckerApi.h` were deleted. The production
+view/oracle/wire conversion lives in `FillerRepairEngine.cpp`; the old pure
+search pipeline is isolated as `internal::PlannerEngine`.
 
-## Completed work
+## Required opto sequence
 
-- V2.1 planner algorithms are complete: OracleGate corrections,
-  filler-domain enumeration, adaptive-L1 expansion, per-band polarity
-  filtering/ranking and deterministic all-or-nothing output.
-- `adapter::PlacementView` is the only production boundary: planner view,
-  checker oracle and repair entry.
-- Final checker alignment is complete:
-  `Node::getId()`/`Master::getId()`, `FillerCellRecord`, ordered blocking
-  results and `IntraRow`/`InterRow`.
-- `RepairInfrastructure` builds real Network/Grid from `PhysDesMgr` physical
-  data plus caller-supplied design leaf IDs.
-- It registers all placed masters, the target new master and every master from
-  `fillerSetting::getFillerMasters()` before checker construction.
-- Real `Grid.cpp` is compiled and executed with Boost and TBB.
-- Grid link stubs, Helper-based Grid injection, fake PlacementDRC and test
-  DePlace/Network shims were removed from the E2E.
-- Standalone CMake/CTest entry is available in `src/dpl2/test/CMakeLists.txt`.
+1. Construct engine with the current Grid/Network and call `init()`.
+2. Before any cell mutation, call `precheck()`.
+3. If `precheck().isLegal == false`, stop. `Gap`/`Overlap` diagnostics are
+   warnings for logging, but the bool is a hard blocking contract.
+4. Call `repair(targetCell, newMaster)` while the DB still contains the old
+   target master. `newMaster` is an overlay.
+5. If repair succeeds, opto/infrastructure commits the returned
+   `ipl::FillerChanges` together with its own target mutation.
+
+fillerRepair provides the gate; it does not modify opto and does not commit.
+`precheck()` and `repair()` are both non-mutating.
+
+## Precheck scope
+
+Precheck checks only placement gaps and overlaps over non-pad rows using
+`PhysDesMgr` physical cells and the Network cell universe. It does not check:
+
+- target or proposed master;
+- master-size compatibility;
+- candidate availability;
+- Node/Master ID mapping;
+- site alignment or a separate out-of-bounds category;
+- implant DRC.
+
+`isLegal=true` means no gap/overlap. `isLegal=false` means at least one
+`Gap`/`Overlap` diagnostic and opto must block. `repair()` deliberately does
+not call precheck again.
+
+## Repair semantics
+
+The first implant query overlays the target new master with an empty filler
+change list. No violation returns success with empty changes. Violations enter
+the unchanged adaptive-L1/ranker/subset/cache/budget/baseline-delta planner.
+A clean solution returns `ipl::FillerChanges`; no solution returns failure and
+empty changes. The final checker remains the only DRC oracle.
 
 ## Data authority
 
 | Data | Authority |
 |---|---|
-| row/core/site geometry | `PhysDesMgr` |
-| placement status, origin, orientation and physical master | `PhysDesMgr` |
-| leaf-cell universe | embedding application supplies `LeafCellID` list |
-| instance/master topology and checker IDs | production `Network` built by `RepairInfrastructure` |
-| filler candidate allow-list | `fillerSetting::getFillerMasters()` |
-| VT family and band polarity | `PhysLibCell` implant shapes + checker layers |
-| legality | final `ImplantLayerChecker` |
+| rows and physical placement | `PhysDesMgr` |
+| cell/master topology and checker IDs | production Network |
+| filler allow-list | `fillerSetting::getFillerMasters()` |
+| VT family/band polarity | `PhysLibCell` implant shapes + checker layers |
+| implant legality | final `ImplantLayerChecker` |
+| commit | opto/infrastructure |
 
-The explicit leaf-ID list keeps hierarchy traversal in the embedding
-application. It carries identifiers only; all precheck/placement properties
-are read back from `PhysDesMgr`.
+`RepairInfrastructure` registers placed, target-new and configured candidate
+masters before checker/engine construction, including uninstantiated masters.
 
-## Lifetime and threading
+## Destination build wiring
 
-`PhysDesMgr`, `fillerSetting`, Network, Grid, checker and adapter must describe
-one design revision. `RepairInfrastructure` validates the design association
-and is a one-build snapshot. After commit, construct a new infrastructure,
-checker and adapter.
+The destination has no supplied dpl2 CMake fragment, so its owner must add
+these fillerRepair production sources to the target that already owns
+Grid/Network/checker:
 
-Adapter placement data is immutable. Coverage caching uses `call_once`; use
-one engine per thread. Checker calls are serialized by the adapter because the
-current checker const path updates internal counters.
-
-## Build environment
-
-Required local packages: Boost headers, TBB, a C++20 compiler and CMake 3.20+.
-On Apple Silicon with Homebrew:
-
-```sh
-brew install boost tbb cmake
+```text
+FillerRepairEngine.cpp  PlannerEngine.cpp  OracleGate.cpp
+PlacementView.cpp       Ranker.cpp          Signature.cpp
+SubsetSearch.cpp        Swap.cpp            Window.cpp
 ```
 
-`build_all.sh` discovers TBB through pkg-config or `/opt/homebrew`. For Apple
-ASan it links Homebrew's static TBB archive to avoid the dynamic oneTBB
-finalizer-order crash.
+Do not add `fillerRepair/fake/*`, `fillerRepair/test/*`, or a fake UDM include
+path to a production target. No production source uses a fake/real UDM
+conditional; it includes the real UDM names already used by infra/checker.
 
-## Verified commands
+## Build and verification
+
+The standalone test CMake is not a proposed production CMake file. It provides
+one interface-only selection point:
+
+- default: `DPL2_TEST_USE_FAKE_UDM=ON`, using the test-only UDM-compatible
+  include root selected by `DPL2_TEST_FAKE_UDM_INCLUDE_DIR`;
+- real UDM rehearsal: set it `OFF` and provide
+  `DPL2_TEST_UDM_INCLUDE_DIRS` and/or `DPL2_TEST_UDM_LIBRARIES`.
+
+Both modes compile the same infra/checker/fillerRepair sources. The fake uses
+the real UDM namespaces, type names, signatures and placement behavior; only
+include/link configuration changes.
+
+Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
 
 ```sh
-# 87 planner unit tests
 src/dpl2/src/fillerRepair/test/run_tests.sh
 SANITIZE=address src/dpl2/src/fillerRepair/test/run_tests.sh
-
-# fake-UDM-only production E2E; -Wall -Wextra -Werror
 src/dpl2/test/build_all.sh
 SANITIZE=address src/dpl2/test/build_all.sh
 
-# CMake/CTest
 cmake -S src/dpl2/test -B src/dpl2/test/build-cmake
 cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
-
-cmake -S src/dpl2/test -B src/dpl2/test/build-cmake-asan \
-  -DDPL2_ENABLE_ASAN=ON
-cmake --build src/dpl2/test/build-cmake-asan -j2
-ctest --test-dir src/dpl2/test/build-cmake-asan --output-on-failure
 ```
 
-2026-07-18 result: planner 87/87 normal and ASan; E2E normal and ASan;
-CTest 1/1 normal and ASan.
+All 87 planner cases and the E2E are GoogleTests. The E2E uses fake UDM only as
+test data and links supplied Grid/Network,
+RepairInfrastructure, final checker, FillerRepairEngine and internal planner.
+It covers clean/gap/overlap precheck, opto-blocking return values, deterministic
+repair, and byte-equivalent physical snapshots before/after both APIs.
 
-## Test-double boundary
+2026-07-18 result: planner 87/87 normal and ASan; E2E normal and ASan; full
+CTest 88/88 normal and ASan; all targets passed Werror.
 
-The final E2E links no `fillerRepair/fake/*` files. The 87 white-box planner
-tests retain private Design/checker doubles for malformed-protocol and precise
-search-state injection; they are a separate unit-test executable and are not
-production interfaces or E2E dependencies.
+## Integration risks
 
-## Integration into the complete destination tree
-
-Add `RepairInfrastructure.cpp`, planner sources and
-`adapter/PlacementView.cpp` to the destination dpl2 target, then reuse the
-smoke fixture or register the CTest target. The complete destination may use
-its own hierarchy traversal to produce leaf IDs. No changes to checker DRC or
-planner algorithms are required.
-
-## Red lines
-
-- Do not reproduce implant DRC in the planner.
-- Do not introduce a second production adapter or placement model.
-- Do not parse VT from master names.
-- Do not mutate the design during an overlay query.
-- Do not broaden this stage to merge/split/rewrite.
+- Opto must honor the explicit precheck ordering; repair has no fallback gate.
+- Engine/Grid/Network/checker/PhysDesMgr must describe one design revision;
+  rebuild after commit.
+- Destination build must add the nine fillerRepair sources listed above and
+  must not add the deleted adapter or standalone `CheckerApi.h`.
+- Real-UDM verification still depends on the destination providing its UDM
+  include directories and link libraries/targets; no code port remains.
+- Checker calls are serialized inside the engine because the checker const
+  overlay path updates counters.
+- The public facade owns production translation; planner fake/checker types
+  must remain outside production targets.

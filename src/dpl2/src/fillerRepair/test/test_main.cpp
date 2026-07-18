@@ -3,22 +3,23 @@
 
 // Unit tests for the fillerRepair planner: Swap primitives, fake checker /
 // fake candidate provider protocol, and the
-// 100% utility pre-check. Plain C++17, no external test framework so the
-// suite runs before dpl2 is wired into the CMake build.
+// placement coverage scanner. Each legacy case is registered as an individual
+// GoogleTest so it remains independently filterable and reportable.
 //
 // Run: test/run_tests.sh   (FR_VERBOSE=1 prints the [fr] debug transcript)
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
-#include <algorithm>
 #include <cstring>
 #include <map>
-#include <functional>
 #include <string>
 #include <tuple>
 #include <vector>
 
-#include "../FillerRepairEngine.h"
+#include <gtest/gtest.h>
+
+#include "../PlannerEngine.h"
 #include "../Swap.h"
 #include "../Signature.h"
 #include "../OracleGate.h"
@@ -31,38 +32,35 @@
 
 namespace fr = dpl2::fillerRepair;
 
-// --- Minimal test harness ---------------------------------------------------
+// --- GoogleTest registration support ---------------------------------------
 
 namespace {
-
-int g_failures = 0;
-const char* g_current = "";
-
-#define CHECK(cond)                                                        \
-  do {                                                                     \
-    if (!(cond)) {                                                         \
-      std::printf("FAIL %s: %s (%s:%d)\n", g_current, #cond, __FILE__,     \
-                  __LINE__);                                               \
-      ++g_failures;                                                        \
-    }                                                                      \
-  } while (0)
-
-#define CHECK_EQ(a, b)                                                     \
-  do {                                                                     \
-    const auto va = (a);                                                   \
-    const auto vb = (b);                                                   \
-    if (!(va == vb)) {                                                     \
-      std::printf("FAIL %s: %s == %s (%lld vs %lld) (%s:%d)\n", g_current, \
-                  #a, #b, (long long) va, (long long) vb, __FILE__,        \
-                  __LINE__);                                               \
-      ++g_failures;                                                        \
-    }                                                                      \
-  } while (0)
 
 struct Test
 {
   const char* name;
-  std::function<void()> fn;
+  void (*fn)();
+};
+
+bool verbose();
+
+class PlannerTest final : public ::testing::Test
+{
+ public:
+  explicit PlannerTest(void (*fn)()) : fn_(fn) {}
+
+ private:
+  void TestBody() override
+  {
+    if (verbose()) {
+      std::printf("\n===== case: %s =====\n", ::testing::UnitTest::GetInstance()
+                                                   ->current_test_info()
+                                                   ->name());
+    }
+    fn_();
+  }
+
+  void (*fn_)();
 };
 
 bool verbose()
@@ -158,22 +156,22 @@ void testSwapConstruction()
 
   // Valid swap: filler 101 (w2 vt1) -> w2 vt2 master.
   auto move = fr::makeSwap(f.design, 101, fillerMaster(2, kVt2), &error);
-  CHECK(move.has_value());
-  CHECK_EQ(move->rowId, 0);
-  CHECK(move->span == (fr::XInterval{4, 6}));
-  CHECK_EQ(move->oldVt, kVt1);
-  CHECK_EQ(move->newVt, kVt2);
+  EXPECT_TRUE(move.has_value());
+  EXPECT_EQ(move->rowId, 0);
+  EXPECT_TRUE(move->span == (fr::XInterval{4, 6}));
+  EXPECT_EQ(move->oldVt, kVt1);
+  EXPECT_EQ(move->newVt, kVt2);
 
   // Rejections, each with a reason.
-  CHECK(!fr::makeSwap(f.design, 999, fillerMaster(2, kVt2), &error).has_value());
-  CHECK(!fr::makeSwap(f.design, 101, fillerMaster(4, kVt2), &error).has_value());
-  CHECK(!error.empty());  // size mismatch reason recorded
-  CHECK(!fr::makeSwap(f.design, 101, fillerMaster(2, kVt1), &error).has_value());
-  CHECK(!fr::makeSwap(f.design, 101, cellMaster(kVt2), &error).has_value());
+  EXPECT_TRUE(!fr::makeSwap(f.design, 999, fillerMaster(2, kVt2), &error).has_value());
+  EXPECT_TRUE(!fr::makeSwap(f.design, 101, fillerMaster(4, kVt2), &error).has_value());
+  EXPECT_TRUE(!error.empty());  // size mismatch reason recorded
+  EXPECT_TRUE(!fr::makeSwap(f.design, 101, fillerMaster(2, kVt1), &error).has_value());
+  EXPECT_TRUE(!fr::makeSwap(f.design, 101, cellMaster(kVt2), &error).has_value());
 
   // Std cell is never a move target.
   f.design.remove(103).place(103, cellMaster(kVt2), 0, 10);
-  CHECK(!fr::makeSwap(f.design, 103, fillerMaster(2, kVt1), &error).has_value());
+  EXPECT_TRUE(!fr::makeSwap(f.design, 103, fillerMaster(2, kVt1), &error).has_value());
 }
 
 void testCanonicalKeyOrderIndependent()
@@ -182,26 +180,26 @@ void testCanonicalKeyOrderIndependent()
   auto m1 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt2));
   auto m2 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
 
-  CHECK(fr::canonicalKey({m1, m2}) == fr::canonicalKey({m2, m1}));
-  CHECK(fr::canonicalKey({m1}) != fr::canonicalKey({m1, m2}));
+  EXPECT_TRUE(fr::canonicalKey({m1, m2}) == fr::canonicalKey({m2, m1}));
+  EXPECT_TRUE(fr::canonicalKey({m1}) != fr::canonicalKey({m1, m2}));
   // Same instance, different target master => different overlay.
   auto m1b = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3));
-  CHECK(fr::canonicalKey({m1}) != fr::canonicalKey({m1b}));
+  EXPECT_TRUE(fr::canonicalKey({m1}) != fr::canonicalKey({m1b}));
 }
 
-void testWireAdapter()
+void testWireConversion()
 {
   RowFixture f = makeCoveredRow();
   auto m1 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
   auto m2 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3));
 
   const auto changes = fr::toFillerChanges({m1, m2});
-  CHECK_EQ(changes.size(), 2u);
+  EXPECT_EQ(changes.size(), 2u);
   // Deterministic order: sorted by instanceId.
-  CHECK_EQ(changes[0].instanceId, 100);
-  CHECK_EQ(changes[0].newMasterId, fillerMaster(4, kVt3));
-  CHECK_EQ(changes[1].instanceId, 101);
-  CHECK_EQ(changes[1].newMasterId, fillerMaster(2, kVt2));
+  EXPECT_EQ(changes[0].instanceId, 100);
+  EXPECT_EQ(changes[0].newMasterId, fillerMaster(4, kVt3));
+  EXPECT_EQ(changes[1].instanceId, 101);
+  EXPECT_EQ(changes[1].newMasterId, fillerMaster(2, kVt2));
 }
 
 // --- TODO 3: utility pre-check ----------------------------------------------
@@ -210,8 +208,8 @@ void testPreCheckFullUtility()
 {
   RowFixture f = makeCoveredRow();
   const auto coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
-  CHECK(coverage.isFullUtility);
-  CHECK(coverage.issues.empty());
+  EXPECT_TRUE(coverage.isFullUtility);
+  EXPECT_TRUE(coverage.issues.empty());
 }
 
 void testPreCheckGap()
@@ -220,47 +218,31 @@ void testPreCheckGap()
   f.design.remove(101);  // hole [4,6)
 
   const auto coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
-  CHECK(!coverage.isFullUtility);
-  CHECK_EQ(coverage.issues.size(), 1u);
-  CHECK(coverage.issues[0].kind == fr::CoverageIssueKind::Gap);
-  CHECK_EQ(coverage.issues[0].rowId, 0);
-  CHECK_EQ(coverage.issues[0].xLo, 4);
-  CHECK_EQ(coverage.issues[0].xHi, 6);
-  CHECK_EQ(coverage.issues[0].siteCount, 2);
+  EXPECT_TRUE(!coverage.isFullUtility);
+  EXPECT_EQ(coverage.issues.size(), 1u);
+  EXPECT_TRUE(coverage.issues[0].kind == fr::CoverageIssueKind::Gap);
+  EXPECT_EQ(coverage.issues[0].rowId, 0);
+  EXPECT_EQ(coverage.issues[0].xLo, 4);
+  EXPECT_EQ(coverage.issues[0].xHi, 6);
+  EXPECT_EQ(coverage.issues[0].siteCount, 2);
 }
 
-void testPreCheckOverlapOffGridIllegal()
+void testPreCheckOnlyGapOverlap()
 {
   RowFixture f = makeCoveredRow();
   // Overlap: extra filler on top of [4,6).
   f.design.place(300, fillerMaster(2, kVt2), 0, 5);
   auto coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
-  CHECK(!coverage.isFullUtility);
+  EXPECT_TRUE(!coverage.isFullUtility);
   bool sawOverlap = false;
   for (const auto& issue : coverage.issues) {
     sawOverlap |= issue.kind == fr::CoverageIssueKind::Overlap;
   }
-  CHECK(sawOverlap);
-  f.design.remove(300);
-
-  // Illegal occupant: instance sticking out of the legal row span.
-  f.design.remove(104).place(104, fillerMaster(8, kVt1), 0, 12);  // [12,20) > 16
-  coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
-  bool sawIllegal = false;
-  for (const auto& issue : coverage.issues) {
-    sawIllegal |= issue.kind == fr::CoverageIssueKind::IllegalOccupant;
+  EXPECT_TRUE(sawOverlap);
+  for (const auto& diagnostic : coverage.diagnostics) {
+    EXPECT_TRUE(diagnostic.severity == fr::Severity::Warning);
+    EXPECT_TRUE(diagnostic.code == "Gap" || diagnostic.code == "Overlap");
   }
-  CHECK(sawIllegal);
-
-  // Off-grid: site width 2, instance at odd x.
-  fr::FakeDesign design = makeLibrary();
-  design.setSiteWidth(2).addRow(0, 0, 8).place(400, fillerMaster(4, kVt1), 0, 1);
-  coverage = design.checkSiteCoverage(fr::DebugLog(verbose()));
-  bool sawOffGrid = false;
-  for (const auto& issue : coverage.issues) {
-    sawOffGrid |= issue.kind == fr::CoverageIssueKind::OffGrid;
-  }
-  CHECK(sawOffGrid);
 }
 
 bool sameCoverageIssues(const std::vector<fr::CoverageIssue>& a,
@@ -293,17 +275,17 @@ void testPreCheckMultiRowIssuesDeterministic()
 
   const auto first = design.checkSiteCoverage(fr::DebugLog(verbose()));
   const auto second = design.checkSiteCoverage(fr::DebugLog(verbose()));
-  CHECK(!first.isFullUtility);
-  CHECK(sameCoverageIssues(first.issues, second.issues));
-  CHECK_EQ(first.issues.size(), 2u);
+  EXPECT_TRUE(!first.isFullUtility);
+  EXPECT_TRUE(sameCoverageIssues(first.issues, second.issues));
+  EXPECT_EQ(first.issues.size(), 2u);
   if (first.issues.size() != 2) {
     return;
   }
-  CHECK_EQ(first.issues[0].rowId, 2);
-  CHECK(first.issues[0].kind == fr::CoverageIssueKind::Gap);
-  CHECK(first.issues[0].xLo == 2 && first.issues[0].xHi == 4);
-  CHECK_EQ(first.issues[1].rowId, 5);
-  CHECK(first.issues[1].xLo == 4 && first.issues[1].xHi == 8);
+  EXPECT_EQ(first.issues[0].rowId, 2);
+  EXPECT_TRUE(first.issues[0].kind == fr::CoverageIssueKind::Gap);
+  EXPECT_TRUE(first.issues[0].xLo == 2 && first.issues[0].xHi == 4);
+  EXPECT_EQ(first.issues[1].rowId, 5);
+  EXPECT_TRUE(first.issues[1].xLo == 4 && first.issues[1].xHi == 8);
 }
 
 void testPreCheckGapAtRowEdges()
@@ -314,18 +296,18 @@ void testPreCheckGapAtRowEdges()
   design.addRow(0, 0, 8).place(100, fillerMaster(4, kVt1), 0, 2);
 
   const auto coverage = design.checkSiteCoverage(fr::DebugLog(verbose()));
-  CHECK_EQ(coverage.issues.size(), 2u);
+  EXPECT_EQ(coverage.issues.size(), 2u);
   if (coverage.issues.size() != 2) {
     return;
   }
-  CHECK(coverage.issues[0].kind == fr::CoverageIssueKind::Gap);
-  CHECK_EQ(coverage.issues[0].xLo, 0);
-  CHECK_EQ(coverage.issues[0].xHi, 2);
-  CHECK_EQ(coverage.issues[0].siteCount, 2);
-  CHECK(coverage.issues[1].kind == fr::CoverageIssueKind::Gap);
-  CHECK_EQ(coverage.issues[1].xLo, 6);
-  CHECK_EQ(coverage.issues[1].xHi, 8);
-  CHECK_EQ(coverage.issues[1].siteCount, 2);
+  EXPECT_TRUE(coverage.issues[0].kind == fr::CoverageIssueKind::Gap);
+  EXPECT_EQ(coverage.issues[0].xLo, 0);
+  EXPECT_EQ(coverage.issues[0].xHi, 2);
+  EXPECT_EQ(coverage.issues[0].siteCount, 2);
+  EXPECT_TRUE(coverage.issues[1].kind == fr::CoverageIssueKind::Gap);
+  EXPECT_EQ(coverage.issues[1].xLo, 6);
+  EXPECT_EQ(coverage.issues[1].xHi, 8);
+  EXPECT_EQ(coverage.issues[1].siteCount, 2);
 }
 
 void testPreCheckOverlapThreeInstances()
@@ -339,18 +321,18 @@ void testPreCheckOverlapThreeInstances()
       .place(101, fillerMaster(4, kVt3), 0, 0);
 
   const auto coverage = design.checkSiteCoverage(fr::DebugLog(verbose()));
-  CHECK_EQ(coverage.issues.size(), 1u);
+  EXPECT_EQ(coverage.issues.size(), 1u);
   if (coverage.issues.size() != 1) {
     return;
   }
   const auto& overlap = coverage.issues.front();
-  CHECK(overlap.kind == fr::CoverageIssueKind::Overlap);
-  CHECK_EQ(overlap.xLo, 0);
-  CHECK_EQ(overlap.xHi, 4);
-  CHECK(overlap.instances == (std::vector<fr::InstanceId>{100, 101, 102}));
+  EXPECT_TRUE(overlap.kind == fr::CoverageIssueKind::Overlap);
+  EXPECT_EQ(overlap.xLo, 0);
+  EXPECT_EQ(overlap.xHi, 4);
+  EXPECT_TRUE(overlap.instances == (std::vector<fr::InstanceId>{100, 101, 102}));
 }
 
-void testEngineFatalOnGapWithoutCheckerCalls()
+void testPlannerDoesNotRunPlacementPrecheck()
 {
   RowFixture f = makeCoveredRow();
   f.design.remove(101);  // hole [4,6)
@@ -358,21 +340,18 @@ void testEngineFatalOnGapWithoutCheckerCalls()
   fr::FakeImplantChecker checker(f.design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(f.design, checker, config);
+  fr::internal::PlannerEngine engine(f.design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(f.design, f.anchor);
   const auto result = engine.repair(request);
 
-  CHECK(!result.hasSolution);
-  CHECK(result.changes.empty());
-  bool sawFatal = false;
-  for (const auto& diag : result.diagnostics) {
-    sawFatal |= diag.severity == fr::Severity::Fatal && diag.code == "NonFullUtility";
-  }
-  CHECK(sawFatal);
-  // Spec 6.1: pre-check failure must not reach the checker.
-  CHECK_EQ(checker.requestCount(), 0);
+  // The production facade's public precheck owns the placement gate. The
+  // pure planner sees an empty implant snapshot and succeeds without ever
+  // inspecting placement coverage.
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_EQ(checker.requestCount(), 0);
 }
 
 // --- TODO 2: fake candidate provider ----------------------------------------
@@ -383,18 +362,18 @@ void testCandidateProvider()
 
   // Filler 101 is w2 vt1 -> exactly the two other w2 VTs, ascending order.
   const auto result = f.design.getUsableMasterCandidates({101});
-  CHECK_EQ(result.candidates.size(), 2u);
-  CHECK_EQ(result.candidates[0].masterId, fillerMaster(2, kVt2));
-  CHECK_EQ(result.candidates[1].masterId, fillerMaster(2, kVt3));
+  EXPECT_EQ(result.candidates.size(), 2u);
+  EXPECT_EQ(result.candidates[0].masterId, fillerMaster(2, kVt2));
+  EXPECT_EQ(result.candidates[1].masterId, fillerMaster(2, kVt3));
 
   // Std cell input: empty + diagnostic, not an error.
   f.design.remove(103).place(103, cellMaster(kVt1), 0, 10);
   const auto cellResult = f.design.getUsableMasterCandidates({103});
-  CHECK(cellResult.candidates.empty());
-  CHECK(!cellResult.diagnostics.empty());
+  EXPECT_TRUE(cellResult.candidates.empty());
+  EXPECT_TRUE(!cellResult.diagnostics.empty());
 }
 
-// --- Fake-UDM candidate provider (adapter rehearsal) --------------------------
+// --- Fake-UDM candidate provider (production-boundary rehearsal) -------------
 //
 // Derivation must match the checker's buildMasters/parseLayerName path: VT is
 // the FAMILY of the implant layers under the master's shapes (VTS=0 VTL=1
@@ -418,24 +397,24 @@ void testUdmProviderDescribeWidthsAndVts()
   ids.push_back(999);  // unknown
 
   const auto described = provider.describeMasters(ids);
-  CHECK_EQ(described.size(), 13u);
+  EXPECT_EQ(described.size(), 13u);
   for (size_t i = 0; i + 1 < described.size(); ++i) {
     const auto& d = described[i];
-    CHECK_EQ(d.masterId, ids[i]);
-    CHECK(d.usable);
-    CHECK(d.isFiller);
-    CHECK_EQ(d.width, static_cast<fr::DbCoord>(ids[i] / 10));  // sites*1
-    CHECK_EQ(d.vt, static_cast<fr::VtId>(ids[i] % 10));        // family index
-    CHECK_EQ(d.heightRows, 1);
+    EXPECT_EQ(d.masterId, ids[i]);
+    EXPECT_TRUE(d.usable);
+    EXPECT_TRUE(d.isFiller);
+    EXPECT_EQ(d.width, static_cast<fr::DbCoord>(ids[i] / 10));  // sites*1
+    EXPECT_EQ(d.vt, static_cast<fr::VtId>(ids[i] % 10));        // family index
+    EXPECT_EQ(d.heightRows, 1);
   }
-  CHECK(!described.back().usable);
-  CHECK(described.back().reason == "unknown_master");
+  EXPECT_TRUE(!described.back().usable);
+  EXPECT_TRUE(described.back().reason == "unknown_master");
 
   // Name is carried through but never drives the derivation.
   const auto* w8ul = provider.describeMaster(83);
-  CHECK(w8ul != nullptr);
-  CHECK(w8ul->name == "F_FILL8_63S6T9UL_1");
-  CHECK_EQ(w8ul->vt, 3);  // VTUL family, from the layers
+  EXPECT_TRUE(w8ul != nullptr);
+  EXPECT_TRUE(w8ul->name == "F_FILL8_63S6T9UL_1");
+  EXPECT_EQ(w8ul->vt, 3);  // VTUL family, from the layers
 }
 
 // Malformed masters are described but unusable, with the checker-style
@@ -464,20 +443,20 @@ void testUdmProviderRejectsMalformedMasters()
   provider.addMaster({905, "NO_SHAPES", 4, 2, true, {}});
 
   const auto d = provider.describeMasters({901, 902, 903, 904, 905});
-  CHECK(!d[0].usable);
-  CHECK(d[0].reason == "master_width_not_site_aligned");
-  CHECK(!d[1].usable);
-  CHECK(d[1].reason == "master_implant_family_mismatch");
-  CHECK(!d[2].usable);
-  CHECK(d[2].reason == "skipped_missing_rule_parameter");
-  CHECK(!d[3].usable);
-  CHECK(d[3].reason == "implant_shape_width_mismatch");
-  CHECK(!d[4].usable);
-  CHECK(d[4].reason == "no_implant_shape");
+  EXPECT_TRUE(!d[0].usable);
+  EXPECT_TRUE(d[0].reason == "master_width_not_site_aligned");
+  EXPECT_TRUE(!d[1].usable);
+  EXPECT_TRUE(d[1].reason == "master_implant_family_mismatch");
+  EXPECT_TRUE(!d[2].usable);
+  EXPECT_TRUE(d[2].reason == "skipped_missing_rule_parameter");
+  EXPECT_TRUE(!d[3].usable);
+  EXPECT_TRUE(d[3].reason == "implant_shape_width_mismatch");
+  EXPECT_TRUE(!d[4].usable);
+  EXPECT_TRUE(d[4].reason == "no_implant_shape");
   // Width is still reported even when unusable (it comes from the master
   // input, not the derivation).
-  CHECK_EQ(d[1].width, 4);
-  CHECK_EQ(d[1].vt, fr::kUnknownVt);
+  EXPECT_EQ(d[1].width, 4);
+  EXPECT_EQ(d[1].vt, fr::kUnknownVt);
 }
 
 // Candidate query contract (spec 5.3) on the appendix-A library, plus the
@@ -501,26 +480,26 @@ void testUdmProviderCandidatesContract()
   // Filler: exactly the two other w4 filler VTs, ascending id; the same-size
   // NON-filler master 942 must not appear.
   const auto result = design.getUsableMasterCandidates({500});
-  CHECK_EQ(result.candidates.size(), 2u);
-  CHECK_EQ(result.candidates[0].masterId, 41);  // w4 VTL
-  CHECK_EQ(result.candidates[1].masterId, 43);  // w4 VTUL
+  EXPECT_EQ(result.candidates.size(), 2u);
+  EXPECT_EQ(result.candidates[0].masterId, 41);  // w4 VTL
+  EXPECT_EQ(result.candidates[1].masterId, 43);  // w4 VTUL
 
   // Std cell input: empty + warning, not an error.
   const auto cellResult = design.getUsableMasterCandidates({501});
-  CHECK(cellResult.candidates.empty());
-  CHECK(!cellResult.diagnostics.empty());
+  EXPECT_TRUE(cellResult.candidates.empty());
+  EXPECT_TRUE(!cellResult.diagnostics.empty());
 
   // Unknown instance: error diagnostic.
   const auto unknown = design.getUsableMasterCandidates({777});
-  CHECK(unknown.candidates.empty());
-  CHECK(!unknown.diagnostics.empty());
+  EXPECT_TRUE(unknown.candidates.empty());
+  EXPECT_TRUE(!unknown.diagnostics.empty());
 
   // registerInto synced width/height/vt into the PlacementView.
   const fr::MasterInfo* info = design.masterInfo(43);
-  CHECK(info != nullptr);
-  CHECK_EQ(info->width, 4);
-  CHECK_EQ(info->vt, 3);
-  CHECK(info->isFiller);
+  EXPECT_TRUE(info != nullptr);
+  EXPECT_EQ(info->width, 4);
+  EXPECT_EQ(info->vt, 3);
+  EXPECT_TRUE(info->isFiller);
 }
 
 // E2E smoke: the engine solves a single-swap case with the appendix-A
@@ -571,18 +550,18 @@ void testEngineSolvesWithUdmProvider()
   request.targetPlace = anchor;
   request.violations =
       snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
-  CHECK_EQ(request.violations.size(), 3u);
+  EXPECT_EQ(request.violations.size(), 3u);
 
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
-  CHECK(result.hasSolution);
-  CHECK_EQ(result.changes.size(), 1u);
-  CHECK_EQ(result.changes[0].instanceId, 601);
-  CHECK_EQ(result.changes[0].newMasterId, 21);  // w2 VTL
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 1u);
+  EXPECT_EQ(result.changes[0].instanceId, 601);
+  EXPECT_EQ(result.changes[0].newMasterId, 21);  // w2 VTL
 }
 
 // --- TODO 2: fake checker protocol -------------------------------------------
@@ -612,12 +591,12 @@ void testCheckerEchoAndOrder()
     batch.push_back(baselineRequest(f.design, f.anchor, id));
   }
   const auto results = checker.checkPlaceWithOverlays(batch);
-  CHECK_EQ(results.size(), 3u);
-  CHECK_EQ(results[0].requestId, 7);
-  CHECK_EQ(results[1].requestId, 3);
-  CHECK_EQ(results[2].requestId, 5);
-  CHECK_EQ(checker.batchCount(), 1);
-  CHECK_EQ(checker.requestCount(), 3);
+  EXPECT_EQ(results.size(), 3u);
+  EXPECT_EQ(results[0].requestId, 7);
+  EXPECT_EQ(results[1].requestId, 3);
+  EXPECT_EQ(results[2].requestId, 5);
+  EXPECT_EQ(checker.batchCount(), 1);
+  EXPECT_EQ(checker.requestCount(), 3);
 }
 
 void testCheckerInvalidIsolated()
@@ -632,10 +611,10 @@ void testCheckerInvalidIsolated()
   auto valid2 = baselineRequest(f.design, f.anchor, 3);
 
   const auto results = checker.checkPlaceWithOverlays({valid, invalid, valid2});
-  CHECK(results[0].status == fr::CheckStatus::Checked);
-  CHECK(results[1].status == fr::CheckStatus::InvalidOverlay);
-  CHECK(!results[1].diagnostics.empty());  // status != Checked carries diags
-  CHECK(results[2].status == fr::CheckStatus::Checked);
+  EXPECT_TRUE(results[0].status == fr::CheckStatus::Checked);
+  EXPECT_TRUE(results[1].status == fr::CheckStatus::InvalidOverlay);
+  EXPECT_TRUE(!results[1].diagnostics.empty());  // status != Checked carries diags
+  EXPECT_TRUE(results[2].status == fr::CheckStatus::Checked);
 }
 
 void testCheckerIntraMsDetectAndClear()
@@ -651,19 +630,19 @@ void testCheckerIntraMsDetectAndClear()
 
   const auto baseline = checker.checkPlaceWithOverlay(
       baselineRequest(f.design, /*anchor=*/100, 1));
-  CHECK(baseline.status == fr::CheckStatus::Checked);
-  CHECK(!baseline.isLegal);
-  CHECK_EQ(baseline.violations.size(), 1u);
-  CHECK(baseline.violations[0].kind == fr::ViolationKind::MinSpacing);
-  CHECK(baseline.violations[0].relation == fr::ViolationRelation::IntraRow);
-  CHECK(baseline.violations[0].xWindow == (fr::XInterval{10, 12}));
+  EXPECT_TRUE(baseline.status == fr::CheckStatus::Checked);
+  EXPECT_TRUE(!baseline.isLegal);
+  EXPECT_EQ(baseline.violations.size(), 1u);
+  EXPECT_TRUE(baseline.violations[0].kind == fr::ViolationKind::MinSpacing);
+  EXPECT_TRUE(baseline.violations[0].relation == fr::ViolationRelation::IntraRow);
+  EXPECT_TRUE(baseline.violations[0].xWindow == (fr::XInterval{10, 12}));
 
   // Overlay: recolor 103 to VT1 -> single VT1 run [0,16) -> clean.
   auto overlay = baselineRequest(f.design, 100, 2);
   overlay.fillerChanges = {{103, fillerMaster(2, kVt1)}};
   const auto fixed = checker.checkPlaceWithOverlay(overlay);
-  CHECK(fixed.status == fr::CheckStatus::Checked);
-  CHECK(fr::isRawCheckerSnapshotClean(fixed));
+  EXPECT_TRUE(fixed.status == fr::CheckStatus::Checked);
+  EXPECT_TRUE(fr::isRawCheckerSnapshotClean(fixed));
 }
 
 void testCheckerInterRowRules()
@@ -688,12 +667,12 @@ void testCheckerInterRowRules()
   fr::FakeImplantChecker checker(design, rules);
 
   const auto result = checker.checkPlaceWithOverlay(baselineRequest(design, 100, 1));
-  CHECK(result.status == fr::CheckStatus::Checked);
-  CHECK_EQ(result.violations.size(), 1u);
-  CHECK(result.violations[0].kind == fr::ViolationKind::MinWidth);
-  CHECK(result.violations[0].relation == fr::ViolationRelation::InterRow);
-  CHECK(result.violations[0].xWindow == (fr::XInterval{3, 4}));
-  CHECK_EQ(result.violations[0].rowIds.size(), 2u);
+  EXPECT_TRUE(result.status == fr::CheckStatus::Checked);
+  EXPECT_EQ(result.violations.size(), 1u);
+  EXPECT_TRUE(result.violations[0].kind == fr::ViolationKind::MinWidth);
+  EXPECT_TRUE(result.violations[0].relation == fr::ViolationRelation::InterRow);
+  EXPECT_TRUE(result.violations[0].xWindow == (fr::XInterval{3, 4}));
+  EXPECT_EQ(result.violations[0].rowIds.size(), 2u);
 
   // Inter-row MS: shrink row1's VT2 to [6,10) so the shapes become disjoint
   // with distance 2 < msInter 3.
@@ -702,10 +681,10 @@ void testCheckerInterRowRules()
   msRules.msInter = 3;
   fr::FakeImplantChecker msChecker(design, msRules);
   const auto msResult = msChecker.checkPlaceWithOverlay(baselineRequest(design, 100, 2));
-  CHECK_EQ(msResult.violations.size(), 1u);
-  CHECK(msResult.violations[0].kind == fr::ViolationKind::MinSpacing);
-  CHECK(msResult.violations[0].relation == fr::ViolationRelation::InterRow);
-  CHECK_EQ(msResult.violations[0].measuredValue, 2);
+  EXPECT_EQ(msResult.violations.size(), 1u);
+  EXPECT_TRUE(msResult.violations[0].kind == fr::ViolationKind::MinSpacing);
+  EXPECT_TRUE(msResult.violations[0].relation == fr::ViolationRelation::InterRow);
+  EXPECT_EQ(msResult.violations[0].measuredValue, 2);
 }
 
 void testCheckerGuardRegionFilter()
@@ -722,8 +701,8 @@ void testCheckerGuardRegionFilter()
   auto request = baselineRequest(f.design, 100, 1);
   request.guardRegion = fr::Region{fr::XInterval{0, 8}, 0, 0};
   const auto result = checker.checkPlaceWithOverlay(request);
-  CHECK(result.status == fr::CheckStatus::Checked);
-  CHECK(result.violations.empty());
+  EXPECT_TRUE(result.status == fr::CheckStatus::Checked);
+  EXPECT_TRUE(result.violations.empty());
 }
 
 void testCheckerTargetOverrideSeedsViolation()
@@ -755,20 +734,20 @@ void testCheckerTargetOverrideSeedsViolation()
   // Before the change (target master == placed master): VT2 filler 203 has
   // no same-VT neighbor shape -> clean.
   const auto before = checker.checkPlaceWithOverlay(baselineRequest(design, 102, 1));
-  CHECK(fr::isRawCheckerSnapshotClean(before));
+  EXPECT_TRUE(fr::isRawCheckerSnapshotClean(before));
 
   // Opto change: anchor becomes VT2 -> its shape [10,14) overlaps filler
   // 203's shape [9,11) by 1 < 2 -> inter-row MW violation with the target.
   auto changed = baselineRequest(design, 102, 2);
   changed.targetPlace.masterId = cellMaster(kVt2);
   const auto after = checker.checkPlaceWithOverlay(changed);
-  CHECK(!after.isLegal);
-  CHECK_EQ(after.violations.size(), 1u);
+  EXPECT_TRUE(!after.isLegal);
+  EXPECT_EQ(after.violations.size(), 1u);
   bool targetSeen = false;
   for (const auto& p : after.violations[0].participants) {
     targetSeen |= p.isTarget;
   }
-  CHECK(targetSeen);
+  EXPECT_TRUE(targetSeen);
 
   // Repair direction (spec anchor-follow): recolor bridge filler 203 to VT1
   // -> row1 becomes one VT1 run, anchor's VT2 shape has no partner -> clean.
@@ -776,7 +755,7 @@ void testCheckerTargetOverrideSeedsViolation()
   repaired.requestId = 3;
   repaired.fillerChanges = {{203, fillerMaster(2, kVt1)}};
   const auto fixed = checker.checkPlaceWithOverlay(repaired);
-  CHECK(fr::isRawCheckerSnapshotClean(fixed));
+  EXPECT_TRUE(fr::isRawCheckerSnapshotClean(fixed));
 }
 
 
@@ -831,18 +810,18 @@ void testNormalizeViolations()
 
   const auto normalized =
       fr::normalizeViolations(request, f.design, fr::DebugLog(verbose()));
-  CHECK_EQ(normalized.size(), 2u);
+  EXPECT_EQ(normalized.size(), 2u);
 
-  CHECK(normalized[0].xRange == (fr::XInterval{10, 16}));
-  CHECK_EQ(normalized[0].fillerParticipants.size(), 1u);
-  CHECK_EQ(normalized[0].fillerParticipants[0], 104);
-  CHECK_EQ(normalized[0].cellAnchors.size(), 1u);  // target == participant 103
-  CHECK_EQ(normalized[0].cellAnchors[0], 103);
-  CHECK(!normalized[0].rowIdFallback);
+  EXPECT_TRUE(normalized[0].xRange == (fr::XInterval{10, 16}));
+  EXPECT_EQ(normalized[0].fillerParticipants.size(), 1u);
+  EXPECT_EQ(normalized[0].fillerParticipants[0], 104);
+  EXPECT_EQ(normalized[0].cellAnchors.size(), 1u);  // target == participant 103
+  EXPECT_EQ(normalized[0].cellAnchors[0], 103);
+  EXPECT_TRUE(!normalized[0].rowIdFallback);
 
-  CHECK(normalized[1].rowIdFallback);
-  CHECK_EQ(normalized[1].rowIds.size(), 1u);
-  CHECK_EQ(normalized[1].rowIds[0], 0);  // anchor row
+  EXPECT_TRUE(normalized[1].rowIdFallback);
+  EXPECT_EQ(normalized[1].rowIds.size(), 1u);
+  EXPECT_EQ(normalized[1].rowIds[0], 0);  // anchor row
 }
 
 void testSignatureMatching()
@@ -854,31 +833,31 @@ void testSignatureMatching()
   // Identical -> match; rows in different order -> still match.
   auto same = base;
   same.rowIds = {1, 0};
-  CHECK(fr::sameSignature(base, same, 1));
+  EXPECT_TRUE(fr::sameSignature(base, same, 1));
 
   // Shifted by one site -> match (jitter tolerance).
   auto shifted = base;
   shifted.xWindow = {11, 15};
-  CHECK(fr::sameSignature(base, shifted, 1));
+  EXPECT_TRUE(fr::sameSignature(base, shifted, 1));
 
   // Far away -> no match even with identical ids.
   auto far = base;
   far.xWindow = {30, 34};
-  CHECK(!fr::sameSignature(base, far, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, far, 1));
 
   // Different rule / kind / relation / rows -> no match.
   auto rule = base;
   rule.ruleId = 4;
-  CHECK(!fr::sameSignature(base, rule, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, rule, 1));
   auto kind = base;
   kind.kind = fr::ViolationKind::MinSpacing;
-  CHECK(!fr::sameSignature(base, kind, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, kind, 1));
   auto rel = base;
   rel.relation = fr::ViolationRelation::IntraRow;
-  CHECK(!fr::sameSignature(base, rel, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, rel, 1));
   auto rows = base;
   rows.rowIds = {0};
-  CHECK(!fr::sameSignature(base, rows, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, rows, 1));
 
   // P/N band: same rule/kind/relation/rows/xWindow but different implant
   // layer -> distinct violations (spec 6.2, no dedup by position).
@@ -886,12 +865,12 @@ void testSignatureMatching()
   pband.primaryLayer = 10;  // e.g. P-band implant
   fr::Violation nband = base;
   nband.primaryLayer = 11;  // e.g. N-band implant at the same x gap
-  CHECK(!fr::sameSignature(pband, nband, 1));
-  CHECK(fr::sameSignature(pband, pband, 1));  // same layer still matches
+  EXPECT_TRUE(!fr::sameSignature(pband, nband, 1));
+  EXPECT_TRUE(fr::sameSignature(pband, pband, 1));  // same layer still matches
   // secondaryLayer also participates (MS uses primary/secondary).
   fr::Violation sec = pband;
   sec.secondaryLayer = 12;
-  CHECK(!fr::sameSignature(pband, sec, 1));
+  EXPECT_TRUE(!fr::sameSignature(pband, sec, 1));
 }
 
 void testRelatedness()
@@ -906,22 +885,22 @@ void testRelatedness()
   fr::ViolationParticipant p;
   p.instanceId = 101;
   direct.participants = {p};
-  CHECK(fr::isRelatedToOverlay(direct, overlay, 1));
+  EXPECT_TRUE(fr::isRelatedToOverlay(direct, overlay, 1));
 
   // Geometric proximity on the same row -> related.
   auto near = makeViolation(2, fr::ViolationKind::MinSpacing,
                             fr::ViolationRelation::IntraRow, {0}, {6, 7});
-  CHECK(fr::isRelatedToOverlay(near, overlay, 1));
+  EXPECT_TRUE(fr::isRelatedToOverlay(near, overlay, 1));
 
   // Same row but far in x -> unrelated.
   auto farX = makeViolation(2, fr::ViolationKind::MinSpacing,
                             fr::ViolationRelation::IntraRow, {0}, {12, 14});
-  CHECK(!fr::isRelatedToOverlay(farX, overlay, 1));
+  EXPECT_TRUE(!fr::isRelatedToOverlay(farX, overlay, 1));
 
   // Near in x but two rows away -> unrelated (rules couple adjacent rows).
   auto farRow = makeViolation(2, fr::ViolationKind::MinSpacing,
                               fr::ViolationRelation::IntraRow, {2}, {5, 6});
-  CHECK(!fr::isRelatedToOverlay(farRow, overlay, 1));
+  EXPECT_TRUE(!fr::isRelatedToOverlay(farRow, overlay, 1));
 }
 
 // --- TODO 5: window builder + guard --------------------------------------
@@ -979,19 +958,19 @@ void testWindowL0()
 
   // Participant 203, anchor-adjacent 101/103, bridge under anchor 204/205
   // ([13,16) overlaps the widened anchor span [9,15)).
-  CHECK(window.containsEditable(203));
-  CHECK(window.containsEditable(101));
-  CHECK(window.containsEditable(103));
-  CHECK(window.containsEditable(204));
-  CHECK(!window.containsEditable(100));  // [0,8) does not overlap [8,16)
-  CHECK(!window.containsEditable(202));  // [6,9) touches 9 only
+  EXPECT_TRUE(window.containsEditable(203));
+  EXPECT_TRUE(window.containsEditable(101));
+  EXPECT_TRUE(window.containsEditable(103));
+  EXPECT_TRUE(window.containsEditable(204));
+  EXPECT_TRUE(!window.containsEditable(100));  // [0,8) does not overlap [8,16)
+  EXPECT_TRUE(!window.containsEditable(202));  // [6,9) touches 9 only
   // Bridge subset flagged.
   bool bridge203 = false;
   for (const auto id : window.bridgeFillers) {
     bridge203 |= id == 203;
   }
-  CHECK(bridge203);
-  CHECK_EQ(window.rows.size(), 2u);
+  EXPECT_TRUE(bridge203);
+  EXPECT_EQ(window.rows.size(), 2u);
 }
 
 void testWindowL0ExactMembership()
@@ -1022,14 +1001,14 @@ void testWindowL0ExactMembership()
                                       1,
                                       fr::DebugLog(verbose()));
 
-  CHECK(window.rows == (std::vector<fr::RowId>{0, 1}));
-  CHECK(window.x == (fr::XInterval{8, 16}));
-  CHECK(window.editableFillers
+  EXPECT_TRUE(window.rows == (std::vector<fr::RowId>{0, 1}));
+  EXPECT_TRUE(window.x == (fr::XInterval{8, 16}));
+  EXPECT_TRUE(window.editableFillers
         == (std::vector<fr::InstanceId>{101, 103, 203, 204, 205}));
-  CHECK(window.bridgeFillers
+  EXPECT_TRUE(window.bridgeFillers
         == (std::vector<fr::InstanceId>{101, 103, 203, 204, 205}));
-  CHECK(!window.containsEditable(100));
-  CHECK(!window.containsEditable(202));
+  EXPECT_TRUE(!window.containsEditable(100));
+  EXPECT_TRUE(!window.containsEditable(202));
 }
 
 void testWindowBridgeConditionsEach()
@@ -1062,14 +1041,14 @@ void testWindowBridgeConditionsEach()
       .place(10, fillerMaster(2, kVt1), 0, 2)
       .place(11, cellMaster(kVt2), 0, 4);
   const auto leftWindow = makeWindow(left, 11, {4, 5});
-  CHECK(leftWindow.containsEditable(10));
+  EXPECT_TRUE(leftWindow.containsEditable(10));
 
   fr::FakeDesign right = makeLibrary();
   right.addRow(0, 0, 8)
       .place(20, cellMaster(kVt2), 0, 0)
       .place(21, fillerMaster(2, kVt1), 0, 4);
   const auto rightWindow = makeWindow(right, 20, {0, 1});
-  CHECK(rightWindow.containsEditable(21));
+  EXPECT_TRUE(rightWindow.containsEditable(21));
 
   fr::FakeDesign adjacent = makeLibrary();
   adjacent.addRow(0, 0, 10)
@@ -1078,8 +1057,8 @@ void testWindowBridgeConditionsEach()
       .addRow(1, 0, 10)
       .place(32, cellMaster(kVt2), 1, 4);
   const auto adjacentWindow = makeWindow(adjacent, 32, {4, 5});
-  CHECK(adjacentWindow.containsEditable(30));  // overlaps widened [3,9)
-  CHECK(!adjacentWindow.containsEditable(31)); // only touches x=3
+  EXPECT_TRUE(adjacentWindow.containsEditable(30));  // overlaps widened [3,9)
+  EXPECT_TRUE(!adjacentWindow.containsEditable(31)); // only touches x=3
 }
 
 void testWindowAtDesignEdges()
@@ -1106,9 +1085,9 @@ void testWindowAtDesignEdges()
                                             bottom,
                                             1,
                                             fr::DebugLog(verbose()));
-  CHECK_EQ(bottomWindow.guardRegion.rowLo, 0);
-  CHECK_EQ(bottomWindow.guardRegion.rowHi, 2);
-  CHECK(bottomWindow.guardRegion.x.xl >= 0);
+  EXPECT_EQ(bottomWindow.guardRegion.rowLo, 0);
+  EXPECT_EQ(bottomWindow.guardRegion.rowHi, 2);
+  EXPECT_TRUE(bottomWindow.guardRegion.x.xl >= 0);
 
   fr::FakeDesign top = makeLibrary();
   top.addRow(0, 0, 8)
@@ -1130,9 +1109,9 @@ void testWindowAtDesignEdges()
                                          top,
                                          1,
                                          fr::DebugLog(verbose()));
-  CHECK_EQ(topWindow.guardRegion.rowLo, 0);
-  CHECK_EQ(topWindow.guardRegion.rowHi, 2);
-  CHECK(topWindow.guardRegion.x.xh <= 8);
+  EXPECT_EQ(topWindow.guardRegion.rowLo, 0);
+  EXPECT_EQ(topWindow.guardRegion.rowHi, 2);
+  EXPECT_TRUE(topWindow.guardRegion.x.xh <= 8);
 }
 
 void testWindowAdaptiveAddsKOnBlockingSide()
@@ -1153,11 +1132,11 @@ void testWindowAdaptiveAddsKOnBlockingSide()
   // K=2 fillers per relevant row, not to the fixed/row boundary.
   const auto window = fr::expandWindowAdaptive(
       l0, request.targetPlace, {v}, design, 2, fr::DebugLog(verbose()));
-  CHECK(window.x == (fr::XInterval{0, 16}));
-  CHECK(window.containsEditable(100));  // row0: only one filler before boundary
-  CHECK(window.containsEditable(201));  // row1: second filler added
-  CHECK(window.containsEditable(202));  // row1: nearest filler added
-  CHECK(!window.containsEditable(200));  // third filler: proves no whole-run sweep
+  EXPECT_TRUE(window.x == (fr::XInterval{0, 16}));
+  EXPECT_TRUE(window.containsEditable(100));  // row0: only one filler before boundary
+  EXPECT_TRUE(window.containsEditable(201));  // row1: second filler added
+  EXPECT_TRUE(window.containsEditable(202));  // row1: nearest filler added
+  EXPECT_TRUE(!window.containsEditable(200));  // third filler: proves no whole-run sweep
 }
 
 void testWindowAdaptiveCoupledRowsAndFixedBoundary()
@@ -1203,10 +1182,10 @@ void testWindowAdaptiveCoupledRowsAndFixedBoundary()
       1,
       fr::DebugLog(verbose()));
 
-  CHECK(expanded.containsEditable(203));  // anchor row, first right filler
-  CHECK(expanded.containsEditable(303));  // coupled row +1
-  CHECK(!expanded.containsEditable(304)); // K=1, no run sweep
-  CHECK(!expanded.containsEditable(104)); // row -1 stopped at fixed cell 103
+  EXPECT_TRUE(expanded.containsEditable(203));  // anchor row, first right filler
+  EXPECT_TRUE(expanded.containsEditable(303));  // coupled row +1
+  EXPECT_TRUE(!expanded.containsEditable(304)); // K=1, no run sweep
+  EXPECT_TRUE(!expanded.containsEditable(104)); // row -1 stopped at fixed cell 103
 }
 
 void testGuardRegionTwoCellRing()
@@ -1231,13 +1210,13 @@ void testGuardRegionTwoCellRing()
                                       design, 1, fr::DebugLog(verbose()));
   // Guard: rows clamped to the design (0..1); x widened by two instances
   // beyond the window on each side -> reaches the row edges here.
-  CHECK_EQ(window.guardRegion.rowLo, 0);
-  CHECK_EQ(window.guardRegion.rowHi, 1);
-  CHECK(window.guardRegion.x.xl <= 3);   // two instances left of x=8 on row1
-  CHECK(window.guardRegion.x.xh >= 16);  // right edge of both rows
+  EXPECT_EQ(window.guardRegion.rowLo, 0);
+  EXPECT_EQ(window.guardRegion.rowHi, 1);
+  EXPECT_TRUE(window.guardRegion.x.xl <= 3);   // two instances left of x=8 on row1
+  EXPECT_TRUE(window.guardRegion.x.xh >= 16);  // right edge of both rows
   // Guard must always contain the window itself.
-  CHECK(window.guardRegion.x.xl <= window.x.xl);
-  CHECK(window.guardRegion.x.xh >= window.x.xh);
+  EXPECT_TRUE(window.guardRegion.x.xl <= window.x.xl);
+  EXPECT_TRUE(window.guardRegion.x.xh >= window.x.xh);
 }
 
 void testEngineNoEditableFillerZeroCalls()
@@ -1256,7 +1235,7 @@ void testEngineNoEditableFillerZeroCalls()
   fr::FakeImplantChecker checker(design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
@@ -1265,15 +1244,15 @@ void testEngineNoEditableFillerZeroCalls()
   request.violations = {v};
 
   const auto result = engine.repair(request);
-  CHECK(!result.hasSolution);
-  CHECK(result.changes.empty());
-  CHECK_EQ(checker.requestCount(), 0);  // no editable filler -> no calls
+  EXPECT_TRUE(!result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_EQ(checker.requestCount(), 0);  // no editable filler -> no calls
 }
 
 class ReentrantChecker : public fr::ImplantOverlayChecker
 {
  public:
-  fr::FillerRepairEngine* engine = nullptr;
+  fr::internal::PlannerEngine* engine = nullptr;
   const fr::FillerRepairRequest* request = nullptr;
   fr::Violation original;
   fr::FillerRepairResult inner;
@@ -1328,20 +1307,20 @@ void testEngineReentrantRepairRefused()
   checker.original = original;
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
   checker.engine = &engine;
   checker.request = &request;
 
   const auto result = engine.repair(request);
-  CHECK(checker.fired);
-  CHECK(!checker.inner.hasSolution);
+  EXPECT_TRUE(checker.fired);
+  EXPECT_TRUE(!checker.inner.hasSolution);
   bool sawReentrant = false;
   for (const auto& diag : checker.inner.diagnostics) {
     sawReentrant |= diag.severity == fr::Severity::Fatal
                     && diag.code == "ReentrantRepair";
   }
-  CHECK(sawReentrant);
-  CHECK(result.hasSolution);  // the outer repair is unaffected
+  EXPECT_TRUE(sawReentrant);
+  EXPECT_TRUE(result.hasSolution);  // the outer repair is unaffected
 }
 
 void testEngineEmptySnapshotIsSuccess()
@@ -1350,14 +1329,14 @@ void testEngineEmptySnapshotIsSuccess()
   fr::FakeImplantChecker checker(f.design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(f.design, checker, config);
+  fr::internal::PlannerEngine engine(f.design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(f.design, f.anchor);
   const auto result = engine.repair(request);
-  CHECK(result.hasSolution);
-  CHECK(result.changes.empty());
-  CHECK_EQ(checker.requestCount(), 0);
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_EQ(checker.requestCount(), 0);
 }
 
 
@@ -1388,20 +1367,20 @@ void testSwapGeneratorBasic()
                                                fr::DebugLog(verbose()));
 
   // Full library: every editable filler has exactly 2 same-size candidates.
-  CHECK_EQ(generated.swaps.size(), window.editableFillers.size() * 2);
+  EXPECT_EQ(generated.swaps.size(), window.editableFillers.size() * 2);
 
   // Deterministic order: window editable order (row, x), then master id.
   // First editable filler is 101 (row0, x=8, w2 vt1) -> masters 22, 23.
-  CHECK_EQ(generated.swaps[0].instanceId, 101);
-  CHECK_EQ(generated.swaps[0].newMasterId, fillerMaster(2, kVt2));
-  CHECK_EQ(generated.swaps[1].instanceId, 101);
-  CHECK_EQ(generated.swaps[1].newMasterId, fillerMaster(2, kVt3));
+  EXPECT_EQ(generated.swaps[0].instanceId, 101);
+  EXPECT_EQ(generated.swaps[0].newMasterId, fillerMaster(2, kVt2));
+  EXPECT_EQ(generated.swaps[1].instanceId, 101);
+  EXPECT_EQ(generated.swaps[1].newMasterId, fillerMaster(2, kVt3));
 
   // Every swap targets an editable filler and never the current master.
   for (const auto& swap : generated.swaps) {
-    CHECK(window.containsEditable(swap.instanceId));
-    CHECK(swap.newMasterId != swap.oldMasterId);
-    CHECK(swap.newVt != swap.oldVt);
+    EXPECT_TRUE(window.containsEditable(swap.instanceId));
+    EXPECT_TRUE(swap.newMasterId != swap.oldMasterId);
+    EXPECT_TRUE(swap.newVt != swap.oldVt);
   }
 }
 
@@ -1418,12 +1397,12 @@ void testSwapGeneratorNoUsableMaster()
 
   const auto generated = fr::generateSwaps(window, design,
                                                fr::DebugLog(verbose()));
-  CHECK(generated.swaps.empty());
+  EXPECT_TRUE(generated.swaps.empty());
   bool sawNoUsable = false;
   for (const auto& diag : generated.diagnostics) {
     sawNoUsable |= diag.code == "NoUsableMaster";
   }
-  CHECK(sawNoUsable);
+  EXPECT_TRUE(sawNoUsable);
 }
 
 class MixedValidityPlacementView : public fr::FakeDesign
@@ -1456,8 +1435,8 @@ void testSwapgenRejectedCandidateDiag()
 
   const auto generated = fr::generateSwaps(
       window, design, fr::DebugLog(verbose()));
-  CHECK_EQ(generated.swaps.size(), 1u);
-  CHECK_EQ(generated.swaps.front().newMasterId, fillerMaster(2, kVt2));
+  EXPECT_EQ(generated.swaps.size(), 1u);
+  EXPECT_EQ(generated.swaps.front().newMasterId, fillerMaster(2, kVt2));
   bool sawRejected = false;
   for (const auto& diagnostic : generated.diagnostics) {
     sawRejected |= diagnostic.severity == fr::Severity::Warning
@@ -1465,7 +1444,7 @@ void testSwapgenRejectedCandidateDiag()
                    && diagnostic.message.find("size mismatch")
                           != std::string::npos;
   }
-  CHECK(sawRejected);
+  EXPECT_TRUE(sawRejected);
 }
 
 
@@ -1513,20 +1492,20 @@ void testRankerOrder()
   // V2.1 #9: the ranker returns filler DOMAINS. 203 is the only direct
   // participant -> its domain ranks first; within the domain the
   // neighbor-majority (VT1) target beats the demoted third VT (VT3).
-  CHECK_EQ(ranked[0].instanceId, 203);
-  CHECK_EQ(ranked[0].options.front().newVt, kVt1);
+  EXPECT_EQ(ranked[0].instanceId, 203);
+  EXPECT_EQ(ranked[0].options.front().newVt, kVt1);
   // Third-VT options are demoted to the domain tail but never removed.
-  CHECK_EQ(ranked[0].options.back().newVt, kVt3);
+  EXPECT_EQ(ranked[0].options.back().newVt, kVt3);
   // Grouping preserves every generated swap and never truncates a domain.
   size_t optionTotal = 0;
   for (const auto& domain : ranked) {
-    CHECK(!domain.options.empty());
+    EXPECT_TRUE(!domain.options.empty());
     for (const auto& option : domain.options) {
-      CHECK_EQ(option.instanceId, domain.instanceId);
+      EXPECT_EQ(option.instanceId, domain.instanceId);
     }
     optionTotal += domain.options.size();
   }
-  CHECK_EQ(optionTotal, generated.swaps.size());
+  EXPECT_EQ(optionTotal, generated.swaps.size());
 }
 
 void testRankerFillerKeyIsolated()
@@ -1565,7 +1544,7 @@ void testRankerFillerKeyIsolated()
   for (const auto& domain : ranked) {
     order.push_back(domain.instanceId);
   }
-  CHECK(order == (std::vector<fr::InstanceId>{700, 701, 702, 703, 704, 705}));
+  EXPECT_TRUE(order == (std::vector<fr::InstanceId>{700, 701, 702, 703, 704, 705}));
 }
 
 void testRankerDomainOrderIsolated()
@@ -1592,17 +1571,17 @@ void testRankerDomainOrderIsolated()
                                       {},
                                       design,
                                       fr::DebugLog(verbose()));
-  CHECK_EQ(ranked.size(), 1u);
+  EXPECT_EQ(ranked.size(), 1u);
   if (ranked.size() != 1) {
     return;
   }
-  CHECK_EQ(ranked[0].options.size(), 3u);
+  EXPECT_EQ(ranked[0].options.size(), 3u);
   if (ranked[0].options.size() != 3) {
     return;
   }
-  CHECK_EQ(ranked[0].options[0].newVt, kVt2);  // anchor vote
-  CHECK_EQ(ranked[0].options[1].newVt, kVt1);  // neighbor majority
-  CHECK_EQ(ranked[0].options[2].newVt, kVt3);  // third VT, retained last
+  EXPECT_EQ(ranked[0].options[0].newVt, kVt2);  // anchor vote
+  EXPECT_EQ(ranked[0].options[1].newVt, kVt1);  // neighbor majority
+  EXPECT_EQ(ranked[0].options[2].newVt, kVt3);  // third VT, retained last
 }
 
 void testRankerMajorityPerBand()
@@ -1635,13 +1614,13 @@ void testRankerMajorityPerBand()
                                       {},
                                       design,
                                       fr::DebugLog(verbose()));
-  CHECK_EQ(ranked.size(), 1u);
+  EXPECT_EQ(ranked.size(), 1u);
   if (ranked.size() != 1 || ranked[0].options.size() != 3) {
     return;
   }
-  CHECK_EQ(ranked[0].options[0].newVt, kVt3);  // anchor vote
-  CHECK_EQ(ranked[0].options[1].newVt, kVt2);  // per-band majority
-  CHECK_EQ(ranked[0].options[2].newVt, kVt1);  // third VT, retained last
+  EXPECT_EQ(ranked[0].options[0].newVt, kVt3);  // anchor vote
+  EXPECT_EQ(ranked[0].options[1].newVt, kVt2);  // per-band majority
+  EXPECT_EQ(ranked[0].options[2].newVt, kVt1);  // third VT, retained last
 }
 
 void testRankerMajoritySkipsMissingMaster()
@@ -1670,12 +1649,12 @@ void testRankerMajoritySkipsMissingMaster()
                                       {},
                                       design,
                                       fr::DebugLog(verbose()));
-  CHECK_EQ(ranked.size(), 1u);
+  EXPECT_EQ(ranked.size(), 1u);
   if (ranked.size() != 1 || ranked[0].options.size() != 2) {
     return;
   }
-  CHECK_EQ(ranked[0].options[0].newVt, kVt2);  // anchor vote
-  CHECK_EQ(ranked[0].options[1].newVt, kVt1);  // majority from real neighbors
+  EXPECT_EQ(ranked[0].options[0].newVt, kVt2);  // anchor vote
+  EXPECT_EQ(ranked[0].options[1].newVt, kVt1);  // majority from real neighbors
 }
 
 void testCandidatesBandPolarityLayoutMustMatch()
@@ -1692,9 +1671,9 @@ void testCandidatesBandPolarityLayoutMustMatch()
   design.addRow(0, 0, 2).place(100, 10, 0, 0);
 
   const auto result = design.getUsableMasterCandidates({100});
-  CHECK_EQ(result.candidates.size(), 1u);
+  EXPECT_EQ(result.candidates.size(), 1u);
   if (!result.candidates.empty()) {
-    CHECK_EQ(result.candidates.front().masterId, 11);
+    EXPECT_EQ(result.candidates.front().masterId, 11);
   }
 }
 
@@ -1710,12 +1689,12 @@ void testCandidatesPolarityOnlyFilterDiagnosed()
   design.addRow(0, 0, 2).place(100, 10, 0, 0);
 
   const auto result = design.getUsableMasterCandidates({100});
-  CHECK(result.candidates.empty());
+  EXPECT_TRUE(result.candidates.empty());
   bool sawPolarity = false;
   for (const auto& diag : result.diagnostics) {
     sawPolarity |= diag.code == "PolarityLayoutFiltered";
   }
-  CHECK(sawPolarity);
+  EXPECT_TRUE(sawPolarity);
 }
 
 void testFakeDesignCachesFollowMutation()
@@ -1724,14 +1703,14 @@ void testFakeDesignCachesFollowMutation()
   // must invalidate them (this locks the dirty-flag contract).
   fr::FakeDesign design = makeLibrary();
   design.addRow(0, 0, 8).place(100, cellMaster(kVt1), 0, 0);
-  CHECK_EQ(design.instancesInRow(0).size(), 1u);
+  EXPECT_EQ(design.instancesInRow(0).size(), 1u);
   design.place(101, fillerMaster(4, kVt1), 0, 4);
-  CHECK_EQ(design.instancesInRow(0).size(), 2u);
+  EXPECT_EQ(design.instancesInRow(0).size(), 2u);
   design.remove(100);
-  CHECK_EQ(design.instancesInRow(0).size(), 1u);
-  CHECK_EQ(design.rows().size(), 1u);
+  EXPECT_EQ(design.instancesInRow(0).size(), 1u);
+  EXPECT_EQ(design.rows().size(), 1u);
   design.addRow(1, 0, 8);
-  CHECK_EQ(design.rows().size(), 2u);
+  EXPECT_EQ(design.rows().size(), 2u);
 }
 
 void testFakeUdmBottomPolarityDerived()
@@ -1755,20 +1734,20 @@ void testFakeUdmBottomPolarityDerived()
 
   const auto* nBottom = provider.describeMaster(500);
   const auto* pBottom = provider.describeMaster(501);
-  CHECK(nBottom != nullptr && nBottom->usable);
-  CHECK(pBottom != nullptr && pBottom->usable);
+  EXPECT_TRUE(nBottom != nullptr && nBottom->usable);
+  EXPECT_TRUE(pBottom != nullptr && pBottom->usable);
   if (nBottom == nullptr || pBottom == nullptr) {
     return;
   }
-  CHECK(nBottom->bottomBandPolarity == fr::BandPolarity::N);
-  CHECK(pBottom->bottomBandPolarity == fr::BandPolarity::P);
+  EXPECT_TRUE(nBottom->bottomBandPolarity == fr::BandPolarity::N);
+  EXPECT_TRUE(pBottom->bottomBandPolarity == fr::BandPolarity::P);
 
   fr::FakeDesign design;
   design.setSiteWidth(1);
   provider.registerInto(design);
-  CHECK(design.masterInfo(500) != nullptr
+  EXPECT_TRUE(design.masterInfo(500) != nullptr
         && design.masterInfo(500)->bottomBandPolarity == fr::BandPolarity::N);
-  CHECK(design.masterInfo(501) != nullptr
+  EXPECT_TRUE(design.masterInfo(501) != nullptr
         && design.masterInfo(501)->bottomBandPolarity == fr::BandPolarity::P);
 }
 
@@ -1790,27 +1769,27 @@ void testEnumerationOrderAndCompleteness()
   const auto plan =
       fr::enumerateOverlays(ranked, config, 512, fr::DebugLog(verbose()));
   // Space = (1+2)(1+2)-1 = 8: 4 singles + 4 cross-filler pairs.
-  CHECK(plan.complete);
-  CHECK_EQ(plan.overlays.size(), 8u);
+  EXPECT_TRUE(plan.complete);
+  EXPECT_EQ(plan.overlays.size(), 8u);
   // Size 1 walks fillers in rank order, each full domain in domain order.
-  CHECK_EQ(plan.overlays[0].size(), 1u);
-  CHECK_EQ(plan.overlays[0][0].instanceId, 100);
-  CHECK_EQ(plan.overlays[1][0].instanceId, 100);
-  CHECK_EQ(plan.overlays[1][0].newMasterId, fillerMaster(4, kVt3));
-  CHECK_EQ(plan.overlays[2][0].instanceId, 101);
+  EXPECT_EQ(plan.overlays[0].size(), 1u);
+  EXPECT_EQ(plan.overlays[0][0].instanceId, 100);
+  EXPECT_EQ(plan.overlays[1][0].instanceId, 100);
+  EXPECT_EQ(plan.overlays[1][0].newMasterId, fillerMaster(4, kVt3));
+  EXPECT_EQ(plan.overlays[2][0].instanceId, 101);
   // First pair = both fillers' first choices (anchor-follow leads); the last
   // filler's option varies fastest across the Cartesian product.
-  CHECK_EQ(plan.overlays[4].size(), 2u);
-  CHECK_EQ(plan.overlays[4][0].instanceId, 100);
-  CHECK_EQ(plan.overlays[4][1].instanceId, 101);
-  CHECK_EQ(plan.overlays[4][1].newMasterId, fillerMaster(2, kVt2));
-  CHECK_EQ(plan.overlays[5][1].newMasterId, fillerMaster(2, kVt3));
+  EXPECT_EQ(plan.overlays[4].size(), 2u);
+  EXPECT_EQ(plan.overlays[4][0].instanceId, 100);
+  EXPECT_EQ(plan.overlays[4][1].instanceId, 101);
+  EXPECT_EQ(plan.overlays[4][1].newMasterId, fillerMaster(2, kVt2));
+  EXPECT_EQ(plan.overlays[5][1].newMasterId, fillerMaster(2, kVt3));
 
   // Tiny budget truncates and clears the completeness claim.
   const auto truncated =
       fr::enumerateOverlays(ranked, config, 3, fr::DebugLog(verbose()));
-  CHECK(!truncated.complete);
-  CHECK_EQ(truncated.overlays.size(), 3u);
+  EXPECT_TRUE(!truncated.complete);
+  EXPECT_EQ(truncated.overlays.size(), 3u);
 }
 
 // V2.1 #9 regression: member caps count FILLERS, not options. Three ranked
@@ -1841,7 +1820,7 @@ void testEnumerationFillerDomainNotCrowdedOut()
   // Space = 3*3*3-1 = 26 > budget 20 -> truncated mode, caps active.
   const auto plan =
       fr::enumerateOverlays(ranked, config, 20, fr::DebugLog(verbose()));
-  CHECK(!plan.complete);
+  EXPECT_TRUE(!plan.complete);
 
   // Size 1 is never capped: all three fillers' full domains appear --
   // including the last-ranked filler 104 and its second (demoted) option.
@@ -1854,8 +1833,8 @@ void testEnumerationFillerDomainNotCrowdedOut()
                       && overlay[0].newMasterId == fillerMaster(4, kVt3);
     }
   }
-  CHECK_EQ(singles, 6);
-  CHECK(saw104Second);
+  EXPECT_EQ(singles, 6);
+  EXPECT_TRUE(saw104Second);
 
   // Size 2: exactly the (100,101) cross-filler products -- 4 of them, every
   // domain option reachable; filler 104 is excluded by the FILLER cap.
@@ -1863,11 +1842,11 @@ void testEnumerationFillerDomainNotCrowdedOut()
   for (const auto& overlay : plan.overlays) {
     if (overlay.size() == 2) {
       ++pairs;
-      CHECK_EQ(overlay[0].instanceId, 100);
-      CHECK_EQ(overlay[1].instanceId, 101);
+      EXPECT_EQ(overlay[0].instanceId, 100);
+      EXPECT_EQ(overlay[1].instanceId, 101);
     }
   }
-  CHECK_EQ(pairs, 4);
+  EXPECT_EQ(pairs, 4);
 }
 
 void testEngineSolvesSingleSwap()
@@ -1876,26 +1855,26 @@ void testEngineSolvesSingleSwap()
   fr::FakeImplantChecker checker(sc.design, sc.rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(sc.design, checker, config);
+  fr::internal::PlannerEngine engine(sc.design, checker, config);
 
   const auto result = engine.repair(sc.request);
-  CHECK(result.hasSolution);
-  CHECK_EQ(result.changes.size(), 1u);
-  CHECK_EQ(result.changes[0].instanceId, 203);
-  CHECK_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt1));
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 1u);
+  EXPECT_EQ(result.changes[0].instanceId, 203);
+  EXPECT_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt1));
   // One baseline + at most one batch (clean overlay is the top-ranked
   // candidate; the final check is a cache hit, not a new request).
-  CHECK(checker.requestCount() <= 1 + config.batchSize);
+  EXPECT_TRUE(checker.requestCount() <= 1 + config.batchSize);
 
   // Determinism: same input -> identical outcome and identical call count.
   fr::FakeImplantChecker checker2(sc.design, sc.rules);
-  fr::FillerRepairEngine engine2(sc.design, checker2, config);
+  fr::internal::PlannerEngine engine2(sc.design, checker2, config);
   const auto result2 = engine2.repair(sc.request);
-  CHECK(result2.hasSolution);
-  CHECK_EQ(result2.changes.size(), result.changes.size());
-  CHECK_EQ(result2.changes[0].instanceId, result.changes[0].instanceId);
-  CHECK_EQ(result2.changes[0].newMasterId, result.changes[0].newMasterId);
-  CHECK_EQ(checker2.requestCount(), checker.requestCount());
+  EXPECT_TRUE(result2.hasSolution);
+  EXPECT_EQ(result2.changes.size(), result.changes.size());
+  EXPECT_EQ(result2.changes[0].instanceId, result.changes[0].instanceId);
+  EXPECT_EQ(result2.changes[0].newMasterId, result.changes[0].newMasterId);
+  EXPECT_EQ(checker2.requestCount(), checker.requestCount());
 }
 
 // Scenario B (MW-style pair, non-monotone), single row, msIntra=5. Two VT2
@@ -1925,23 +1904,23 @@ void testEngineSolvesPairNonMonotone()
   request.violations =
       snapshotChecker.checkPlaceWithOverlay(baselineRequest(design, 102, 0))
           .violations;
-  CHECK_EQ(request.violations.size(), 2u);  // VT2 MS + VT1 MS
+  EXPECT_EQ(request.violations.size(), 2u);  // VT2 MS + VT1 MS
 
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
-  CHECK(result.hasSolution);
-  CHECK_EQ(result.changes.size(), 2u);
-  CHECK_EQ(result.changes[0].instanceId, 110);
-  CHECK_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt2));
-  CHECK_EQ(result.changes[1].instanceId, 111);
-  CHECK_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt2));
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 2u);
+  EXPECT_EQ(result.changes[0].instanceId, 110);
+  EXPECT_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt2));
+  EXPECT_EQ(result.changes[1].instanceId, 111);
+  EXPECT_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt2));
   // All size-1 candidates were evaluated and rejected before the pair won:
   // 6 swaps (3 fillers x 2 usable VTs) + baseline at least.
-  CHECK(checker.requestCount() >= 7);
+  EXPECT_TRUE(checker.requestCount() >= 7);
 }
 
 // A protocol-honest oracle for complex search-order tests. Baseline and every
@@ -2079,23 +2058,23 @@ void testEngineComplexRankedPairFast()
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(
+  fr::internal::PlannerEngine engine(
       fixture.design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(fixture.request);
-  CHECK(result.hasSolution);
-  CHECK_EQ(result.changes.size(), 2u);
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 2u);
   if (result.changes.size() == 2) {
-    CHECK_EQ(result.changes[0].instanceId, 102);
-    CHECK_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt2));
-    CHECK_EQ(result.changes[1].instanceId, 202);
-    CHECK_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt2));
+    EXPECT_EQ(result.changes[0].instanceId, 102);
+    EXPECT_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt2));
+    EXPECT_EQ(result.changes[1].instanceId, 202);
+    EXPECT_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt2));
   }
   // The correct fillers are the two highest-ranked direct participants and
   // VT2 is the anchor-follow first option. Even with many decoys, the engine
   // reaches the first size-2 assignment without approaching the 128-call cap.
-  CHECK(checker.requestCount() <= 21);
-  CHECK(checker.batchCount() <= 6);
+  EXPECT_TRUE(checker.requestCount() <= 21);
+  EXPECT_TRUE(checker.batchCount() <= 6);
 
   // Reordering the incoming snapshot must not change success, solution, or
   // the deterministic checker-call transcript.
@@ -2104,21 +2083,21 @@ void testEngineComplexRankedPairFast()
   RequiredChangesChecker checkerAgain;
   checkerAgain.originals = fixture.request.violations;
   checkerAgain.required = checker.required;
-  fr::FillerRepairEngine engineAgain(
+  fr::internal::PlannerEngine engineAgain(
       fixture.design, checkerAgain, config);
   const fr::FillerRepairResult again = engineAgain.repair(fixture.request);
-  CHECK(again.hasSolution);
-  CHECK_EQ(again.changes.size(), result.changes.size());
+  EXPECT_TRUE(again.hasSolution);
+  EXPECT_EQ(again.changes.size(), result.changes.size());
   if (again.changes.size() == result.changes.size()) {
     for (size_t index = 0; index < result.changes.size(); ++index) {
-      CHECK_EQ(again.changes[index].instanceId,
+      EXPECT_EQ(again.changes[index].instanceId,
                result.changes[index].instanceId);
-      CHECK_EQ(again.changes[index].newMasterId,
+      EXPECT_EQ(again.changes[index].newMasterId,
                result.changes[index].newMasterId);
     }
   }
-  CHECK_EQ(checkerAgain.requestCount(), checker.requestCount());
-  CHECK_EQ(checkerAgain.batchCount(), checker.batchCount());
+  EXPECT_EQ(checkerAgain.requestCount(), checker.requestCount());
+  EXPECT_EQ(checkerAgain.batchCount(), checker.batchCount());
 }
 
 void testEngineComplexThirdVtStillSucceeds()
@@ -2134,20 +2113,20 @@ void testEngineComplexThirdVtStillSucceeds()
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(
+  fr::internal::PlannerEngine engine(
       fixture.design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(fixture.request);
-  CHECK(result.hasSolution);
-  CHECK_EQ(result.changes.size(), 2u);
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 2u);
   if (result.changes.size() == 2) {
-    CHECK_EQ(result.changes[0].instanceId, 102);
-    CHECK_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt3));
-    CHECK_EQ(result.changes[1].instanceId, 202);
-    CHECK_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt3));
+    EXPECT_EQ(result.changes[0].instanceId, 102);
+    EXPECT_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt3));
+    EXPECT_EQ(result.changes[1].instanceId, 202);
+    EXPECT_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt3));
   }
-  CHECK(checker.requestCount() <= 21);
-  CHECK(checker.batchCount() <= 7);
+  EXPECT_TRUE(checker.requestCount() <= 21);
+  EXPECT_TRUE(checker.batchCount() <= 7);
 }
 
 // Unrelated pre-existing violation inside the guard halo must not block
@@ -2190,19 +2169,19 @@ void testEngineIgnoresUnrelatedHaloViolation()
   snapReq.guardRegion = fr::Region{fr::XInterval{8, 16}, 0, 1};
   request.violations =
       snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
-  CHECK_EQ(request.violations.size(), 1u);  // only the anchor-caused MW
+  EXPECT_EQ(request.violations.size(), 1u);  // only the anchor-caused MW
 
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
   // The pre-existing VT3 MW sits in the baseline of the same guard region;
   // being unrelated to any changed filler it must not veto the fix.
-  CHECK(result.hasSolution);
-  CHECK_EQ(result.changes.size(), 1u);
-  CHECK_EQ(result.changes[0].instanceId, 203);
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 1u);
+  EXPECT_EQ(result.changes[0].instanceId, 203);
 }
 
 // mwIntra=100 makes every run violate: no overlay can ever be clean. The
@@ -2224,16 +2203,16 @@ void testEngineNoSolutionDefinitive()
   request.violations =
       snapshotChecker.checkPlaceWithOverlay(baselineRequest(design, 102, 0))
           .violations;
-  CHECK(!request.violations.empty());
+  EXPECT_TRUE(!request.violations.empty());
 
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
-  CHECK(!result.hasSolution);
-  CHECK(result.changes.empty());
+  EXPECT_TRUE(!result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
   bool sawNoClean = false;
   bool sawDefinitive = false;
   bool sawCutoff = false;
@@ -2245,10 +2224,10 @@ void testEngineNoSolutionDefinitive()
     sawCutoff |= diag.code == "ExpansionCutoff";
     sawBest |= diag.code == "BestOverlay";
   }
-  CHECK(sawNoClean);
-  CHECK(sawDefinitive);
-  CHECK(sawCutoff);
-  CHECK(sawBest);
+  EXPECT_TRUE(sawNoClean);
+  EXPECT_TRUE(sawDefinitive);
+  EXPECT_TRUE(sawCutoff);
+  EXPECT_TRUE(sawBest);
 }
 
 // Gate-level cache: the same overlay under the same guard hits the checker
@@ -2270,12 +2249,12 @@ void testGateCacheSingleEvaluation()
   const fr::Overlay o1 = {swap};
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
-  CHECK(gate.runBaseline(window, budget));  // cache hit
+  EXPECT_TRUE(gate.runBaseline(window, budget));
+  EXPECT_TRUE(gate.runBaseline(window, budget));  // cache hit
   (void) gate.search({o1}, window, window.guardRegion, budget);
   (void) gate.search({o1}, window, window.guardRegion, budget);  // cache hit
-  CHECK_EQ(checker.requestCount(), 2);  // baseline + o1, each exactly once
-  CHECK(gate.cacheHits() >= 2);
+  EXPECT_EQ(checker.requestCount(), 2);  // baseline + o1, each exactly once
+  EXPECT_TRUE(gate.cacheHits() >= 2);
 }
 
 // A checker that violates the requestId echo protocol must abort the repair
@@ -2308,16 +2287,16 @@ void testEngineDetectsProtocolError()
   MisbehavingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(sc.design, checker, config);
+  fr::internal::PlannerEngine engine(sc.design, checker, config);
 
   const auto result = engine.repair(sc.request);
-  CHECK(!result.hasSolution);
-  CHECK(result.changes.empty());
+  EXPECT_TRUE(!result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
   bool sawProtocol = false;
   for (const auto& diag : result.diagnostics) {
     sawProtocol |= diag.code == "CheckerProtocolError";
   }
-  CHECK(sawProtocol);
+  EXPECT_TRUE(sawProtocol);
 }
 
 // Batch result order must not matter: a checker returning results reversed
@@ -2348,13 +2327,13 @@ void testEngineOrderIndependentBatches()
   ReversingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(sc.design, checker, config);
+  fr::internal::PlannerEngine engine(sc.design, checker, config);
 
   const auto result = engine.repair(sc.request);
-  CHECK(result.hasSolution);
-  CHECK_EQ(result.changes.size(), 1u);
-  CHECK_EQ(result.changes[0].instanceId, 203);
-  CHECK_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt1));
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 1u);
+  EXPECT_EQ(result.changes[0].instanceId, 203);
+  EXPECT_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt1));
 }
 
 bool sameChanges(const std::vector<fr::FillerChange>& a,
@@ -2420,18 +2399,18 @@ void testEngineBatchSizeInvariance()
   fr::RepairConfig one;
   one.batchSize = 1;
   one.verbose = verbose();
-  fr::FillerRepairEngine engineOne(sc.design, checkerOne, one);
+  fr::internal::PlannerEngine engineOne(sc.design, checkerOne, one);
   const auto resultOne = engineOne.repair(sc.request);
 
   fr::FakeImplantChecker checkerMany(sc.design, sc.rules);
   fr::RepairConfig many;
   many.batchSize = 32;
   many.verbose = verbose();
-  fr::FillerRepairEngine engineMany(sc.design, checkerMany, many);
+  fr::internal::PlannerEngine engineMany(sc.design, checkerMany, many);
   const auto resultMany = engineMany.repair(sc.request);
 
-  CHECK(resultOne.hasSolution == resultMany.hasSolution);
-  CHECK(sameChanges(resultOne.changes, resultMany.changes));
+  EXPECT_TRUE(resultOne.hasSolution == resultMany.hasSolution);
+  EXPECT_TRUE(sameChanges(resultOne.changes, resultMany.changes));
 }
 
 void testEngineDeterminismFullTranscript()
@@ -2442,18 +2421,18 @@ void testEngineDeterminismFullTranscript()
   config.verbose = verbose();
 
   fr::FakeImplantChecker checkerA(sc.design, sc.rules);
-  fr::FillerRepairEngine engineA(sc.design, checkerA, config);
+  fr::internal::PlannerEngine engineA(sc.design, checkerA, config);
   const auto resultA = engineA.repair(sc.request);
 
   fr::FakeImplantChecker checkerB(sc.design, sc.rules);
-  fr::FillerRepairEngine engineB(sc.design, checkerB, config);
+  fr::internal::PlannerEngine engineB(sc.design, checkerB, config);
   const auto resultB = engineB.repair(sc.request);
 
-  CHECK(resultA.hasSolution == resultB.hasSolution);
-  CHECK(sameChanges(resultA.changes, resultB.changes));
-  CHECK(sameDiagnostics(resultA.diagnostics, resultB.diagnostics));
-  CHECK_EQ(checkerA.requestCount(), checkerB.requestCount());
-  CHECK_EQ(checkerA.batchCount(), checkerB.batchCount());
+  EXPECT_TRUE(resultA.hasSolution == resultB.hasSolution);
+  EXPECT_TRUE(sameChanges(resultA.changes, resultB.changes));
+  EXPECT_TRUE(sameDiagnostics(resultA.diagnostics, resultB.diagnostics));
+  EXPECT_EQ(checkerA.requestCount(), checkerB.requestCount());
+  EXPECT_EQ(checkerA.batchCount(), checkerB.batchCount());
 }
 
 void testEngineNeverEditsGuardOnly()
@@ -2467,26 +2446,26 @@ void testEngineNeverEditsGuardOnly()
                                   sc.design,
                                   2,
                                   fr::DebugLog(verbose()));
-  CHECK(!l0.containsEditable(100));
-  CHECK(!l0.containsEditable(200));
-  CHECK(l0.guardRegion.containsRow(sc.design.instance(100)->rowId));
-  CHECK(l0.guardRegion.x.overlaps(fr::instanceSpan(sc.design, *sc.design.instance(100))));
-  CHECK(l0.guardRegion.x.overlaps(fr::instanceSpan(sc.design, *sc.design.instance(200))));
+  EXPECT_TRUE(!l0.containsEditable(100));
+  EXPECT_TRUE(!l0.containsEditable(200));
+  EXPECT_TRUE(l0.guardRegion.containsRow(sc.design.instance(100)->rowId));
+  EXPECT_TRUE(l0.guardRegion.x.overlaps(fr::instanceSpan(sc.design, *sc.design.instance(100))));
+  EXPECT_TRUE(l0.guardRegion.x.overlaps(fr::instanceSpan(sc.design, *sc.design.instance(200))));
 
   fr::FakeImplantChecker inner(sc.design, sc.rules);
   RecordingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(sc.design, checker, config);
+  fr::internal::PlannerEngine engine(sc.design, checker, config);
   const auto result = engine.repair(sc.request);
 
-  CHECK(result.hasSolution);
-  CHECK(!checker.requests.empty());
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_TRUE(!checker.requests.empty());
   for (const auto& request : checker.requests) {
     for (const auto& change : request.fillerChanges) {
-      CHECK(l0.containsEditable(change.instanceId));
-      CHECK(change.instanceId != 100);
-      CHECK(change.instanceId != 200);
+      EXPECT_TRUE(l0.containsEditable(change.instanceId));
+      EXPECT_TRUE(change.instanceId != 100);
+      EXPECT_TRUE(change.instanceId != 200);
     }
   }
 }
@@ -2638,17 +2617,17 @@ void testGateDeltaClassificationBranches()
                       /*ruleDistance=*/2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
+  EXPECT_TRUE(gate.runBaseline(window, budget));
   const auto sr = gate.search({o1, o2, o3}, window, window.guardRegion, budget);
 
   // o1/o2 rejected for the pinned reasons; o3 accepted despite the unrelated
   // halo violation (and despite isLegal=false in its raw result).
-  CHECK(sr.foundClean);
-  CHECK_EQ(sr.cleanOverlay.size(), 1u);
-  CHECK_EQ(sr.cleanOverlay[0].instanceId, 500);
-  CHECK_EQ(sr.cleanOverlay[0].newMasterId, fillerMaster(2, kVt3));
-  CHECK(sr.hasBest);
-  CHECK_EQ(sr.bestSummary.newInWindow, 1);  // o1 was the best-tracked reject
+  EXPECT_TRUE(sr.foundClean);
+  EXPECT_EQ(sr.cleanOverlay.size(), 1u);
+  EXPECT_EQ(sr.cleanOverlay[0].instanceId, 500);
+  EXPECT_EQ(sr.cleanOverlay[0].newMasterId, fillerMaster(2, kVt3));
+  EXPECT_TRUE(sr.hasBest);
+  EXPECT_EQ(sr.bestSummary.newInWindow, 1);  // o1 was the best-tracked reject
 }
 
 // --- V2.1 batch-1 correctness regressions ----------------------------------
@@ -2708,12 +2687,12 @@ void testGateRejectsUnexplainedIllegal()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
+  EXPECT_TRUE(gate.runBaseline(window, budget));
   const fr::Overlay o = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
   const auto sr = gate.search({o}, window, window.guardRegion, budget);
-  CHECK(!sr.foundClean);               // NOT accepted
-  CHECK(sr.hasBest);
-  CHECK(sr.bestSummary.inconsistent);  // rejected for self-inconsistency
+  EXPECT_TRUE(!sr.foundClean);               // NOT accepted
+  EXPECT_TRUE(sr.hasBest);
+  EXPECT_TRUE(sr.bestSummary.inconsistent);  // rejected for self-inconsistency
 }
 
 // V2.1 #2: a baseline that fails to reproduce an in-guard original means the
@@ -2740,12 +2719,12 @@ void testGateBaselineMismatchAbortsSearch()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(!gate.runBaseline(window, budget));  // consistency gate fails
+  EXPECT_TRUE(!gate.runBaseline(window, budget));  // consistency gate fails
   bool sawMismatch = false;
   for (const auto& d : gate.diagnostics()) {
     sawMismatch |= d.code == "BaselineMismatch";
   }
-  CHECK(sawMismatch);
+  EXPECT_TRUE(sawMismatch);
 }
 
 // V2.1 #3: two candidate violations of the same signature must not both be
@@ -2778,10 +2757,10 @@ void testGateMultisetNewViolationNotAbsorbed()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));  // H is out-of-window -> baseline consistent
+  EXPECT_TRUE(gate.runBaseline(window, budget));  // H is out-of-window -> baseline consistent
   const auto sr = gate.search({o}, window, window.guardRegion, budget);
-  CHECK(!sr.foundClean);                     // the second H is not absorbed
-  CHECK_EQ(sr.bestSummary.relatedInHalo, 1);
+  EXPECT_TRUE(!sr.foundClean);                     // the second H is not absorbed
+  EXPECT_EQ(sr.bestSummary.relatedInHalo, 1);
 }
 
 // V2.1 #5: relatedness of a NEW violation uses max(originalRuleDistance, its
@@ -2815,11 +2794,11 @@ void testGatePerViolationRuleDistance()
   fr::OracleGate gate(checker, anchor, originals, 1, /*ruleDistance=*/2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
+  EXPECT_TRUE(gate.runBaseline(window, budget));
   const auto sr = gate.search({o}, window, window.guardRegion, budget);
-  CHECK(!sr.foundClean);
-  CHECK_EQ(sr.bestSummary.relatedInHalo, 1);
-  CHECK_EQ(sr.bestSummary.unrelatedInHalo, 0);
+  EXPECT_TRUE(!sr.foundClean);
+  EXPECT_EQ(sr.bestSummary.relatedInHalo, 1);
+  EXPECT_EQ(sr.bestSummary.unrelatedInHalo, 0);
 }
 
 // A checker for which no overlay is ever clean: it returns the original
@@ -2876,18 +2855,18 @@ void testEngineBudgetCeiling()
   fr::RepairConfig config;
   config.checkerCallBudgetPerWindow = 3;  // baseline + exact two-option space
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
-  CHECK(!result.hasSolution);
-  CHECK_EQ(checker.requests.size(), 3u);
+  EXPECT_TRUE(!result.hasSolution);
+  EXPECT_EQ(checker.requests.size(), 3u);
   bool sawDefinitive = false;
   for (const auto& diagnostic : result.diagnostics) {
     sawDefinitive |= diagnostic.code == "NoCleanOverlay"
                      && diagnostic.message.find("definitively")
                             != std::string::npos;
   }
-  CHECK(sawDefinitive);
+  EXPECT_TRUE(sawDefinitive);
 }
 
 // Scripted oracle for adaptive-L1: every overlay remains blocked until it
@@ -2956,13 +2935,13 @@ void testEngineAdaptiveSolvesBeyondRing()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
-  CHECK(result.hasSolution);
-  CHECK_EQ(result.changes.size(), 1u);
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 1u);
   if (!result.changes.empty()) {
-    CHECK_EQ(result.changes.front().instanceId, 141);
+    EXPECT_EQ(result.changes.front().instanceId, 141);
   }
   bool sawAdaptiveSolution = false;
   for (const auto& diagnostic : result.diagnostics) {
@@ -2970,7 +2949,7 @@ void testEngineAdaptiveSolvesBeyondRing()
                            && diagnostic.message.find("adaptive-L1")
                                   != std::string::npos;
   }
-  CHECK(sawAdaptiveSolution);
+  EXPECT_TRUE(sawAdaptiveSolution);
 }
 
 void testEngineAdaptiveL1FindsFarFiller()
@@ -3008,19 +2987,19 @@ void testEngineAdaptiveL1FindsFarFiller()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(request);
-  CHECK(result.hasSolution);
-  CHECK_EQ(result.changes.size(), 1u);
-  CHECK_EQ(result.changes.front().instanceId, 141);
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 1u);
+  EXPECT_EQ(result.changes.front().instanceId, 141);
   bool sawAdaptiveSolution = false;
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
     sawAdaptiveSolution |= diagnostic.code == "Solution"
                            && diagnostic.message.find("adaptive-L1 step 1")
                                   != std::string::npos;
   }
-  CHECK(sawAdaptiveSolution);
+  EXPECT_TRUE(sawAdaptiveSolution);
 }
 
 void testEngineAdaptiveCutoffUnchangedBlocking()
@@ -3056,17 +3035,17 @@ void testEngineAdaptiveCutoffUnchangedBlocking()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(request);
-  CHECK(!result.hasSolution);
+  EXPECT_TRUE(!result.hasSolution);
   bool sawUnchangedCutoff = false;
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
     sawUnchangedCutoff |= diagnostic.code == "ExpansionCutoff"
                           && diagnostic.message.find("unchanged blocking")
                                  != std::string::npos;
   }
-  CHECK(sawUnchangedCutoff);
+  EXPECT_TRUE(sawUnchangedCutoff);
 }
 
 // V2.1 #10: "definitive no solution" must reflect the LAST searched window.
@@ -3109,10 +3088,10 @@ void testEngineDefinitiveReflectsLastWindow()
   // L0 (1 filler, space 2) fits; adaptive step (7 fillers) far exceeds 50.
   config.checkerCallBudgetPerWindow = 50;
   config.adaptiveStepFillers = 6;
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   const auto result = engine.repair(request);
-  CHECK(!result.hasSolution);
+  EXPECT_TRUE(!result.hasSolution);
   bool sawTruncated = false;
   bool sawDefinitive = false;
   for (const auto& d : result.diagnostics) {
@@ -3121,8 +3100,8 @@ void testEngineDefinitiveReflectsLastWindow()
       sawDefinitive |= d.message.find("definitively") != std::string::npos;
     }
   }
-  CHECK(sawTruncated);
-  CHECK(!sawDefinitive);
+  EXPECT_TRUE(sawTruncated);
+  EXPECT_TRUE(!sawDefinitive);
 }
 
 void testGateBaselineUnexpectedInWindowAborts()
@@ -3146,8 +3125,8 @@ void testGateBaselineUnexpectedInWindowAborts()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(!gate.runBaseline(window, budget));
-  CHECK(hasDiagCode(gate.diagnostics(), "BaselineMismatch"));
+  EXPECT_TRUE(!gate.runBaseline(window, budget));
+  EXPECT_TRUE(hasDiagCode(gate.diagnostics(), "BaselineMismatch"));
 }
 
 void testGateBaselineHaloExtraAllowed()
@@ -3175,10 +3154,10 @@ void testGateBaselineHaloExtraAllowed()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
+  EXPECT_TRUE(gate.runBaseline(window, budget));
   const auto sr = gate.search({overlay}, window, window.guardRegion, budget);
-  CHECK(sr.foundClean);
-  CHECK_EQ(sr.cleanOverlay[0].instanceId, 500);
+  EXPECT_TRUE(sr.foundClean);
+  EXPECT_EQ(sr.cleanOverlay[0].instanceId, 500);
 }
 
 void testGateBaselineOutsideGuardOriginalSkipped()
@@ -3202,8 +3181,8 @@ void testGateBaselineOutsideGuardOriginalSkipped()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
-  CHECK(!hasDiagCode(gate.diagnostics(), "BaselineMismatch"));
+  EXPECT_TRUE(gate.runBaseline(window, budget));
+  EXPECT_TRUE(!hasDiagCode(gate.diagnostics(), "BaselineMismatch"));
 }
 
 void testGateResidualOneToOne()
@@ -3229,11 +3208,11 @@ void testGateResidualOneToOne()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
+  EXPECT_TRUE(gate.runBaseline(window, budget));
   const auto sr = gate.search({overlay}, window, window.guardRegion, budget);
-  CHECK(!sr.foundClean);
-  CHECK(sr.hasBest);
-  CHECK_EQ(sr.bestSummary.residualOriginals, 1);
+  EXPECT_TRUE(!sr.foundClean);
+  EXPECT_TRUE(sr.hasBest);
+  EXPECT_EQ(sr.bestSummary.residualOriginals, 1);
 }
 
 void testGateBatchExtraResultRejected()
@@ -3262,10 +3241,10 @@ void testGateBatchExtraResultRejected()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
+  EXPECT_TRUE(gate.runBaseline(window, budget));
   const auto sr = gate.search({overlay}, window, window.guardRegion, budget);
-  CHECK(sr.protocolError);
-  CHECK(hasDiagCode(gate.diagnostics(), "CheckerProtocolError"));
+  EXPECT_TRUE(sr.protocolError);
+  EXPECT_TRUE(hasDiagCode(gate.diagnostics(), "CheckerProtocolError"));
 }
 
 void testGateSingleWrongEchoOnBaseline()
@@ -3288,8 +3267,8 @@ void testGateSingleWrongEchoOnBaseline()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(!gate.runBaseline(window, budget));
-  CHECK(hasDiagCode(gate.diagnostics(), "CheckerProtocolError"));
+  EXPECT_TRUE(!gate.runBaseline(window, budget));
+  EXPECT_TRUE(hasDiagCode(gate.diagnostics(), "CheckerProtocolError"));
 }
 
 void testGateStatusNotCheckedCarriesOn()
@@ -3326,10 +3305,10 @@ void testGateStatusNotCheckedCarriesOn()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
+  EXPECT_TRUE(gate.runBaseline(window, budget));
   const auto sr = gate.search({bad, clean}, window, window.guardRegion, budget);
-  CHECK(sr.foundClean);
-  CHECK_EQ(sr.cleanOverlay[0].instanceId, 501);
+  EXPECT_TRUE(sr.foundClean);
+  EXPECT_EQ(sr.cleanOverlay[0].instanceId, 501);
 }
 
 void testGateFatalDiagMakesUnusable()
@@ -3360,11 +3339,11 @@ void testGateFatalDiagMakesUnusable()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
+  EXPECT_TRUE(gate.runBaseline(window, budget));
   const auto sr = gate.search({overlay}, window, window.guardRegion, budget);
-  CHECK(!sr.foundClean);
-  CHECK(sr.hasBest);
-  CHECK(!sr.bestSummary.usable);
+  EXPECT_TRUE(!sr.foundClean);
+  EXPECT_TRUE(sr.hasBest);
+  EXPECT_TRUE(!sr.bestSummary.usable);
 }
 
 void testGateNewViolationNoRowsGoesHalo()
@@ -3392,12 +3371,12 @@ void testGateNewViolationNoRowsGoesHalo()
   fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
-  CHECK(gate.runBaseline(window, budget));
+  EXPECT_TRUE(gate.runBaseline(window, budget));
   const auto sr = gate.search({overlay}, window, window.guardRegion, budget);
-  CHECK(!sr.foundClean);
-  CHECK(sr.hasBest);
-  CHECK_EQ(sr.bestSummary.newInWindow, 0);
-  CHECK_EQ(sr.bestSummary.relatedInHalo, 1);
+  EXPECT_TRUE(!sr.foundClean);
+  EXPECT_TRUE(sr.hasBest);
+  EXPECT_EQ(sr.bestSummary.newInWindow, 0);
+  EXPECT_EQ(sr.bestSummary.relatedInHalo, 1);
 }
 
 void testSignatureFieldMismatchEach()
@@ -3407,22 +3386,22 @@ void testSignatureFieldMismatchEach()
                                   {10, 14});
   auto changed = base;
   changed.ruleId = 4;
-  CHECK(!fr::sameSignature(base, changed, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, changed, 1));
   changed = base;
   changed.kind = fr::ViolationKind::MinSpacing;
-  CHECK(!fr::sameSignature(base, changed, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, changed, 1));
   changed = base;
   changed.relation = fr::ViolationRelation::IntraRow;
-  CHECK(!fr::sameSignature(base, changed, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, changed, 1));
   changed = base;
   changed.primaryLayer = 7;
-  CHECK(!fr::sameSignature(base, changed, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, changed, 1));
   changed = base;
   changed.secondaryLayer = 8;
-  CHECK(!fr::sameSignature(base, changed, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, changed, 1));
   changed = base;
   changed.rowIds = {0};
-  CHECK(!fr::sameSignature(base, changed, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, changed, 1));
 }
 
 void testSignatureXwindowToleranceEdges()
@@ -3432,19 +3411,19 @@ void testSignatureXwindowToleranceEdges()
                                   {10, 14});
   auto halfOverlap = base;
   halfOverlap.xWindow = {12, 16};  // overlap 2, shorter 4 -> match
-  CHECK(fr::sameSignature(base, halfOverlap, 1));
+  EXPECT_TRUE(fr::sameSignature(base, halfOverlap, 1));
 
   auto zeroLengthNear = base;
   zeroLengthNear.xWindow = {15, 15};
-  CHECK(fr::sameSignature(base, zeroLengthNear, 1));
+  EXPECT_TRUE(fr::sameSignature(base, zeroLengthNear, 1));
 
   auto exactlyOneSiteAway = base;
   exactlyOneSiteAway.xWindow = {15, 17};
-  CHECK(fr::sameSignature(base, exactlyOneSiteAway, 1));
+  EXPECT_TRUE(fr::sameSignature(base, exactlyOneSiteAway, 1));
 
   auto justPastTolerance = base;
   justPastTolerance.xWindow = {16, 18};
-  CHECK(!fr::sameSignature(base, justPastTolerance, 1));
+  EXPECT_TRUE(!fr::sameSignature(base, justPastTolerance, 1));
 }
 
 void testRelatednessRowAndDistanceEdges()
@@ -3455,20 +3434,20 @@ void testRelatednessRowAndDistanceEdges()
 
   auto rowPlusOne = makeViolation(2, fr::ViolationKind::MinSpacing,
                                   fr::ViolationRelation::InterRow, {1}, {7, 8});
-  CHECK(fr::isRelatedToOverlay(rowPlusOne, overlay, 1));
+  EXPECT_TRUE(fr::isRelatedToOverlay(rowPlusOne, overlay, 1));
 
   auto rowPlusTwo = rowPlusOne;
   rowPlusTwo.rowIds = {2};
-  CHECK(!fr::isRelatedToOverlay(rowPlusTwo, overlay, 1));
+  EXPECT_TRUE(!fr::isRelatedToOverlay(rowPlusTwo, overlay, 1));
 
   auto exactDistance = rowPlusOne;
   exactDistance.rowIds = {0};
   exactDistance.xWindow = {7, 8};  // distance 1 from [4,6)
-  CHECK(fr::isRelatedToOverlay(exactDistance, overlay, 1));
+  EXPECT_TRUE(fr::isRelatedToOverlay(exactDistance, overlay, 1));
 
   auto pastDistance = exactDistance;
   pastDistance.xWindow = {8, 9};  // distance 2
-  CHECK(!fr::isRelatedToOverlay(pastDistance, overlay, 1));
+  EXPECT_TRUE(!fr::isRelatedToOverlay(pastDistance, overlay, 1));
 }
 
 void testRuleDistanceFallback()
@@ -3479,11 +3458,11 @@ void testRuleDistanceFallback()
   fr::Violation smaller = zero;
   smaller.requiredValue = 2;
 
-  CHECK_EQ(fr::estimateRuleDistance({}, 3), 3);
-  CHECK_EQ(fr::estimateRuleDistance({zero}, 3), 3);
-  CHECK_EQ(fr::estimateRuleDistance({zero, smaller}, 3), 3);
+  EXPECT_EQ(fr::estimateRuleDistance({}, 3), 3);
+  EXPECT_EQ(fr::estimateRuleDistance({zero}, 3), 3);
+  EXPECT_EQ(fr::estimateRuleDistance({zero, smaller}, 3), 3);
   smaller.requiredValue = 5;
-  CHECK_EQ(fr::estimateRuleDistance({zero, smaller}, 3), 5);
+  EXPECT_EQ(fr::estimateRuleDistance({zero, smaller}, 3), 5);
 }
 
 fr::FillerDomain makeDomain(const fr::FakeDesign& design,
@@ -3511,18 +3490,18 @@ void testEnumerateCompleteBudgetBoundary()
   fr::RepairConfig config;
   const auto exactBudget =
       fr::enumerateOverlays(domains, config, 8, fr::DebugLog(verbose()));
-  CHECK_EQ(exactBudget.overlays.size(), 8u);
-  CHECK(exactBudget.complete);
+  EXPECT_EQ(exactBudget.overlays.size(), 8u);
+  EXPECT_TRUE(exactBudget.complete);
 
   const auto complete =
       fr::enumerateOverlays(domains, config, 9, fr::DebugLog(verbose()));
-  CHECK(complete.complete);
-  CHECK_EQ(complete.overlays.size(), 8u);
+  EXPECT_TRUE(complete.complete);
+  EXPECT_EQ(complete.overlays.size(), 8u);
 
   const auto truncated =
       fr::enumerateOverlays(domains, config, 7, fr::DebugLog(verbose()));
-  CHECK(!truncated.complete);
-  CHECK_EQ(truncated.overlays.size(), 7u);
+  EXPECT_TRUE(!truncated.complete);
+  EXPECT_EQ(truncated.overlays.size(), 7u);
 }
 
 void testEnumerateOverflowClamp()
@@ -3540,8 +3519,8 @@ void testEnumerateOverflowClamp()
   fr::RepairConfig config;
   const auto plan =
       fr::enumerateOverlays(domains, config, 32, fr::DebugLog(verbose()));
-  CHECK(!plan.complete);
-  CHECK_EQ(plan.overlays.size(), 32u);
+  EXPECT_TRUE(!plan.complete);
+  EXPECT_EQ(plan.overlays.size(), 32u);
 }
 
 void testEnumerateSize3CapAndProducts()
@@ -3562,13 +3541,13 @@ void testEnumerateSize3CapAndProducts()
   config.memberCapSize3 = 3;
   const auto plan =
       fr::enumerateOverlays(domains, config, 100, fr::DebugLog(verbose()));
-  CHECK(!plan.complete);
-  CHECK_EQ(plan.overlays.size(), 58u);  // size1:10, size2:40, size3 cap C(3,3)*8
-  CHECK_EQ(plan.overlays.back().size(), 3u);
-  CHECK_EQ(plan.overlays.back()[0].instanceId, 800);
-  CHECK_EQ(plan.overlays.back()[1].instanceId, 801);
-  CHECK_EQ(plan.overlays.back()[2].instanceId, 802);
-  CHECK_EQ(plan.overlays.back()[2].newMasterId, fillerMaster(2, kVt3));
+  EXPECT_TRUE(!plan.complete);
+  EXPECT_EQ(plan.overlays.size(), 58u);  // size1:10, size2:40, size3 cap C(3,3)*8
+  EXPECT_EQ(plan.overlays.back().size(), 3u);
+  EXPECT_EQ(plan.overlays.back()[0].instanceId, 800);
+  EXPECT_EQ(plan.overlays.back()[1].instanceId, 801);
+  EXPECT_EQ(plan.overlays.back()[2].instanceId, 802);
+  EXPECT_EQ(plan.overlays.back()[2].newMasterId, fillerMaster(2, kVt3));
 }
 
 // --- User-provided realistic grid ------------------------------------------
@@ -3653,12 +3632,12 @@ void testEngineUserGridMwMs1()
   snapReq.targetPlace = anchor;
   snapReq.guardRegion = fr::Region{fr::XInterval{-1, 1000}, 0, 4};
   const auto snapshot = snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
-  CHECK_EQ(snapshot.size(), 2u);  // two corner-touch inter-row MS at [49,50)
+  EXPECT_EQ(snapshot.size(), 2u);  // two corner-touch inter-row MS at [49,50)
 
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::FillerRepairEngine engine(design, checker, config);
+  fr::internal::PlannerEngine engine(design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchor;
@@ -3671,42 +3650,35 @@ void testEngineUserGridMwMs1()
   // filler 2012 -> vt0 (the pre-#9 flat-swap order surfaced 3013 -> vt1,
   // an equally clean alternative). Oracle-verified: residual=0,
   // newInWindow=0, relatedInHalo=0.
-  CHECK(result.hasSolution);
-  CHECK_EQ(result.changes.size(), 1u);
-  CHECK_EQ(result.changes[0].instanceId, 2012);
-  CHECK_EQ(result.changes[0].newMasterId, grid::filler(4, 0));
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 1u);
+  EXPECT_EQ(result.changes[0].instanceId, 2012);
+  EXPECT_EQ(result.changes[0].newMasterId, grid::filler(4, 0));
 
   // Same input -> identical result (planner determinism).
   fr::FakeImplantChecker checker2(design, rules);
-  fr::FillerRepairEngine engine2(design, checker2, config);
+  fr::internal::PlannerEngine engine2(design, checker2, config);
   const auto result2 = engine2.repair(request);
-  CHECK(result2.hasSolution);
-  CHECK_EQ(result2.changes.size(), 1u);
-  CHECK_EQ(result2.changes[0].instanceId, 2012);
+  EXPECT_TRUE(result2.hasSolution);
+  EXPECT_EQ(result2.changes.size(), 1u);
+  EXPECT_EQ(result2.changes[0].instanceId, 2012);
 }
 
-}  // namespace
-
-int main(int argc, char** argv)
+void registerPlannerTests()
 {
-  // Optional name filter: `fillerRepair_tests <substring>` runs only the
-  // tests whose name contains <substring>. With FR_VERBOSE=1 this isolates
-  // one case's full [fr] transcript.
-  const char* filter = argc > 1 ? argv[1] : nullptr;
-
   const std::vector<Test> tests = {
       {"swap_construction", testSwapConstruction},
       {"canonical_key_order_independent", testCanonicalKeyOrderIndependent},
-      {"wire_adapter", testWireAdapter},
+      {"wire_conversion", testWireConversion},
       {"precheck_full_utility", testPreCheckFullUtility},
       {"precheck_gap", testPreCheckGap},
-      {"precheck_overlap_offgrid_illegal", testPreCheckOverlapOffGridIllegal},
+      {"precheck_only_gap_overlap", testPreCheckOnlyGapOverlap},
       {"precheck_multi_row_issues_deterministic",
        testPreCheckMultiRowIssuesDeterministic},
       {"precheck_gap_at_row_edges", testPreCheckGapAtRowEdges},
       {"precheck_overlap_three_instances", testPreCheckOverlapThreeInstances},
-      {"engine_fatal_on_gap_without_checker_calls",
-       testEngineFatalOnGapWithoutCheckerCalls},
+      {"planner_does_not_run_placement_precheck",
+       testPlannerDoesNotRunPlacementPrecheck},
       {"candidate_provider", testCandidateProvider},
       {"udm_provider_describe_widths_and_vts", testUdmProviderDescribeWidthsAndVts},
       {"udm_provider_rejects_malformed_masters",
@@ -3805,27 +3777,16 @@ int main(int argc, char** argv)
       {"engine_user_grid_mw_ms_1", testEngineUserGridMwMs1},
   };
 
-  size_t ran = 0;
   for (const Test& test : tests) {
-    if (filter != nullptr && std::strstr(test.name, filter) == nullptr) {
-      continue;
-    }
-    g_current = test.name;
-    if (verbose()) {
-      std::printf("\n===== case: %s =====\n", test.name);
-    }
-    test.fn();
-    ++ran;
+    ::testing::RegisterTest(
+        "FillerRepairPlanner", test.name, nullptr, nullptr, __FILE__, __LINE__,
+        [fn = test.fn]() -> ::testing::Test* { return new PlannerTest(fn); });
   }
-
-  if (ran == 0) {
-    std::printf("no test matched filter \"%s\"\n", filter ? filter : "");
-    return 1;
-  }
-  if (g_failures == 0) {
-    std::printf("OK: %zu test(s) passed\n", ran);
-    return 0;
-  }
-  std::printf("FAILED: %d check(s) across %zu test(s)\n", g_failures, ran);
-  return 1;
 }
+
+[[maybe_unused]] const bool kPlannerTestsRegistered = []() {
+  registerPlannerTests();
+  return true;
+}();
+
+}  // namespace

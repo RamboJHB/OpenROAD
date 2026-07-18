@@ -3,8 +3,8 @@
 
 // Fake-UDM master catalog + candidate provider.
 //
-// Purpose: rehearse the REAL adapter's data path before the real checker/infra
-// APIs land. The real provider will sit on the checker's master tables, which
+// Purpose: rehearse the production engine's master/candidate data path in
+// planner unit tests. The real provider sits on checker master tables, which
 // are built from UDM by ImplantLayerChecker::buildMasters, parseLayerName and
 // rebuildMasterShapes (formerly in the helper, folded into the checker by the
 // 2026-07-12 update). This fake replicates that derivation UDM-free, with the

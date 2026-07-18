@@ -4,8 +4,8 @@
 // Read-only placement/DB view consumed by the repair planner.
 //
 // This is the planner's only window into the infrastructure database. The
-// real adapter wraps the UDM-backed design; fake/FakeDesign.h implements it
-// for unit tests. The planner never mutates the design -- commit stays with
+// FillerRepairEngine's private view wraps UDM; fake/FakeDesign.h implements
+// it for unit tests. The planner never mutates the design -- commit stays with
 // the infrastructure (spec section 3.1).
 //
 // Thread model: after construction a production view is an immutable
@@ -63,7 +63,7 @@ class PlacementView
   virtual const std::vector<RowId>& rows() const = 0;
 
   // Legal std-cell site range of a row in DBU. Macros/blockages/core cutouts
-  // must already be excluded by the adapter (spec section 6.1); anything a
+  // must already be excluded by the production view; anything a
   // std cell or filler may legally occupy is inside this span.
   virtual XInterval rowLegalSpan(RowId rowId) const = 0;
 

@@ -1,67 +1,58 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Pure repair planner entry point (spec sections 3.2 / 5.4).
-//
-// Deterministic pipeline: precheck -> normalize -> window -> swap gen ->
-// rank -> subset search -> oracle gate -> result. The engine owns no state
-// between repair() calls and never mutates the design; all effects are the
-// returned FillerRepairResult.
-//
-// Implementation status (spec section 11 TODO order):
-//   [x] 1  planner API, Swap struct, overlay cache key
-//   [x] 2  fake checker / fake candidate provider (see fake/)
-//   [x] 3  100% utility pre-check with fatal short-circuit
-//   [x] 4  violation normalization + signature matching (Signature.h)
-//   [x] 5  L0 + adaptive-L1, guardRegion, unfixable warning (#6/#7/#8)
-//   [x] 6  swap generator: atomic swap moves only (Swap.h)
-//   [x] 7  ranker (Ranker.h)
-//   [x] 8  subset searcher (SubsetSearch.h)
-//   [x] 9  oracle gate: batch, cache, baseline-delta (OracleGate.h)
-//   [x] 10 adaptive window escalation + diagnostics (final check dropped #11)
+// Production filler-repair facade. Like ImplantLayerChecker, callers bind
+// Grid/Network once, initialize against one physical-design revision, then
+// issue const pre-commit queries. Neither precheck() nor repair() mutates UDM.
 
 #pragma once
 
-#include <atomic>
+#include <memory>
+#include <vector>
 
-#include "CheckerApi.h"
-#include "Log.h"
-#include "PlacementView.h"
-#include "Types.h"
+#include "drc/ImplantLayerChecker.h"
 
-namespace dpl2::fillerRepair {
+namespace dpl2 {
 
-// Search parameters (spec section 7). All knobs live here so tests and
-// diagnostics can print the exact configuration used.
-struct RepairConfig
+class Grid;
+class Network;
+class fillerSetting;
+
+namespace fillerRepair {
+
+struct RepairOutcome
 {
-  int checkerCallBudgetPerWindow = 512;  // includes the baseline request
-  int batchSize = 32;
-  int maxSubsetSize = 4;          // large-window truncation only (spec 6.7)
-  int memberCapSize2 = 24;        // N_2
-  int memberCapSize3 = 12;        // N_3
-  int memberCapSize4 = 8;         // N_4
-  int adaptiveStepFillers = 2;    // K per relevant row/side (spec 6.3 #8)
-  bool verbose = false;           // enables the [fr] debug transcript
+  bool hasSolution = false;
+  ipl::FillerChanges changes;
+  std::vector<ipl::Diagnostic> diagnostics;
 };
 
 class FillerRepairEngine
 {
  public:
-  FillerRepairEngine(const PlacementView& view,
-                     ImplantOverlayChecker& checker,
-                     RepairConfig config = {});
+  FillerRepairEngine(Grid* grid, Network* network);
+  ~FillerRepairEngine();
 
-  FillerRepairResult repair(const FillerRepairRequest& request);
+  FillerRepairEngine(const FillerRepairEngine&) = delete;
+  FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
+
+  bool init(eUNL::PhysDesMgr* desMgr,
+            const ipl::ImplantLayerChecker* checker,
+            const fillerSetting* fillerSetting);
+
+  // Placement-only gate for opto to call before any cell mutation.
+  // isLegal=false blocks opto and diagnostics contain Gap/Overlap warnings.
+  ipl::CheckResult precheck() const;
+
+  // Pre-commit implant overlay query. Gap/overlap precheck is deliberately
+  // not called here; opto owns that sequencing.
+  RepairOutcome repair(eUNL::LeafCellID targetCell,
+                       const eLIB::PhysLibCell& newMaster);
 
  private:
-  const PlacementView& view_;
-  ImplantOverlayChecker& checker_;
-  RepairConfig config_;
-  DebugLog log_;
-  // Guards spec 3.3's no-reentrancy contract AND flags concurrent use of one
-  // engine instance; concurrent repairs use one engine per thread.
-  std::atomic<bool> repair_active_{false};
+  class Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
-}  // namespace dpl2::fillerRepair
+}  // namespace fillerRepair
+}  // namespace dpl2

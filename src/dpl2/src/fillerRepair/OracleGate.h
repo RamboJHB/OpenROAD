@@ -24,14 +24,43 @@
 #include <string>
 #include <vector>
 
-#include "CheckerApi.h"
-#include "FillerRepairEngine.h"
 #include "Log.h"
 #include "Signature.h"
 #include "Swap.h"
+#include "Types.h"
 #include "Window.h"
 
 namespace dpl2::fillerRepair {
+
+struct RepairConfig;
+
+// Planner-internal checker protocol. Production callers never see these
+// requestId/status types; FillerRepairEngine translates ordered final-checker
+// CheckResult/FillerChanges at its private boundary. Test fakes implement this
+// interface to inject protocol failures and exact search states.
+class ImplantOverlayChecker
+{
+ public:
+  virtual ~ImplantOverlayChecker() = default;
+
+  virtual CheckResult checkPlaceWithOverlay(
+      const OverlayCheckRequest& request) = 0;
+  virtual std::vector<CheckResult> checkPlaceWithOverlays(
+      const std::vector<OverlayCheckRequest>& requests) = 0;
+};
+
+inline bool isRawCheckerSnapshotClean(const CheckResult& result)
+{
+  return result.status == CheckStatus::Checked && result.isLegal
+         && result.violations.empty();
+}
+
+inline bool isCheckedResultUsable(const CheckResult& result)
+{
+  return result.status == CheckStatus::Checked
+         && (result.isLegal || !result.violations.empty()
+             || !result.diagnostics.empty());
+}
 
 // Delta classification of one checker result against the baseline.
 struct DeltaSummary

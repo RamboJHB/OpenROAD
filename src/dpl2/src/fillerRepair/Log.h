@@ -4,7 +4,7 @@
 // Debug logging for the repair planner.
 //
 // Contract for messages: each line states cause -> effect so a transcript
-// reads as a decision chain ("gap found at ... -> NonFullUtility fatal"),
+// reads as a decision chain ("window L0 -> baseline -> candidate"),
 // including the concrete data that changed. Output goes to stdout with a
 // "[fr][stage]" prefix and is fully disabled by default.
 

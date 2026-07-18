@@ -14,7 +14,7 @@
 // PlacementView's reference-returning queries are served from caches that
 // every mutator invalidates and the next query rebuilds. Unlike production
 // views this object stays mutable, so it is SINGLE-THREADED by design
-// (tests only) -- the thread-safety contract lives with the real adapter.
+// (tests only) -- the thread-safety contract lives with the production engine.
 
 #pragma once
 
