@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Provider-neutral production E2E cases. This file is the single source of
-// truth compiled by both the real-UDM delivery target and the local fake-UDM
-// runner. No fake UDM name, header or implementation is referenced here.
+// Production E2E cases for the destination's real UDM environment. Fixture
+// construction is supplied through E2ETestProvider; every engine call and
+// assertion remains in this file.
 
 #include "E2ETestProvider.h"
 

@@ -1,15 +1,13 @@
 # Test Plan — fillerRepair
 
-Updated: 2026-07-18.
+Updated: 2026-07-19.
 
 ## Tiers
 
 | Tier | Command | Boundary |
 |---|---|---|
-| Portable planner unit | `fillerRepair/test/CMakeLists.txt` | 81 individually registered UDM-free GoogleTests |
-| Shared production E2E | `fillerRepair/test/e2e_cases.cpp` | 52 GoogleTests compiled unchanged with either provider |
-| Local fake-UDM run | `src/dpl2/test/local/run_fake_udm_e2e.sh` | shared E2E assertions + local fake data provider |
-| Real-UDM compile gate | `-DDPL2_BUILD_REAL_UDM_CASES=ON` | complete production chain plus all shared E2E case objects against real UDM |
+| Real-UDM compile gate | `fillerRepair/test/CMakeLists.txt` | complete production chain plus all 52 E2E case objects against real UDM |
+| Real-UDM E2E | `DPL2_REAL_UDM_PROVIDER_SOURCE=<provider.cpp>` | the same 52 cases linked with the destination's real-UDM fixture |
 
 Normal and AddressSanitizer runs are required. Production builds use
 `-Wall -Wextra -Werror`.
@@ -24,23 +22,22 @@ enabled for every project source and test execution.
 Included: production Grid/Network, fillerSetting, final ImplantLayerChecker,
 FillerRepairEngine (borrowing that infrastructure), internal
 FillerRepairPlanner and all search stages (compile lists from
-`src/fillerRepair/sources.cmake`). Fake UDM provides tech/library/row/cell data
-only. A test-only fixture performs the Grid/Network wiring that DePlace already
-performs in production; no importer exists in the production engine.
+`src/fillerRepair/sources.cmake`). The destination's real-UDM fixture provides
+tech/library/row/cell data. A test-only provider exposes the Grid/Network wiring
+that DePlace already performs in production; no importer exists in the engine.
 
-`e2e_cases.cpp`, `E2ETestProvider.h`, all 81 unit cases, portable CMake and this
-plan live below `fillerRepair/test`, so an entire-directory port carries every
-assertion. `sources.cmake` exports the unit and E2E source lists.
+`e2e_cases.cpp`, `E2ETestProvider.h`, real-UDM CMake and this plan live below
+`fillerRepair/test`, so an entire-directory port carries every production E2E
+assertion. `sources.cmake` exports the E2E source list.
 
 The provider boundary is data-only: create/activate a canonical design, expose
 the Grid/Network already wired as production does, resolve semantic cell/master
 roles, move a cell for gap/overlap setup and snapshot physical records. Engine
-construction, calls and assertions remain exclusively in the shared case
-source. Thus real and local runners cannot diverge.
+construction, calls and assertions remain exclusively in the case source.
 
-The fake UDM include tree, fake provider and local scripts are deliberately
-outside the migration payload at `src/dpl2/test/local/`. The portable test
-tree contains only planner-unit doubles; none enters production or E2E.
+All 81 planner unit cases and their test doubles are maintained in the separate
+repository-local regression copy at `src/dpl2/test/local/planner/`; none is
+part of this real-UDM migration test tree.
 
 ## Required precheck cases
 
@@ -92,8 +89,9 @@ FarShiftedOrigin: three independently discovered testcases per behavior.
   standard row off the shared origin frame stays refused
   (`RowOriginMisaligned`/`ColFrameMismatch`), with the origin baseline on the
   first NON-pad row.
-- Planner tests continue covering adaptive-L1, ranking, subset enumeration,
-  budgets, cache, baseline-delta and malformed internal oracle protocol.
+- The separate local planner suite continues covering adaptive-L1, ranking,
+  subset enumeration, budgets, cache, baseline-delta and malformed internal
+  oracle protocol.
 - `FR_VERBOSE=1` enables the deterministic `[fr][stage]` algorithm transcript;
   normal test runs remain silent apart from GoogleTest output.
 
@@ -106,27 +104,18 @@ fixture constructs at least five standard rows.
 ## Commands
 
 ```sh
-src/dpl2/test/local/run_planner_tests.sh
-SANITIZE=address src/dpl2/test/local/run_planner_tests.sh
-src/dpl2/test/local/run_fake_udm_e2e.sh
-SANITIZE=address src/dpl2/test/local/run_fake_udm_e2e.sh
-
-cmake -S src/dpl2/test -B src/dpl2/test/build-cmake
-cmake --build src/dpl2/test/build-cmake -j2
-ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
-
-cmake -S src/dpl2/test -B src/dpl2/test/build-cmake-asan \
-  -DDPL2_ENABLE_ASAN=ON
-# macOS + Homebrew GoogleTest only; the two scripts above set this themselves:
-export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_container_overflow=0"
-cmake --build src/dpl2/test/build-cmake-asan -j2
-ctest --test-dir src/dpl2/test/build-cmake-asan --output-on-failure
+cmake -S fillerRepair/test -B build-real \
+  -DDPL2_REAL_UDM_INCLUDE_DIRS='<real UDM includes>' \
+  -DDPL2_REAL_UDM_LIBRARIES='<real UDM targets/libraries>' \
+  -DDPL2_REAL_UDM_PROVIDER_SOURCE='<RealUdmE2ETestProvider.cpp>'
+cmake --build build-real
+ctest --test-dir build-real -R '^real-udm\.'
 ```
 
-Portable destination unit command and real-UDM CMake command are documented in
-`test/README.md`.
+Repository-local fake regression commands are documented outside this directory
+in `src/dpl2/test/local/README.md`.
 
-2026-07-18 local results: planner 81/81 and production E2E 52/52 in both
+2026-07-19 local results: planner 81/81 and production E2E 52/52 in both
 normal and ASan builds; full CTest 133/133; `-Wall -Wextra -Werror` clean.
 
 ## Regression rules
@@ -139,7 +128,8 @@ normal and ASan builds; full CTest 133/133; `-Wall -Wextra -Werror` clean.
   must not change any UDM physical record.
 - Production signatures must not expose planner requestId/status types.
 - No planner double may enter a production/E2E link target.
-- Real/local E2E must compile the same `e2e_cases.cpp`; only the provider may differ.
-- Fake UDM files must remain outside `fillerRepair/`.
+- Every test source below `fillerRepair/test` must compile against real UDM.
+- Planner doubles and UDM-compatible local test data must remain outside
+  `fillerRepair/`.
 - Production delivery contains fillerRepair only; supplied infra/checker must
   remain at zero diff.

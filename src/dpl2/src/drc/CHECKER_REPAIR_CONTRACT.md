@@ -1,6 +1,6 @@
 # ImplantLayerChecker ↔ fillerRepair contract
 
-Updated: 2026-07-18.
+Updated: 2026-07-19.
 
 ## Final checker API
 
@@ -87,13 +87,13 @@ No DRC rule or scan behavior changed. Warning-clean integration required only:
 
 ## Verified test boundary
 
-All final E2E calls/assertions live in the provider-neutral
+All final E2E calls/assertions live in the real-UDM
 `fillerRepair/test/e2e_cases.cpp` and use production Grid, Network, final
-checker, FillerRepairEngine and planner. Destination real UDM and repository-
-local fake UDM only provide fixture data through `E2ETestProvider`; the fake
-tree is outside the migration payload. The production engine contains no
-snapshot builder or test conditional. Normal and ASan local builds pass with
-`-Wall -Wextra -Werror`.
+checker, FillerRepairEngine and planner. The destination supplies fixture data
+through `E2ETestProvider`. All local test doubles and UDM-compatible test data
+live outside the migration payload under `src/dpl2/test/local`. The production
+engine contains no snapshot builder or test conditional. Normal and ASan local
+builds pass with `-Wall -Wextra -Werror`.
 
 Future checker API or semantic changes must be recorded here before engine
 changes are merged.

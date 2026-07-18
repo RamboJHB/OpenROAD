@@ -5,8 +5,8 @@
 //
 // The planner is a pure, deterministic component (spec section 3.1): it
 // depends only on PlacementView plus the planner-internal oracle protocol in
-// OracleGate.h, never on UDM or the real checker headers. Test fakes implement
-// that protocol; the production FillerRepairEngine translates it privately.
+// OracleGate.h, never on UDM or the real checker headers. Test doubles implement
+// that protocol outside this directory; FillerRepairEngine translates it privately.
 //
 // Conventions:
 //  - All x coordinates are DBU. Site alignment comes from

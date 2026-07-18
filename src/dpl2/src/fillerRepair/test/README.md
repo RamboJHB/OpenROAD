@@ -1,30 +1,21 @@
-# Portable fillerRepair tests
+# Real-UDM fillerRepair tests
 
 This directory is part of the migration payload. It contains one source for
-all 81 UDM-free planner unit cases and one provider-neutral source for all 52
-production-chain E2E cases.
+all 52 production-chain E2E cases and the fixture contract implemented by the
+destination's real UDM test environment.
 
-The E2E assertions do not include fake UDM. `E2ETestProvider.h` is the only
-fixture boundary. A destination real-UDM provider creates the canonical five-
-row design, exposes its existing Grid/Network, and implements the two test
-operations (`moveCell` and `snapshot`). The local fake provider implements the
-same boundary outside this directory at `src/dpl2/test/local/`.
+`E2ETestProvider.h` is the only fixture boundary. A destination provider
+creates the canonical five-row design with real UDM, exposes its existing
+Grid/Network, and implements the two test operations (`moveCell` and
+`snapshot`). No planner test double or UDM-compatible local test data lives in
+this directory.
 
 ## Destination build
-
-Unit tests need only GoogleTest:
-
-```sh
-cmake -S fillerRepair/test -B build-unit
-cmake --build build-unit --target dpl2_filler_repair_unit_test
-ctest --test-dir build-unit -R '^unit\.'
-```
 
 Compile the production chain and every E2E assertion against real UDM:
 
 ```sh
 cmake -S fillerRepair/test -B build-real \
-  -DDPL2_BUILD_REAL_UDM_CASES=ON \
   -DDPL2_REAL_UDM_INCLUDE_DIRS='<real UDM includes>' \
   -DDPL2_REAL_UDM_LIBRARIES='<real UDM targets/libraries>'
 cmake --build build-real
@@ -38,4 +29,8 @@ To run the 52 E2E cases, also pass the destination's implementation of
 ```
 
 That provider is intentionally data-only. All engine calls and assertions
-remain in `e2e_cases.cpp`, so the real and local runners cannot drift.
+remain in `e2e_cases.cpp`.
+
+The separate local regression copy, including all 81 fake-based planner unit
+tests and the local UDM-compatible E2E provider, lives at
+`src/dpl2/test/local/` and is not part of the migration payload.

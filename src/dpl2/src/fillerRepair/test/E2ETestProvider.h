@@ -6,8 +6,8 @@
 // The cases in e2e_cases.cpp contain every assertion and call the real
 // FillerRepairEngine.  A provider only creates the requested UDM design,
 // exposes the already-wired production Grid/Network, and performs the few
-// test mutations needed to create gap/overlap inputs.  Consequently the real
-// UDM runner and the repository-local fake UDM runner execute ONE case source.
+// test mutations needed to create gap/overlap inputs. The destination supplies
+// this fixture implementation using its real UDM design APIs.
 
 #pragma once
 
@@ -37,8 +37,8 @@ inline constexpr int kRowHeight = 8;
 inline constexpr int kRowSites = 20;
 inline constexpr int kStandardRows = 5;
 
-// Stable semantic roles. Providers may use different numeric UDM ids; test
-// assertions compare through these roles instead of assuming fake-UDM ids.
+// Stable semantic roles. Tests compare through these roles instead of assuming
+// numeric UDM ids assigned by a particular design loader.
 enum class CellRole
 {
   Row0ThirdCell,
@@ -101,8 +101,7 @@ class E2ETestProvider
  public:
   virtual ~E2ETestProvider() = default;
 
-  // The real provider loads/creates the canonical UDM fixture. The local
-  // provider builds the same data in the test-only in-memory UDM model.
+  // The destination provider loads or creates the canonical real-UDM fixture.
   virtual std::unique_ptr<E2ETestDesign> createDesign(
       const DesignSetup& setup) = 0;
   virtual std::unique_ptr<E2ETestInfrastructure> createInfrastructure(
@@ -110,8 +109,7 @@ class E2ETestProvider
       const DesignSetup& setup) = 0;
 };
 
-// Supplied exactly once by the selected runner. The portable case library has
-// no fake include and can therefore compile directly against real UDM.
+// Supplied exactly once by the destination's real-UDM test runner.
 std::unique_ptr<E2ETestProvider> makeE2ETestProvider();
 
 }  // namespace dpl2::fillerRepair::test

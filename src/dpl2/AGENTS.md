@@ -1,6 +1,6 @@
 # AGENTS.md — dpl2 filler repair project memory
 
-Updated: 2026-07-18. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-19. Branch: `claude/wizardly-carson-secahu`.
 
 Read `docs/filler_vt_overlay_repair_spec.md`, `src/dpl2/HandOff.md`,
 `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md` and the fillerRepair/test READMEs
@@ -8,17 +8,17 @@ before changing this feature.
 
 ## Project status
 
-The V2.1 swap-only planner and provider-neutral production E2E are complete.
+The V2.1 swap-only planner and real-UDM production E2E package are complete.
 
 | Area | State |
 |---|---|
 | Planner | internal `FillerRepairPlanner`; adaptive-L1, filler domains, per-band ranking/filtering, deterministic output and opt-in `[fr][stage]` transcript complete |
-| Unit tests | 81/81 GoogleTests normal and ASan |
+| Unit tests | 81/81 GoogleTests normal and ASan; local-only under `src/dpl2/test/local/planner` |
 | Infrastructure | existing production Grid/Network are borrowed; engine owns only final checker/view, registers configured filler masters at init and target master lazily; empty `getFillerMasters()` errors out |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
 | Production API | one `FillerRepairEngine` = precheck + private view/oracle + repair; fails closed before a successful `init()` |
-| E2E | 52 cases in `fillerRepair/test/e2e_cases.cpp`; one assertion source links with either a real-UDM or local fake-UDM data provider |
-| CMake | portable `fillerRepair/test/CMakeLists.txt` carries all unit/real-UDM cases; repository-local fake harness passes 133/133 normal and ASan |
+| E2E | 52 real-UDM cases in `fillerRepair/test/e2e_cases.cpp`; destination supplies the real-UDM data provider |
+| CMake | `fillerRepair/test/CMakeLists.txt` is real-UDM-only; repository-local regression harness passes 133/133 normal and ASan |
 
 ## Fixed decisions
 
@@ -73,16 +73,14 @@ src/dpl2/test/local/run_fake_udm_e2e.sh
 SANITIZE=address src/dpl2/test/local/run_fake_udm_e2e.sh
 ```
 
-`fillerRepair/test` travels with production and contains the 81 unit cases,
-the 52 provider-neutral E2E assertions, the provider contract and portable
-CMake. The fake UDM include tree/provider/runners live only under
-`src/dpl2/test/local`; they are not part of the migration payload. Planner
-doubles are test support below `fillerRepair/test/support/planner` and never
-link into E2E or production.
+`fillerRepair/test` travels with production and contains only the 52 real-UDM
+E2E assertions, the real-UDM provider contract and CMake. All 81 fake-based
+planner unit cases, their doubles, the local UDM-compatible include tree,
+provider and runners live only under `src/dpl2/test/local`; they are not part
+of the migration payload and never link into production.
 
 The destination copies only `fillerRepair/`; existing infrastructure/checker
-remain unmodified. Real and local E2E runners compile the same case source and
-differ only in the linked `E2ETestProvider` implementation.
+remain unmodified. Every test source copied with it targets real UDM.
 
 Local dependencies are GoogleTest, Boost, TBB, C++20 and CMake. On Apple ASan, use the
 static Homebrew TBB archive as encoded in both build entry points.

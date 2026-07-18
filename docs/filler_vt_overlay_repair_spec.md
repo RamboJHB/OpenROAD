@@ -1,7 +1,7 @@
 # 功能规格 — Filler VT Overlay 修复 V2.1(checker-guided,本阶段 swap-only)
 
 状态:**V2.1 定稿**。分支:`claude/wizardly-carson-secahu`。基线:`2023-base`。
-最后更新 2026-07-18。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
+最后更新 2026-07-19。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
 checker 源码。
 
 V2.1 相对 V2 是一次 reviewer 驱动的修订,聚焦三处高价值改动:**OracleGate 正确性、
@@ -158,8 +158,8 @@ opto 改动次数,所以"好排序让首批候选命中"比"搜索策略高级"�
   violation 归一化、开窗、move 生成、
   排序、子集搜索、baseline-delta 判定、结果与 diagnostics。实现为 deterministic
   内部搜索保持 deterministic **pure planner**;production facade 直接封装真实
-  DB/checker。当前 planner unit tests 仍使用 test doubles;final E2E 只允许 fake
-  UDM 数据。
+  DB/checker。planner unit tests 使用迁移目录外的 test doubles;交付的 final E2E
+  只允许真实 UDM 数据。
 
 第一版代码位置:`src/dpl2/src/fillerRepair/`。
 
@@ -252,11 +252,11 @@ checker/view、借用一套 Grid/Network,对应一个 design revision;commit 后
   `LeafCellID` / `LibCellID` 是 production `FillerCellRecord` handle。
 - placed masters 来自既有 Network;configured filler masters 在 init 时注册;
   uninstantiated target new master 由 repair 首次按需注册并触发 checker/view 重建。
-- production E2E 的 52 个 assertion 位于唯一的 provider-neutral
-  `test/e2e_cases.cpp`;real UDM 与 repository-local fake UDM 只替换
-  `E2ETestProvider` 数据/fixture 实现。engine 调用和断言不复制,因此同步修改。
-- fake UDM include tree/provider/runner 位于交付目录外的 `src/dpl2/test/local`;
-  `fillerRepair/test` 不含 fake UDM,可直接随 production 复制并对真实 UDM 编译。
+- production E2E 的 52 个 assertion 位于 real-UDM
+  `test/e2e_cases.cpp`;目的地只实现 `E2ETestProvider` 数据/fixture。
+- 81 个 fake-based planner unit cases、test doubles、fake UDM include
+  tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
+  `fillerRepair/test` 只含可对真实 UDM 编译/运行的 E2E 测试。
 - production 编译清单唯一定义在 `src/fillerRepair/sources.cmake`
   (`DPL2_FILLER_REPAIR_PRODUCTION_SOURCES`);test harness 与移植目的地共用,
   不允许手抄文件列表。
@@ -913,16 +913,15 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 
 ## 10. 测试集
 
-当前 81 个 pure-planner cases 是独立 UDM-free GoogleTests。52 个 production E2E
+当前 81 个 pure-planner cases 是独立 UDM-free GoogleTests,全部位于迁移目录外的
+`src/dpl2/test/local/planner`。52 个 production E2E
 集中在 `fillerRepair/test/e2e_cases.cpp`,使用 supplied Network/Grid、final checker
 与 production FillerRepairEngine;完整本地 CTest 共 133 项。每类 behavior 有 3 个
 独立 testcase,每个 fixture 至少 5 行 standard-cell placement。
 
-`E2ETestProvider.h` 是唯一数据边界:真实 UDM provider 与 repository-local fake UDM
-provider 均创建同一 canonical design 并提供相同 semantic cell/master roles。
-所有 engine 调用/断言只有一份。fake UDM tree/provider/runner 移至
-`src/dpl2/test/local`;交付的 `fillerRepair/test` 含 portable CMake、81 unit 与 52
-real-UDM case objects,不含 fake UDM 或 fake/real `#ifdef`。
+`E2ETestProvider.h` 是真实 UDM 测试的唯一数据边界。交付的
+`fillerRepair/test` 只含 real-UDM CMake、provider contract 与 52 个 real-UDM case
+objects。完整 local fake regression copy 位于 `src/dpl2/test/local`,不进入迁移目录。
 
 前置与协议:
 
@@ -980,7 +979,7 @@ gate 语义:
 
 ## 11. 实现状态
 
-全部功能已实现并验证(2026-07-18):
+全部功能已实现并验证(2026-07-19):
 
 - pure planner 完整落地:`Swap`/cache key、violation 归一化 + signature、
   L0 + adaptive-L1 window + guardRegion、swap 生成器、Ranker(5 特征,
@@ -990,10 +989,12 @@ gate 语义:
 - production `FillerRepairEngine` facade 借用 supplied Grid/Network,私有拥有
   final checker/view;configured filler init-time 注册、target master repair-time
   lazy 注册;
-  provider-neutral GoogleTest E2E 与 portable CMake/CTest 接入;编译清单唯一定义在
+  real-UDM GoogleTest E2E 与 CMake/CTest 接入;编译清单唯一定义在
   `src/fillerRepair/sources.cmake`。
 - 81 个 planner unit tests + 52 个 production E2E tests 全为 GoogleTest;
-  precheck/repair 均 non-mutating;production 交付只含 fillerRepair,
+  81 个 fake-based planner tests 完整移至 `src/dpl2/test/local/planner`,
+  `fillerRepair/test` 只保留 real-UDM E2E;precheck/repair 均 non-mutating;
+  production 交付只含 fillerRepair,
   supplied infrastructure/checker 零修改。普通版和 ASan 全绿。
   详见 `src/dpl2/HandOff.md` 与 `src/fillerRepair/test/TestPlan.md`。
 

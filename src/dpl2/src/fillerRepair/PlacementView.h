@@ -4,15 +4,14 @@
 // Read-only placement/DB view consumed by the repair planner.
 //
 // This is the planner's only window into the infrastructure database. The
-// FillerRepairEngine's private view wraps UDM; fake/FakeDesign.h implements
-// it for unit tests. The planner never mutates the design -- commit stays with
-// the infrastructure (spec section 3.1).
+// FillerRepairEngine's private view wraps UDM. The planner never mutates the
+// design -- commit stays with the infrastructure (spec section 3.1).
 //
 // Thread model: after construction a production view is an immutable
 // snapshot -- all const methods must be safe for CONCURRENT readers (any
 // internal lazy cache must synchronize itself), and returned references stay
-// valid for the view's lifetime. FakeDesign (test-only) keeps mutable
-// builders and is single-threaded by design.
+// valid for the view's lifetime. Test implementations may use mutable builders
+// but are not part of this production directory.
 
 #pragma once
 

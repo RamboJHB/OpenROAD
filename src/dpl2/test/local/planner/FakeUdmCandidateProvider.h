@@ -31,8 +31,8 @@
 #include <string>
 #include <vector>
 
-#include "../../../Log.h"
-#include "../../../PlacementView.h"
+#include "fillerRepair/Log.h"
+#include "fillerRepair/PlacementView.h"
 #include "FakeDesign.h"
 
 namespace dpl2::fillerRepair {

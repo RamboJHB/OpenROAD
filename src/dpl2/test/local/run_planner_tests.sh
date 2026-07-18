@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Builds and runs the 81 GoogleTest planner cases.
-# Local-only runner. The exact unit sources also travel in fillerRepair/test.
+# Local-only runner. Unit cases and doubles live outside fillerRepair here.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"

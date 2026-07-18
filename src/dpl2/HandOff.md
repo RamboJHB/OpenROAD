@@ -1,14 +1,15 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-07-18. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-19. Branch: `claude/wizardly-carson-secahu`.
 
 ## Result
 
 The destination already supplies complete infrastructure and checker sources.
 Production and tests migrate together by copying only
-`src/dpl2/src/fillerRepair/`. Its `test/` subtree contains all 81 unit cases,
-all 52 provider-neutral E2E assertions and standalone CMake. The repository-
-local fake UDM harness is outside this payload at `src/dpl2/test/local/`.
+`src/dpl2/src/fillerRepair/`. Its `test/` subtree contains only the 52
+real-UDM production E2E assertions, fixture contract and standalone CMake.
+All 81 fake-based planner unit tests and the repository-local UDM-compatible
+harness are outside this payload at `src/dpl2/test/local/`.
 No infrastructure/checker source or API change is required.
 
 The production boundary is one checker-style class that reuses DePlace's
@@ -113,7 +114,8 @@ What to copy (one directory, nothing else):
    `infrastructure/` and `drc/` directories (the production sources include
    `infrastructure/...` and `drc/ImplantLayerChecker.h` relative to that
    common source root). This directory contains the complete production
-   delivery plus its portable `test/` package. It contains no fake UDM.
+   delivery plus its real-UDM `test/` package. It contains no local test double
+   or UDM-compatible test-data implementation.
 
 Production wiring (their CMake, 2 lines):
 
@@ -138,19 +140,13 @@ leaf traversal or placement importer is copied into production.
 
 Do not hand-copy file names -- both production and test CMake include the same
 `sources.cmake`. Do not add `fillerRepair/test/*` to a production target.
-No production or portable E2E source uses a fake/real UDM conditional.
+Every migrated E2E source is compiled against real UDM.
 
-Test wiring in the destination environment:
+Real-UDM test wiring in the destination environment:
 
 ```sh
-# 1) All 81 UDM-free unit cases:
-cmake -S <srcroot>/fillerRepair/test -B build-unit
-cmake --build build-unit
-ctest --test-dir build-unit -R '^unit\.'
-
-# 2) Complete chain + all 52 assertion objects against REAL UDM:
+# Complete chain + all 52 assertion objects against REAL UDM:
 cmake -S <srcroot>/fillerRepair/test -B build-real \
-  -DDPL2_BUILD_REAL_UDM_CASES=ON \
   -DDPL2_REAL_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
   -DDPL2_REAL_UDM_LIBRARIES='<real UDM libs/targets>'
 cmake --build build-real
@@ -165,10 +161,10 @@ APIs are not part of fillerRepair.
 
 ## Build and verification
 
-The portable CMake is a test package, not production CMake. It runs unit tests
-without UDM and compiles the complete chain/E2E assertions against real UDM.
-The local harness links those same source lists to a fake provider only for
-repository verification.
+The CMake below `fillerRepair/test` is a real-UDM test package, not production
+CMake. It compiles the complete chain/E2E assertions against real UDM. The
+separate local harness retains the 81 planner tests and UDM-compatible E2E data
+provider only for repository verification.
 
 Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
 
@@ -183,10 +179,11 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-All 81 planner cases and 52 production E2E cases are GoogleTests. The portable
-unit/E2E sources live in `fillerRepair/test`; `sources.cmake` exports their
-lists. Local fake and destination real providers both link the exact same
-`e2e_cases.cpp`, so additions and changes are automatically synchronized.
+All 81 planner cases and 52 production E2E cases are GoogleTests. Planner cases
+and doubles live only under `src/dpl2/test/local/planner`; `fillerRepair/test`
+contains only real-UDM E2E sources, and `sources.cmake` exports only production
+and real-UDM E2E lists. The local E2E harness reuses `e2e_cases.cpp`, so case
+additions and changes are automatically synchronized.
 Each behavior has three independently discovered cases; every case constructs
 at least five standard rows. Coverage includes clean/gap/overlap precheck,
 hard-blockage and instance-halo exclusions, a real gap inside the remaining
@@ -195,8 +192,8 @@ opto-blocking values, deterministic/non-mutating repair, persistent checker
 diagnostics, candidate-universe failures and the row/column frame gates (trailing pad
 accepted, leading pad and off-origin rows refused).
 
-2026-07-18 refactor result: portable/local planner 81/81 and provider-neutral
-E2E through local fake provider 52/52 in both normal and ASan builds; full
+2026-07-19 split result: local planner 81/81 and production E2E through the
+local UDM-compatible provider 52/52 in both normal and ASan builds; full
 CTest 133/133; `-Wall -Wextra -Werror` clean.
 
 ## Integration risks

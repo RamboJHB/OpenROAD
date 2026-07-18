@@ -1,6 +1,6 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-07-18.
+Updated: 2026-07-19.
 
 `FillerRepairEngine` is the only production entry. It borrows the initialized
 Grid/Network already owned by DePlace and privately owns only its final
@@ -43,11 +43,10 @@ in-memory master registry, not UDM placement.
 | `PlacementView.h/.cpp` | planner-only read view and candidate filter |
 | `Types.h` | planner-internal IDs, geometry and request/result types |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
-| `sources.cmake` | single source-of-truth compile lists (planner / production / tests) |
-| `test/unit/` | all 81 portable UDM-free planner cases |
-| `test/e2e_cases.cpp` | all 52 provider-neutral production E2E assertions |
-| `test/E2ETestProvider.h` | data-only boundary implemented by real/local UDM fixtures |
-| `test/support/planner/` | planner unit-test doubles; never linked into production/E2E |
+| `sources.cmake` | single source-of-truth compile lists (planner / production / real-UDM E2E) |
+| `test/e2e_cases.cpp` | all 52 production E2E assertions for real UDM |
+| `test/E2ETestProvider.h` | data-only boundary implemented by the destination real-UDM fixture |
+| `test/CMakeLists.txt` | real-UDM production-chain compile and E2E targets |
 
 ## Debug transcript
 
@@ -68,27 +67,14 @@ The facade consumes only borrowed Grid/Network pointers and the idempotent
 `Network::addMaster(PhysLibCell, Grid)` registration API; there is no
 repair-specific importer.
 
-## Verification
+## Real-UDM verification
 
-The 81 planner cases and 52 production E2E cases are GoogleTests and move with
-this directory. The unit cases are UDM-free. `e2e_cases.cpp` contains no fake
-include and is compiled unchanged by real and local runners; only
-`makeE2ETestProvider()` differs. Every behavior has three cases and each
-fixture has at least five standard rows.
-
-Portable unit build:
-
-```sh
-cmake -S test -B test/build/unit
-cmake --build test/build/unit
-ctest --test-dir test/build/unit -R '^unit\.'
-```
-
-Real-UDM compile gate:
+Only tests that compile against the destination's real UDM remain below this
+directory. The 52 production E2E cases move with the production sources; every
+behavior has three cases and each fixture has at least five standard rows.
 
 ```sh
 cmake -S test -B test/build/real-udm \
-  -DDPL2_BUILD_REAL_UDM_CASES=ON \
   -DDPL2_REAL_UDM_INCLUDE_DIRS='<real include dirs>' \
   -DDPL2_REAL_UDM_LIBRARIES='<real libraries or CMake targets>'
 cmake --build test/build/real-udm
@@ -98,7 +84,7 @@ This builds the complete chain and all 52 case objects against real UDM. Add
 `DPL2_REAL_UDM_PROVIDER_SOURCE=<provider.cpp>` to link and run the E2E. The
 provider only loads/creates canonical fixture data; assertions stay shared.
 
-The repository-local fake UDM, provider and scripts are outside this directory
-at `src/dpl2/test/local/`. No production or portable E2E source has a fake UDM
-dependency or compile-time branch. Current local result: planner 81/81 and E2E
-52/52; full CTest 133/133, normal+ASan; Werror clean.
+The complete repository-local regression copy—including all 81 planner unit
+cases, their doubles, the UDM-compatible test data provider and its runners—is
+outside this directory at `src/dpl2/test/local/`. Current local result: planner
+81/81 and E2E 52/52; full CTest 133/133, normal+ASan; Werror clean.

@@ -36,8 +36,8 @@ struct RepairConfig;
 
 // Planner-internal checker protocol. Production callers never see these
 // requestId/status types; FillerRepairEngine translates ordered final-checker
-// CheckResult/FillerChanges at its private boundary. Test fakes implement this
-// interface to inject protocol failures and exact search states.
+// CheckResult/FillerChanges at its private boundary. Test doubles may implement
+// this interface to inject protocol failures and exact search states.
 class ImplantOverlayChecker
 {
  public:

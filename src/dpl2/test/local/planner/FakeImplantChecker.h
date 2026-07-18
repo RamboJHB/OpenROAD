@@ -31,7 +31,7 @@
 #include <map>
 #include <vector>
 
-#include "../../../OracleGate.h"
+#include "fillerRepair/OracleGate.h"
 #include "FakeDesign.h"
 
 namespace dpl2::fillerRepair {

@@ -1,14 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(dpl2_filler_repair_portable_tests LANGUAGES CXX)
+project(dpl2_filler_repair_real_udm_tests LANGUAGES CXX)
 
 include(CTest)
 include(GoogleTest)
 
-option(DPL2_ENABLE_ASAN "Build portable tests with AddressSanitizer" OFF)
-option(DPL2_BUILD_REAL_UDM_CASES
-       "Compile production chain and provider-neutral E2E cases against real UDM"
-       OFF)
+option(DPL2_ENABLE_ASAN "Build real-UDM tests with AddressSanitizer" OFF)
 set(DPL2_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." CACHE PATH
     "Directory containing fillerRepair/, infrastructure/ and drc/")
 set(DPL2_DPL2_INCLUDE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../include" CACHE PATH
@@ -23,7 +20,7 @@ set(DPL2_REAL_UDM_PROVIDER_SOURCE "" CACHE FILEPATH
 find_package(GTest REQUIRED)
 include("${CMAKE_CURRENT_LIST_DIR}/../sources.cmake")
 
-function(dpl2_portable_test_options target standard)
+function(dpl2_real_udm_test_options target standard)
   target_compile_features(${target} PRIVATE "cxx_std_${standard}")
   target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
   if(DPL2_ENABLE_ASAN)
@@ -34,23 +31,11 @@ function(dpl2_portable_test_options target standard)
   endif()
 endfunction()
 
-# All 81 unit cases are UDM-free and run unchanged in local and destination
-# builds. Their doubles live below test/support, never in the production list.
-add_executable(
-  dpl2_filler_repair_unit_test
-  ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-  ${DPL2_FILLER_REPAIR_UNIT_TEST_SOURCES})
-target_link_libraries(dpl2_filler_repair_unit_test PRIVATE GTest::gtest_main)
-dpl2_portable_test_options(dpl2_filler_repair_unit_test 17)
-gtest_discover_tests(
-  dpl2_filler_repair_unit_test TEST_PREFIX "unit." DISCOVERY_TIMEOUT 30)
-
-if(DPL2_BUILD_REAL_UDM_CASES)
-  if(NOT DPL2_REAL_UDM_INCLUDE_DIRS AND NOT DPL2_REAL_UDM_LIBRARIES)
+if(NOT DPL2_REAL_UDM_INCLUDE_DIRS AND NOT DPL2_REAL_UDM_LIBRARIES)
     message(FATAL_ERROR
       "Real-UDM mode requires DPL2_REAL_UDM_INCLUDE_DIRS and/or "
       "DPL2_REAL_UDM_LIBRARIES")
-  endif()
+endif()
 
   find_package(Boost REQUIRED)
   find_package(TBB REQUIRED)
@@ -75,7 +60,7 @@ if(DPL2_BUILD_REAL_UDM_CASES)
       ${target} PRIVATE "${DPL2_SOURCE_ROOT}" "${DPL2_DPL2_INCLUDE_ROOT}")
     target_include_directories(${target} SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
     target_link_libraries(${target} PRIVATE dpl2_real_udm TBB::tbb)
-    dpl2_portable_test_options(${target} 20)
+    dpl2_real_udm_test_options(${target} 20)
   endfunction()
 
   # Compile every production and assertion source against REAL UDM even when
@@ -112,4 +97,3 @@ if(DPL2_BUILD_REAL_UDM_CASES)
       NO_PRETTY_VALUES
       DISCOVERY_TIMEOUT 30)
   endif()
-endif()

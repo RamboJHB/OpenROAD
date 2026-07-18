@@ -39,11 +39,10 @@ unused implant-rule layers. These variations drive all 52 cases.
 
 ## Build
 
-Pass the implementation to portable CMake:
+Pass the implementation to the real-UDM test CMake:
 
 ```sh
 cmake -S fillerRepair/test -B build-real \
-  -DDPL2_BUILD_REAL_UDM_CASES=ON \
   -DDPL2_REAL_UDM_INCLUDE_DIRS='<includes>' \
   -DDPL2_REAL_UDM_LIBRARIES='<targets>' \
   -DDPL2_REAL_UDM_PROVIDER_SOURCE='<RealUdmE2ETestProvider.cpp>'
