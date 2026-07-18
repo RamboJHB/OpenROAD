@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Unit tests for the fillerRepair planner: Swap primitives, fake checker /
-// fake candidate provider protocol, and the
+// Portable unit tests for the UDM-free fillerRepair planner: Swap primitives,
+// test checker / candidate-provider protocol, and the
 // placement coverage scanner. Each legacy case is registered as an individual
 // GoogleTest so it remains independently filterable and reportable.
 //
-// Run: test/run_tests.sh   (FR_VERBOSE=1 prints the [fr] debug transcript)
+// These exact cases are compiled both by the destination real-UDM test
+// package and by the repository-local fake-UDM harness.
 
 #include <algorithm>
 #include <cstdio>
@@ -19,16 +20,16 @@
 
 #include <gtest/gtest.h>
 
-#include "../FillerRepairPlanner.h"
-#include "../Swap.h"
-#include "../Signature.h"
-#include "../OracleGate.h"
-#include "../Ranker.h"
-#include "../SubsetSearch.h"
-#include "../Window.h"
-#include "../fake/FakeDesign.h"
-#include "../fake/FakeImplantChecker.h"
-#include "../fake/FakeUdmCandidateProvider.h"
+#include "../../FillerRepairPlanner.h"
+#include "../../OracleGate.h"
+#include "../../Ranker.h"
+#include "../../Signature.h"
+#include "../../SubsetSearch.h"
+#include "../../Swap.h"
+#include "../../Window.h"
+#include "../support/planner/FakeDesign.h"
+#include "../support/planner/FakeImplantChecker.h"
+#include "../support/planner/FakeUdmCandidateProvider.h"
 
 namespace fr = dpl2::fillerRepair;
 

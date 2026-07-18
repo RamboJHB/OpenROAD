@@ -252,11 +252,11 @@ checker/view、借用一套 Grid/Network,对应一个 design revision;commit 后
   `LeafCellID` / `LibCellID` 是 production `FillerCellRecord` handle。
 - placed masters 来自既有 Network;configured filler masters 在 init 时注册;
   uninstantiated target new master 由 repair 首次按需注册并触发 checker/view 重建。
-- fake-UDM-only E2E 的 test-only fixture 从数据构建真实 Grid/Network,再编译 final
-  checker、复用既有 infrastructure 的 FillerRepairEngine 与 internal planner;
-  不链接任何其他 test double。
-  fake 与 real UDM 只通过 test CMake include/link interface 切换,production source
-  无条件编译同一套真实 UDM 名称/签名。normal/ASan/CMake/Werror 均验证。
+- production E2E 的 52 个 assertion 位于唯一的 provider-neutral
+  `test/e2e_cases.cpp`;real UDM 与 repository-local fake UDM 只替换
+  `E2ETestProvider` 数据/fixture 实现。engine 调用和断言不复制,因此同步修改。
+- fake UDM include tree/provider/runner 位于交付目录外的 `src/dpl2/test/local`;
+  `fillerRepair/test` 不含 fake UDM,可直接随 production 复制并对真实 UDM 编译。
 - production 编译清单唯一定义在 `src/fillerRepair/sources.cmake`
   (`DPL2_FILLER_REPAIR_PRODUCTION_SOURCES`);test harness 与移植目的地共用,
   不允许手抄文件列表。
@@ -913,19 +913,16 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 
 ## 10. 测试集
 
-当前 81 个 pure-planner cases 已转换为独立 GoogleTests,使用 isolated planner
-test doubles;integration GoogleTest 只 fake UDM 数据,使用 supplied Network/Grid、
-final checker 与 production FillerRepairEngine。42 个 E2E,完整 CTest 共 123 项。
-E2E source/runner 和唯一的 test-only fake UDM include tree 位于
-`src/dpl2/src/fillerRepair/test`,随整个 fillerRepair 目录一起移植;每类 production
-behavior 有 3 个独立 testcase,每个 fixture 至少 5 行 standard-cell placement。
-`sources.cmake` 输出 E2E source 路径供目的地 CMake 接线。
+当前 81 个 pure-planner cases 是独立 UDM-free GoogleTests。52 个 production E2E
+集中在 `fillerRepair/test/e2e_cases.cpp`,使用 supplied Network/Grid、final checker
+与 production FillerRepairEngine;完整本地 CTest 共 133 项。每类 behavior 有 3 个
+独立 testcase,每个 fixture 至少 5 行 standard-cell placement。
 
-fake UDM 与真实 UDM 使用相同 namespace、type name、method signature 和测试所需
-placement 行为。`src/dpl2/test/CMakeLists.txt` 的 `dpl2_test_udm` interface target
-是唯一选择点:`DPL2_TEST_USE_FAKE_UDM=ON` 使用 test-only headers;设为 `OFF` 时由
-`DPL2_TEST_UDM_INCLUDE_DIRS` / `DPL2_TEST_UDM_LIBRARIES` 提供真实 UDM。production
-source 不含 fake include、fake link 或 fake/real `#ifdef`。
+`E2ETestProvider.h` 是唯一数据边界:真实 UDM provider 与 repository-local fake UDM
+provider 均创建同一 canonical design 并提供相同 semantic cell/master roles。
+所有 engine 调用/断言只有一份。fake UDM tree/provider/runner 移至
+`src/dpl2/test/local`;交付的 `fillerRepair/test` 含 portable CMake、81 unit 与 52
+real-UDM case objects,不含 fake UDM 或 fake/real `#ifdef`。
 
 前置与协议:
 
@@ -993,9 +990,9 @@ gate 语义:
 - production `FillerRepairEngine` facade 借用 supplied Grid/Network,私有拥有
   final checker/view;configured filler init-time 注册、target master repair-time
   lazy 注册;
-  fake-UDM-only GoogleTest E2E 与 standalone CMake/CTest 接入;编译清单唯一定义在
+  provider-neutral GoogleTest E2E 与 portable CMake/CTest 接入;编译清单唯一定义在
   `src/fillerRepair/sources.cmake`。
-- 81 个 planner unit tests + 42 个 production E2E tests 全为 GoogleTest;
+- 81 个 planner unit tests + 52 个 production E2E tests 全为 GoogleTest;
   precheck/repair 均 non-mutating;production 交付只含 fillerRepair,
   supplied infrastructure/checker 零修改。普通版和 ASan 全绿。
   详见 `src/dpl2/HandOff.md` 与 `src/fillerRepair/test/TestPlan.md`。

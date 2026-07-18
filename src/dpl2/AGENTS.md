@@ -8,7 +8,7 @@ before changing this feature.
 
 ## Project status
 
-The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
+The V2.1 swap-only planner and provider-neutral production E2E are complete.
 
 | Area | State |
 |---|---|
@@ -17,8 +17,8 @@ The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
 | Infrastructure | existing production Grid/Network are borrowed; engine owns only final checker/view, registers configured filler masters at init and target master lazily; empty `getFillerMasters()` errors out |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
 | Production API | one `FillerRepairEngine` = precheck + private view/oracle + repair; fails closed before a successful `init()` |
-| E2E | 52 cases in `fillerRepair/test/e2e_test.cpp`; every behavior has 3 cases and every fixture has at least 5 standard rows; fake UDM is the only data substitute |
-| CMake | standalone GoogleTest/CTest harness passes 133/133 normal and ASan; source/test lists live in `src/fillerRepair/sources.cmake`; `DPL2_TEST_USE_FAKE_UDM=OFF` builds the real-UDM compile gate |
+| E2E | 52 cases in `fillerRepair/test/e2e_cases.cpp`; one assertion source links with either a real-UDM or local fake-UDM data provider |
+| CMake | portable `fillerRepair/test/CMakeLists.txt` carries all unit/real-UDM cases; repository-local fake harness passes 133/133 normal and ASan |
 
 ## Fixed decisions
 
@@ -67,22 +67,22 @@ create another engine for a new revision.
 ## Tests
 
 ```sh
-src/dpl2/src/fillerRepair/test/run_tests.sh
-SANITIZE=address src/dpl2/src/fillerRepair/test/run_tests.sh
-src/dpl2/src/fillerRepair/test/run_e2e_tests.sh
-SANITIZE=address src/dpl2/src/fillerRepair/test/run_e2e_tests.sh
+src/dpl2/test/local/run_planner_tests.sh
+SANITIZE=address src/dpl2/test/local/run_planner_tests.sh
+src/dpl2/test/local/run_fake_udm_e2e.sh
+SANITIZE=address src/dpl2/test/local/run_fake_udm_e2e.sh
 ```
 
-The E2E source, runner and only fake-UDM include tree live under
-`fillerRepair/test`, so they travel with the directory being ported. Its target
-contains production Grid/Network/checker/engine/planner and fake UDM headers
-only. Test-only fixture code wires Grid/Network from fake UDM data. Private
-planner doubles remain confined to the unit executable;
-never link them into E2E or production targets.
+`fillerRepair/test` travels with production and contains the 81 unit cases,
+the 52 provider-neutral E2E assertions, the provider contract and portable
+CMake. The fake UDM include tree/provider/runners live only under
+`src/dpl2/test/local`; they are not part of the migration payload. Planner
+doubles are test support below `fillerRepair/test/support/planner` and never
+link into E2E or production.
 
-The destination ports only `fillerRepair/`; existing infrastructure/checker
-must remain unmodified. Fake versus real UDM is selected only through the test
-CMake interface target's include/link settings.
+The destination copies only `fillerRepair/`; existing infrastructure/checker
+remain unmodified. Real and local E2E runners compile the same case source and
+differ only in the linked `E2ETestProvider` implementation.
 
 Local dependencies are GoogleTest, Boost, TBB, C++20 and CMake. On Apple ASan, use the
 static Homebrew TBB archive as encoded in both build entry points.

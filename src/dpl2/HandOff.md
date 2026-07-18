@@ -5,11 +5,11 @@ Updated: 2026-07-18. Branch: `claude/wizardly-carson-secahu`.
 ## Result
 
 The destination already supplies complete infrastructure and checker sources.
-Production migration therefore copies only `src/dpl2/src/fillerRepair/`
-and optionally `src/dpl2/test/` for the harness, then adds the `sources.cmake`
-list to the destination's existing target. No infrastructure/checker source or
-API change is required, and this change set keeps both directories at zero
-diff.
+Production and tests migrate together by copying only
+`src/dpl2/src/fillerRepair/`. Its `test/` subtree contains all 81 unit cases,
+all 52 provider-neutral E2E assertions and standalone CMake. The repository-
+local fake UDM harness is outside this payload at `src/dpl2/test/local/`.
+No infrastructure/checker source or API change is required.
 
 The production boundary is one checker-style class that reuses DePlace's
 already initialized infrastructure:
@@ -107,16 +107,13 @@ placement.
 
 ## Migration to the destination environment
 
-What to copy (two directories, nothing else):
+What to copy (one directory, nothing else):
 
 1. `src/dpl2/src/fillerRepair/` -> next to the destination's existing
    `infrastructure/` and `drc/` directories (the production sources include
    `infrastructure/...` and `drc/ImplantLayerChecker.h` relative to that
-   common source root). This directory now contains the complete production
-   delivery, plus `fake/` and `test/` subdirectories that are used
-   ONLY by the standalone harness.
-2. `src/dpl2/test/` -> anywhere (standalone CMake project); only needed to
-   run the harness in the destination environment.
+   common source root). This directory contains the complete production
+   delivery plus its portable `test/` package. It contains no fake UDM.
 
 Production wiring (their CMake, 2 lines):
 
@@ -139,56 +136,47 @@ branch: `DePlace::getGrid()`, `getNetwork()`, `getDesMgr()` and idempotent
 `Network::addMaster(const PhysLibCell&, const Grid*)`. No RepairInfrastructure,
 leaf traversal or placement importer is copied into production.
 
-Do not hand-copy file names -- the test harness includes the same
-`sources.cmake`, so the two lists cannot drift. Do not add
-`fillerRepair/fake/*`, `fillerRepair/test/*`, or a fake UDM include path to a
-production target. No production source uses a fake/real UDM conditional; it
-includes the real UDM names already used by infra/checker.
+Do not hand-copy file names -- both production and test CMake include the same
+`sources.cmake`. Do not add `fillerRepair/test/*` to a production target.
+No production or portable E2E source uses a fake/real UDM conditional.
 
-Harness wiring in the destination environment:
+Test wiring in the destination environment:
 
 ```sh
-# 1) Compile gate against REAL UDM (no fake anywhere):
-cmake -S <copied test dir> -B build-real \
-  -DDPL2_TEST_USE_FAKE_UDM=OFF \
-  -DDPL2_TEST_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
-  -DDPL2_TEST_UDM_LIBRARIES='<real UDM libs/targets>'
-cmake --build build-real   # builds dpl2_filler_repair_compile_check
+# 1) All 81 UDM-free unit cases:
+cmake -S <srcroot>/fillerRepair/test -B build-unit
+cmake --build build-unit
+ctest --test-dir build-unit -R '^unit\.'
 
-# 2) Full test run (fake UDM is the data provider; default mode):
-cmake -S <copied test dir> -B build-test
-cmake --build build-test && ctest --test-dir build-test
+# 2) Complete chain + all 52 assertion objects against REAL UDM:
+cmake -S <srcroot>/fillerRepair/test -B build-real \
+  -DDPL2_BUILD_REAL_UDM_CASES=ON \
+  -DDPL2_REAL_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
+  -DDPL2_REAL_UDM_LIBRARIES='<real UDM libs/targets>'
+cmake --build build-real
 ```
 
-In real-UDM mode there is no runnable E2E (its DATA comes from fake UDM), so
-the harness builds `dpl2_filler_repair_compile_check` instead: every supplied
-and production source compiling and linking against the real UDM headers is
-the migration gate. The harness expects the copied `test/` directory to sit
-next to `src/` as in this repo (`../src` relative layout); if the destination
-places it elsewhere, adjust `DPL2_SRC` at the top of `test/CMakeLists.txt` --
-that is the only expected edit.
+To run those 52 cases, pass
+`DPL2_REAL_UDM_PROVIDER_SOURCE=<RealUdmE2ETestProvider.cpp>`. The provider
+implements only canonical fixture creation/loading and the operations declared
+in `E2ETestProvider.h`; the shared source owns every engine call/assertion.
+This provider is destination-specific because UDM design-construction/loading
+APIs are not part of fillerRepair.
 
 ## Build and verification
 
-The standalone test CMake is not a proposed production CMake file. It provides
-one interface-only selection point:
-
-- default: `DPL2_TEST_USE_FAKE_UDM=ON`, using the test-only UDM-compatible
-  include root selected by `DPL2_TEST_FAKE_UDM_INCLUDE_DIR`;
-- real UDM rehearsal: set it `OFF` and provide
-  `DPL2_TEST_UDM_INCLUDE_DIRS` and/or `DPL2_TEST_UDM_LIBRARIES`.
-
-Both modes compile the same infra/checker/fillerRepair sources. The fake uses
-the real UDM namespaces, type names, signatures and placement behavior; only
-include/link configuration changes.
+The portable CMake is a test package, not production CMake. It runs unit tests
+without UDM and compiles the complete chain/E2E assertions against real UDM.
+The local harness links those same source lists to a fake provider only for
+repository verification.
 
 Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
 
 ```sh
-src/dpl2/src/fillerRepair/test/run_tests.sh
-SANITIZE=address src/dpl2/src/fillerRepair/test/run_tests.sh
-src/dpl2/src/fillerRepair/test/run_e2e_tests.sh
-SANITIZE=address src/dpl2/src/fillerRepair/test/run_e2e_tests.sh
+src/dpl2/test/local/run_planner_tests.sh
+SANITIZE=address src/dpl2/test/local/run_planner_tests.sh
+src/dpl2/test/local/run_fake_udm_e2e.sh
+SANITIZE=address src/dpl2/test/local/run_fake_udm_e2e.sh
 
 cmake -S src/dpl2/test -B src/dpl2/test/build-cmake
 cmake --build src/dpl2/test/build-cmake -j2
@@ -196,14 +184,9 @@ ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
 All 81 planner cases and 52 production E2E cases are GoogleTests. The portable
-E2E source/runner and test-only fake UDM include tree live in
-`src/dpl2/src/fillerRepair/test`, and
-`sources.cmake` exports `DPL2_FILLER_REPAIR_E2E_TEST_SOURCE` for destination
-CMake wiring. It uses fake UDM only as data and links supplied
-Grid/Network/final-checker types plus FillerRepairEngine and the internal
-planner. A test-only fixture wires Grid/Network from fake UDM data, matching
-the production objects normally supplied by DePlace; the engine owns only its
-checker/view instances.
+unit/E2E sources live in `fillerRepair/test`; `sources.cmake` exports their
+lists. Local fake and destination real providers both link the exact same
+`e2e_cases.cpp`, so additions and changes are automatically synchronized.
 Each behavior has three independently discovered cases; every case constructs
 at least five standard rows. Coverage includes clean/gap/overlap precheck,
 hard-blockage and instance-halo exclusions, a real gap inside the remaining
@@ -212,8 +195,9 @@ opto-blocking values, deterministic/non-mutating repair, persistent checker
 diagnostics, candidate-universe failures and the row/column frame gates (trailing pad
 accepted, leading pad and off-origin rows refused).
 
-2026-07-18 result: planner 81/81 normal and ASan; E2E 52/52 normal and ASan;
-full CTest 133/133 normal and ASan; all targets passed Werror.
+2026-07-18 refactor result: portable/local planner 81/81 and provider-neutral
+E2E through local fake provider 52/52 in both normal and ASan builds; full
+CTest 133/133; `-Wall -Wextra -Werror` clean.
 
 ## Integration risks
 

@@ -10,7 +10,8 @@
 #                                          destination build adds: planner +
 #                                          UDM-facing facade with its private
 #                                          checker/view
-#   DPL2_FILLER_REPAIR_E2E_TEST_SOURCE      co-located production E2E GoogleTest
+#   DPL2_FILLER_REPAIR_UNIT_TEST_SOURCES    portable UDM-free planner tests
+#   DPL2_FILLER_REPAIR_E2E_CASE_SOURCE      provider-neutral production E2E
 
 set(DPL2_FILLER_REPAIR_PLANNER_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/PlacementView.cpp"
@@ -26,7 +27,12 @@ set(DPL2_FILLER_REPAIR_PRODUCTION_SOURCES
     ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
     "${CMAKE_CURRENT_LIST_DIR}/FillerRepairEngine.cpp")
 
-# Test source travels with fillerRepair so a destination port can copy this
-# directory and wire one GoogleTest target without finding files elsewhere.
-set(DPL2_FILLER_REPAIR_E2E_TEST_SOURCE
-    "${CMAKE_CURRENT_LIST_DIR}/test/e2e_test.cpp")
+# These sources contain no fake-UDM include. The E2E executable selects one
+# provider at link time: destination real UDM or repository-local fake UDM.
+set(DPL2_FILLER_REPAIR_UNIT_TEST_SOURCES
+    "${CMAKE_CURRENT_LIST_DIR}/test/support/planner/FakeImplantChecker.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/test/support/planner/FakeUdmCandidateProvider.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/test/unit/planner_cases.cpp")
+
+set(DPL2_FILLER_REPAIR_E2E_CASE_SOURCE
+    "${CMAKE_CURRENT_LIST_DIR}/test/e2e_cases.cpp")

@@ -87,10 +87,13 @@ No DRC rule or scan behavior changed. Warning-clean integration required only:
 
 ## Verified test boundary
 
-The final E2E uses fake UDM as data only and production Grid, Network, final
-checker, FillerRepairEngine and planner. Its test-only fixture wires the
-infrastructure normally supplied by DePlace; the production engine contains no
-snapshot builder. Normal and ASan builds pass with `-Wall -Wextra -Werror`.
+All final E2E calls/assertions live in the provider-neutral
+`fillerRepair/test/e2e_cases.cpp` and use production Grid, Network, final
+checker, FillerRepairEngine and planner. Destination real UDM and repository-
+local fake UDM only provide fixture data through `E2ETestProvider`; the fake
+tree is outside the migration payload. The production engine contains no
+snapshot builder or test conditional. Normal and ASan local builds pass with
+`-Wall -Wextra -Werror`.
 
 Future checker API or semantic changes must be recorded here before engine
 changes are merged.

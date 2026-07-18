@@ -43,14 +43,17 @@ in-memory master registry, not UDM placement.
 | `PlacementView.h/.cpp` | planner-only read view and candidate filter |
 | `Types.h` | planner-internal IDs, geometry and request/result types |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
-| `sources.cmake` | single source-of-truth compile lists (planner / production) |
-| `fake/` | planner unit-test doubles; never linked into production/E2E |
+| `sources.cmake` | single source-of-truth compile lists (planner / production / tests) |
+| `test/unit/` | all 81 portable UDM-free planner cases |
+| `test/e2e_cases.cpp` | all 52 provider-neutral production E2E assertions |
+| `test/E2ETestProvider.h` | data-only boundary implemented by real/local UDM fixtures |
+| `test/support/planner/` | planner unit-test doubles; never linked into production/E2E |
 
 ## Debug transcript
 
 Debug output is disabled by default. Production callers may call
 `engine.setDebugLogging(true)` before or after `init()`; planner tests use
-`FR_VERBOSE=1 test/run_tests.sh`. The deterministic transcript is printed as
+`FR_VERBOSE=1` on the unit-test executable. The deterministic transcript is printed as
 `[fr][stage]` lines and records the request/configuration, normalized
 violations, L0/adaptive-L1 windows, emitted swaps, ranked filler domains,
 subset counts, checker batches/cache/budget, best non-clean candidate and the
@@ -67,34 +70,35 @@ repair-specific importer.
 
 ## Verification
 
+The 81 planner cases and 52 production E2E cases are GoogleTests and move with
+this directory. The unit cases are UDM-free. `e2e_cases.cpp` contains no fake
+include and is compiled unchanged by real and local runners; only
+`makeE2ETestProvider()` differs. Every behavior has three cases and each
+fixture has at least five standard rows.
+
+Portable unit build:
+
 ```sh
-test/run_tests.sh
-SANITIZE=address test/run_tests.sh
-test/run_e2e_tests.sh
-SANITIZE=address test/run_e2e_tests.sh
+cmake -S test -B test/build/unit
+cmake --build test/build/unit
+ctest --test-dir test/build/unit -R '^unit\.'
 ```
 
-The 81 planner cases and 52 production E2E cases are GoogleTests. E2E source,
-runner, plan and the only test-only fake UDM include tree all live in
-`fillerRepair/test`, so they move with the code;
-`sources.cmake` exports `DPL2_FILLER_REPAIR_E2E_TEST_SOURCE` for the destination
-CMake. Every behavior has three cases and each fixture has at least five
-standard rows. Test CMake selects fake UDM only through `dpl2_test_udm`
-include/link settings; the same source graph compiles against real UDM with:
+Real-UDM compile gate:
 
 ```sh
 cmake -S test -B test/build/real-udm \
-  -DDPL2_TEST_USE_FAKE_UDM=OFF \
-  -DDPL2_TEST_UDM_INCLUDE_DIRS='<real include dirs>' \
-  -DDPL2_TEST_UDM_LIBRARIES='<real libraries or CMake targets>'
+  -DDPL2_BUILD_REAL_UDM_CASES=ON \
+  -DDPL2_REAL_UDM_INCLUDE_DIRS='<real include dirs>' \
+  -DDPL2_REAL_UDM_LIBRARIES='<real libraries or CMake targets>'
+cmake --build test/build/real-udm
 ```
 
-In real-UDM mode the harness builds `dpl2_filler_repair_compile_check` (all
-supplied + production sources against real UDM headers) instead of the E2E,
-whose test data comes from fake UDM by design.
+This builds the complete chain and all 52 case objects against real UDM. Add
+`DPL2_REAL_UDM_PROVIDER_SOURCE=<provider.cpp>` to link and run the E2E. The
+provider only loads/creates canonical fixture data; assertions stay shared.
 
-No production source has a fake UDM dependency or compile-time branch. The E2E
-uses fake UDM as the test-data provider only; supplied infrastructure/checker
-and production fillerRepair compile with `-Wall -Wextra -Werror`. Current
-result: planner 81/81 and E2E 52/52 normal+ASan; full CTest 133/133
-normal+ASan; Werror clean.
+The repository-local fake UDM, provider and scripts are outside this directory
+at `src/dpl2/test/local/`. No production or portable E2E source has a fake UDM
+dependency or compile-time branch. Current local result: planner 81/81 and E2E
+52/52; full CTest 133/133, normal+ASan; Werror clean.

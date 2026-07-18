@@ -12,7 +12,7 @@ include(GoogleTest)
 option(DPL2_ENABLE_ASAN "Build fillerRepair tests with AddressSanitizer" OFF)
 option(DPL2_TEST_USE_FAKE_UDM "Use the test-only UDM-compatible headers" ON)
 set(DPL2_TEST_FAKE_UDM_INCLUDE_DIR
-    "${CMAKE_CURRENT_LIST_DIR}/../src/fillerRepair/test/support/include" CACHE PATH
+    "${CMAKE_CURRENT_LIST_DIR}/local/fake_udm/include" CACHE PATH
     "Test-only UDM-compatible include root")
 set(DPL2_TEST_UDM_INCLUDE_DIRS "" CACHE STRING
     "Real UDM include directories used when DPL2_TEST_USE_FAKE_UDM=OFF")
@@ -65,9 +65,7 @@ endfunction()
 add_executable(
   dpl2_filler_repair_planner_test
   ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-  "${DPL2_SRC}/fillerRepair/fake/FakeImplantChecker.cpp"
-  "${DPL2_SRC}/fillerRepair/fake/FakeUdmCandidateProvider.cpp"
-  "${DPL2_SRC}/fillerRepair/test/test_main.cpp")
+  ${DPL2_FILLER_REPAIR_UNIT_TEST_SOURCES})
 target_link_libraries(dpl2_filler_repair_planner_test PRIVATE GTest::gtest_main)
 dpl2_configure_test(dpl2_filler_repair_planner_test 17)
 gtest_discover_tests(
@@ -107,7 +105,8 @@ if(DPL2_TEST_USE_FAKE_UDM)
     dpl2_filler_repair_e2e
     ${DPL2_SUPPLIED_CHAIN_SOURCES}
     ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES}
-    ${DPL2_FILLER_REPAIR_E2E_TEST_SOURCE})
+    ${DPL2_FILLER_REPAIR_E2E_CASE_SOURCE}
+    "${CMAKE_CURRENT_LIST_DIR}/local/FakeUdmE2ETestProvider.cpp")
   target_link_libraries(dpl2_filler_repair_e2e PRIVATE GTest::gtest_main)
   dpl2_configure_chain_target(dpl2_filler_repair_e2e)
   gtest_discover_tests(
@@ -125,4 +124,14 @@ else()
     ${DPL2_SUPPLIED_CHAIN_SOURCES}
     ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES})
   dpl2_configure_chain_target(dpl2_filler_repair_compile_check)
+
+  # Compile every provider-neutral E2E assertion against real UDM as an
+  # object library. The destination links these objects with its concrete
+  # RealUdmE2ETestProvider and production owning target to run them.
+  add_library(
+    dpl2_filler_repair_real_udm_e2e_cases OBJECT
+    ${DPL2_FILLER_REPAIR_E2E_CASE_SOURCE})
+  target_link_libraries(
+    dpl2_filler_repair_real_udm_e2e_cases PRIVATE GTest::gtest)
+  dpl2_configure_chain_target(dpl2_filler_repair_real_udm_e2e_cases)
 endif()
