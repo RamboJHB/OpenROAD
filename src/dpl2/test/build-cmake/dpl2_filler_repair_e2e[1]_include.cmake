@@ -1,0 +1,5 @@
+if(EXISTS "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_e2e[1]_tests.cmake")
+  include("/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_e2e[1]_tests.cmake")
+else()
+  add_test(dpl2_filler_repair_e2e_NOT_BUILT dpl2_filler_repair_e2e_NOT_BUILT)
+endif()

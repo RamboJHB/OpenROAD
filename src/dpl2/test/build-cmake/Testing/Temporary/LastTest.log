@@ -1,0 +1,2406 @@
+Start testing: Jul 18 04:52 UTC
+----------------------------------------------------------
+1/88 Testing: planner.FillerRepairPlanner.swap_construction
+1/88 Test: planner.FillerRepairPlanner.swap_construction
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.swap_construction" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.swap_construction" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.swap_construction
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.swap_construction
+[       OK ] FillerRepairPlanner.swap_construction (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.swap_construction" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.swap_construction" time elapsed: 00:00:00
+----------------------------------------------------------
+
+2/88 Testing: planner.FillerRepairPlanner.canonical_key_order_independent
+2/88 Test: planner.FillerRepairPlanner.canonical_key_order_independent
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.canonical_key_order_independent" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.canonical_key_order_independent" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.canonical_key_order_independent
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.canonical_key_order_independent
+[       OK ] FillerRepairPlanner.canonical_key_order_independent (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.canonical_key_order_independent" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.canonical_key_order_independent" time elapsed: 00:00:00
+----------------------------------------------------------
+
+3/88 Testing: planner.FillerRepairPlanner.wire_conversion
+3/88 Test: planner.FillerRepairPlanner.wire_conversion
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.wire_conversion" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.wire_conversion" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.wire_conversion
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.wire_conversion
+[       OK ] FillerRepairPlanner.wire_conversion (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.wire_conversion" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.wire_conversion" time elapsed: 00:00:00
+----------------------------------------------------------
+
+4/88 Testing: planner.FillerRepairPlanner.precheck_full_utility
+4/88 Test: planner.FillerRepairPlanner.precheck_full_utility
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.precheck_full_utility" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.precheck_full_utility" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.precheck_full_utility
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.precheck_full_utility
+[       OK ] FillerRepairPlanner.precheck_full_utility (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.precheck_full_utility" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.precheck_full_utility" time elapsed: 00:00:00
+----------------------------------------------------------
+
+5/88 Testing: planner.FillerRepairPlanner.precheck_gap
+5/88 Test: planner.FillerRepairPlanner.precheck_gap
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.precheck_gap" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.precheck_gap" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.precheck_gap
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.precheck_gap
+[       OK ] FillerRepairPlanner.precheck_gap (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.precheck_gap" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.precheck_gap" time elapsed: 00:00:00
+----------------------------------------------------------
+
+6/88 Testing: planner.FillerRepairPlanner.precheck_only_gap_overlap
+6/88 Test: planner.FillerRepairPlanner.precheck_only_gap_overlap
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.precheck_only_gap_overlap" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.precheck_only_gap_overlap" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.precheck_only_gap_overlap
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.precheck_only_gap_overlap
+[       OK ] FillerRepairPlanner.precheck_only_gap_overlap (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.precheck_only_gap_overlap" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.precheck_only_gap_overlap" time elapsed: 00:00:00
+----------------------------------------------------------
+
+7/88 Testing: planner.FillerRepairPlanner.precheck_multi_row_issues_deterministic
+7/88 Test: planner.FillerRepairPlanner.precheck_multi_row_issues_deterministic
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.precheck_multi_row_issues_deterministic" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.precheck_multi_row_issues_deterministic" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.precheck_multi_row_issues_deterministic
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.precheck_multi_row_issues_deterministic
+[       OK ] FillerRepairPlanner.precheck_multi_row_issues_deterministic (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.precheck_multi_row_issues_deterministic" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.precheck_multi_row_issues_deterministic" time elapsed: 00:00:00
+----------------------------------------------------------
+
+8/88 Testing: planner.FillerRepairPlanner.precheck_gap_at_row_edges
+8/88 Test: planner.FillerRepairPlanner.precheck_gap_at_row_edges
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.precheck_gap_at_row_edges" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.precheck_gap_at_row_edges" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.precheck_gap_at_row_edges
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.precheck_gap_at_row_edges
+[       OK ] FillerRepairPlanner.precheck_gap_at_row_edges (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.precheck_gap_at_row_edges" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.precheck_gap_at_row_edges" time elapsed: 00:00:00
+----------------------------------------------------------
+
+9/88 Testing: planner.FillerRepairPlanner.precheck_overlap_three_instances
+9/88 Test: planner.FillerRepairPlanner.precheck_overlap_three_instances
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.precheck_overlap_three_instances" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.precheck_overlap_three_instances" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.precheck_overlap_three_instances
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.precheck_overlap_three_instances
+[       OK ] FillerRepairPlanner.precheck_overlap_three_instances (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.precheck_overlap_three_instances" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.precheck_overlap_three_instances" time elapsed: 00:00:00
+----------------------------------------------------------
+
+10/88 Testing: planner.FillerRepairPlanner.planner_does_not_run_placement_precheck
+10/88 Test: planner.FillerRepairPlanner.planner_does_not_run_placement_precheck
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.planner_does_not_run_placement_precheck" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.planner_does_not_run_placement_precheck" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.planner_does_not_run_placement_precheck
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.planner_does_not_run_placement_precheck
+[       OK ] FillerRepairPlanner.planner_does_not_run_placement_precheck (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.planner_does_not_run_placement_precheck" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.planner_does_not_run_placement_precheck" time elapsed: 00:00:00
+----------------------------------------------------------
+
+11/88 Testing: planner.FillerRepairPlanner.candidate_provider
+11/88 Test: planner.FillerRepairPlanner.candidate_provider
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.candidate_provider" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.candidate_provider" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.candidate_provider
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.candidate_provider
+[       OK ] FillerRepairPlanner.candidate_provider (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.candidate_provider" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.candidate_provider" time elapsed: 00:00:00
+----------------------------------------------------------
+
+12/88 Testing: planner.FillerRepairPlanner.udm_provider_describe_widths_and_vts
+12/88 Test: planner.FillerRepairPlanner.udm_provider_describe_widths_and_vts
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.udm_provider_describe_widths_and_vts" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.udm_provider_describe_widths_and_vts" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.udm_provider_describe_widths_and_vts
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.udm_provider_describe_widths_and_vts
+[       OK ] FillerRepairPlanner.udm_provider_describe_widths_and_vts (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.udm_provider_describe_widths_and_vts" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.udm_provider_describe_widths_and_vts" time elapsed: 00:00:00
+----------------------------------------------------------
+
+13/88 Testing: planner.FillerRepairPlanner.udm_provider_rejects_malformed_masters
+13/88 Test: planner.FillerRepairPlanner.udm_provider_rejects_malformed_masters
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.udm_provider_rejects_malformed_masters" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.udm_provider_rejects_malformed_masters" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.udm_provider_rejects_malformed_masters
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.udm_provider_rejects_malformed_masters
+[       OK ] FillerRepairPlanner.udm_provider_rejects_malformed_masters (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.udm_provider_rejects_malformed_masters" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.udm_provider_rejects_malformed_masters" time elapsed: 00:00:00
+----------------------------------------------------------
+
+14/88 Testing: planner.FillerRepairPlanner.udm_provider_candidates_contract
+14/88 Test: planner.FillerRepairPlanner.udm_provider_candidates_contract
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.udm_provider_candidates_contract" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.udm_provider_candidates_contract" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.udm_provider_candidates_contract
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.udm_provider_candidates_contract
+[       OK ] FillerRepairPlanner.udm_provider_candidates_contract (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.udm_provider_candidates_contract" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.udm_provider_candidates_contract" time elapsed: 00:00:00
+----------------------------------------------------------
+
+15/88 Testing: planner.FillerRepairPlanner.engine_solves_with_udm_provider
+15/88 Test: planner.FillerRepairPlanner.engine_solves_with_udm_provider
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_solves_with_udm_provider" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_solves_with_udm_provider" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_solves_with_udm_provider
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_solves_with_udm_provider
+[       OK ] FillerRepairPlanner.engine_solves_with_udm_provider (1 ms)
+[----------] 1 test from FillerRepairPlanner (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_solves_with_udm_provider" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_solves_with_udm_provider" time elapsed: 00:00:00
+----------------------------------------------------------
+
+16/88 Testing: planner.FillerRepairPlanner.checker_echo_and_order
+16/88 Test: planner.FillerRepairPlanner.checker_echo_and_order
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.checker_echo_and_order" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.checker_echo_and_order" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.checker_echo_and_order
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.checker_echo_and_order
+[       OK ] FillerRepairPlanner.checker_echo_and_order (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.checker_echo_and_order" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.checker_echo_and_order" time elapsed: 00:00:00
+----------------------------------------------------------
+
+17/88 Testing: planner.FillerRepairPlanner.checker_invalid_isolated
+17/88 Test: planner.FillerRepairPlanner.checker_invalid_isolated
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.checker_invalid_isolated" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.checker_invalid_isolated" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.checker_invalid_isolated
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.checker_invalid_isolated
+[       OK ] FillerRepairPlanner.checker_invalid_isolated (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.checker_invalid_isolated" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.checker_invalid_isolated" time elapsed: 00:00:00
+----------------------------------------------------------
+
+18/88 Testing: planner.FillerRepairPlanner.checker_intra_ms_detect_and_clear
+18/88 Test: planner.FillerRepairPlanner.checker_intra_ms_detect_and_clear
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.checker_intra_ms_detect_and_clear" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.checker_intra_ms_detect_and_clear" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.checker_intra_ms_detect_and_clear
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.checker_intra_ms_detect_and_clear
+[       OK ] FillerRepairPlanner.checker_intra_ms_detect_and_clear (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.checker_intra_ms_detect_and_clear" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.checker_intra_ms_detect_and_clear" time elapsed: 00:00:00
+----------------------------------------------------------
+
+19/88 Testing: planner.FillerRepairPlanner.checker_inter_row_rules
+19/88 Test: planner.FillerRepairPlanner.checker_inter_row_rules
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.checker_inter_row_rules" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.checker_inter_row_rules" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.checker_inter_row_rules
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.checker_inter_row_rules
+[       OK ] FillerRepairPlanner.checker_inter_row_rules (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.checker_inter_row_rules" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.checker_inter_row_rules" time elapsed: 00:00:00
+----------------------------------------------------------
+
+20/88 Testing: planner.FillerRepairPlanner.checker_guard_region_filter
+20/88 Test: planner.FillerRepairPlanner.checker_guard_region_filter
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.checker_guard_region_filter" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.checker_guard_region_filter" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.checker_guard_region_filter
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.checker_guard_region_filter
+[       OK ] FillerRepairPlanner.checker_guard_region_filter (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.checker_guard_region_filter" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.checker_guard_region_filter" time elapsed: 00:00:00
+----------------------------------------------------------
+
+21/88 Testing: planner.FillerRepairPlanner.checker_target_override_seeds_violation
+21/88 Test: planner.FillerRepairPlanner.checker_target_override_seeds_violation
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.checker_target_override_seeds_violation" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.checker_target_override_seeds_violation" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.checker_target_override_seeds_violation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.checker_target_override_seeds_violation
+[       OK ] FillerRepairPlanner.checker_target_override_seeds_violation (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.checker_target_override_seeds_violation" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.checker_target_override_seeds_violation" time elapsed: 00:00:00
+----------------------------------------------------------
+
+22/88 Testing: planner.FillerRepairPlanner.normalize_violations
+22/88 Test: planner.FillerRepairPlanner.normalize_violations
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.normalize_violations" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.normalize_violations" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.normalize_violations
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.normalize_violations
+[       OK ] FillerRepairPlanner.normalize_violations (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.normalize_violations" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.normalize_violations" time elapsed: 00:00:00
+----------------------------------------------------------
+
+23/88 Testing: planner.FillerRepairPlanner.signature_matching
+23/88 Test: planner.FillerRepairPlanner.signature_matching
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.signature_matching" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.signature_matching" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.signature_matching
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.signature_matching
+[       OK ] FillerRepairPlanner.signature_matching (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.signature_matching" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.signature_matching" time elapsed: 00:00:00
+----------------------------------------------------------
+
+24/88 Testing: planner.FillerRepairPlanner.relatedness
+24/88 Test: planner.FillerRepairPlanner.relatedness
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.relatedness" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.relatedness" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.relatedness
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.relatedness
+[       OK ] FillerRepairPlanner.relatedness (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.relatedness" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.relatedness" time elapsed: 00:00:00
+----------------------------------------------------------
+
+25/88 Testing: planner.FillerRepairPlanner.window_L0
+25/88 Test: planner.FillerRepairPlanner.window_L0
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.window_L0" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.window_L0" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.window_L0
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.window_L0
+[       OK ] FillerRepairPlanner.window_L0 (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.window_L0" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.window_L0" time elapsed: 00:00:00
+----------------------------------------------------------
+
+26/88 Testing: planner.FillerRepairPlanner.window_L0_exact_membership
+26/88 Test: planner.FillerRepairPlanner.window_L0_exact_membership
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.window_L0_exact_membership" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.window_L0_exact_membership" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.window_L0_exact_membership
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.window_L0_exact_membership
+[       OK ] FillerRepairPlanner.window_L0_exact_membership (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.window_L0_exact_membership" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.window_L0_exact_membership" time elapsed: 00:00:00
+----------------------------------------------------------
+
+27/88 Testing: planner.FillerRepairPlanner.window_bridge_conditions_each
+27/88 Test: planner.FillerRepairPlanner.window_bridge_conditions_each
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.window_bridge_conditions_each" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.window_bridge_conditions_each" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.window_bridge_conditions_each
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.window_bridge_conditions_each
+[       OK ] FillerRepairPlanner.window_bridge_conditions_each (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.window_bridge_conditions_each" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.window_bridge_conditions_each" time elapsed: 00:00:00
+----------------------------------------------------------
+
+28/88 Testing: planner.FillerRepairPlanner.window_at_design_edges
+28/88 Test: planner.FillerRepairPlanner.window_at_design_edges
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.window_at_design_edges" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.window_at_design_edges" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.window_at_design_edges
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.window_at_design_edges
+[       OK ] FillerRepairPlanner.window_at_design_edges (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.window_at_design_edges" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.window_at_design_edges" time elapsed: 00:00:00
+----------------------------------------------------------
+
+29/88 Testing: planner.FillerRepairPlanner.window_adaptive_adds_k_on_blocking_side
+29/88 Test: planner.FillerRepairPlanner.window_adaptive_adds_k_on_blocking_side
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.window_adaptive_adds_k_on_blocking_side" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.window_adaptive_adds_k_on_blocking_side" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.window_adaptive_adds_k_on_blocking_side
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.window_adaptive_adds_k_on_blocking_side
+[       OK ] FillerRepairPlanner.window_adaptive_adds_k_on_blocking_side (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.window_adaptive_adds_k_on_blocking_side" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.window_adaptive_adds_k_on_blocking_side" time elapsed: 00:00:00
+----------------------------------------------------------
+
+30/88 Testing: planner.FillerRepairPlanner.window_adaptive_coupled_rows_and_fixed_boundary
+30/88 Test: planner.FillerRepairPlanner.window_adaptive_coupled_rows_and_fixed_boundary
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.window_adaptive_coupled_rows_and_fixed_boundary" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.window_adaptive_coupled_rows_and_fixed_boundary" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.window_adaptive_coupled_rows_and_fixed_boundary
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.window_adaptive_coupled_rows_and_fixed_boundary
+[       OK ] FillerRepairPlanner.window_adaptive_coupled_rows_and_fixed_boundary (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.window_adaptive_coupled_rows_and_fixed_boundary" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.window_adaptive_coupled_rows_and_fixed_boundary" time elapsed: 00:00:00
+----------------------------------------------------------
+
+31/88 Testing: planner.FillerRepairPlanner.guard_region_two_cell_ring
+31/88 Test: planner.FillerRepairPlanner.guard_region_two_cell_ring
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.guard_region_two_cell_ring" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.guard_region_two_cell_ring" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.guard_region_two_cell_ring
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.guard_region_two_cell_ring
+[       OK ] FillerRepairPlanner.guard_region_two_cell_ring (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.guard_region_two_cell_ring" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.guard_region_two_cell_ring" time elapsed: 00:00:00
+----------------------------------------------------------
+
+32/88 Testing: planner.FillerRepairPlanner.engine_no_editable_filler_zero_calls
+32/88 Test: planner.FillerRepairPlanner.engine_no_editable_filler_zero_calls
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_no_editable_filler_zero_calls" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_no_editable_filler_zero_calls" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_no_editable_filler_zero_calls
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_no_editable_filler_zero_calls
+[       OK ] FillerRepairPlanner.engine_no_editable_filler_zero_calls (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_no_editable_filler_zero_calls" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_no_editable_filler_zero_calls" time elapsed: 00:00:00
+----------------------------------------------------------
+
+33/88 Testing: planner.FillerRepairPlanner.engine_reentrant_repair_refused
+33/88 Test: planner.FillerRepairPlanner.engine_reentrant_repair_refused
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_reentrant_repair_refused" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_reentrant_repair_refused" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_reentrant_repair_refused
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_reentrant_repair_refused
+[       OK ] FillerRepairPlanner.engine_reentrant_repair_refused (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_reentrant_repair_refused" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_reentrant_repair_refused" time elapsed: 00:00:00
+----------------------------------------------------------
+
+34/88 Testing: planner.FillerRepairPlanner.engine_empty_snapshot_is_success
+34/88 Test: planner.FillerRepairPlanner.engine_empty_snapshot_is_success
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_empty_snapshot_is_success" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_empty_snapshot_is_success" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_empty_snapshot_is_success
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_empty_snapshot_is_success
+[       OK ] FillerRepairPlanner.engine_empty_snapshot_is_success (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_empty_snapshot_is_success" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_empty_snapshot_is_success" time elapsed: 00:00:00
+----------------------------------------------------------
+
+35/88 Testing: planner.FillerRepairPlanner.swap_generator_basic
+35/88 Test: planner.FillerRepairPlanner.swap_generator_basic
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.swap_generator_basic" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.swap_generator_basic" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.swap_generator_basic
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.swap_generator_basic
+[       OK ] FillerRepairPlanner.swap_generator_basic (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.swap_generator_basic" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.swap_generator_basic" time elapsed: 00:00:00
+----------------------------------------------------------
+
+36/88 Testing: planner.FillerRepairPlanner.swap_generator_no_usable_master
+36/88 Test: planner.FillerRepairPlanner.swap_generator_no_usable_master
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.swap_generator_no_usable_master" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.swap_generator_no_usable_master" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.swap_generator_no_usable_master
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.swap_generator_no_usable_master
+[       OK ] FillerRepairPlanner.swap_generator_no_usable_master (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.swap_generator_no_usable_master" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.swap_generator_no_usable_master" time elapsed: 00:00:00
+----------------------------------------------------------
+
+37/88 Testing: planner.FillerRepairPlanner.swapgen_rejected_candidate_diag
+37/88 Test: planner.FillerRepairPlanner.swapgen_rejected_candidate_diag
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.swapgen_rejected_candidate_diag" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.swapgen_rejected_candidate_diag" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.swapgen_rejected_candidate_diag
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.swapgen_rejected_candidate_diag
+[       OK ] FillerRepairPlanner.swapgen_rejected_candidate_diag (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.swapgen_rejected_candidate_diag" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.swapgen_rejected_candidate_diag" time elapsed: 00:00:00
+----------------------------------------------------------
+
+38/88 Testing: planner.FillerRepairPlanner.ranker_order
+38/88 Test: planner.FillerRepairPlanner.ranker_order
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.ranker_order" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.ranker_order" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.ranker_order
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.ranker_order
+[       OK ] FillerRepairPlanner.ranker_order (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.ranker_order" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.ranker_order" time elapsed: 00:00:00
+----------------------------------------------------------
+
+39/88 Testing: planner.FillerRepairPlanner.ranker_filler_key_isolated
+39/88 Test: planner.FillerRepairPlanner.ranker_filler_key_isolated
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.ranker_filler_key_isolated" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.ranker_filler_key_isolated" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.ranker_filler_key_isolated
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.ranker_filler_key_isolated
+[       OK ] FillerRepairPlanner.ranker_filler_key_isolated (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.ranker_filler_key_isolated" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.ranker_filler_key_isolated" time elapsed: 00:00:00
+----------------------------------------------------------
+
+40/88 Testing: planner.FillerRepairPlanner.ranker_domain_order_isolated
+40/88 Test: planner.FillerRepairPlanner.ranker_domain_order_isolated
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.ranker_domain_order_isolated" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.ranker_domain_order_isolated" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.ranker_domain_order_isolated
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.ranker_domain_order_isolated
+[       OK ] FillerRepairPlanner.ranker_domain_order_isolated (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.ranker_domain_order_isolated" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.ranker_domain_order_isolated" time elapsed: 00:00:00
+----------------------------------------------------------
+
+41/88 Testing: planner.FillerRepairPlanner.ranker_majority_per_band
+41/88 Test: planner.FillerRepairPlanner.ranker_majority_per_band
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.ranker_majority_per_band" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.ranker_majority_per_band" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.ranker_majority_per_band
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.ranker_majority_per_band
+[       OK ] FillerRepairPlanner.ranker_majority_per_band (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.ranker_majority_per_band" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.ranker_majority_per_band" time elapsed: 00:00:00
+----------------------------------------------------------
+
+42/88 Testing: planner.FillerRepairPlanner.ranker_majority_skips_missing_master
+42/88 Test: planner.FillerRepairPlanner.ranker_majority_skips_missing_master
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.ranker_majority_skips_missing_master" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.ranker_majority_skips_missing_master" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.ranker_majority_skips_missing_master
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.ranker_majority_skips_missing_master
+[       OK ] FillerRepairPlanner.ranker_majority_skips_missing_master (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.ranker_majority_skips_missing_master" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.ranker_majority_skips_missing_master" time elapsed: 00:00:00
+----------------------------------------------------------
+
+43/88 Testing: planner.FillerRepairPlanner.candidates_band_polarity_layout_must_match
+43/88 Test: planner.FillerRepairPlanner.candidates_band_polarity_layout_must_match
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.candidates_band_polarity_layout_must_match" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.candidates_band_polarity_layout_must_match" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.candidates_band_polarity_layout_must_match
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.candidates_band_polarity_layout_must_match
+[       OK ] FillerRepairPlanner.candidates_band_polarity_layout_must_match (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.candidates_band_polarity_layout_must_match" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.candidates_band_polarity_layout_must_match" time elapsed: 00:00:00
+----------------------------------------------------------
+
+44/88 Testing: planner.FillerRepairPlanner.candidates_polarity_only_filter_diagnosed
+44/88 Test: planner.FillerRepairPlanner.candidates_polarity_only_filter_diagnosed
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.candidates_polarity_only_filter_diagnosed" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.candidates_polarity_only_filter_diagnosed" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.candidates_polarity_only_filter_diagnosed
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.candidates_polarity_only_filter_diagnosed
+[       OK ] FillerRepairPlanner.candidates_polarity_only_filter_diagnosed (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.candidates_polarity_only_filter_diagnosed" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.candidates_polarity_only_filter_diagnosed" time elapsed: 00:00:00
+----------------------------------------------------------
+
+45/88 Testing: planner.FillerRepairPlanner.fake_design_caches_follow_mutation
+45/88 Test: planner.FillerRepairPlanner.fake_design_caches_follow_mutation
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.fake_design_caches_follow_mutation" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.fake_design_caches_follow_mutation" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.fake_design_caches_follow_mutation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.fake_design_caches_follow_mutation
+[       OK ] FillerRepairPlanner.fake_design_caches_follow_mutation (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.fake_design_caches_follow_mutation" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.fake_design_caches_follow_mutation" time elapsed: 00:00:00
+----------------------------------------------------------
+
+46/88 Testing: planner.FillerRepairPlanner.fake_udm_bottom_polarity_derived
+46/88 Test: planner.FillerRepairPlanner.fake_udm_bottom_polarity_derived
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.fake_udm_bottom_polarity_derived" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.fake_udm_bottom_polarity_derived" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.fake_udm_bottom_polarity_derived
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.fake_udm_bottom_polarity_derived
+[       OK ] FillerRepairPlanner.fake_udm_bottom_polarity_derived (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.fake_udm_bottom_polarity_derived" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.fake_udm_bottom_polarity_derived" time elapsed: 00:00:00
+----------------------------------------------------------
+
+47/88 Testing: planner.FillerRepairPlanner.enumeration_order_and_completeness
+47/88 Test: planner.FillerRepairPlanner.enumeration_order_and_completeness
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.enumeration_order_and_completeness" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.enumeration_order_and_completeness" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.enumeration_order_and_completeness
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.enumeration_order_and_completeness
+[       OK ] FillerRepairPlanner.enumeration_order_and_completeness (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.enumeration_order_and_completeness" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.enumeration_order_and_completeness" time elapsed: 00:00:00
+----------------------------------------------------------
+
+48/88 Testing: planner.FillerRepairPlanner.enumeration_filler_domain_not_crowded_out
+48/88 Test: planner.FillerRepairPlanner.enumeration_filler_domain_not_crowded_out
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.enumeration_filler_domain_not_crowded_out" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.enumeration_filler_domain_not_crowded_out" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.enumeration_filler_domain_not_crowded_out
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.enumeration_filler_domain_not_crowded_out
+[       OK ] FillerRepairPlanner.enumeration_filler_domain_not_crowded_out (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.enumeration_filler_domain_not_crowded_out" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.enumeration_filler_domain_not_crowded_out" time elapsed: 00:00:00
+----------------------------------------------------------
+
+49/88 Testing: planner.FillerRepairPlanner.engine_solves_single_swap
+49/88 Test: planner.FillerRepairPlanner.engine_solves_single_swap
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_solves_single_swap" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_solves_single_swap" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_solves_single_swap
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_solves_single_swap
+[       OK ] FillerRepairPlanner.engine_solves_single_swap (2 ms)
+[----------] 1 test from FillerRepairPlanner (2 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (2 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_solves_single_swap" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_solves_single_swap" time elapsed: 00:00:00
+----------------------------------------------------------
+
+50/88 Testing: planner.FillerRepairPlanner.engine_solves_pair_non_monotone
+50/88 Test: planner.FillerRepairPlanner.engine_solves_pair_non_monotone
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_solves_pair_non_monotone" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_solves_pair_non_monotone" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_solves_pair_non_monotone
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_solves_pair_non_monotone
+[       OK ] FillerRepairPlanner.engine_solves_pair_non_monotone (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_solves_pair_non_monotone" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_solves_pair_non_monotone" time elapsed: 00:00:00
+----------------------------------------------------------
+
+51/88 Testing: planner.FillerRepairPlanner.engine_complex_ranked_pair_fast
+51/88 Test: planner.FillerRepairPlanner.engine_complex_ranked_pair_fast
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_complex_ranked_pair_fast" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_complex_ranked_pair_fast" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_complex_ranked_pair_fast
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_complex_ranked_pair_fast
+[       OK ] FillerRepairPlanner.engine_complex_ranked_pair_fast (1 ms)
+[----------] 1 test from FillerRepairPlanner (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_complex_ranked_pair_fast" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_complex_ranked_pair_fast" time elapsed: 00:00:00
+----------------------------------------------------------
+
+52/88 Testing: planner.FillerRepairPlanner.engine_complex_third_vt_still_succeeds
+52/88 Test: planner.FillerRepairPlanner.engine_complex_third_vt_still_succeeds
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_complex_third_vt_still_succeeds" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_complex_third_vt_still_succeeds" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_complex_third_vt_still_succeeds
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_complex_third_vt_still_succeeds
+[       OK ] FillerRepairPlanner.engine_complex_third_vt_still_succeeds (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_complex_third_vt_still_succeeds" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_complex_third_vt_still_succeeds" time elapsed: 00:00:00
+----------------------------------------------------------
+
+53/88 Testing: planner.FillerRepairPlanner.engine_ignores_unrelated_halo_violation
+53/88 Test: planner.FillerRepairPlanner.engine_ignores_unrelated_halo_violation
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_ignores_unrelated_halo_violation" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_ignores_unrelated_halo_violation" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_ignores_unrelated_halo_violation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_ignores_unrelated_halo_violation
+[       OK ] FillerRepairPlanner.engine_ignores_unrelated_halo_violation (1 ms)
+[----------] 1 test from FillerRepairPlanner (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_ignores_unrelated_halo_violation" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_ignores_unrelated_halo_violation" time elapsed: 00:00:00
+----------------------------------------------------------
+
+54/88 Testing: planner.FillerRepairPlanner.engine_no_solution_definitive
+54/88 Test: planner.FillerRepairPlanner.engine_no_solution_definitive
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_no_solution_definitive" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_no_solution_definitive" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_no_solution_definitive
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_no_solution_definitive
+[       OK ] FillerRepairPlanner.engine_no_solution_definitive (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_no_solution_definitive" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_no_solution_definitive" time elapsed: 00:00:00
+----------------------------------------------------------
+
+55/88 Testing: planner.FillerRepairPlanner.gate_cache_single_evaluation
+55/88 Test: planner.FillerRepairPlanner.gate_cache_single_evaluation
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_cache_single_evaluation" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_cache_single_evaluation" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_cache_single_evaluation
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_cache_single_evaluation
+[       OK ] FillerRepairPlanner.gate_cache_single_evaluation (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_cache_single_evaluation" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_cache_single_evaluation" time elapsed: 00:00:00
+----------------------------------------------------------
+
+56/88 Testing: planner.FillerRepairPlanner.engine_detects_protocol_error
+56/88 Test: planner.FillerRepairPlanner.engine_detects_protocol_error
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_detects_protocol_error" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_detects_protocol_error" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_detects_protocol_error
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_detects_protocol_error
+[       OK ] FillerRepairPlanner.engine_detects_protocol_error (1 ms)
+[----------] 1 test from FillerRepairPlanner (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_detects_protocol_error" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_detects_protocol_error" time elapsed: 00:00:00
+----------------------------------------------------------
+
+57/88 Testing: planner.FillerRepairPlanner.engine_order_independent_batches
+57/88 Test: planner.FillerRepairPlanner.engine_order_independent_batches
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_order_independent_batches" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_order_independent_batches" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_order_independent_batches
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_order_independent_batches
+[       OK ] FillerRepairPlanner.engine_order_independent_batches (1 ms)
+[----------] 1 test from FillerRepairPlanner (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_order_independent_batches" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_order_independent_batches" time elapsed: 00:00:00
+----------------------------------------------------------
+
+58/88 Testing: planner.FillerRepairPlanner.engine_batch_size_invariance
+58/88 Test: planner.FillerRepairPlanner.engine_batch_size_invariance
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_batch_size_invariance" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_batch_size_invariance" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_batch_size_invariance
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_batch_size_invariance
+[       OK ] FillerRepairPlanner.engine_batch_size_invariance (1 ms)
+[----------] 1 test from FillerRepairPlanner (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_batch_size_invariance" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_batch_size_invariance" time elapsed: 00:00:00
+----------------------------------------------------------
+
+59/88 Testing: planner.FillerRepairPlanner.engine_determinism_full_transcript
+59/88 Test: planner.FillerRepairPlanner.engine_determinism_full_transcript
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_determinism_full_transcript" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_determinism_full_transcript" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_determinism_full_transcript
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_determinism_full_transcript
+[       OK ] FillerRepairPlanner.engine_determinism_full_transcript (1 ms)
+[----------] 1 test from FillerRepairPlanner (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_determinism_full_transcript" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_determinism_full_transcript" time elapsed: 00:00:00
+----------------------------------------------------------
+
+60/88 Testing: planner.FillerRepairPlanner.engine_never_edits_guard_only
+60/88 Test: planner.FillerRepairPlanner.engine_never_edits_guard_only
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_never_edits_guard_only" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_never_edits_guard_only" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_never_edits_guard_only
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_never_edits_guard_only
+[       OK ] FillerRepairPlanner.engine_never_edits_guard_only (1 ms)
+[----------] 1 test from FillerRepairPlanner (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_never_edits_guard_only" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_never_edits_guard_only" time elapsed: 00:00:00
+----------------------------------------------------------
+
+61/88 Testing: planner.FillerRepairPlanner.gate_delta_classification_branches
+61/88 Test: planner.FillerRepairPlanner.gate_delta_classification_branches
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_delta_classification_branches" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_delta_classification_branches" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_delta_classification_branches
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_delta_classification_branches
+[       OK ] FillerRepairPlanner.gate_delta_classification_branches (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_delta_classification_branches" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_delta_classification_branches" time elapsed: 00:00:00
+----------------------------------------------------------
+
+62/88 Testing: planner.FillerRepairPlanner.gate_rejects_unexplained_illegal
+62/88 Test: planner.FillerRepairPlanner.gate_rejects_unexplained_illegal
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_rejects_unexplained_illegal" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_rejects_unexplained_illegal" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_rejects_unexplained_illegal
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_rejects_unexplained_illegal
+[       OK ] FillerRepairPlanner.gate_rejects_unexplained_illegal (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_rejects_unexplained_illegal" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_rejects_unexplained_illegal" time elapsed: 00:00:00
+----------------------------------------------------------
+
+63/88 Testing: planner.FillerRepairPlanner.gate_baseline_mismatch_aborts_search
+63/88 Test: planner.FillerRepairPlanner.gate_baseline_mismatch_aborts_search
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_baseline_mismatch_aborts_search" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_baseline_mismatch_aborts_search" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_baseline_mismatch_aborts_search
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_baseline_mismatch_aborts_search
+[       OK ] FillerRepairPlanner.gate_baseline_mismatch_aborts_search (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_baseline_mismatch_aborts_search" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_baseline_mismatch_aborts_search" time elapsed: 00:00:00
+----------------------------------------------------------
+
+64/88 Testing: planner.FillerRepairPlanner.gate_multiset_new_violation_not_absorbed
+64/88 Test: planner.FillerRepairPlanner.gate_multiset_new_violation_not_absorbed
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_multiset_new_violation_not_absorbed" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_multiset_new_violation_not_absorbed" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_multiset_new_violation_not_absorbed
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_multiset_new_violation_not_absorbed
+[       OK ] FillerRepairPlanner.gate_multiset_new_violation_not_absorbed (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_multiset_new_violation_not_absorbed" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_multiset_new_violation_not_absorbed" time elapsed: 00:00:00
+----------------------------------------------------------
+
+65/88 Testing: planner.FillerRepairPlanner.gate_per_violation_rule_distance
+65/88 Test: planner.FillerRepairPlanner.gate_per_violation_rule_distance
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_per_violation_rule_distance" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_per_violation_rule_distance" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_per_violation_rule_distance
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_per_violation_rule_distance
+[       OK ] FillerRepairPlanner.gate_per_violation_rule_distance (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_per_violation_rule_distance" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_per_violation_rule_distance" time elapsed: 00:00:00
+----------------------------------------------------------
+
+66/88 Testing: planner.FillerRepairPlanner.engine_definitive_reflects_last_window
+66/88 Test: planner.FillerRepairPlanner.engine_definitive_reflects_last_window
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_definitive_reflects_last_window" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_definitive_reflects_last_window" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_definitive_reflects_last_window
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_definitive_reflects_last_window
+[       OK ] FillerRepairPlanner.engine_definitive_reflects_last_window (1 ms)
+[----------] 1 test from FillerRepairPlanner (1 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (1 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_definitive_reflects_last_window" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_definitive_reflects_last_window" time elapsed: 00:00:00
+----------------------------------------------------------
+
+67/88 Testing: planner.FillerRepairPlanner.engine_budget_ceiling
+67/88 Test: planner.FillerRepairPlanner.engine_budget_ceiling
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_budget_ceiling" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_budget_ceiling" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_budget_ceiling
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_budget_ceiling
+[       OK ] FillerRepairPlanner.engine_budget_ceiling (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_budget_ceiling" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_budget_ceiling" time elapsed: 00:00:00
+----------------------------------------------------------
+
+68/88 Testing: planner.FillerRepairPlanner.engine_adaptive_solves_beyond_ring
+68/88 Test: planner.FillerRepairPlanner.engine_adaptive_solves_beyond_ring
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_adaptive_solves_beyond_ring" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_adaptive_solves_beyond_ring" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_adaptive_solves_beyond_ring
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_adaptive_solves_beyond_ring
+[       OK ] FillerRepairPlanner.engine_adaptive_solves_beyond_ring (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_adaptive_solves_beyond_ring" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_adaptive_solves_beyond_ring" time elapsed: 00:00:00
+----------------------------------------------------------
+
+69/88 Testing: planner.FillerRepairPlanner.engine_adaptive_l1_finds_far_filler
+69/88 Test: planner.FillerRepairPlanner.engine_adaptive_l1_finds_far_filler
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_adaptive_l1_finds_far_filler" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_adaptive_l1_finds_far_filler" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_adaptive_l1_finds_far_filler
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_adaptive_l1_finds_far_filler
+[       OK ] FillerRepairPlanner.engine_adaptive_l1_finds_far_filler (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_adaptive_l1_finds_far_filler" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_adaptive_l1_finds_far_filler" time elapsed: 00:00:00
+----------------------------------------------------------
+
+70/88 Testing: planner.FillerRepairPlanner.engine_adaptive_cutoff_unchanged_blocking
+70/88 Test: planner.FillerRepairPlanner.engine_adaptive_cutoff_unchanged_blocking
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_adaptive_cutoff_unchanged_blocking" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_adaptive_cutoff_unchanged_blocking" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_adaptive_cutoff_unchanged_blocking
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_adaptive_cutoff_unchanged_blocking
+[       OK ] FillerRepairPlanner.engine_adaptive_cutoff_unchanged_blocking (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_adaptive_cutoff_unchanged_blocking" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_adaptive_cutoff_unchanged_blocking" time elapsed: 00:00:00
+----------------------------------------------------------
+
+71/88 Testing: planner.FillerRepairPlanner.gate_baseline_unexpected_inwindow_aborts
+71/88 Test: planner.FillerRepairPlanner.gate_baseline_unexpected_inwindow_aborts
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_baseline_unexpected_inwindow_aborts" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_baseline_unexpected_inwindow_aborts" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_baseline_unexpected_inwindow_aborts
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_baseline_unexpected_inwindow_aborts
+[       OK ] FillerRepairPlanner.gate_baseline_unexpected_inwindow_aborts (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_baseline_unexpected_inwindow_aborts" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_baseline_unexpected_inwindow_aborts" time elapsed: 00:00:00
+----------------------------------------------------------
+
+72/88 Testing: planner.FillerRepairPlanner.gate_baseline_halo_extra_allowed
+72/88 Test: planner.FillerRepairPlanner.gate_baseline_halo_extra_allowed
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_baseline_halo_extra_allowed" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_baseline_halo_extra_allowed" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_baseline_halo_extra_allowed
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_baseline_halo_extra_allowed
+[       OK ] FillerRepairPlanner.gate_baseline_halo_extra_allowed (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_baseline_halo_extra_allowed" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_baseline_halo_extra_allowed" time elapsed: 00:00:00
+----------------------------------------------------------
+
+73/88 Testing: planner.FillerRepairPlanner.gate_baseline_outside_guard_original_skipped
+73/88 Test: planner.FillerRepairPlanner.gate_baseline_outside_guard_original_skipped
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_baseline_outside_guard_original_skipped" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_baseline_outside_guard_original_skipped" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_baseline_outside_guard_original_skipped
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_baseline_outside_guard_original_skipped
+[       OK ] FillerRepairPlanner.gate_baseline_outside_guard_original_skipped (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_baseline_outside_guard_original_skipped" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_baseline_outside_guard_original_skipped" time elapsed: 00:00:00
+----------------------------------------------------------
+
+74/88 Testing: planner.FillerRepairPlanner.gate_residual_one_to_one
+74/88 Test: planner.FillerRepairPlanner.gate_residual_one_to_one
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_residual_one_to_one" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_residual_one_to_one" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_residual_one_to_one
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_residual_one_to_one
+[       OK ] FillerRepairPlanner.gate_residual_one_to_one (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_residual_one_to_one" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_residual_one_to_one" time elapsed: 00:00:00
+----------------------------------------------------------
+
+75/88 Testing: planner.FillerRepairPlanner.gate_batch_extra_result_rejected
+75/88 Test: planner.FillerRepairPlanner.gate_batch_extra_result_rejected
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_batch_extra_result_rejected" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_batch_extra_result_rejected" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_batch_extra_result_rejected
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_batch_extra_result_rejected
+[       OK ] FillerRepairPlanner.gate_batch_extra_result_rejected (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_batch_extra_result_rejected" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_batch_extra_result_rejected" time elapsed: 00:00:00
+----------------------------------------------------------
+
+76/88 Testing: planner.FillerRepairPlanner.gate_single_wrong_echo_on_baseline
+76/88 Test: planner.FillerRepairPlanner.gate_single_wrong_echo_on_baseline
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_single_wrong_echo_on_baseline" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_single_wrong_echo_on_baseline" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_single_wrong_echo_on_baseline
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_single_wrong_echo_on_baseline
+[       OK ] FillerRepairPlanner.gate_single_wrong_echo_on_baseline (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_single_wrong_echo_on_baseline" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_single_wrong_echo_on_baseline" time elapsed: 00:00:00
+----------------------------------------------------------
+
+77/88 Testing: planner.FillerRepairPlanner.gate_status_not_checked_carries_on
+77/88 Test: planner.FillerRepairPlanner.gate_status_not_checked_carries_on
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_status_not_checked_carries_on" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_status_not_checked_carries_on" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_status_not_checked_carries_on
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_status_not_checked_carries_on
+[       OK ] FillerRepairPlanner.gate_status_not_checked_carries_on (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_status_not_checked_carries_on" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_status_not_checked_carries_on" time elapsed: 00:00:00
+----------------------------------------------------------
+
+78/88 Testing: planner.FillerRepairPlanner.gate_fatal_diag_makes_unusable
+78/88 Test: planner.FillerRepairPlanner.gate_fatal_diag_makes_unusable
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_fatal_diag_makes_unusable" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_fatal_diag_makes_unusable" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_fatal_diag_makes_unusable
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_fatal_diag_makes_unusable
+[       OK ] FillerRepairPlanner.gate_fatal_diag_makes_unusable (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_fatal_diag_makes_unusable" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_fatal_diag_makes_unusable" time elapsed: 00:00:00
+----------------------------------------------------------
+
+79/88 Testing: planner.FillerRepairPlanner.gate_new_violation_no_rows_goes_halo
+79/88 Test: planner.FillerRepairPlanner.gate_new_violation_no_rows_goes_halo
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.gate_new_violation_no_rows_goes_halo" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.gate_new_violation_no_rows_goes_halo" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.gate_new_violation_no_rows_goes_halo
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.gate_new_violation_no_rows_goes_halo
+[       OK ] FillerRepairPlanner.gate_new_violation_no_rows_goes_halo (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.gate_new_violation_no_rows_goes_halo" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.gate_new_violation_no_rows_goes_halo" time elapsed: 00:00:00
+----------------------------------------------------------
+
+80/88 Testing: planner.FillerRepairPlanner.signature_field_mismatch_each
+80/88 Test: planner.FillerRepairPlanner.signature_field_mismatch_each
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.signature_field_mismatch_each" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.signature_field_mismatch_each" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.signature_field_mismatch_each
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.signature_field_mismatch_each
+[       OK ] FillerRepairPlanner.signature_field_mismatch_each (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.signature_field_mismatch_each" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.signature_field_mismatch_each" time elapsed: 00:00:00
+----------------------------------------------------------
+
+81/88 Testing: planner.FillerRepairPlanner.signature_xwindow_tolerance_edges
+81/88 Test: planner.FillerRepairPlanner.signature_xwindow_tolerance_edges
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.signature_xwindow_tolerance_edges" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.signature_xwindow_tolerance_edges" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.signature_xwindow_tolerance_edges
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.signature_xwindow_tolerance_edges
+[       OK ] FillerRepairPlanner.signature_xwindow_tolerance_edges (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.signature_xwindow_tolerance_edges" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.signature_xwindow_tolerance_edges" time elapsed: 00:00:00
+----------------------------------------------------------
+
+82/88 Testing: planner.FillerRepairPlanner.relatedness_row_and_distance_edges
+82/88 Test: planner.FillerRepairPlanner.relatedness_row_and_distance_edges
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.relatedness_row_and_distance_edges" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.relatedness_row_and_distance_edges" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.relatedness_row_and_distance_edges
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.relatedness_row_and_distance_edges
+[       OK ] FillerRepairPlanner.relatedness_row_and_distance_edges (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.relatedness_row_and_distance_edges" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.relatedness_row_and_distance_edges" time elapsed: 00:00:00
+----------------------------------------------------------
+
+83/88 Testing: planner.FillerRepairPlanner.rule_distance_fallback
+83/88 Test: planner.FillerRepairPlanner.rule_distance_fallback
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.rule_distance_fallback" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.rule_distance_fallback" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.rule_distance_fallback
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.rule_distance_fallback
+[       OK ] FillerRepairPlanner.rule_distance_fallback (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.rule_distance_fallback" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.rule_distance_fallback" time elapsed: 00:00:00
+----------------------------------------------------------
+
+84/88 Testing: planner.FillerRepairPlanner.enumerate_complete_budget_boundary
+84/88 Test: planner.FillerRepairPlanner.enumerate_complete_budget_boundary
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.enumerate_complete_budget_boundary" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.enumerate_complete_budget_boundary" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.enumerate_complete_budget_boundary
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.enumerate_complete_budget_boundary
+[       OK ] FillerRepairPlanner.enumerate_complete_budget_boundary (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.enumerate_complete_budget_boundary" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.enumerate_complete_budget_boundary" time elapsed: 00:00:00
+----------------------------------------------------------
+
+85/88 Testing: planner.FillerRepairPlanner.enumerate_overflow_clamp
+85/88 Test: planner.FillerRepairPlanner.enumerate_overflow_clamp
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.enumerate_overflow_clamp" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.enumerate_overflow_clamp" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.enumerate_overflow_clamp
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.enumerate_overflow_clamp
+[       OK ] FillerRepairPlanner.enumerate_overflow_clamp (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.enumerate_overflow_clamp" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.enumerate_overflow_clamp" time elapsed: 00:00:00
+----------------------------------------------------------
+
+86/88 Testing: planner.FillerRepairPlanner.enumerate_size3_cap_and_products
+86/88 Test: planner.FillerRepairPlanner.enumerate_size3_cap_and_products
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.enumerate_size3_cap_and_products" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.enumerate_size3_cap_and_products" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.enumerate_size3_cap_and_products
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.enumerate_size3_cap_and_products
+[       OK ] FillerRepairPlanner.enumerate_size3_cap_and_products (0 ms)
+[----------] 1 test from FillerRepairPlanner (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.00 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.enumerate_size3_cap_and_products" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.enumerate_size3_cap_and_products" time elapsed: 00:00:00
+----------------------------------------------------------
+
+87/88 Testing: planner.FillerRepairPlanner.engine_user_grid_mw_ms_1
+87/88 Test: planner.FillerRepairPlanner.engine_user_grid_mw_ms_1
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_planner_test" "--gtest_filter=FillerRepairPlanner.engine_user_grid_mw_ms_1" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"planner.FillerRepairPlanner.engine_user_grid_mw_ms_1" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairPlanner.engine_user_grid_mw_ms_1
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairPlanner
+[ RUN      ] FillerRepairPlanner.engine_user_grid_mw_ms_1
+[       OK ] FillerRepairPlanner.engine_user_grid_mw_ms_1 (9 ms)
+[----------] 1 test from FillerRepairPlanner (9 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (9 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"planner.FillerRepairPlanner.engine_user_grid_mw_ms_1" end time: Jul 18 04:52 UTC
+"planner.FillerRepairPlanner.engine_user_grid_mw_ms_1" time elapsed: 00:00:00
+----------------------------------------------------------
+
+88/88 Testing: e2e.FillerRepairProduction.FakeUdmEndToEnd
+88/88 Test: e2e.FillerRepairProduction.FakeUdmEndToEnd
+Command: "/home/user/OpenROAD/src/dpl2/test/build-cmake/dpl2_filler_repair_e2e" "--gtest_filter=FillerRepairProduction.FakeUdmEndToEnd" "--gtest_also_run_disabled_tests"
+Directory: /home/user/OpenROAD/src/dpl2/test/build-cmake
+"e2e.FillerRepairProduction.FakeUdmEndToEnd" start time: Jul 18 04:52 UTC
+Output:
+----------------------------------------------------------
+Running main() from ./googletest/src/gtest_main.cc
+Note: Google Test filter = FillerRepairProduction.FakeUdmEndToEnd
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from FillerRepairProduction
+[ RUN      ] FillerRepairProduction.FakeUdmEndToEnd
+[smoke][ok] production infrastructure snapshot is ready
+[smoke][ok] Network nodes were imported from PhysDesMgr
+[smoke][ok] placed, target and getFillerMasters masters were registered
+[smoke][ok] FillerRepairEngine init succeeds
+[smoke][ok] clean placement passes gap/overlap precheck
+[smoke][ok] clean precheck does not mutate UDM
+[smoke][ok] gap precheck blocks opto with Gap warning
+[smoke][ok] gap precheck does not mutate UDM
+[smoke][ok] overlap precheck blocks opto with Overlap warning
+[smoke][ok] overlap precheck does not mutate UDM
+[smoke][ok] clean target overlay succeeds with empty filler changes
+[smoke][ok] empty-change repair does not mutate UDM
+[smoke] repair#1: hasSolution=1 changes=1
+[smoke]   swap cell 111 -> libCell 4
+[smoke]   diag Solution: info: window L0: 1 change(s); checker requests=9 batches=1 cacheHits=0
+[smoke][ok] repair finds a filler swap solution
+[smoke][ok] solution carries FillerCellRecord changes
+[smoke][ok] record op is Replace
+[smoke][ok] replacement master is the VTH filler (FH2)
+[smoke][ok] swapped cell is one of the fillers next to the target
+[smoke][ok] repair does not mutate UDM
+[smoke] repair#2: hasSolution=1 changes=1
+[smoke]   swap cell 111 -> libCell 4
+[smoke]   diag Solution: info: window L0: 1 change(s); checker requests=9 batches=1 cacheHits=0
+[smoke][ok] second run matches the first
+[smoke][ok] change 0 identical across runs
+[smoke][ok] repeated repair remains non-mutating
+[       OK ] FillerRepairProduction.FakeUdmEndToEnd (8 ms)
+[----------] 1 test from FillerRepairProduction (8 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (8 ms total)
+[  PASSED  ] 1 test.
+<end of output>
+Test time =   0.01 sec
+----------------------------------------------------------
+Test Passed.
+"e2e.FillerRepairProduction.FakeUdmEndToEnd" end time: Jul 18 04:52 UTC
+"e2e.FillerRepairProduction.FakeUdmEndToEnd" time elapsed: 00:00:00
+----------------------------------------------------------
+
+End testing: Jul 18 04:52 UTC
