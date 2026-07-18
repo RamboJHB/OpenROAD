@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Internal pure repair planner (spec sections 3.2 / 5.4).
+// Internal pure filler-repair planner (spec sections 3.2 / 5.4).
 //
 // Deterministic pipeline: normalize -> window -> swap gen ->
-// rank -> subset search -> oracle gate -> result. The engine owns no state
+// rank -> subset search -> oracle gate -> result. The planner owns no state
 // between repair() calls and never mutates the design; all effects are the
-// returned FillerRepairResult.
+// returned FillerRepairResult. With RepairConfig::verbose enabled, each stage
+// prints a deterministic [fr][stage] decision transcript.
 
 #pragma once
 
@@ -35,12 +36,12 @@ struct RepairConfig
 
 namespace internal {
 
-class PlannerEngine
+class FillerRepairPlanner
 {
  public:
-  PlannerEngine(const PlacementView& view,
-                ImplantOverlayChecker& checker,
-                RepairConfig config = {});
+  FillerRepairPlanner(const PlacementView& view,
+                      ImplantOverlayChecker& checker,
+                      RepairConfig config = {});
 
   FillerRepairResult repair(const FillerRepairRequest& request);
 
@@ -50,7 +51,7 @@ class PlannerEngine
   RepairConfig config_;
   DebugLog log_;
   // Guards spec 3.3's no-reentrancy contract AND flags concurrent use of one
-  // engine instance; concurrent repairs use one engine per thread.
+  // planner instance; concurrent repairs use one planner per thread.
   std::atomic<bool> repair_active_{false};
 };
 

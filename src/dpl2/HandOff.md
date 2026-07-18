@@ -15,6 +15,7 @@ The production boundary is now one checker-style class:
 
 ```cpp
 FillerRepairEngine(Grid* grid, Network* network);
+void setDebugLogging(bool enabled);  // optional, disabled by default
 bool init(PhysDesMgr* desMgr,
           const ImplantLayerChecker* checker,
           const fillerSetting* fillerSetting);
@@ -23,7 +24,7 @@ RepairOutcome repair(LeafCellID targetCell, const PhysLibCell& newMaster);
 ```
 
 The production view/oracle/wire conversion lives in `FillerRepairEngine.cpp`;
-the pure search pipeline is `internal::PlannerEngine`. `init()` must succeed
+the pure search pipeline is `internal::FillerRepairPlanner`. `init()` must succeed
 before use: until it does, `precheck()` and `repair()` fail closed
 (`precheck_not_initialized` / `engine_not_initialized`).
 
@@ -64,6 +65,12 @@ change list. No violation returns success with empty changes. Violations enter
 the unchanged adaptive-L1/ranker/subset/cache/budget/baseline-delta planner.
 A clean solution returns `ipl::FillerChanges`; no solution returns failure and
 empty changes. The final checker remains the only DRC oracle.
+
+Optional debug logging is enabled with `engine.setDebugLogging(true)`. It emits
+a deterministic `[fr][stage]` transcript for planner configuration,
+normalization, window growth, swap generation, ranking, enumeration,
+checker/cache/budget activity and the final decision. It is disabled by
+default and does not affect search behavior.
 
 ## Data authority
 
@@ -164,7 +171,7 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-All 81 planner cases and the 5 production E2E cases are GoogleTests. The E2E
+All 81 planner cases and the 6 production E2E cases are GoogleTests. The E2E
 uses fake UDM only as test data and links supplied Grid/Network,
 RepairInfrastructure, final checker, FillerRepairEngine and internal planner.
 It covers clean/gap/overlap precheck, opto-blocking return values,
@@ -173,8 +180,8 @@ APIs, persistent-checker-diagnostic stripping, configured-master/Network
 consistency, fail-closed behavior after failed init, and the first-non-pad-row
 origin baseline.
 
-2026-07-18 result: planner 81/81 normal and ASan; E2E normal and ASan; full
-CTest 86/86 normal and ASan; all targets passed Werror.
+2026-07-18 result: planner 81/81 normal and ASan; E2E 6/6 normal and ASan;
+full CTest 87/87 normal and ASan; all targets passed Werror.
 
 ## Integration risks
 

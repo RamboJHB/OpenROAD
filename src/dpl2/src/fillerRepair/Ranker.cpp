@@ -159,15 +159,28 @@ std::vector<FillerDomain> rankFillers(
                      return fillerKey(a) < fillerKey(b);
                    });
 
-  if (log.enabled() && !ranked.empty()) {
-    std::string top;
-    for (const Swap& s : ranked[0].options) {
-      top += cat(top.empty() ? "" : ",", "vt", s.newVt);
-    }
+  if (log.enabled()) {
     log.msg("rank",
             cat(ranked.size(), " filler domain(s) over ", swaps.size(),
-                " swap(s), anchorVt=", anchorVt, ", demoted(thirdVt)=", demoted,
-                "; top: filler ", ranked[0].instanceId, " domain=[", top, "]"));
+                " swap(s), anchorVt=", anchorVt,
+                ", demoted(thirdVt)=", demoted));
+    // Print the actual domain order consumed by SubsetSearcher. Each line
+    // contains the filler-level key followed by the complete, still-reachable
+    // master domain (anchor/majority choices first, third VT last).
+    for (size_t rank = 0; rank < ranked.size(); ++rank) {
+      const FillerDomain& domain = ranked[rank];
+      const FillerKey key = fillerKey(domain);
+      std::string options;
+      for (const Swap& swap : domain.options) {
+        options += cat(options.empty() ? "" : ",", "m", swap.newMasterId,
+                       ":vt", swap.newVt);
+      }
+      log.msg("rank",
+              cat("#", rank, " filler=", domain.instanceId,
+                  " key{direct=", key.direct, " bridge=", key.bridge,
+                  " width=", key.width, " x=", key.x, " row=", key.row,
+                  "} domain=[", options, ']'));
+    }
   }
   return ranked;
 }

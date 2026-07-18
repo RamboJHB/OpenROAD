@@ -133,10 +133,18 @@ SwapGenerationResult generateSwaps(
             makeDiag(Severity::Warning, "RejectedCandidate",
                      cat("filler ", fillerId, " -> master ",
                          candidate.masterId, ": ", error)));
+        log.msg("swapgen",
+                cat("reject filler=", fillerId, " master=",
+                    candidate.masterId, " reason=", error));
         continue;
       }
       result.swaps.push_back(*swap);
       ++emitted;
+      log.msg("swapgen",
+              cat("emit filler=", swap->instanceId, " row=", swap->rowId,
+                  " span=", show(swap->span), " master ", swap->oldMasterId,
+                  "(vt", swap->oldVt, ") -> ", swap->newMasterId, "(vt",
+                  swap->newVt, ')'));
     }
     log.msg("swapgen",
             cat("filler ", fillerId, " (row=",

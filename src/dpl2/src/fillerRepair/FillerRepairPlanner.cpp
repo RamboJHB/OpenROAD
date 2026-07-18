@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "PlannerEngine.h"
+#include "FillerRepairPlanner.h"
 
 #include "OracleGate.h"
 #include "Ranker.h"
@@ -66,7 +66,7 @@ std::string windowLabel(const RepairWindow& window)
 
 namespace internal {
 
-PlannerEngine::PlannerEngine(
+FillerRepairPlanner::FillerRepairPlanner(
     const PlacementView& view,
     ImplantOverlayChecker& checker,
     RepairConfig config)
@@ -77,18 +77,19 @@ PlannerEngine::PlannerEngine(
 {
 }
 
-FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
+FillerRepairResult FillerRepairPlanner::repair(
+    const FillerRepairRequest& request)
 {
   FillerRepairResult result;
 
   // Spec 3.3: the overlay API is a pure query and must never call back into
-  // repair, and one engine instance never runs two repairs at once
-  // (concurrent repairs = one engine per thread over a shared immutable
+  // repair, and one planner instance never runs two repairs at once
+  // (concurrent repairs = one planner per thread over a shared immutable
   // view). Turn a violation into a fatal result instead of corrupted state.
   if (repair_active_.exchange(true, std::memory_order_acq_rel)) {
     result.diagnostics.push_back(makeDiag(
         Severity::Fatal, "ReentrantRepair",
-        "repair() re-entered on this engine instance (oracle callback or "
+        "repair() re-entered on this planner instance (oracle callback or "
         "concurrent use) -> refused"));
     return result;
   }
@@ -98,12 +99,22 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
     ~ActiveGuard() { flag.store(false, std::memory_order_release); }
   } activeGuard{repair_active_};
 
-  log_.msg("engine",
+  // The transcript starts with both the immutable request and every search
+  // knob. This makes a production failure reproducible from one captured log
+  // without relying on hidden defaults.
+  log_.msg("planner",
            cat("repair start: anchor inst=", request.targetPlace.instanceId,
                " master=", request.targetPlace.masterId,
                " row=", request.targetPlace.rowId,
                " x=", request.targetPlace.x,
                " violations=", request.violations.size()));
+  log_.msg("planner",
+           cat("config: budget/window=", config_.checkerCallBudgetPerWindow,
+               " batch=", config_.batchSize,
+               " maxSubset=", config_.maxSubsetSize,
+               " memberCaps=[", config_.memberCapSize2, ',',
+               config_.memberCapSize3, ',', config_.memberCapSize4,
+               "] adaptiveStep=", config_.adaptiveStepFillers));
 
   // Placement coverage is intentionally not checked here. Production opto
   // calls FillerRepairEngine::precheck() before any mutation; keeping that
@@ -113,7 +124,8 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
     result.hasSolution = true;
     result.diagnostics.push_back(makeDiag(
         Severity::Info, "EmptySnapshot", "no violations in initial snapshot"));
-    log_.msg("engine", "empty violation snapshot -> hasSolution=true, 0 changes");
+    log_.msg("planner",
+             "empty violation snapshot -> hasSolution=true, 0 changes");
     return result;
   }
 
@@ -123,6 +135,10 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
 
   const DbCoord ruleDistance =
       estimateRuleDistance(request.violations, view_.siteWidth());
+  log_.msg("planner",
+           cat("normalized=", violations.size(), " siteWidth=",
+               view_.siteWidth(), " ruleDistance=", ruleDistance,
+               " -> build L0 window"));
   OracleGate gate(checker_, request.targetPlace, request.violations,
                   view_.siteWidth(), ruleDistance, config_, log_);
 
@@ -148,6 +164,15 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
     std::vector<Violation> blockingForExpansion = request.violations;
     bool searched = false;
     bool currentDefinitive = false;
+
+    // One loop iteration is one independently budgeted search question. The
+    // window and guard are logged before generating swaps so a transcript can
+    // explain exactly which fillers were editable versus check-only.
+    log_.msg("planner",
+             cat("search ", label, ": area=", show(window.area()),
+                 " guard=", show(window.guardRegion), " editable=",
+                 window.editableFillers.size(), " bridge=",
+                 window.bridgeFillers.size()));
 
     if (window.editableFillers.empty()) {
       result.diagnostics.push_back(makeDiag(
@@ -183,7 +208,7 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
               Severity::Fatal, "BaselineGateFailed",
               cat("baseline gate failed at window ", label,
                   " (see BaselineUnusable/BaselineMismatch above)")));
-          log_.msg("engine", "baseline gate failed -> abort");
+          log_.msg("planner", "baseline gate failed -> abort");
           return result;
         }
 
@@ -200,7 +225,7 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
           result.diagnostics.push_back(makeDiag(
               Severity::Fatal, "CheckerProtocolError",
               "batch protocol violated; rejecting this repair"));
-          log_.msg("engine", "checker protocol error -> abort");
+          log_.msg("planner", "checker protocol error -> abort");
           return result;
         }
 
@@ -213,7 +238,7 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
                   " change(s); checker requests=", gate.requestsSent(),
                   " batches=", gate.batchesSent(),
                   " cacheHits=", gate.cacheHits())));
-          log_.msg("engine",
+          log_.msg("planner",
                    cat("SOLUTION at ", label, ": ", result.changes.size(),
                        " change(s), requests=", gate.requestsSent(),
                        " cacheHits=", gate.cacheHits()));
@@ -222,6 +247,12 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
 
         if (betterBest(sr, best)) {
           best = sr;
+          log_.msg("planner",
+                   cat("best-so-far updated at ", label, ": swaps=",
+                       best.bestOverlay.size(), " residual=",
+                       best.bestSummary.residualOriginals, " newInWindow=",
+                       best.bestSummary.newInWindow, " relatedInHalo=",
+                       best.bestSummary.relatedInHalo));
         }
         currentDefinitive = plan.complete && !sr.budgetExhausted;
         lastSearchedDefinitive = currentDefinitive;
@@ -235,7 +266,7 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
                 currentDefinitive
                     ? "complete enumeration, definitively no clean overlay"
                     : "truncated (size caps or budget), no clean overlay found")));
-        log_.msg("engine",
+        log_.msg("planner",
                  cat("window ", label, " no clean overlay (",
                      currentDefinitive ? "definitive" : "truncated",
                      ") -> adaptive expansion"));
@@ -252,7 +283,7 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
           cat("window ", label,
               " completed enumeration with unchanged blocking violations -> "
               "stop adaptive expansion")));
-      log_.msg("engine",
+      log_.msg("planner",
                cat("window ", label,
                    " blocking multiset unchanged after complete search -> cutoff"));
       break;
@@ -272,7 +303,7 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
           Severity::Info, "ExpansionCutoff",
           cat("window ", label,
               " adaptive step adds no new editable filler -> stop escalation")));
-      log_.msg("engine",
+      log_.msg("planner",
                cat("window ", label,
                    " adaptive step adds no filler -> expansion cutoff"));
       break;
@@ -297,7 +328,7 @@ FillerRepairResult PlannerEngine::repair(const FillerRepairRequest& request)
             " relatedInHalo=", best.bestSummary.relatedInHalo,
             " unrelatedInHalo=", best.bestSummary.unrelatedInHalo)));
   }
-  log_.msg("engine",
+  log_.msg("planner",
            cat("NO SOLUTION (", lastSearchedDefinitive ? "definitive" : "truncated",
                "), requests=", gate.requestsSent(),
                " cacheHits=", gate.cacheHits()));

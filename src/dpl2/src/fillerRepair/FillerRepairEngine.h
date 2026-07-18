@@ -36,6 +36,11 @@ class FillerRepairEngine
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
+  // Enables the [fr][stage] decision transcript. Disabled by default; the
+  // switch changes diagnostics output only and never changes search order or
+  // acceptance. Configure it outside concurrent precheck()/repair() calls.
+  void setDebugLogging(bool enabled);
+
   bool init(eUNL::PhysDesMgr* desMgr,
             const ipl::ImplantLayerChecker* checker,
             const fillerSetting* fillerSetting);

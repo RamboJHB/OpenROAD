@@ -12,7 +12,7 @@ The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
 
 | Area | State |
 |---|---|
-| Planner | adaptive-L1, filler domains, per-band ranking/filtering and deterministic output complete |
+| Planner | internal `FillerRepairPlanner`; adaptive-L1, filler domains, per-band ranking/filtering, deterministic output and opt-in `[fr][stage]` transcript complete |
 | Unit tests | 81/81 GoogleTests normal and ASan |
 | Infrastructure | `fillerRepair/RepairInfrastructure` builds production Network/Grid from PhysDesMgr data; empty `getFillerMasters()` errors out |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |

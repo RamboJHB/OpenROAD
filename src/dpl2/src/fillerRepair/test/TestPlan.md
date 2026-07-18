@@ -22,7 +22,7 @@ enabled for every project source and test execution.
 ## Production E2E composition
 
 Included: production RepairInfrastructure, Grid/Network, fillerSetting, final
-ImplantLayerChecker, FillerRepairEngine, internal PlannerEngine and all search
+ImplantLayerChecker, FillerRepairEngine, internal FillerRepairPlanner and all search
 stages (compile lists from `src/fillerRepair/sources.cmake`). Fake UDM
 provides tech/library/row/cell data only.
 
@@ -66,6 +66,8 @@ newMaster or candidate information to precheck, proving that scope separation.
   sit anywhere; a misaligned standard row is refused even behind a pad row.
 - Planner tests continue covering adaptive-L1, ranking, subset enumeration,
   budgets, cache, baseline-delta and malformed internal oracle protocol.
+- `FR_VERBOSE=1` enables the deterministic `[fr][stage]` algorithm transcript;
+  normal test runs remain silent apart from GoogleTest output.
 
 ## Commands
 

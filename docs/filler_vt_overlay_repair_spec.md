@@ -206,7 +206,7 @@ opto: engine.precheck()                      [mutation 前;只查 gap/overlap]
 opto: engine.repair(targetCell, newMaster)   [pre-commit,不调 precheck]
   → final checker: target overlay + empty filler changes
   → 无 violation: success + empty FillerChanges
-  → 有 violation: internal::PlannerEngine
+  → 有 violation: internal::FillerRepairPlanner
        → internal PlacementView/ImplantOverlayChecker protocol
        → final checker ordered CheckResult batches
   → RepairOutcome(ipl::FillerChanges)
@@ -215,7 +215,7 @@ opto/infrastructure: commit
 
 view/oracle/wire 转换全部是 `FillerRepairEngine.cpp` 的 private
 implementation。planner-only `OverlayCheckRequest`/`CheckStatus`/`requestId`
-abstraction 位于 `OracleGate.h`,只供 `internal::PlannerEngine` 与 unit-test
+abstraction 位于 `OracleGate.h`,只供 `internal::FillerRepairPlanner` 与 unit-test
 fake 使用。production 签名只使用 final checker 的 `ipl::CheckResult`、
 `ipl::Diagnostic`、`ipl::FillerChanges`、`FillerCellRecord`。`init()` 成功前,
 `precheck()`/`repair()` 一律 fail-closed。
@@ -516,6 +516,8 @@ master 序列)可铺满该宽度"。第一版实现建议内部就按宽度建�
 
 ```cpp
 FillerRepairEngine(Grid* grid, Network* network);
+
+void setDebugLogging(bool enabled);  // optional [fr][stage], default false
 
 bool init(PhysDesMgr* desMgr,
           const ImplantLayerChecker* checker,
@@ -876,13 +878,19 @@ baseline result 摘要;final result 是否 checked/legal/delta-clean 与 returne
 violation 数;best overlay 及其分类(residual original / new inside-window /
 related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举。
 
+`setDebugLogging(true)` 额外输出 deterministic `[fr][stage]` transcript:
+`planner` 记录 request/config/final decision,`normalize` 记录 signature 输入,
+`window` 记录 L0/adaptive-L1 方向与增量,`swapgen`/`rank`/`enumerate` 记录候选空间,
+`gate` 记录 baseline、batch、cache、budget 与 best candidate。默认关闭;开启只增加
+可观测性,不改变排序、预算或 accept 结果。
+
 ---
 
 ## 10. 测试集
 
-当前 87 个 pure-planner cases 已转换为独立 GoogleTests,使用 isolated planner
+当前 81 个 pure-planner cases 已转换为独立 GoogleTests,使用 isolated planner
 test doubles;integration GoogleTest 只 fake UDM 数据,使用 supplied Network/Grid、
-final checker 与 production FillerRepairEngine。完整 CTest 共 88 项。
+final checker 与 production FillerRepairEngine。6 个 E2E,完整 CTest 共 87 项。
 
 fake UDM 与真实 UDM 使用相同 namespace、type name、method signature 和测试所需
 placement 行为。`src/dpl2/test/CMakeLists.txt` 的 `dpl2_test_udm` interface target
@@ -955,7 +963,7 @@ gate 语义:
   `RepairInfrastructure` 从 PhysDesMgr 构建 snapshot;fake-UDM-only GoogleTest
   E2E 与 standalone CMake/CTest 接入;编译清单唯一定义在
   `src/fillerRepair/sources.cmake`。
-- 81 个 planner unit tests + 5 个 production E2E tests 全为 GoogleTest;
+- 81 个 planner unit tests + 6 个 production E2E tests 全为 GoogleTest;
   precheck/repair 均 non-mutating;production 交付只含 fillerRepair,
   supplied infrastructure/checker 零修改。普通版和 ASan 全绿。
   详见 `src/dpl2/HandOff.md` 与 `src/fillerRepair/test/TestPlan.md`。

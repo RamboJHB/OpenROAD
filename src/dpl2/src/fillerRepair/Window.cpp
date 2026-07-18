@@ -229,12 +229,21 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
     growLeft = true;
     growRight = true;
   }
+  log.msg("window",
+          cat("expand from L", current.level, ": blocking=",
+              blocking.size(), " direction=",
+              growLeft ? "left" : "",
+              growLeft && growRight ? "+" : "",
+              growRight ? "right" : "", " stepPerRow=",
+              std::max(1, fillersPerRow)));
 
   const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);
   const XInterval anchorSpan{
       anchor.x,
       anchor.x + (anchorMaster != nullptr ? anchorMaster->width : 0)};
   const int step = std::max(1, fillersPerRow);
+  int addedLeftTotal = 0;
+  int addedRightTotal = 0;
 
   for (const RowId rowId : rowSet) {
     const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
@@ -276,6 +285,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
         leftFrontier = span.xl;
         x.xl = std::min(x.xl, span.xl);
         ++added;
+        ++addedLeftTotal;
       }
     }
     if (growRight) {
@@ -295,9 +305,16 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
         rightFrontier = span.xh;
         x.xh = std::max(x.xh, span.xh);
         ++added;
+        ++addedRightTotal;
       }
     }
   }
+
+  log.msg("window",
+          cat("adaptive step L", current.level, " -> L",
+              current.level + 1, " addedLeft=", addedLeftTotal,
+              " addedRight=", addedRightTotal, " editableTotal=",
+              editable.size()));
 
   return finalizeWindow(current.level + 1,
                         rowSet,

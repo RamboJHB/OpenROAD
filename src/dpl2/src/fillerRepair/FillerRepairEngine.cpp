@@ -14,7 +14,7 @@
 #include "Log.h"
 #include "OracleGate.h"
 #include "PlacementView.h"
-#include "PlannerEngine.h"
+#include "FillerRepairPlanner.h"
 #include "infrastructure/Grid.h"
 #include "infrastructure/Objects.h"
 #include "infrastructure/fillerSetting.h"
@@ -57,6 +57,12 @@ class ProductionView final : public PlacementView,
                  Config config);
 
   bool isReady() const;
+  void setDebugLogging(bool enabled)
+  {
+    config_.verbose = enabled;
+    config_.repair.verbose = enabled;
+    log_.setEnabled(enabled);
+  }
   const std::vector<Diagnostic>& setupDiagnostics() const
   {
     return setup_diagnostics_;
@@ -901,7 +907,7 @@ PlannedOutcome ProductionView::repair(eUNL::LeafCellID targetCell,
   FillerRepairRequest request;
   request.targetPlace = target;
   request.violations = snapshot.violations;
-  internal::PlannerEngine planner(*this, *this, config_.repair);
+  internal::FillerRepairPlanner planner(*this, *this, config_.repair);
   const FillerRepairResult planned = planner.repair(request);
 
   result.hasSolution = planned.hasSolution;
@@ -1113,10 +1119,21 @@ class FillerRepairEngine::Impl
         || checker_ == nullptr || filler_setting_ == nullptr) {
       return false;
     }
+    ProductionView::Config config;
+    config.verbose = debug_logging_;
+    config.repair.verbose = debug_logging_;
     view_ = std::make_unique<ProductionView>(
-        des_mgr_, grid_, network_, checker_, filler_setting_);
+        des_mgr_, grid_, network_, checker_, filler_setting_, config);
     initialized_ = view_->isReady();
     return initialized_;
+  }
+
+  void setDebugLogging(bool enabled)
+  {
+    debug_logging_ = enabled;
+    if (view_ != nullptr) {
+      view_->setDebugLogging(enabled);
+    }
   }
 
   ipl::CheckResult precheck() const
@@ -1181,6 +1198,7 @@ class FillerRepairEngine::Impl
   const ipl::ImplantLayerChecker* checker_ = nullptr;
   const fillerSetting* filler_setting_ = nullptr;
   std::unique_ptr<ProductionView> view_;
+  bool debug_logging_ = false;
   // True only after a fully successful init(); every public API fails closed
   // until then (a half-built snapshot must never answer queries).
   bool initialized_ = false;
@@ -1193,6 +1211,11 @@ FillerRepairEngine::FillerRepairEngine(Grid* grid, Network* network)
 }
 
 FillerRepairEngine::~FillerRepairEngine() = default;
+
+void FillerRepairEngine::setDebugLogging(bool enabled)
+{
+  impl_->setDebugLogging(enabled);
+}
 
 bool FillerRepairEngine::init(eUNL::PhysDesMgr* desMgr,
                               const ipl::ImplantLayerChecker* checker,

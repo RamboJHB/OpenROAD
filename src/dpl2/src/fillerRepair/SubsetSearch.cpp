@@ -3,7 +3,7 @@
 
 #include "SubsetSearch.h"
 
-#include "PlannerEngine.h"
+#include "FillerRepairPlanner.h"
 
 #include <algorithm>
 #include <functional>
@@ -35,6 +35,9 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
 {
   EnumerationPlan plan;
   if (ranked.empty() || budget <= 0) {
+    log.msg("enumerate",
+            cat("skip enumeration: domains=", ranked.size(),
+                " budget=", budget));
     return plan;
   }
 
@@ -109,7 +112,15 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   };
 
   for (int size = 1; size <= maxSize && !budgetHit; ++size) {
-    choose(size, 0, memberCap(size));
+    const size_t before = plan.overlays.size();
+    const int cap = memberCap(size);
+    choose(size, 0, cap);
+    // Per-size accounting makes it obvious when a large-window member cap or
+    // the checker budget, rather than the legality oracle, removed candidates.
+    log.msg("enumerate",
+            cat("subsetSize=", size, " memberPrefix=", cap, '/',
+                fillerTotal, " -> emitted=", plan.overlays.size() - before,
+                budgetHit ? " (budget reached)" : ""));
   }
   // Reaching the budget on the final element is still a complete search.
   // Derive completeness from what was actually emitted so space == budget

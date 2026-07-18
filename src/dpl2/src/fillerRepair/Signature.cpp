@@ -48,6 +48,7 @@ std::vector<NormalizedViolation> normalizeViolations(
 {
   std::vector<NormalizedViolation> result;
   result.reserve(request.violations.size());
+  int rowFallbacks = 0;
 
   for (size_t i = 0; i < request.violations.size(); ++i) {
     const Violation& raw = request.violations[i];
@@ -60,6 +61,7 @@ std::vector<NormalizedViolation> normalizeViolations(
     if (nv.rowIds.empty()) {
       nv.rowIds = {request.targetPlace.rowId};
       nv.rowIdFallback = true;
+      ++rowFallbacks;
     }
 
     // Footprint: xWindow united with every participant's x range.
@@ -98,6 +100,9 @@ std::vector<NormalizedViolation> normalizeViolations(
     result.push_back(std::move(nv));
   }
 
+  log.msg("normalize",
+          cat("normalized ", result.size(), " violation(s); rowFallbacks=",
+              rowFallbacks, " anchor=", request.targetPlace.instanceId));
   (void) view;  // reserved for participant lookups when checker data is thin
   return result;
 }

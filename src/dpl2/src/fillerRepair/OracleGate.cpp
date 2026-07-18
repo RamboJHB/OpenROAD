@@ -3,7 +3,7 @@
 
 #include "OracleGate.h"
 
-#include "PlannerEngine.h"
+#include "FillerRepairPlanner.h"
 
 #include <algorithm>
 #include <set>
@@ -86,12 +86,16 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
     log_.msg("gate", cat("baseline cache hit for guard ", show(guard)));
   } else {
     if (budget <= 0) {
+      log_.msg("gate", "baseline skipped: checker budget is exhausted");
       return false;
     }
     OverlayCheckRequest request;
     request.requestId = next_request_id_++;
     request.targetPlace = anchor_;
     request.guardRegion = guard;
+    log_.msg("gate",
+             cat("baseline send id=", request.requestId, " guard=",
+                 show(guard), " budgetBefore=", budget));
     const CheckResult result = checker_.checkPlaceWithOverlay(request);
     ++requests_sent_;
     --budget;
@@ -101,6 +105,11 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
           cat("baseline echoed id ", result.requestId, " != ", request.requestId)));
       return false;
     }
+    log_.msg("gate",
+             cat("baseline recv id=", result.requestId, " status=",
+                 static_cast<int>(result.status), " legal=", result.isLegal,
+                 " violations=", result.violations.size(), " diagnostics=",
+                 result.diagnostics.size(), " budgetAfter=", budget));
     it = cache_.emplace(key, result).first;
   }
 
@@ -274,11 +283,18 @@ const CheckResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
   // Send everything in the chunk that is not cached yet as one batch.
   std::vector<OverlayCheckRequest> requests;
   std::vector<std::string> keys;
+  int cachedInChunk = 0;
+  int skippedForBudget = 0;
+  const int budgetBefore = budget;
   for (const Overlay& overlay : chunk) {
     const std::string key = cacheKey(guard, overlay);
-    if (cache_.count(key) > 0 || budget <= 0) {
-      if (cache_.count(key) > 0) {
+    const bool cached = cache_.count(key) > 0;
+    if (cached || budget <= 0) {
+      if (cached) {
         ++cache_hits_;
+        ++cachedInChunk;
+      } else {
+        ++skippedForBudget;
       }
       continue;
     }
@@ -292,6 +308,11 @@ const CheckResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
     --budget;
   }
   if (!requests.empty()) {
+    log_.msg("gate",
+             cat("batch send: chunk=", chunk.size(), " uncached=",
+                 requests.size(), " cached=", cachedInChunk,
+                 " skippedForBudget=", skippedForBudget, " guard=",
+                 show(guard), " budget ", budgetBefore, " -> ", budget));
     const std::vector<CheckResult> results =
         checker_.checkPlaceWithOverlays(requests);
     ++batches_sent_;
@@ -305,6 +326,9 @@ const CheckResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
           cat("batch returned ", results.size(), " result(s) for ",
               requests.size(), " request(s)")));
       protocolError = true;
+      log_.msg("gate",
+               cat("batch protocol error: results=", results.size(),
+                   " requests=", requests.size()));
       return nullptr;
     }
     std::map<OverlayRequestId, const CheckResult*> byId;
@@ -313,6 +337,8 @@ const CheckResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
         diagnostics_.push_back(makeDiag(Severity::Fatal, "CheckerProtocolError",
                                         cat("duplicate requestId ", result.requestId)));
         protocolError = true;
+        log_.msg("gate",
+                 cat("batch protocol error: duplicate id=", result.requestId));
         return nullptr;
       }
     }
@@ -323,10 +349,21 @@ const CheckResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
                                         cat("missing result for requestId ",
                                             requests[i].requestId)));
         protocolError = true;
+        log_.msg("gate",
+                 cat("batch protocol error: missing id=",
+                     requests[i].requestId));
         return nullptr;
       }
       cache_.emplace(keys[i], *it->second);
     }
+    log_.msg("gate",
+             cat("batch recv: results=", results.size(), " cacheSize=",
+                 cache_.size(), " requestsTotal=", requests_sent_,
+                 " batchesTotal=", batches_sent_));
+  } else {
+    log_.msg("gate",
+             cat("batch avoided: chunk=", chunk.size(), " cached=",
+                 cachedInChunk, " skippedForBudget=", skippedForBudget));
   }
   return baseline_;  // non-null marker; per-overlay lookup goes via cache_
 }
@@ -337,6 +374,10 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
                                             int& budget)
 {
   SearchResult sr;
+  log_.msg("gate",
+           cat("search start: candidates=", candidates.size(), " batchSize=",
+               config_.batchSize, " budget=", budget, " window=",
+               show(window.area()), " guard=", show(guard)));
 
   size_t next = 0;
   while (next < candidates.size()) {
@@ -383,6 +424,14 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
         sr.hasBest = true;
         sr.bestOverlay = candidates[i];
         sr.bestSummary = summary;
+        log_.msg("gate",
+                 cat("best candidate #", i, " swaps=", candidates[i].size(),
+                     " usable=", summary.usable,
+                     " inconsistent=", summary.inconsistent,
+                     " residual=", summary.residualOriginals,
+                     " newInWindow=", summary.newInWindow,
+                     " relatedInHalo=", summary.relatedInHalo,
+                     " unrelatedInHalo=", summary.unrelatedInHalo));
       }
     }
     next = chunkEnd;
@@ -391,6 +440,10 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
       break;
     }
   }
+  log_.msg("gate",
+           cat("search end: clean=false best=", sr.hasBest,
+               " budgetExhausted=", sr.budgetExhausted,
+               " budgetRemaining=", budget));
   return sr;
 }
 

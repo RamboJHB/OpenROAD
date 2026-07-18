@@ -10,6 +10,7 @@ sources is patched.
 
 ```cpp
 FillerRepairEngine engine(grid, network);
+engine.setDebugLogging(true);  // optional [fr][stage] transcript
 engine.init(desMgr, checker, fillerSetting);
 
 ipl::CheckResult placement = engine.precheck();  // opto calls before mutation
@@ -31,13 +32,23 @@ opto/infrastructure.
 |---|---|
 | `FillerRepairEngine.h/.cpp` | production API, private view/oracle conversion, precheck and repair |
 | `RepairInfrastructure.h/.cpp` | builds the production Network/Grid snapshot from PhysDesMgr |
-| `PlannerEngine.h/.cpp` | internal deterministic search pipeline |
+| `FillerRepairPlanner.h/.cpp` | internal deterministic search pipeline and debug transcript |
 | `OracleGate.h/.cpp` | internal checker abstraction, batching, cache and baseline-delta gate |
 | `PlacementView.h/.cpp` | planner-only read view and candidate filter |
 | `Types.h` | planner-internal IDs, geometry and request/result types |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
 | `sources.cmake` | single source-of-truth compile lists (planner / production) |
 | `fake/` | planner unit-test doubles; never linked into production/E2E |
+
+## Debug transcript
+
+Debug output is disabled by default. Production callers may call
+`engine.setDebugLogging(true)` before or after `init()`; planner tests use
+`FR_VERBOSE=1 test/run_tests.sh`. The deterministic transcript is printed as
+`[fr][stage]` lines and records the request/configuration, normalized
+violations, L0/adaptive-L1 windows, emitted swaps, ranked filler domains,
+subset counts, checker batches/cache/budget, best non-clean candidate and the
+final decision. Logging never changes search order or acceptance.
 
 Planner `OverlayCheckRequest`, `CheckStatus` and requestId stay internal to
 `OracleGate`; the public API uses final checker `CheckResult`, `Diagnostic`,

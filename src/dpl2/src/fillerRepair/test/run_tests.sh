@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds and runs the 87 GoogleTest planner cases.
+# Builds and runs the 81 GoogleTest planner cases.
 # Usage: test/run_tests.sh
 #        FR_VERBOSE=1 test/run_tests.sh
 #        test/run_tests.sh --gtest_filter='FillerRepairPlanner.*adaptive*'

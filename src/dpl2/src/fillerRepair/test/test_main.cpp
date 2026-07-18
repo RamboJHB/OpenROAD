@@ -19,7 +19,7 @@
 
 #include <gtest/gtest.h>
 
-#include "../PlannerEngine.h"
+#include "../FillerRepairPlanner.h"
 #include "../Swap.h"
 #include "../Signature.h"
 #include "../OracleGate.h"
@@ -210,7 +210,7 @@ void testPlannerDoesNotRunPlacementPrecheck()
   fr::FakeImplantChecker checker(f.design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(f.design, checker, config);
+  fr::internal::FillerRepairPlanner engine(f.design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(f.design, f.anchor);
@@ -425,7 +425,7 @@ void testEngineSolvesWithUdmProvider()
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   const auto result = engine.repair(request);
   EXPECT_TRUE(result.hasSolution);
@@ -1105,7 +1105,7 @@ void testEngineNoEditableFillerZeroCalls()
   fr::FakeImplantChecker checker(design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
@@ -1122,7 +1122,7 @@ void testEngineNoEditableFillerZeroCalls()
 class ReentrantChecker : public fr::ImplantOverlayChecker
 {
  public:
-  fr::internal::PlannerEngine* engine = nullptr;
+  fr::internal::FillerRepairPlanner* engine = nullptr;
   const fr::FillerRepairRequest* request = nullptr;
   fr::Violation original;
   fr::FillerRepairResult inner;
@@ -1177,7 +1177,7 @@ void testEngineReentrantRepairRefused()
   checker.original = original;
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
   checker.engine = &engine;
   checker.request = &request;
 
@@ -1199,7 +1199,7 @@ void testEngineEmptySnapshotIsSuccess()
   fr::FakeImplantChecker checker(f.design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(f.design, checker, config);
+  fr::internal::FillerRepairPlanner engine(f.design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(f.design, f.anchor);
@@ -1725,7 +1725,7 @@ void testEngineSolvesSingleSwap()
   fr::FakeImplantChecker checker(sc.design, sc.rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(sc.design, checker, config);
+  fr::internal::FillerRepairPlanner engine(sc.design, checker, config);
 
   const auto result = engine.repair(sc.request);
   EXPECT_TRUE(result.hasSolution);
@@ -1738,7 +1738,7 @@ void testEngineSolvesSingleSwap()
 
   // Determinism: same input -> identical outcome and identical call count.
   fr::FakeImplantChecker checker2(sc.design, sc.rules);
-  fr::internal::PlannerEngine engine2(sc.design, checker2, config);
+  fr::internal::FillerRepairPlanner engine2(sc.design, checker2, config);
   const auto result2 = engine2.repair(sc.request);
   EXPECT_TRUE(result2.hasSolution);
   EXPECT_EQ(result2.changes.size(), result.changes.size());
@@ -1779,7 +1779,7 @@ void testEngineSolvesPairNonMonotone()
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   const auto result = engine.repair(request);
   EXPECT_TRUE(result.hasSolution);
@@ -1928,7 +1928,7 @@ void testEngineComplexRankedPairFast()
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(
+  fr::internal::FillerRepairPlanner engine(
       fixture.design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(fixture.request);
@@ -1953,7 +1953,7 @@ void testEngineComplexRankedPairFast()
   RequiredChangesChecker checkerAgain;
   checkerAgain.originals = fixture.request.violations;
   checkerAgain.required = checker.required;
-  fr::internal::PlannerEngine engineAgain(
+  fr::internal::FillerRepairPlanner engineAgain(
       fixture.design, checkerAgain, config);
   const fr::FillerRepairResult again = engineAgain.repair(fixture.request);
   EXPECT_TRUE(again.hasSolution);
@@ -1983,7 +1983,7 @@ void testEngineComplexThirdVtStillSucceeds()
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(
+  fr::internal::FillerRepairPlanner engine(
       fixture.design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(fixture.request);
@@ -2044,7 +2044,7 @@ void testEngineIgnoresUnrelatedHaloViolation()
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   const auto result = engine.repair(request);
   // The pre-existing VT3 MW sits in the baseline of the same guard region;
@@ -2078,7 +2078,7 @@ void testEngineNoSolutionDefinitive()
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   const auto result = engine.repair(request);
   EXPECT_TRUE(!result.hasSolution);
@@ -2157,7 +2157,7 @@ void testEngineDetectsProtocolError()
   MisbehavingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(sc.design, checker, config);
+  fr::internal::FillerRepairPlanner engine(sc.design, checker, config);
 
   const auto result = engine.repair(sc.request);
   EXPECT_TRUE(!result.hasSolution);
@@ -2197,7 +2197,7 @@ void testEngineOrderIndependentBatches()
   ReversingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(sc.design, checker, config);
+  fr::internal::FillerRepairPlanner engine(sc.design, checker, config);
 
   const auto result = engine.repair(sc.request);
   EXPECT_TRUE(result.hasSolution);
@@ -2269,14 +2269,14 @@ void testEngineBatchSizeInvariance()
   fr::RepairConfig one;
   one.batchSize = 1;
   one.verbose = verbose();
-  fr::internal::PlannerEngine engineOne(sc.design, checkerOne, one);
+  fr::internal::FillerRepairPlanner engineOne(sc.design, checkerOne, one);
   const auto resultOne = engineOne.repair(sc.request);
 
   fr::FakeImplantChecker checkerMany(sc.design, sc.rules);
   fr::RepairConfig many;
   many.batchSize = 32;
   many.verbose = verbose();
-  fr::internal::PlannerEngine engineMany(sc.design, checkerMany, many);
+  fr::internal::FillerRepairPlanner engineMany(sc.design, checkerMany, many);
   const auto resultMany = engineMany.repair(sc.request);
 
   EXPECT_TRUE(resultOne.hasSolution == resultMany.hasSolution);
@@ -2291,11 +2291,11 @@ void testEngineDeterminismFullTranscript()
   config.verbose = verbose();
 
   fr::FakeImplantChecker checkerA(sc.design, sc.rules);
-  fr::internal::PlannerEngine engineA(sc.design, checkerA, config);
+  fr::internal::FillerRepairPlanner engineA(sc.design, checkerA, config);
   const auto resultA = engineA.repair(sc.request);
 
   fr::FakeImplantChecker checkerB(sc.design, sc.rules);
-  fr::internal::PlannerEngine engineB(sc.design, checkerB, config);
+  fr::internal::FillerRepairPlanner engineB(sc.design, checkerB, config);
   const auto resultB = engineB.repair(sc.request);
 
   EXPECT_TRUE(resultA.hasSolution == resultB.hasSolution);
@@ -2326,7 +2326,7 @@ void testEngineNeverEditsGuardOnly()
   RecordingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(sc.design, checker, config);
+  fr::internal::FillerRepairPlanner engine(sc.design, checker, config);
   const auto result = engine.repair(sc.request);
 
   EXPECT_TRUE(result.hasSolution);
@@ -2725,7 +2725,7 @@ void testEngineBudgetCeiling()
   fr::RepairConfig config;
   config.checkerCallBudgetPerWindow = 3;  // baseline + exact two-option space
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   const auto result = engine.repair(request);
   EXPECT_TRUE(!result.hasSolution);
@@ -2805,7 +2805,7 @@ void testEngineAdaptiveSolvesBeyondRing()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   const auto result = engine.repair(request);
   EXPECT_TRUE(result.hasSolution);
@@ -2857,7 +2857,7 @@ void testEngineAdaptiveL1FindsFarFiller()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(request);
   EXPECT_TRUE(result.hasSolution);
@@ -2905,7 +2905,7 @@ void testEngineAdaptiveCutoffUnchangedBlocking()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   const fr::FillerRepairResult result = engine.repair(request);
   EXPECT_TRUE(!result.hasSolution);
@@ -2958,7 +2958,7 @@ void testEngineDefinitiveReflectsLastWindow()
   // L0 (1 filler, space 2) fits; adaptive step (7 fillers) far exceeds 50.
   config.checkerCallBudgetPerWindow = 50;
   config.adaptiveStepFillers = 6;
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   const auto result = engine.repair(request);
   EXPECT_TRUE(!result.hasSolution);
@@ -3507,7 +3507,7 @@ void testEngineUserGridMwMs1()
   fr::FakeImplantChecker checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::PlannerEngine engine(design, checker, config);
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchor;
@@ -3527,7 +3527,7 @@ void testEngineUserGridMwMs1()
 
   // Same input -> identical result (planner determinism).
   fr::FakeImplantChecker checker2(design, rules);
-  fr::internal::PlannerEngine engine2(design, checker2, config);
+  fr::internal::FillerRepairPlanner engine2(design, checker2, config);
   const auto result2 = engine2.repair(request);
   EXPECT_TRUE(result2.hasSolution);
   EXPECT_EQ(result2.changes.size(), 1u);

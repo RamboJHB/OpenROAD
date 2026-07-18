@@ -43,11 +43,13 @@ class DebugLog
   explicit DebugLog(bool enabled = false) : enabled_(enabled) {}
 
   bool enabled() const { return enabled_; }
+  void setEnabled(bool enabled) { enabled_ = enabled; }
 
   void msg(const char* stage, const std::string& text) const
   {
     if (enabled_) {
       std::printf("[fr][%s] %s\n", stage, text.c_str());
+      std::fflush(stdout);
     }
   }
 
