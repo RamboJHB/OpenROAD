@@ -132,7 +132,7 @@ RowFixture makeCoveredRow()
 
 fr::Region wholeDesignRegion()
 {
-  // Generous region: all rows, all x. Windowing (TODO 5) will narrow this.
+  // Generous region: all rows, all x (window tests narrow this themselves).
   return fr::Region{fr::XInterval{-1000, 1000}, 0, 100};
 }
 
@@ -147,7 +147,7 @@ fr::TargetPlace anchorPlace(const fr::FakeDesign& design, fr::InstanceId id)
   return place;
 }
 
-// --- TODO 1: Swap primitives -------------------------------------------------
+// --- Swap primitives ---------------------------------------------------------
 
 void testSwapConstruction()
 {
@@ -202,136 +202,6 @@ void testWireConversion()
   EXPECT_EQ(changes[1].newMasterId, fillerMaster(2, kVt2));
 }
 
-// --- TODO 3: utility pre-check ----------------------------------------------
-
-void testPreCheckFullUtility()
-{
-  RowFixture f = makeCoveredRow();
-  const auto coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
-  EXPECT_TRUE(coverage.isFullUtility);
-  EXPECT_TRUE(coverage.issues.empty());
-}
-
-void testPreCheckGap()
-{
-  RowFixture f = makeCoveredRow();
-  f.design.remove(101);  // hole [4,6)
-
-  const auto coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
-  EXPECT_TRUE(!coverage.isFullUtility);
-  EXPECT_EQ(coverage.issues.size(), 1u);
-  EXPECT_TRUE(coverage.issues[0].kind == fr::CoverageIssueKind::Gap);
-  EXPECT_EQ(coverage.issues[0].rowId, 0);
-  EXPECT_EQ(coverage.issues[0].xLo, 4);
-  EXPECT_EQ(coverage.issues[0].xHi, 6);
-  EXPECT_EQ(coverage.issues[0].siteCount, 2);
-}
-
-void testPreCheckOnlyGapOverlap()
-{
-  RowFixture f = makeCoveredRow();
-  // Overlap: extra filler on top of [4,6).
-  f.design.place(300, fillerMaster(2, kVt2), 0, 5);
-  auto coverage = f.design.checkSiteCoverage(fr::DebugLog(verbose()));
-  EXPECT_TRUE(!coverage.isFullUtility);
-  bool sawOverlap = false;
-  for (const auto& issue : coverage.issues) {
-    sawOverlap |= issue.kind == fr::CoverageIssueKind::Overlap;
-  }
-  EXPECT_TRUE(sawOverlap);
-  for (const auto& diagnostic : coverage.diagnostics) {
-    EXPECT_TRUE(diagnostic.severity == fr::Severity::Warning);
-    EXPECT_TRUE(diagnostic.code == "Gap" || diagnostic.code == "Overlap");
-  }
-}
-
-bool sameCoverageIssues(const std::vector<fr::CoverageIssue>& a,
-                        const std::vector<fr::CoverageIssue>& b)
-{
-  if (a.size() != b.size()) {
-    return false;
-  }
-  for (size_t i = 0; i < a.size(); ++i) {
-    if (a[i].kind != b[i].kind || a[i].rowId != b[i].rowId
-        || a[i].xLo != b[i].xLo || a[i].xHi != b[i].xHi
-        || a[i].siteCount != b[i].siteCount
-        || a[i].instances != b[i].instances) {
-      return false;
-    }
-  }
-  return true;
-}
-
-void testPreCheckMultiRowIssuesDeterministic()
-{
-  // Vt Type: 1 | Widths: {2,4} | cell type: 0=filler
-  // Row 2 has [2,4) uncovered; row 5 has [4,8) uncovered.
-  fr::FakeDesign design = makeLibrary();
-  design.addRow(2, 0, 8)
-      .place(200, fillerMaster(2, kVt1), 2, 0)
-      .place(201, fillerMaster(4, kVt1), 2, 4)
-      .addRow(5, 0, 8)
-      .place(500, fillerMaster(4, kVt1), 5, 0);
-
-  const auto first = design.checkSiteCoverage(fr::DebugLog(verbose()));
-  const auto second = design.checkSiteCoverage(fr::DebugLog(verbose()));
-  EXPECT_TRUE(!first.isFullUtility);
-  EXPECT_TRUE(sameCoverageIssues(first.issues, second.issues));
-  EXPECT_EQ(first.issues.size(), 2u);
-  if (first.issues.size() != 2) {
-    return;
-  }
-  EXPECT_EQ(first.issues[0].rowId, 2);
-  EXPECT_TRUE(first.issues[0].kind == fr::CoverageIssueKind::Gap);
-  EXPECT_TRUE(first.issues[0].xLo == 2 && first.issues[0].xHi == 4);
-  EXPECT_EQ(first.issues[1].rowId, 5);
-  EXPECT_TRUE(first.issues[1].xLo == 4 && first.issues[1].xHi == 8);
-}
-
-void testPreCheckGapAtRowEdges()
-{
-  // Vt Type: 1 | Widths: {4} | cell type: 0=filler
-  // Row 0: gap[0,2), filler[2,6), gap[6,8).
-  fr::FakeDesign design = makeLibrary();
-  design.addRow(0, 0, 8).place(100, fillerMaster(4, kVt1), 0, 2);
-
-  const auto coverage = design.checkSiteCoverage(fr::DebugLog(verbose()));
-  EXPECT_EQ(coverage.issues.size(), 2u);
-  if (coverage.issues.size() != 2) {
-    return;
-  }
-  EXPECT_TRUE(coverage.issues[0].kind == fr::CoverageIssueKind::Gap);
-  EXPECT_EQ(coverage.issues[0].xLo, 0);
-  EXPECT_EQ(coverage.issues[0].xHi, 2);
-  EXPECT_EQ(coverage.issues[0].siteCount, 2);
-  EXPECT_TRUE(coverage.issues[1].kind == fr::CoverageIssueKind::Gap);
-  EXPECT_EQ(coverage.issues[1].xLo, 6);
-  EXPECT_EQ(coverage.issues[1].xHi, 8);
-  EXPECT_EQ(coverage.issues[1].siteCount, 2);
-}
-
-void testPreCheckOverlapThreeInstances()
-{
-  // Vt Type: {1,2,3} | Widths: {4} | cell type: 0=filler
-  // Three fillers occupy the same [0,4) segment.
-  fr::FakeDesign design = makeLibrary();
-  design.addRow(0, 0, 4)
-      .place(102, fillerMaster(4, kVt1), 0, 0)
-      .place(100, fillerMaster(4, kVt2), 0, 0)
-      .place(101, fillerMaster(4, kVt3), 0, 0);
-
-  const auto coverage = design.checkSiteCoverage(fr::DebugLog(verbose()));
-  EXPECT_EQ(coverage.issues.size(), 1u);
-  if (coverage.issues.size() != 1) {
-    return;
-  }
-  const auto& overlap = coverage.issues.front();
-  EXPECT_TRUE(overlap.kind == fr::CoverageIssueKind::Overlap);
-  EXPECT_EQ(overlap.xLo, 0);
-  EXPECT_EQ(overlap.xHi, 4);
-  EXPECT_TRUE(overlap.instances == (std::vector<fr::InstanceId>{100, 101, 102}));
-}
-
 void testPlannerDoesNotRunPlacementPrecheck()
 {
   RowFixture f = makeCoveredRow();
@@ -354,7 +224,7 @@ void testPlannerDoesNotRunPlacementPrecheck()
   EXPECT_EQ(checker.requestCount(), 0);
 }
 
-// --- TODO 2: fake candidate provider ----------------------------------------
+// --- Fake candidate provider -------------------------------------------------
 
 void testCandidateProvider()
 {
@@ -564,7 +434,7 @@ void testEngineSolvesWithUdmProvider()
   EXPECT_EQ(result.changes[0].newMasterId, 21);  // w2 VTL
 }
 
-// --- TODO 2: fake checker protocol -------------------------------------------
+// --- Fake checker protocol ---------------------------------------------------
 
 // Two rows, anchor std cell at row0 whose VT2 conflicts with a VT2 filler in
 // row1 below it (inter-row MS), plus everything else VT1. Recoloring the
@@ -759,7 +629,7 @@ void testCheckerTargetOverrideSeedsViolation()
 }
 
 
-// --- TODO 4: normalization + signature ---------------------------------------
+// --- Normalization + signature -----------------------------------------------
 
 // Hand-built violation matching the inter-row MW shape of the fake checker.
 fr::Violation makeViolation(int ruleId,
@@ -903,7 +773,7 @@ void testRelatedness()
   EXPECT_TRUE(!fr::isRelatedToOverlay(farRow, overlay, 1));
 }
 
-// --- TODO 5: window builder + guard --------------------------------------
+// --- Window builder + guard --------------------------------------------------
 
 // Two-row fixture (ScenarioA): anchor std cell 102 [10,14) row0; the VT2
 // bridge filler 203 [9,11) row1 sits under it. When opto changes 102 to VT2,
@@ -1340,7 +1210,7 @@ void testEngineEmptySnapshotIsSuccess()
 }
 
 
-// --- TODO 6: swap generator ---------------------------------------------------
+// --- Swap generator ----------------------------------------------------------
 
 void testSwapGeneratorBasic()
 {
@@ -1448,7 +1318,7 @@ void testSwapgenRejectedCandidateDiag()
 }
 
 
-// --- TODO 7-10: ranker, enumeration, oracle gate, end-to-end -----------------
+// --- Ranker, enumeration, oracle gate, end-to-end ----------------------------
 
 // Scenario A (inter-row MW): anchor 102 changes VT1->VT2, bridging filler
 // 203 (VT2, [9,11) row1) now overlaps the anchor shape by 1 < mwInter=2.
@@ -3670,13 +3540,6 @@ void registerPlannerTests()
       {"swap_construction", testSwapConstruction},
       {"canonical_key_order_independent", testCanonicalKeyOrderIndependent},
       {"wire_conversion", testWireConversion},
-      {"precheck_full_utility", testPreCheckFullUtility},
-      {"precheck_gap", testPreCheckGap},
-      {"precheck_only_gap_overlap", testPreCheckOnlyGapOverlap},
-      {"precheck_multi_row_issues_deterministic",
-       testPreCheckMultiRowIssuesDeterministic},
-      {"precheck_gap_at_row_edges", testPreCheckGapAtRowEdges},
-      {"precheck_overlap_three_instances", testPreCheckOverlapThreeInstances},
       {"planner_does_not_run_placement_precheck",
        testPlannerDoesNotRunPlacementPrecheck},
       {"candidate_provider", testCandidateProvider},

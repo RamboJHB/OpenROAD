@@ -32,15 +32,18 @@ opto/infrastructure.
 | `FillerRepairEngine.h/.cpp` | production API, private view/oracle conversion, precheck and repair |
 | `PlannerEngine.h/.cpp` | internal deterministic search pipeline |
 | `OracleGate.h/.cpp` | internal checker abstraction, batching, cache and baseline-delta gate |
-| `PlacementView.h/.cpp` | planner-only read view and gap/overlap coverage helper |
+| `PlacementView.h/.cpp` | planner-only read view and candidate filter |
 | `Types.h` | planner-internal IDs, geometry and request/result types |
-| `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | unchanged search stages |
+| `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
+| `sources.cmake` | single source-of-truth compile lists (planner / production) |
 | `fake/` | planner unit-test doubles; never linked into production/E2E |
 
-The production adapter directory and standalone `CheckerApi.h` are deleted.
 Planner `OverlayCheckRequest`, `CheckStatus` and requestId stay internal to
 `OracleGate`; the public API uses final checker `CheckResult`, `Diagnostic`,
-`FillerChanges` and `FillerCellRecord`.
+`FillerChanges` and `FillerCellRecord`. Destination builds compile
+`DPL2_FILLER_REPAIR_PRODUCTION_SOURCES` from `sources.cmake` (plus
+`infrastructure/RepairInfrastructure.cpp` when using the supplied snapshot
+builder) -- never a hand-copied file list.
 
 ## Verification
 
@@ -53,9 +56,9 @@ test/build_all.sh
 SANITIZE=address test/build_all.sh
 ```
 
-The 87 planner cases and E2E are GoogleTests. The test CMake selects fake UDM
-only through `dpl2_test_udm` include/link settings; the same source graph can
-use real UDM with:
+The 81 planner cases and 5 production E2E cases are GoogleTests. The test
+CMake selects fake UDM only through `dpl2_test_udm` include/link settings; the
+same source graph can use real UDM with:
 
 ```sh
 cmake -S test -B test/build/real-udm \
@@ -67,4 +70,4 @@ cmake -S test -B test/build/real-udm \
 No production source has a fake UDM dependency or compile-time branch. The E2E
 uses fake UDM as the test-data provider only; supplied infrastructure/checker
 and production fillerRepair compile with `-Wall -Wextra -Werror`. Current
-result: planner 87/87 and full CTest 88/88, normal+ASan.
+result: planner 81/81 and full CTest 86/86, normal+ASan.

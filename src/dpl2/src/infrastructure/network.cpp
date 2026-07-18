@@ -310,7 +310,7 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
   ndi.setId(id);
   ndi.setDbInst(cellId);
   // Filler predicate must match ImplantLayerChecker::initFromUDM's
-  // MasterInput.isFiller (isCoreFiller || isPadFiller) -- the repair adapter
+  // MasterInput.isFiller (isCoreFiller || isPadFiller) -- FillerRepairEngine
   // cross-checks the two flags per instance.
   ndi.setType(inst.getPhysMaster().getType().isCoreFiller()
                       || inst.getPhysMaster().getType().isPadFiller()

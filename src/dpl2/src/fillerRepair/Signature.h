@@ -2,7 +2,7 @@
 // Copyright (c) 2026, The OpenROAD Authors
 
 // Violation normalization, signature matching and change-relatedness
-// (spec section 6.2, TODO 4).
+// (spec section 6.2).
 //
 // The signature key is pinned by the spec -- the baseline-delta gate depends
 // on it, so no implementation freedom here:

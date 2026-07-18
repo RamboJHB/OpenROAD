@@ -21,10 +21,10 @@ ipl::CheckResult precheck() const;
 RepairOutcome repair(LeafCellID targetCell, const PhysLibCell& newMaster);
 ```
 
-Production callers no longer construct an adapter or planner PlacementView.
-`adapter/PlacementView.{h,cpp}` and `CheckerApi.h` were deleted. The production
-view/oracle/wire conversion lives in `FillerRepairEngine.cpp`; the old pure
-search pipeline is isolated as `internal::PlannerEngine`.
+The production view/oracle/wire conversion lives in `FillerRepairEngine.cpp`;
+the pure search pipeline is `internal::PlannerEngine`. `init()` must succeed
+before use: until it does, `precheck()` and `repair()` fail closed
+(`precheck_not_initialized` / `engine_not_initialized`).
 
 ## Required opto sequence
 
@@ -80,19 +80,20 @@ masters before checker/engine construction, including uninstantiated masters.
 
 ## Destination build wiring
 
-The destination has no supplied dpl2 CMake fragment, so its owner must add
-these fillerRepair production sources to the target that already owns
-Grid/Network/checker:
+The compile list is defined once in `src/fillerRepair/sources.cmake`:
 
-```text
-FillerRepairEngine.cpp  PlannerEngine.cpp  OracleGate.cpp
-PlacementView.cpp       Ranker.cpp          Signature.cpp
-SubsetSearch.cpp        Swap.cpp            Window.cpp
+```cmake
+include(src/fillerRepair/sources.cmake)
+target_sources(<owning-target> PRIVATE ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES})
 ```
 
-Do not add `fillerRepair/fake/*`, `fillerRepair/test/*`, or a fake UDM include
-path to a production target. No production source uses a fake/real UDM
-conditional; it includes the real UDM names already used by infra/checker.
+Add the list to the target that already owns Grid/Network/checker (plus
+`infrastructure/RepairInfrastructure.cpp` when using the supplied snapshot
+builder). Do not hand-copy file names -- the test harness includes the same
+file, so the two lists cannot drift. Do not add `fillerRepair/fake/*`,
+`fillerRepair/test/*`, or a fake UDM include path to a production target. No
+production source uses a fake/real UDM conditional; it includes the real UDM
+names already used by infra/checker.
 
 ## Build and verification
 
@@ -121,25 +122,30 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-All 87 planner cases and the E2E are GoogleTests. The E2E uses fake UDM only as
-test data and links supplied Grid/Network,
+All 81 planner cases and the 5 production E2E cases are GoogleTests. The E2E
+uses fake UDM only as test data and links supplied Grid/Network,
 RepairInfrastructure, final checker, FillerRepairEngine and internal planner.
-It covers clean/gap/overlap precheck, opto-blocking return values, deterministic
-repair, and byte-equivalent physical snapshots before/after both APIs.
+It covers clean/gap/overlap precheck, opto-blocking return values,
+deterministic repair, byte-equivalent physical snapshots before/after both
+APIs, persistent-checker-diagnostic stripping, configured-master/Network
+consistency, fail-closed behavior after failed init, and the first-non-pad-row
+origin baseline.
 
-2026-07-18 result: planner 87/87 normal and ASan; E2E normal and ASan; full
-CTest 88/88 normal and ASan; all targets passed Werror.
+2026-07-18 result: planner 81/81 normal and ASan; E2E normal and ASan; full
+CTest 86/86 normal and ASan; all targets passed Werror.
 
 ## Integration risks
 
 - Opto must honor the explicit precheck ordering; repair has no fallback gate.
 - Engine/Grid/Network/checker/PhysDesMgr must describe one design revision;
   rebuild after commit.
-- Destination build must add the nine fillerRepair sources listed above and
-  must not add the deleted adapter or standalone `CheckerApi.h`.
+- Destination build must consume `sources.cmake`; nothing else is part of the
+  production delivery.
 - Real-UDM verification still depends on the destination providing its UDM
   include directories and link libraries/targets; no code port remains.
-- Checker calls are serialized inside the engine because the checker const
-  overlay path updates counters.
+- Checker calls are serialized inside ONE engine because the checker const
+  overlay path updates counters. Sharing one checker across several engine
+  instances is NOT serialized -- use one checker per engine (or one engine per
+  thread over its own checker).
 - The public facade owns production translation; planner fake/checker types
   must remain outside production targets.

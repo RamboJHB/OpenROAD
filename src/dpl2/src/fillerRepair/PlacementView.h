@@ -22,8 +22,6 @@
 
 namespace dpl2::fillerRepair {
 
-class DebugLog;
-
 struct MasterInfo
 {
   MasterId id = 0;
@@ -87,7 +85,6 @@ class PlacementView
   virtual const std::vector<MasterId>& fillerMasterIds() const = 0;
   virtual MasterCandidateResult getUsableMasterCandidates(
       const MasterCandidateRequest& request) const;
-  virtual SiteCoverageResult checkSiteCoverage(const DebugLog& log) const;
 
  protected:
   // Shared "no such row" result so implementations can return a reference.

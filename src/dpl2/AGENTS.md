@@ -12,16 +12,13 @@ The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
 
 | Area | State |
 |---|---|
-| Planner | OracleGate fixes, adaptive-L1, filler domains, per-band ranking/filtering and deterministic output complete |
-| Unit tests | 87/87 GoogleTests normal and ASan |
+| Planner | adaptive-L1, filler domains, per-band ranking/filtering and deterministic output complete |
+| Unit tests | 81/81 GoogleTests normal and ASan |
 | Infrastructure | `RepairInfrastructure` builds production Network/Grid from PhysDesMgr data |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
-| Production API | one `FillerRepairEngine` = precheck + private view/oracle + repair |
-| E2E | fake UDM is the only data substitute; normal/ASan and `-Werror` pass |
-| CMake | standalone GoogleTest/CTest harness passes 88/88 normal and ASan |
-
-The old list-only/raw contract, production adapter, `CheckerApi.h`, Helper-injected Grid,
-Grid link stubs, fake PlacementDRC and test DePlace/Network shims are retired.
+| Production API | one `FillerRepairEngine` = precheck + private view/oracle + repair; fails closed before a successful `init()` |
+| E2E | 5 cases; fake UDM is the only data substitute; normal/ASan and `-Werror` pass |
+| CMake | standalone GoogleTest/CTest harness passes 86/86 normal and ASan; compile lists live in `src/fillerRepair/sources.cmake` |
 
 ## Fixed decisions
 
@@ -58,8 +55,9 @@ properties are accepted from the caller.
 
 The infrastructure, checker and engine form one design snapshot. Precheck and
 repair are non-mutating; repair does not call precheck. Checker calls are
-serialized privately. `RepairInfrastructure` is intentionally
-one-build; create another object for a new revision.
+serialized privately per engine -- sharing one checker across engines is not
+serialized, so pair each engine with its own checker. `RepairInfrastructure`
+is intentionally one-build; create another object for a new revision.
 
 ## Tests
 
@@ -72,7 +70,7 @@ SANITIZE=address src/dpl2/test/build_all.sh
 
 The final E2E source list contains production Grid/Network/importer/checker/
 engine/planner and fake UDM headers only. Private test doubles remain confined
-to the standalone 87-case planner unit executable for fault injection; never
+to the standalone planner unit executable for fault injection; never
 link them into E2E or production targets.
 
 The destination ports only `fillerRepair/`; existing infrastructure/checker
@@ -88,7 +86,7 @@ static Homebrew TBB archive as encoded in both build entry points.
   demonstrates a planner defect.
 - Checker algorithm changes remain checker-RD-owned. Record any checker source
   compatibility edit in `CHECKER_REPAIR_CONTRACT.md`.
-- Do not restore the deleted adapter/CheckerApi/fakes/stubs or add another
-  production abstraction.
+- Do not add another production abstraction beside `FillerRepairEngine`.
+- Add/remove production sources only via `src/fillerRepair/sources.cmake`.
 - Run planner and E2E normal + ASan before commit.
 - Keep changes in `src/dpl2/` and the authoritative spec unless scope expands.

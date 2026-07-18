@@ -213,12 +213,12 @@ opto: engine.repair(targetCell, newMaster)   [pre-commit,不调 precheck]
 opto/infrastructure: commit
 ```
 
-`src/dpl2/src/fillerRepair/adapter/PlacementView.{h,cpp}` 已删除,能力并入
-`FillerRepairEngine.cpp` 的 private implementation。独立 `CheckerApi.h` 已删除;
-planner-only `OverlayCheckRequest`/`CheckStatus`/`requestId` abstraction 合并到
-`OracleGate.h`,只供 `internal::PlannerEngine` 与 unit-test fake 使用。production
-签名只使用 final checker 的 `ipl::CheckResult`、`ipl::Diagnostic`、
-`ipl::FillerChanges`、`FillerCellRecord`。
+view/oracle/wire 转换全部是 `FillerRepairEngine.cpp` 的 private
+implementation。planner-only `OverlayCheckRequest`/`CheckStatus`/`requestId`
+abstraction 位于 `OracleGate.h`,只供 `internal::PlannerEngine` 与 unit-test
+fake 使用。production 签名只使用 final checker 的 `ipl::CheckResult`、
+`ipl::Diagnostic`、`ipl::FillerChanges`、`FillerCellRecord`。`init()` 成功前,
+`precheck()`/`repair()` 一律 fail-closed。
 
 checker overlay API 与 engine API 都是 non-mutating query。repair 拒绝同实例重入;
 checker 调用在 engine private view 内串行化。一个 engine/Grid/Network/checker/init
@@ -241,9 +241,12 @@ snapshot 对应一个 design revision;commit 后重新构造并 init。
 - target new、placed 及 configured filler masters 必须在 checker 构造前注册到
   Network,包括未实例化候选。
 - fake-UDM-only E2E 编译真实 RepairInfrastructure、Grid/Network、final checker、
-  FillerRepairEngine 与 internal planner;无 production adapter、fake infra 或 Grid
-  stub。fake 与 real UDM 只通过 test CMake include/link interface 切换,production
-  source 无条件编译同一套真实 UDM 名称/签名。normal/ASan/CMake/Werror 均验证。
+  FillerRepairEngine 与 internal planner;不链接任何其他 test double。fake 与
+  real UDM 只通过 test CMake include/link interface 切换,production source
+  无条件编译同一套真实 UDM 名称/签名。normal/ASan/CMake/Werror 均验证。
+- production 编译清单唯一定义在 `src/fillerRepair/sources.cmake`
+  (`DPL2_FILLER_REPAIR_PRODUCTION_SOURCES`);test harness 与移植目的地共用,
+  不允许手抄文件列表。
 
 
 ## 4. 核心操作:Swap(本阶段唯一操作)
@@ -482,7 +485,6 @@ class PlacementView
   virtual const std::vector<MasterId>& fillerMasterIds() const = 0;
   virtual MasterCandidateResult getUsableMasterCandidates(
       const MasterCandidateRequest& request) const;
-  virtual SiteCoverageResult checkSiteCoverage(const DebugLog& log) const;
 };
 ```
 
@@ -940,34 +942,23 @@ gate 语义:
 
 ---
 
-## 11. 实现 TODO
+## 11. 实现状态
 
-1. 定义 pure planner API(`FillerRepairRequest -> FillerRepairResult`)与
-   `Swap` 结构、overlay cache key。
-2. 建立 planner oracle/view test doubles 锁定算法语义(历史阶段;最终 E2E 不链接)。
-3. placement coverage scanner;production public precheck 只报告 gap/overlap,
-   gate 调用责任移交 opto,repair 内 gate 已删除。
-4. violation 归一化 + signature 匹配(§6.2 的钉死规则)。
-5. L0 + adaptive-L1 window builder + guardRegion 生成。
-6. Swap 生成器(只产原子 swap move;组合由⑧枚举、方向由⑦排序承担)。
-7. Ranker(5 特征;P/N per-band 计数已落地——同行 2 票/跨行 1 票,见 §6.6)。
-8. SubsetSearcher(排序枚举、批产出、预算)。
-9. OracleGate(batch wrapper、canonical cache、baseline-delta gate、best-overlay
-   记录)。
-10. 输出/diagnostics 与 last-window definitive 语义;冗余 final check 已删除。
-11. §10 测试集全绿。
-12. production FillerRepairEngine facade 接 supplied Grid/Network/checker;
-    fake-UDM-only GoogleTest E2E 与 test-only CMake/CTest 接入。目的地已有 infra/
-    checker 且无其 CMake,所以 production 移植只增加 fillerRepair sources。
+全部功能已实现并验证(2026-07-18):
 
-状态(2026-07-18):TODO 1–11 与所有 V2.1 engine 修订已完成;
-`src/dpl2/src/fillerRepair/` 的 87 个确定性 tests 通过。TODO 12 已完成 final
-checker wire/ID/blocking 对齐、单一 production `FillerRepairEngine`、
-`RepairInfrastructure`、真实 Grid/Network fake-UDM-only E2E 与 standalone
-GoogleTest/CMake/CTest。87 个 planner + 1 个 E2E 均为 GoogleTest;production
-adapter 与 `CheckerApi.h` 已删除;precheck/repair 均 non-mutating。production
-交付只含 fillerRepair,supplied infrastructure/checker 零修改。普通版和 ASan
-全绿。详见 `src/dpl2/HandOff.md`。
+- pure planner 完整落地:`Swap`/cache key、violation 归一化 + signature、
+  L0 + adaptive-L1 window + guardRegion、swap 生成器、Ranker(5 特征,
+  per band-slot 计数:同行 2 票/跨行 1 票)、SubsetSearcher、OracleGate
+  (batch、canonical cache、baseline-delta、best-overlay 记录)、
+  last-window definitive 语义。
+- production `FillerRepairEngine` facade 接 supplied Grid/Network/checker;
+  `RepairInfrastructure` 从 PhysDesMgr 构建 snapshot;fake-UDM-only GoogleTest
+  E2E 与 standalone CMake/CTest 接入;编译清单唯一定义在
+  `src/fillerRepair/sources.cmake`。
+- 81 个 planner unit tests + 5 个 production E2E tests 全为 GoogleTest;
+  precheck/repair 均 non-mutating;production 交付只含 fillerRepair,
+  supplied infrastructure/checker 零修改。普通版和 ASan 全绿。
+  详见 `src/dpl2/HandOff.md` 与 `src/fillerRepair/test/TestPlan.md`。
 
 ---
 

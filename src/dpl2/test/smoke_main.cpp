@@ -12,6 +12,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <algorithm>
+#include <array>
 #include <iterator>
 #include <string>
 #include <tuple>
@@ -97,13 +98,98 @@ PhysicalSnapshot snapshotPhysicalData(fake_udm::DesignDb& db)
   return snapshot;
 }
 
-bool hasDiagnostic(const dpl2::ipl::CheckResult& result,
+bool hasDiagnostic(const std::vector<dpl2::ipl::Diagnostic>& diagnostics,
                    const std::string& status)
 {
-  return std::any_of(result.diagnostics.begin(), result.diagnostics.end(),
+  return std::any_of(diagnostics.begin(), diagnostics.end(),
                      [&](const dpl2::ipl::Diagnostic& diagnostic) {
                        return diagnostic.status == status;
                      });
+}
+
+// Fixture variations. The defaults reproduce the canonical smoke design.
+struct DesignSetup
+{
+  // Adds VTUL_{N,P} implant layers carrying a WIDTH value but no SPACING:
+  // the checker records persistent missing_rule_parameter diagnostics at
+  // init while no master ever touches these layers.
+  bool unusedRuleLayers = false;
+  // Prepends a pad row (below the core, first in iteration order) so the
+  // first PhysRow is NOT a standard-cell row.
+  bool padRowFirst = false;
+  int64_t padRowOriginX = 0;
+  // Per-standard-row origin X; placed cells shift with their row.
+  std::array<int64_t, 3> rowOriginX{0, 0, 0};
+};
+
+void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup = {})
+{
+  db.coreSite.width_ = eUTL::UvDist(kSiteWidth);
+  db.coreSite.height_ = eUTL::UvDist(kRowHeight);
+  db.tech().addLayer("VTL_N", true, 0, /*width=*/6, /*minSpacing=*/2);
+  db.tech().addLayer("VTL_P", true, 1, 6, 2);
+  db.tech().addLayer("VTH_N", true, 2, 6, 2);
+  db.tech().addLayer("VTH_P", true, 3, 6, 2);
+  db.tech().addLayer("VTS_N", true, 4, 6, 2);
+  db.tech().addLayer("VTS_P", true, 5, 6, 2);
+  db.tech().addLayer("M1", false, 6);  // non-implant noise
+  if (setup.unusedRuleLayers) {
+    db.tech().addLayer("VTUL_N", true, 7, 6, /*minSpacing=*/0);
+    db.tech().addLayer("VTUL_P", true, 8, 6, 0);
+  }
+
+  for (const MasterSpec& spec : kMasters) {
+    eLIB::PhysLibCell& cell = db.addMaster(spec.name, spec.libIndex,
+                                           spec.width, kRowHeight,
+                                           spec.isFiller);
+    fake_udm::DesignDb::addShape(cell, spec.nLayerRel, 0, kRowHeight / 2);
+    fake_udm::DesignDb::addShape(cell, spec.pLayerRel, kRowHeight / 2,
+                                 kRowHeight);
+  }
+  // Extra VTH filler master that exists in the library but is neither placed
+  // nor part of the canonical allow list (candidate-universe mismatch tests).
+  {
+    eLIB::PhysLibCell& extra = db.addMaster("FX2", 6, 2, kRowHeight, true);
+    fake_udm::DesignDb::addShape(extra, 2, 0, kRowHeight / 2);
+    fake_udm::DesignDb::addShape(extra, 3, kRowHeight / 2, kRowHeight);
+  }
+
+  int rowIndexOffset = 0;
+  if (setup.padRowFirst) {
+    db.desMgr().addRow(setup.padRowOriginX, -kRowHeight, kSiteWidth,
+                       kRowHeight, kRowSites, /*isPad=*/true);
+    rowIndexOffset = 1;
+  }
+  for (int row = 0; row < 3; ++row) {
+    db.desMgr().addRow(setup.rowOriginX[static_cast<size_t>(row)],
+                       row * kRowHeight, kSiteWidth, kRowHeight, kRowSites);
+  }
+  // Row alternation convention: the track pattern expects P at the bottom
+  // band on EVEN rows and N on odd rows (buildTrackPattern), indexed over ALL
+  // rows including pads; R0 masters are N-bottom, so even-index cells are
+  // placed MX-flipped.
+  for (const Placement& p : kPlacements) {
+    const int rowIndex = p.row + rowIndexOffset;
+    const eUTL::PhysOrientation orient = rowIndex % 2 == 0
+                                             ? eUTL::PhysOrientationE::MX
+                                             : eUTL::PhysOrientationE::R0;
+    db.desMgr().addCell(
+        eUNL::LeafCellID(0, p.cellIndex),
+        &db.design.lib_acc_.getPhysLibCell(p.libIndex),
+        setup.rowOriginX[static_cast<size_t>(p.row)] + p.x,
+        p.row * kRowHeight, orient);
+  }
+  db.activate();
+}
+
+std::vector<eUNL::LeafCellID> allLeafCells()
+{
+  std::vector<eUNL::LeafCellID> leafCells;
+  leafCells.reserve(std::size(kPlacements));
+  for (const Placement& p : kPlacements) {
+    leafCells.emplace_back(0, p.cellIndex);
+  }
+  return leafCells;
 }
 
 void expect(bool ok, const std::string& what)
@@ -124,55 +210,18 @@ TEST(FillerRepairProduction, FakeUdmEndToEnd)
 
   // --- fake UDM design ------------------------------------------------------
   fake_udm::DesignDb db;
-  db.coreSite.width_ = eUTL::UvDist(kSiteWidth);
-  db.coreSite.height_ = eUTL::UvDist(kRowHeight);
-  db.tech().addLayer("VTL_N", true, 0, /*width=*/6, /*minSpacing=*/2);
-  db.tech().addLayer("VTL_P", true, 1, 6, 2);
-  db.tech().addLayer("VTH_N", true, 2, 6, 2);
-  db.tech().addLayer("VTH_P", true, 3, 6, 2);
-  db.tech().addLayer("VTS_N", true, 4, 6, 2);
-  db.tech().addLayer("VTS_P", true, 5, 6, 2);
-  db.tech().addLayer("M1", false, 6);  // non-implant noise
+  buildDesign(db);
 
-  for (const MasterSpec& spec : kMasters) {
-    eLIB::PhysLibCell& cell = db.addMaster(spec.name, spec.libIndex,
-                                           spec.width, kRowHeight,
-                                           spec.isFiller);
-    fake_udm::DesignDb::addShape(cell, spec.nLayerRel, 0, kRowHeight / 2);
-    fake_udm::DesignDb::addShape(cell, spec.pLayerRel, kRowHeight / 2,
-                                 kRowHeight);
-  }
-  for (int row = 0; row < 3; ++row) {
-    db.desMgr().addRow(0, row * kRowHeight, kSiteWidth, kRowHeight, kRowSites);
-  }
-  // Row alternation convention: the track pattern expects P at the bottom
-  // band on EVEN rows and N on odd rows (buildTrackPattern); R0 masters are
-  // N-bottom, so even-row cells are placed MX-flipped.
-  for (const Placement& p : kPlacements) {
-    const eUTL::PhysOrientation orient = p.row % 2 == 0
-                                             ? eUTL::PhysOrientationE::MX
-                                             : eUTL::PhysOrientationE::R0;
-    db.desMgr().addCell(eUNL::LeafCellID(0, p.cellIndex),
-                        &db.design.lib_acc_.getPhysLibCell(p.libIndex), p.x,
-                        p.row * kRowHeight, orient);
-  }
-  db.activate();
-
-  // --- ECO filler allow list (the candidate universe, AGENTS D23) -----------
+  // --- ECO filler allow list (the candidate universe) -----------------------
   dpl2::fillerSetting fillerSetting(&db.design);
   fillerSetting.addFillerCell("FL2 FH2 FS2");
 
   // --- production infrastructure import ------------------------------------
   // The test provides only UDM data + cell handles.  Network masters/nodes,
   // Grid geometry and occupancy are all built by production infrastructure.
-  std::vector<eUNL::LeafCellID> leafCells;
-  leafCells.reserve(std::size(kPlacements));
-  for (const Placement& p : kPlacements) {
-    leafCells.emplace_back(0, p.cellIndex);
-  }
   dpl2::RepairInfrastructure infrastructure;
   const bool infraReady = infrastructure.build(
-      db.design.getPhysDesMgr(), leafCells, fillerSetting,
+      db.design.getPhysDesMgr(), allLeafCells(), fillerSetting,
       db.design.lib_acc_.getPhysLibCell(2));  // target new master TH4
   for (const std::string& diag : infrastructure.diagnostics()) {
     std::printf("[smoke][infra] %s\n", diag.c_str());
@@ -206,7 +255,7 @@ TEST(FillerRepairProduction, FakeUdmEndToEnd)
   moved.origin = eUTL::Point2D(eUTL::UvDist(20), eUTL::UvDist(kRowHeight));
   const PhysicalSnapshot gapBefore = snapshotPhysicalData(db);
   const dpl2::ipl::CheckResult gapPrecheck = engine.precheck();
-  expect(!gapPrecheck.isLegal && hasDiagnostic(gapPrecheck, "Gap"),
+  expect(!gapPrecheck.isLegal && hasDiagnostic(gapPrecheck.diagnostics, "Gap"),
          "gap precheck blocks opto with Gap warning");
   expect(snapshotPhysicalData(db) == gapBefore,
          "gap precheck does not mutate UDM");
@@ -215,7 +264,7 @@ TEST(FillerRepairProduction, FakeUdmEndToEnd)
   const PhysicalSnapshot overlapBefore = snapshotPhysicalData(db);
   const dpl2::ipl::CheckResult overlapPrecheck = engine.precheck();
   expect(!overlapPrecheck.isLegal
-             && hasDiagnostic(overlapPrecheck, "Overlap"),
+             && hasDiagnostic(overlapPrecheck.diagnostics, "Overlap"),
          "overlap precheck blocks opto with Overlap warning");
   expect(snapshotPhysicalData(db) == overlapBefore,
          "overlap precheck does not mutate UDM");
@@ -279,4 +328,138 @@ TEST(FillerRepairProduction, FakeUdmEndToEnd)
   expect(snapshotPhysicalData(db) == repairBefore,
          "repeated repair remains non-mutating");
 
+}
+
+// Regression: the checker copies its persistent init diagnostics into every
+// overlay result twice (checkPlaceWithOverlay + the embedded region result).
+// The boundary must strip every repetition, or benign init diagnostics make
+// all candidates illegal and repair can never succeed.
+TEST(FillerRepairProduction, PersistentCheckerDiagnosticsDoNotBlockRepair)
+{
+  using dpl2::fillerRepair::FillerRepairEngine;
+  using dpl2::fillerRepair::RepairOutcome;
+
+  fake_udm::DesignDb db;
+  DesignSetup setup;
+  setup.unusedRuleLayers = true;
+  buildDesign(db, setup);
+
+  dpl2::fillerSetting fillerSetting(&db.design);
+  fillerSetting.addFillerCell("FL2 FH2 FS2");
+  dpl2::RepairInfrastructure infrastructure;
+  ASSERT_TRUE(infrastructure.build(db.design.getPhysDesMgr(), allLeafCells(),
+                                   fillerSetting,
+                                   db.design.lib_acc_.getPhysLibCell(2)));
+  dpl2::ipl::ImplantLayerChecker checker(infrastructure.grid(),
+                                         infrastructure.network());
+  // Precondition: the unused VTUL layers left persistent init diagnostics.
+  ASSERT_FALSE(checker.getDiags().empty());
+
+  FillerRepairEngine engine(infrastructure.grid(), infrastructure.network());
+  ASSERT_TRUE(engine.init(db.design.getPhysDesMgr(), &checker,
+                          &fillerSetting));
+  const RepairOutcome outcome = engine.repair(
+      eUNL::LeafCellID(0, 112), db.design.lib_acc_.getPhysLibCell(2));
+  EXPECT_TRUE(outcome.hasSolution);
+  ASSERT_FALSE(outcome.changes.empty());
+  EXPECT_EQ(outcome.changes.front().new_lib_cell_.getIndexValue(), 4);
+}
+
+// Regression: a configured filler master the Network never imported means the
+// snapshot was built against different inputs -> init must fail, not shrink
+// the candidate universe silently.
+TEST(FillerRepairProduction, ConfiguredMasterMissingFromNetworkFailsInit)
+{
+  using dpl2::fillerRepair::FillerRepairEngine;
+
+  fake_udm::DesignDb db;
+  buildDesign(db);
+
+  dpl2::fillerSetting infraSetting(&db.design);
+  infraSetting.addFillerCell("FL2 FH2 FS2");
+  dpl2::RepairInfrastructure infrastructure;
+  ASSERT_TRUE(infrastructure.build(db.design.getPhysDesMgr(), allLeafCells(),
+                                   infraSetting,
+                                   db.design.lib_acc_.getPhysLibCell(2)));
+  dpl2::ipl::ImplantLayerChecker checker(infrastructure.grid(),
+                                         infrastructure.network());
+
+  // FX2 exists in the library but was never registered into the Network.
+  dpl2::fillerSetting engineSetting(&db.design);
+  engineSetting.addFillerCell("FL2 FH2 FS2 FX2");
+  FillerRepairEngine engine(infrastructure.grid(), infrastructure.network());
+  EXPECT_FALSE(engine.init(db.design.getPhysDesMgr(), &checker,
+                           &engineSetting));
+}
+
+// Regression: after a missing or failed init() every public API fails closed.
+TEST(FillerRepairProduction, FailedInitFailsClosed)
+{
+  using dpl2::fillerRepair::FillerRepairEngine;
+  using dpl2::fillerRepair::RepairOutcome;
+
+  fake_udm::DesignDb db;
+  buildDesign(db);
+
+  dpl2::fillerSetting fillerSetting(&db.design);
+  fillerSetting.addFillerCell("FL2 FH2 FS2");
+  dpl2::RepairInfrastructure infrastructure;
+  ASSERT_TRUE(infrastructure.build(db.design.getPhysDesMgr(), allLeafCells(),
+                                   fillerSetting,
+                                   db.design.lib_acc_.getPhysLibCell(2)));
+
+  const auto expectClosed = [&](FillerRepairEngine& engine,
+                                const char* when) {
+    SCOPED_TRACE(when);
+    const dpl2::ipl::CheckResult precheck = engine.precheck();
+    EXPECT_FALSE(precheck.isLegal);
+    EXPECT_TRUE(hasDiagnostic(precheck.diagnostics,
+                              "precheck_not_initialized"));
+    const RepairOutcome outcome = engine.repair(
+        eUNL::LeafCellID(0, 112), db.design.lib_acc_.getPhysLibCell(2));
+    EXPECT_FALSE(outcome.hasSolution);
+    EXPECT_TRUE(outcome.changes.empty());
+    EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "engine_not_initialized"));
+  };
+
+  FillerRepairEngine engine(infrastructure.grid(), infrastructure.network());
+  expectClosed(engine, "before any init()");
+  EXPECT_FALSE(engine.init(db.design.getPhysDesMgr(), nullptr,
+                           &fillerSetting));
+  expectClosed(engine, "after failed init()");
+}
+
+// Regression: the shared-x-frame validation must baseline on the first
+// NON-PAD row. A pad row anywhere (any origin) is fine; a misaligned
+// standard row must still be refused even when a pad row comes first.
+TEST(FillerRepairProduction, RowOriginCheckUsesFirstNonPadRow)
+{
+  using dpl2::fillerRepair::FillerRepairEngine;
+
+  const auto initWith = [](const DesignSetup& setup) {
+    fake_udm::DesignDb db;
+    buildDesign(db, setup);
+    dpl2::fillerSetting fillerSetting(&db.design);
+    fillerSetting.addFillerCell("FL2 FH2 FS2");
+    dpl2::RepairInfrastructure infrastructure;
+    if (!infrastructure.build(db.design.getPhysDesMgr(), allLeafCells(),
+                              fillerSetting,
+                              db.design.lib_acc_.getPhysLibCell(2))) {
+      return false;
+    }
+    dpl2::ipl::ImplantLayerChecker checker(infrastructure.grid(),
+                                           infrastructure.network());
+    FillerRepairEngine engine(infrastructure.grid(),
+                              infrastructure.network());
+    return engine.init(db.design.getPhysDesMgr(), &checker, &fillerSetting);
+  };
+
+  DesignSetup padOnly;
+  padOnly.padRowFirst = true;
+  padOnly.padRowOriginX = 5;  // pad rows may sit anywhere
+  EXPECT_TRUE(initWith(padOnly));
+
+  DesignSetup misaligned = padOnly;
+  misaligned.rowOriginX = {0, 0, 3};  // one standard row off the shared frame
+  EXPECT_FALSE(initWith(misaligned));
 }

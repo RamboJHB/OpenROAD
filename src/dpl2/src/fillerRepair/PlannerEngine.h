@@ -7,18 +7,6 @@
 // rank -> subset search -> oracle gate -> result. The engine owns no state
 // between repair() calls and never mutates the design; all effects are the
 // returned FillerRepairResult.
-//
-// Implementation status (spec section 11 TODO order):
-//   [x] 1  planner API, Swap struct, overlay cache key
-//   [x] 2  fake checker / fake candidate provider (see fake/)
-//   [x] 3  placement coverage scanner (public gate now owned by facade)
-//   [x] 4  violation normalization + signature matching (Signature.h)
-//   [x] 5  L0 + adaptive-L1, guardRegion, unfixable warning (#6/#7/#8)
-//   [x] 6  swap generator: atomic swap moves only (Swap.h)
-//   [x] 7  ranker (Ranker.h)
-//   [x] 8  subset searcher (SubsetSearch.h)
-//   [x] 9  oracle gate: batch, cache, baseline-delta (OracleGate.h)
-//   [x] 10 adaptive window escalation + diagnostics (final check dropped #11)
 
 #pragma once
 

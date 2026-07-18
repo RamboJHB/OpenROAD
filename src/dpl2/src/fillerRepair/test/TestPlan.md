@@ -6,9 +6,9 @@ Updated: 2026-07-18.
 
 | Tier | Command | Boundary |
 |---|---|---|
-| Planner unit | `src/dpl2/src/fillerRepair/test/run_tests.sh` | 87 individually registered GoogleTests with private planner doubles |
-| Production E2E | `src/dpl2/test/build_all.sh` | 1 GoogleTest; fake UDM data with supplied infra/checker and production engine/planner |
-| Full CTest | `src/dpl2/test/CMakeLists.txt` | 88 discovered GoogleTests |
+| Planner unit | `src/dpl2/src/fillerRepair/test/run_tests.sh` | 81 individually registered GoogleTests with private planner doubles |
+| Production E2E | `src/dpl2/test/build_all.sh` | 5 GoogleTests; fake UDM data with supplied infra/checker and production engine/planner |
+| Full CTest | `src/dpl2/test/CMakeLists.txt` | 86 discovered GoogleTests |
 
 Normal and AddressSanitizer runs are required. Production builds use
 `-Wall -Wextra -Werror`.
@@ -22,10 +22,10 @@ enabled for every project source and test execution.
 
 Included: production RepairInfrastructure, Grid/Network, fillerSetting, final
 ImplantLayerChecker, FillerRepairEngine, internal PlannerEngine and all search
-stages. Fake UDM provides tech/library/row/cell data only.
+stages (compile lists from `src/fillerRepair/sources.cmake`). Fake UDM
+provides tech/library/row/cell data only.
 
-Excluded: `fillerRepair/fake/*`, deleted production adapter, Grid stubs, fake
-PlacementDRC, Helper injection and test DePlace/Network shims.
+Excluded: `fillerRepair/fake/*` and every other test double.
 
 The fake UDM include tree mirrors real UDM namespaces, names, signatures and
 fixture-visible behavior. `dpl2_test_udm` is an interface target that switches
@@ -53,6 +53,12 @@ newMaster or candidate information to precheck, proving that scope separation.
 - Output is an exact `FillerCellRecord` in `ipl::FillerChanges`.
 - Repeated repair returns identical output.
 - Physical UDM snapshots remain unchanged after each repair.
+- Persistent checker init diagnostics (duplicated per result by the checker)
+  never mark candidates illegal; repair still succeeds.
+- A configured filler master absent from the Network fails `init()`.
+- Before/after a failed `init()`, `precheck()` and `repair()` fail closed.
+- The row-origin frame check baselines on the first NON-pad row: pad rows may
+  sit anywhere; a misaligned standard row is refused even behind a pad row.
 - Planner tests continue covering adaptive-L1, ranking, subset enumeration,
   budgets, cache, baseline-delta and malformed internal oracle protocol.
 
@@ -76,8 +82,8 @@ cmake --build src/dpl2/test/build-cmake-asan -j2
 ctest --test-dir src/dpl2/test/build-cmake-asan --output-on-failure
 ```
 
-2026-07-18 results: planner 87/87 normal and ASan; production E2E normal and
-ASan; full CTest 88/88 normal and ASan; Werror clean.
+2026-07-18 results: planner 81/81 normal and ASan; production E2E 5/5 normal
+and ASan; full CTest 86/86 normal and ASan; Werror clean.
 
 ## Regression rules
 

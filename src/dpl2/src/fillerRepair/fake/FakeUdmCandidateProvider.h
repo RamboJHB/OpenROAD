@@ -4,11 +4,9 @@
 // Fake-UDM master catalog + candidate provider.
 //
 // Purpose: rehearse the production engine's master/candidate data path in
-// planner unit tests. The real provider sits on checker master tables, which
-// are built from UDM by ImplantLayerChecker::buildMasters, parseLayerName and
-// rebuildMasterShapes (formerly in the helper, folded into the checker by the
-// 2026-07-12 update). This fake replicates that derivation UDM-free, with the
-// same rules:
+// planner unit tests. The real derivation runs inside the checker
+// (ImplantLayerChecker::buildMasters, parseLayerName, rebuildMasterShapes);
+// this fake replicates it UDM-free, with the same rules:
 //
 //   - implant layers are named "<FAMILY>_<POLARITY>"; family is one of
 //     VTS/VTL/VTH/VTUL (case-insensitive), polarity P/p -> P, anything else N

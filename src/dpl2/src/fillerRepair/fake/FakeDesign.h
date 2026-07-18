@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// In-memory PlacementView for unit tests (spec section 11 TODO 2).
+// In-memory PlacementView for unit tests.
 //
 // A FakeDesign is built fluently:
 //   design.setSiteWidth(1)

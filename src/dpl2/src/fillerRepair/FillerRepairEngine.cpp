@@ -255,15 +255,21 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
                    " differs from infrastructure ", site_width_));
   }
   // Planner windows/guards and the checker's inter-row comparisons both use
-  // ONE x frame across rows; refuse rows with different origin X.
-  for (size_t i = 0; i < frames.size(); ++i) {
-    if (!frames[i].isPad && frames[i].originX != frames.front().originX
-        && !frames.front().isPad) {
-      addProblem(Severity::Fatal, "RowOriginMisaligned",
-                 cat("row ", i, " origin X ", frames[i].originX,
-                     " differs from row 0 origin X ",
-                     frames.front().originX));
-      break;
+  // ONE x frame across rows; refuse non-pad rows with different origin X.
+  // The baseline is the FIRST NON-PAD row -- pad rows may sit anywhere and
+  // must neither serve as the baseline nor be checked themselves.
+  const auto firstNonPad =
+      std::find_if(frames.begin(), frames.end(),
+                   [](const RowFrame& frame) { return !frame.isPad; });
+  if (firstNonPad != frames.end()) {
+    for (size_t i = 0; i < frames.size(); ++i) {
+      if (!frames[i].isPad && frames[i].originX != firstNonPad->originX) {
+        addProblem(Severity::Fatal, "RowOriginMisaligned",
+                   cat("row ", i, " origin X ", frames[i].originX,
+                       " differs from first non-pad row origin X ",
+                       firstNonPad->originX));
+        break;
+      }
     }
   }
   row_list_.reserve(row_spans_.size());
@@ -383,10 +389,14 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
       }
       const int id = network->getMasterId(cell->getLibCellId());
       if (id < 0) {
-        addProblem(Severity::Warning, "ConfiguredMasterNotInNetwork",
+        // Fatal: the checker validates candidates against Network masters, so
+        // a configured master the Network never imported means the snapshot
+        // was built against different inputs -- refuse instead of silently
+        // shrinking the candidate universe.
+        addProblem(Severity::Fatal, "ConfiguredMasterNotInNetwork",
                    cat("configured filler master libCell ",
                        static_cast<int>(cell->getLibCellId().getIndexValue()),
-                       " is not in the Network -> excluded from candidates"));
+                       " is not in the Network"));
         continue;
       }
       const auto it = masters_.find(static_cast<MasterId>(id));
@@ -702,12 +712,34 @@ std::vector<CheckResult> ProductionView::checkPlaceWithOverlays(
            cat("overlay batch: ", changes.size(), " candidate(s) -> ",
                raw.size(), " result(s)"));
 
-  // The final checker prepends its PERSISTENT init diagnostics to every
-  // result and folds them into isLegal. Strip that prefix so only
+  // The final checker copies its PERSISTENT init diagnostics into every
+  // result -- once directly (checkPlaceWithOverlay) and once more inside the
+  // embedded region result (checkOverlayRegion) -- and folds them into
+  // isLegal. Strip every leading repetition of that sequence so only
   // request-specific findings drive the candidate status; otherwise a single
   // benign init diagnostic (e.g. missing_rule_parameter on an unused layer)
   // would make every candidate permanently illegal.
-  const size_t initDiagCount = checker_->getDiags().size();
+  const auto& initDiags = checker_->getDiags();
+  const auto requestDiagOffset =
+      [&initDiags](const std::vector<ipl::Diagnostic>& diagnostics) {
+        size_t offset = 0;
+        while (!initDiags.empty()
+               && offset + initDiags.size() <= diagnostics.size()) {
+          bool matches = true;
+          for (size_t k = 0; k < initDiags.size(); ++k) {
+            if (diagnostics[offset + k].status != initDiags[k].status
+                || diagnostics[offset + k].message != initDiags[k].message) {
+              matches = false;
+              break;
+            }
+          }
+          if (!matches) {
+            break;
+          }
+          offset += initDiags.size();
+        }
+        return offset;
+      };
 
   for (size_t i = 0; i < requests.size(); ++i) {
     CheckResult& out = results[i];
@@ -721,7 +753,8 @@ std::vector<CheckResult> ProductionView::checkPlaceWithOverlays(
       continue;
     }
     const ipl::CheckResult& r = raw[i];
-    for (size_t d = initDiagCount; d < r.diagnostics.size(); ++d) {
+    for (size_t d = requestDiagOffset(r.diagnostics); d < r.diagnostics.size();
+         ++d) {
       out.diagnostics.push_back(makeDiag(
           Severity::Warning, r.diagnostics[d].status,
           r.diagnostics[d].message));
@@ -1040,19 +1073,21 @@ class FillerRepairEngine::Impl
     checker_ = checker;
     filler_setting_ = fillerSetting;
     view_.reset();
+    initialized_ = false;
     if (grid_ == nullptr || network_ == nullptr || des_mgr_ == nullptr
         || checker_ == nullptr || filler_setting_ == nullptr) {
       return false;
     }
     view_ = std::make_unique<ProductionView>(
         des_mgr_, grid_, network_, checker_, filler_setting_);
-    return view_->isReady();
+    initialized_ = view_->isReady();
+    return initialized_;
   }
 
   ipl::CheckResult precheck() const
   {
     ipl::CheckResult result;
-    if (des_mgr_ == nullptr || network_ == nullptr) {
+    if (!initialized_) {
       result.isLegal = false;
       result.diagnostics.push_back(
           {"precheck_not_initialized",
@@ -1088,7 +1123,7 @@ class FillerRepairEngine::Impl
       ~ActiveGuard() { flag.store(false, std::memory_order_release); }
     } activeGuard{repair_active_};
 
-    if (view_ == nullptr) {
+    if (!initialized_) {
       result.diagnostics.push_back(
           {"engine_not_initialized",
            "fatal: init() must succeed before repair()"});
@@ -1111,6 +1146,9 @@ class FillerRepairEngine::Impl
   const ipl::ImplantLayerChecker* checker_ = nullptr;
   const fillerSetting* filler_setting_ = nullptr;
   std::unique_ptr<ProductionView> view_;
+  // True only after a fully successful init(); every public API fails closed
+  // until then (a half-built snapshot must never answer queries).
+  bool initialized_ = false;
   std::atomic<bool> repair_active_{false};
 };
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Subset searcher enumeration (spec section 6.7, TODO 8; V2.1 #9).
+// Subset searcher enumeration (spec section 6.7; V2.1 #9).
 //
 // Input is the ranker's FILLER DOMAINS (V2.1 #9): enumeration walks
 // (subset size ascending, filler-combination lexicographic by filler rank,

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Ranker (spec section 6.6, TODO 7; V2.1 #9). Pure ordering: it decides which
+// Ranker (spec section 6.6; V2.1 #9). Pure ordering: it decides which
 // fillers (and which target VT per filler) the searcher tries first and never
 // judges legality (checker-as-oracle).
 //

@@ -3,7 +3,7 @@
 //
 // Scope: everything the repair chain compiles against --
 // infrastructure (Network/Grid/RepairInfrastructure/fillerSetting), the
-// final ipl::ImplantLayerChecker, and fillerRepair/adapter.
+// final ipl::ImplantLayerChecker, and the fillerRepair production sources.
 // NOT a behavioral UDM: only the accessors those files call are modeled.
 //
 // Data flow for tests: build a fake_udm::DesignDb (tech layers, lib cells,

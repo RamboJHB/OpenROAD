@@ -2,7 +2,7 @@
 // Copyright (c) 2026, The OpenROAD Authors
 
 // Repair window builder: L0 + adaptive-L1, guardRegion, bridge fillers and
-// the swap-unfixable hint (spec sections 6.2/6.3, TODO 5, V2.1 #8).
+// the swap-unfixable hint (spec sections 6.2/6.3, V2.1 #8).
 //
 // Levels (V2.1 #7 dropped L2):
 //   L0  violation participants ∪ anchor-adjacent fillers ∪ bridge fillers

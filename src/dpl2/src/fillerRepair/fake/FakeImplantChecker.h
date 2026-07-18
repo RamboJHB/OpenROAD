@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Fake implant overlay checker (spec section 11 TODO 2).
+// Fake implant overlay checker for planner unit tests.
 //
 // Purpose: lock the OverlayCheckRequest/CheckResult protocol and give the
 // planner a rule-parameterized oracle for unit tests. The rule model is a

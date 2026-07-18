@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Oracle gate (spec sections 6.8 / 4.2, TODO 9): the only place that talks
+// Oracle gate (spec sections 6.8 / 4.2): the only place that talks
 // to the checker during the search.
 //
 // Responsibilities:

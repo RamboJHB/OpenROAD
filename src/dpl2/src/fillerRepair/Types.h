@@ -232,29 +232,4 @@ struct FillerRepairResult
   std::vector<Diagnostic> diagnostics;
 };
 
-// --- Utility pre-check types (spec section 5.4 / 6.1) ----------------------
-
-enum class CoverageIssueKind
-{
-  Gap,
-  Overlap
-};
-
-struct CoverageIssue
-{
-  CoverageIssueKind kind = CoverageIssueKind::Gap;
-  RowId rowId = 0;
-  DbCoord xLo = 0;
-  DbCoord xHi = 0;
-  int siteCount = 0;
-  std::vector<InstanceId> instances;
-};
-
-struct SiteCoverageResult
-{
-  bool isFullUtility = false;
-  std::vector<CoverageIssue> issues;
-  std::vector<Diagnostic> diagnostics;
-};
-
 }  // namespace dpl2::fillerRepair

@@ -24,6 +24,7 @@ find_package(Boost REQUIRED)
 find_package(TBB REQUIRED)
 
 set(DPL2_SRC "${CMAKE_CURRENT_LIST_DIR}/../src")
+include("${DPL2_SRC}/fillerRepair/sources.cmake")
 
 # This interface target is the only fake/real UDM switch. Production sources
 # contain no fake include, compile definition, or conditional code. The fake
@@ -63,14 +64,7 @@ endfunction()
 
 add_executable(
   dpl2_filler_repair_planner_test
-  "${DPL2_SRC}/fillerRepair/PlacementView.cpp"
-  "${DPL2_SRC}/fillerRepair/Swap.cpp"
-  "${DPL2_SRC}/fillerRepair/Signature.cpp"
-  "${DPL2_SRC}/fillerRepair/Window.cpp"
-  "${DPL2_SRC}/fillerRepair/Ranker.cpp"
-  "${DPL2_SRC}/fillerRepair/SubsetSearch.cpp"
-  "${DPL2_SRC}/fillerRepair/OracleGate.cpp"
-  "${DPL2_SRC}/fillerRepair/PlannerEngine.cpp"
+  ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
   "${DPL2_SRC}/fillerRepair/fake/FakeImplantChecker.cpp"
   "${DPL2_SRC}/fillerRepair/fake/FakeUdmCandidateProvider.cpp"
   "${DPL2_SRC}/fillerRepair/test/test_main.cpp")
@@ -93,25 +87,11 @@ add_executable(
   "${DPL2_SRC}/infrastructure/fillerSetting.cpp"
   "${DPL2_SRC}/infrastructure/RepairInfrastructure.cpp"
   "${DPL2_SRC}/drc/ImplantLayerChecker.cpp"
-  "${DPL2_SRC}/fillerRepair/PlacementView.cpp"
-  "${DPL2_SRC}/fillerRepair/Signature.cpp"
-  "${DPL2_SRC}/fillerRepair/Swap.cpp"
-  "${DPL2_SRC}/fillerRepair/Window.cpp"
-  "${DPL2_SRC}/fillerRepair/Ranker.cpp"
-  "${DPL2_SRC}/fillerRepair/SubsetSearch.cpp"
-  "${DPL2_SRC}/fillerRepair/OracleGate.cpp"
-  "${DPL2_SRC}/fillerRepair/PlannerEngine.cpp"
-  "${DPL2_SRC}/fillerRepair/FillerRepairEngine.cpp"
+  ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES}
   smoke_main.cpp)
 target_include_directories(
   dpl2_filler_repair_e2e
   PRIVATE "${DPL2_SRC}" "${CMAKE_CURRENT_LIST_DIR}/../include")
-# The pre-existing fake-UDM support tree also contains a tiny checker-test
-# gtest shim. Put the real GoogleTest headers first without changing that tree.
-get_target_property(
-  DPL2_GTEST_INCLUDE_DIRS GTest::gtest INTERFACE_INCLUDE_DIRECTORIES)
-target_include_directories(
-  dpl2_filler_repair_e2e BEFORE PRIVATE ${DPL2_GTEST_INCLUDE_DIRS})
 target_include_directories(
   dpl2_filler_repair_e2e SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
 target_link_libraries(
