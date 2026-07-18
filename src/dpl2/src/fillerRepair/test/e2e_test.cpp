@@ -138,6 +138,11 @@ struct DesignSetup
   int64_t padRowOriginX = 0;
   // Per-standard-row origin X; placed cells shift with their row.
   std::array<int64_t, kStandardRows> rowOriginX{0, 0, 0, 0, 0};
+  // Optional legal-domain cuts used by precheck tests. A hard blockage makes
+  // the covered Grid sites invalid; the instance halo reserves sites after
+  // row-0 cell 102 without modifying the production Grid implementation.
+  bool row0TailHardBlockage = false;
+  int row0TailHaloWidth = 0;
 };
 
 void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup = {})
@@ -186,6 +191,10 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup = {})
     db.desMgr().addRow(setup.padRowOriginX, kStandardRows * kRowHeight,
                        kSiteWidth, kRowHeight, kRowSites, /*isPad=*/true);
   }
+  if (setup.row0TailHardBlockage) {
+    const int64_t rowX = setup.rowOriginX[0];
+    db.desMgr().addBlockage(rowX + 18, 0, rowX + 20, kRowHeight);
+  }
   // Row alternation convention: the track pattern expects P at the bottom
   // band on EVEN rows and N on odd rows (buildTrackPattern), indexed over ALL
   // rows including pads; R0 masters are N-bottom, so even-index cells are
@@ -220,7 +229,7 @@ std::vector<eUNL::LeafCellID> allLeafCells()
 class ProductionInfrastructure
 {
  public:
-  bool build(fake_udm::DesignDb& db)
+  bool build(fake_udm::DesignDb& db, const DesignSetup& setup = {})
   {
     eUNL::PhysDesMgr* desMgr = db.design.getPhysDesMgr();
     bool haveCore = false;
@@ -237,6 +246,10 @@ class ProductionInfrastructure
     }
 
     padding_->setDesginManager(desMgr);
+    if (setup.row0TailHaloWidth > 0) {
+      padding_->setPadding(eUNL::LeafCellID(0, 102), dpl2::GridX{0},
+                           dpl2::GridX{setup.row0TailHaloWidth});
+    }
     grid_.setCore(core);
     grid_.examineRows(desMgr);
     grid_.initGrid(desMgr, padding_, 100, 100);
@@ -313,7 +326,7 @@ class ProductionHarness
   {
     buildDesign(db_, setup);
     filler_setting_.addFillerCell("FL2 FH2 FS2");
-    infrastructure_ready_ = infrastructure_.build(db_);
+    infrastructure_ready_ = infrastructure_.build(db_, setup);
     engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>(
         infrastructure_.grid(), infrastructure_.network());
     engine_ready_ = infrastructure_ready_
@@ -404,6 +417,57 @@ TEST_P(FillerRepairProductionE2E, OverlapPlacementPrecheck)
   const dpl2::ipl::CheckResult result = harness.engine().precheck();
   EXPECT_FALSE(result.isLegal);
   EXPECT_TRUE(hasDiagnostic(result.diagnostics, "Overlap"));
+  EXPECT_EQ(snapshotPhysicalData(harness.db()), before);
+}
+
+TEST_P(FillerRepairProductionE2E, GapInsideHardBlockageIsIgnored)
+{
+  DesignSetup setup = GetParam().setup;
+  setup.row0TailHardBlockage = true;
+  ProductionHarness harness(setup);
+  ASSERT_TRUE(harness.engineReady());
+  eUNL::PhysCellData& moved
+      = harness.db().desMgr().cells_[eUNL::LeafCellID(0, 103)];
+  moved.origin = eUTL::Point2D(
+      eUTL::UvDist(setup.rowOriginX[0] + kRowSites), eUTL::UvDist(0));
+  const PhysicalSnapshot before = snapshotPhysicalData(harness.db());
+  const dpl2::ipl::CheckResult result = harness.engine().precheck();
+  EXPECT_TRUE(result.isLegal);
+  EXPECT_TRUE(result.diagnostics.empty());
+  EXPECT_EQ(snapshotPhysicalData(harness.db()), before);
+}
+
+TEST_P(FillerRepairProductionE2E, GapInsideInstanceHaloIsIgnored)
+{
+  DesignSetup setup = GetParam().setup;
+  setup.row0TailHaloWidth = 2;
+  ProductionHarness harness(setup);
+  ASSERT_TRUE(harness.engineReady());
+  eUNL::PhysCellData& moved
+      = harness.db().desMgr().cells_[eUNL::LeafCellID(0, 103)];
+  moved.origin = eUTL::Point2D(
+      eUTL::UvDist(setup.rowOriginX[0] + kRowSites), eUTL::UvDist(0));
+  const PhysicalSnapshot before = snapshotPhysicalData(harness.db());
+  const dpl2::ipl::CheckResult result = harness.engine().precheck();
+  EXPECT_TRUE(result.isLegal);
+  EXPECT_TRUE(result.diagnostics.empty());
+  EXPECT_EQ(snapshotPhysicalData(harness.db()), before);
+}
+
+TEST_P(FillerRepairProductionE2E, GapInsideLegalSegmentStillFails)
+{
+  DesignSetup setup = GetParam().setup;
+  setup.row0TailHardBlockage = true;
+  ProductionHarness harness(setup);
+  ASSERT_TRUE(harness.engineReady());
+  eUNL::PhysCellData& moved
+      = harness.db().desMgr().cells_[eUNL::LeafCellID(0, 102)];
+  moved.origin = eUTL::Point2D(
+      eUTL::UvDist(setup.rowOriginX[0] + kRowSites), eUTL::UvDist(0));
+  const PhysicalSnapshot before = snapshotPhysicalData(harness.db());
+  const dpl2::ipl::CheckResult result = harness.engine().precheck();
+  EXPECT_FALSE(result.isLegal);
+  EXPECT_TRUE(hasDiagnostic(result.diagnostics, "Gap"));
   EXPECT_EQ(snapshotPhysicalData(harness.db()), before);
 }
 

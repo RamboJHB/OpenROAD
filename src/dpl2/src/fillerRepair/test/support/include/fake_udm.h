@@ -605,7 +605,15 @@ class PhysRow
   eUTL::PhysOrientation orient_ = eUTL::PhysOrientationE::R0;
 };
 
-class PhysBlockage;
+class PhysBlockage
+{
+ public:
+  bool isSoft() const { return is_soft_; }
+  const std::vector<eLIB::TechShape>& getShapes() const { return shapes_; }
+
+  bool is_soft_ = false;
+  std::vector<eLIB::TechShape> shapes_;
+};
 
 class PhysDesMgr
 {
@@ -642,6 +650,7 @@ class PhysDesMgr
     row.bbox_ = eUTL::Rect(eUTL::UvDist(originX), eUTL::UvDist(originY),
                            eUTL::UvDist(originX + rowWidth),
                            eUTL::UvDist(originY + siteHeight));
+    row.site_cnt_ = static_cast<int>(rowWidth / siteWidth);
     rows_.push_back(row);
     return rows_.back();
   }
@@ -661,10 +670,26 @@ class PhysDesMgr
     data.orient = orient;
     return cells_[id] = data;
   }
+  PhysBlockage& addBlockage(int64_t xl,
+                            int64_t yl,
+                            int64_t xh,
+                            int64_t yh,
+                            bool isSoft = false)
+  {
+    PhysBlockage blockage;
+    blockage.is_soft_ = isSoft;
+    blockage.shapes_.emplace_back(
+        eLIB::TechShape::RECT,
+        eUTL::Rect(eUTL::UvDist(xl), eUTL::UvDist(yl), eUTL::UvDist(xh),
+                   eUTL::UvDist(yh)));
+    blockages_.push_back(std::move(blockage));
+    return blockages_.back();
+  }
 
   const eLIB::TechLib* tech_ = nullptr;
   std::deque<PhysRow> rows_;
   std::map<LeafCellID, PhysCellData> cells_;
+  std::deque<PhysBlockage> blockages_;
 };
 
 class PhysCellImpl
@@ -733,20 +758,9 @@ class PhysNet
   PhysSWire swire_;
 };
 
-class PhysBlockage
-{
- public:
-  bool isSoft() const { return is_soft_; }
-  const std::vector<eLIB::TechShape>& getShapes() const { return shapes_; }
-
-  bool is_soft_ = false;
-  std::vector<eLIB::TechShape> shapes_;
-};
-
 inline const std::deque<PhysBlockage>& PhysDesMgr::getPhysBlockageIter() const
 {
-  static const std::deque<PhysBlockage> kNoBlockages;
-  return kNoBlockages;
+  return blockages_;
 }
 class HierManager
 {

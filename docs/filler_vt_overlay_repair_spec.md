@@ -241,8 +241,11 @@ checker/view、借用一套 Grid/Network,对应一个 design revision;commit 后
 - 单次 `init(PhysDesMgr*, fillerSetting)` 绑定现有 infrastructure,注册 configured
   filler masters 并建立 final-checker/view;不再接收 leafCells 或 targetNewMaster。
   row/site/status/origin/orientation 的 authority 是 `PhysDesMgr`。
-- `precheck()` 独立从 `PhysDesMgr` placement 与 `Network` cell universe 扫描
-  gap/overlap,不检查 target、master size、candidate、ID mapping 或 implant DRC。
+- `precheck()` 以 supplied `Grid` 的合法 site segments 为 coverage domain,再从
+  `PhysDesMgr` placement 与 `Network` cell universe 扫描 gap/overlap。Grid 中
+  `Pixel::is_valid && padding_reserved_by == nullptr` 的最大连续区间才要求覆盖;
+  hard blockage、fragmented-row hole、halo/padding 与其他合法空白不算 Gap。
+  它不检查 target、master size、candidate、ID mapping 或 implant DRC。
 - candidate universe 只来自 `fillerSetting::getFillerMasters()`;repair 内部过滤
   同宽同高、异 VT、filler-only 与相同 bottom-band polarity layout。
 - checker/planner instance/master ID 固定为 `Node::getId()` / `Master::getId()`;
@@ -547,7 +550,7 @@ design commit 后构造新 engine。
 
 `precheck()` 的 contract:
 
-- `isLegal=true`:placement 没有 gap/overlap;
+- `isLegal=true`:合法 row segments 内没有 gap/overlap;
 - `isLegal=false`:至少一个 gap 或 overlap,diagnostics status 为 `Gap`/`Overlap`,
   message 是 warning 并明确 opto 必须阻断 mutation;
 - 不检查 target、master size、candidate、ID mapping、site alignment、越界分类或
@@ -566,7 +569,13 @@ final checker,内部 planner request/status 不能越过 facade。
 
 ### 6.1 Placement precheck(opto-owned gate)
 
-`precheck()` 只回答一件事:每个 non-pad row 的 placement 是否恰好覆盖一次。
+`precheck()` 只回答一件事:每个需要 placement coverage 的合法 row segment 是否
+恰好覆盖一次。coverage domain 由 supplied Grid 定义:逐行扫描 site pixel,
+只把 `is_valid && padding_reserved_by == nullptr` 的最大连续区间纳入检查。
+因此 hard blockage、fragmented-row hole、instance/master/global halo/padding 以及
+infrastructure 标记为不可放置的合法空白被排除,而不是按完整 row bbox 误报 Gap。
+
+在每个合法 segment 内,UDM placed/fixed cell span 被独立裁剪并做 coverage sweep;
 零覆盖区间报告 `Gap`,多重覆盖区间报告 `Overlap`;两者均使
 `ipl::CheckResult::isLegal=false`。diagnostics 是 warning 级信息,但 bool contract
 是 hard gate,opto 必须停止后续 mutation。
@@ -921,7 +930,9 @@ source 不含 fake include、fake link 或 fake/real `#ifdef`。
 前置与协议:
 
 - production clean/gap/overlap 三种 precheck;gap/overlap 返回 `isLegal=false` 与
-  Warning diagnostics,clean 返回 `isLegal=true`。
+  Warning diagnostics,clean 返回 `isLegal=true`。另覆盖 hard blockage 内空白、
+  instance halo 内空白不报 Gap,以及同一 blocked-row 的合法 segment 内真实 Gap
+  仍然阻断。
 - 验证 precheck 与 repair 前后 UDM physical records 完全相同。
 - guard-only filler 出现在 `fillerChanges` 中,判 invalid request。
 - 非 filler instance 出现在 `FillerChange` 中,判 invalid request。

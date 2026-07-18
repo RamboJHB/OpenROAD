@@ -974,31 +974,61 @@ struct CoverageFinding
 };
 
 std::vector<CoverageFinding> findGapAndOverlap(eUNL::PhysDesMgr* desMgr,
+                                               const Grid* grid,
                                                const Network* network)
 {
   struct RowData
   {
     int id = 0;
-    int64_t xl = 0;
-    int64_t xh = 0;
     int64_t yl = 0;
     int64_t yh = 0;
+    std::vector<std::pair<int64_t, int64_t>> legalSpans;
     std::vector<std::pair<int64_t, int64_t>> spans;
   };
 
+  // Grid is the infrastructure authority for placeable row sites. A valid
+  // pixel belongs to a physical row and is not cut by a hard blockage/group
+  // boundary; padding_reserved_by marks a halo/padding site where whitespace
+  // is intentional. Only maximal runs satisfying both conditions require
+  // exactly one placed-cell cover.
   std::vector<RowData> rows;
-  int rowId = 0;
-  for (const eUNL::PhysRow& row : desMgr->getPhysRowIter()) {
-    if (!row.getSite().getIsPad()) {
-      const eUTL::Rect bbox = row.getBbox();
-      rows.push_back(RowData{rowId,
-                             bbox.getXL().getStorage(),
-                             bbox.getXH().getStorage(),
-                             bbox.getYL().getStorage(),
-                             bbox.getYH().getStorage(),
-                             {}});
+  const eUTL::Rect core = grid->getCore();
+  const int64_t coreXl = core.getXL().getStorage();
+  const int64_t coreYl = core.getYL().getStorage();
+  const int64_t siteWidth = grid->getSiteWidth().v;
+  if (siteWidth <= 0) {
+    return {};
+  }
+  for (GridY y{0}; y < grid->getRowCount(); ++y) {
+    RowData row;
+    row.id = y.v;
+    row.yl = coreYl + grid->gridYToDbu(y).v;
+    row.yh = coreYl + grid->gridYToDbu(y + 1).v;
+
+    bool inLegalSpan = false;
+    int legalStart = 0;
+    for (GridX x{0}; x < grid->getRowSiteCount(); ++x) {
+      const Pixel* pixel = grid->gridPixel(x, y);
+      const bool requiresCoverage
+          = pixel != nullptr && pixel->is_valid
+            && pixel->padding_reserved_by == nullptr;
+      if (requiresCoverage && !inLegalSpan) {
+        inLegalSpan = true;
+        legalStart = x.v;
+      } else if (!requiresCoverage && inLegalSpan) {
+        row.legalSpans.emplace_back(coreXl + legalStart * siteWidth,
+                                    coreXl + x.v * siteWidth);
+        inLegalSpan = false;
+      }
     }
-    ++rowId;
+    if (inLegalSpan) {
+      row.legalSpans.emplace_back(
+          coreXl + legalStart * siteWidth,
+          coreXl + grid->getRowSiteCount().v * siteWidth);
+    }
+    if (!row.legalSpans.empty() && row.yh > row.yl) {
+      rows.push_back(std::move(row));
+    }
   }
 
   // y-sorted index over the rows so each node binary-searches its overlapped
@@ -1051,61 +1081,62 @@ std::vector<CoverageFinding> findGapAndOverlap(eUNL::PhysDesMgr* desMgr,
       if (cellYl >= row.yh || cellYh <= row.yl) {
         continue;
       }
-      const int64_t clippedXl = std::max(cellXl, row.xl);
-      const int64_t clippedXh = std::min(cellXh, row.xh);
-      if (clippedXh > clippedXl) {
-        row.spans.emplace_back(clippedXl, clippedXh);
-      }
+      row.spans.emplace_back(cellXl, cellXh);
     }
   }
 
   std::vector<CoverageFinding> findings;
   for (RowData& row : rows) {
-    std::vector<int64_t> cuts{row.xl, row.xh};
-    for (const auto& span : row.spans) {
-      cuts.push_back(span.first);
-      cuts.push_back(span.second);
-    }
-    std::sort(cuts.begin(), cuts.end());
-    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+    for (const auto& legal : row.legalSpans) {
+      std::vector<int64_t> cuts{legal.first, legal.second};
+      std::vector<int64_t> starts;
+      std::vector<int64_t> ends;
+      starts.reserve(row.spans.size());
+      ends.reserve(row.spans.size());
+      for (const auto& span : row.spans) {
+        const int64_t clippedXl = std::max(span.first, legal.first);
+        const int64_t clippedXh = std::min(span.second, legal.second);
+        if (clippedXh <= clippedXl) {
+          continue;
+        }
+        cuts.push_back(clippedXl);
+        cuts.push_back(clippedXh);
+        starts.push_back(clippedXl);
+        ends.push_back(clippedXh);
+      }
+      std::sort(cuts.begin(), cuts.end());
+      cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+      std::sort(starts.begin(), starts.end());
+      std::sort(ends.begin(), ends.end());
 
-    std::vector<int64_t> starts;
-    std::vector<int64_t> ends;
-    starts.reserve(row.spans.size());
-    ends.reserve(row.spans.size());
-    for (const auto& span : row.spans) {
-      starts.push_back(span.first);
-      ends.push_back(span.second);
-    }
-    std::sort(starts.begin(), starts.end());
-    std::sort(ends.begin(), ends.end());
-
-    size_t nextStart = 0;
-    size_t nextEnd = 0;
-    int active = 0;
-    for (size_t i = 0; i + 1 < cuts.size(); ++i) {
-      const int64_t segmentXl = cuts[i];
-      const int64_t segmentXh = cuts[i + 1];
-      while (nextEnd < ends.size() && ends[nextEnd] <= segmentXl) {
-        --active;
-        ++nextEnd;
-      }
-      while (nextStart < starts.size() && starts[nextStart] <= segmentXl) {
-        ++active;
-        ++nextStart;
-      }
-      if (segmentXh <= segmentXl || active == 1) {
-        continue;
-      }
-      const char* findingStatus = active == 0 ? "Gap" : "Overlap";
-      if (!findings.empty()
-          && std::string(findings.back().status) == findingStatus
-          && findings.back().rowId == row.id
-          && findings.back().xh == segmentXl) {
-        findings.back().xh = segmentXh;
-      } else {
-        findings.push_back(
-            CoverageFinding{findingStatus, row.id, segmentXl, segmentXh});
+      size_t nextStart = 0;
+      size_t nextEnd = 0;
+      int active = 0;
+      for (size_t i = 0; i + 1 < cuts.size(); ++i) {
+        const int64_t segmentXl = cuts[i];
+        const int64_t segmentXh = cuts[i + 1];
+        while (nextEnd < ends.size() && ends[nextEnd] <= segmentXl) {
+          --active;
+          ++nextEnd;
+        }
+        while (nextStart < starts.size()
+               && starts[nextStart] <= segmentXl) {
+          ++active;
+          ++nextStart;
+        }
+        if (segmentXh <= segmentXl || active == 1) {
+          continue;
+        }
+        const char* findingStatus = active == 0 ? "Gap" : "Overlap";
+        if (!findings.empty()
+            && std::string(findings.back().status) == findingStatus
+            && findings.back().rowId == row.id
+            && findings.back().xh == segmentXl) {
+          findings.back().xh = segmentXh;
+        } else {
+          findings.push_back(
+              CoverageFinding{findingStatus, row.id, segmentXl, segmentXh});
+        }
       }
     }
   }
@@ -1164,7 +1195,7 @@ class FillerRepairEngine::Impl
       return result;
     }
     const std::vector<CoverageFinding> findings
-        = findGapAndOverlap(des_mgr_, network_);
+        = findGapAndOverlap(des_mgr_, grid_, network_);
     result.isLegal = findings.empty();
     for (const CoverageFinding& finding : findings) {
       result.diagnostics.push_back(

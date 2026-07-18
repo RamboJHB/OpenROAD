@@ -50,8 +50,13 @@ fillerRepair provides the gate; it does not modify opto and does not commit.
 
 ## Precheck scope
 
-Precheck checks only placement gaps and overlaps over non-pad rows using
-`PhysDesMgr` physical cells and the Network cell universe. It does not check:
+Precheck checks only placement gaps and overlaps inside coverage-required
+legal row segments. The supplied Grid is the domain authority: maximal runs
+whose pixels satisfy `is_valid && padding_reserved_by == nullptr` are checked
+exactly once. Hard blockages, fragmented-row holes, halo/padding reservations
+and other non-placeable legal whitespace are outside that domain and are not
+reported as gaps. Cell coverage still comes from `PhysDesMgr` physical cells
+and the Network cell universe. Precheck does not check:
 
 - target or proposed master;
 - master-size compatibility;
@@ -60,7 +65,8 @@ Precheck checks only placement gaps and overlaps over non-pad rows using
 - site alignment or a separate out-of-bounds category;
 - implant DRC.
 
-`isLegal=true` means no gap/overlap. `isLegal=false` means at least one
+`isLegal=true` means no gap/overlap in those legal segments. `isLegal=false`
+means at least one
 `Gap`/`Overlap` diagnostic and opto must block. `repair()` deliberately does
 not call precheck again.
 
@@ -86,6 +92,7 @@ default and does not affect search behavior.
 | Data | Authority |
 |---|---|
 | rows and physical placement | `PhysDesMgr` |
+| precheck coverage-required legal segments | supplied Grid valid, unreserved pixels |
 | cell/master topology and checker IDs | production Network |
 | filler allow-list | `fillerSetting::getFillerMasters()` |
 | VT family/band polarity | `PhysLibCell` implant shapes + checker layers |
@@ -188,7 +195,7 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-All 81 planner cases and 43 production E2E cases are GoogleTests. The portable
+All 81 planner cases and 52 production E2E cases are GoogleTests. The portable
 E2E source/runner and test-only fake UDM include tree live in
 `src/dpl2/src/fillerRepair/test`, and
 `sources.cmake` exports `DPL2_FILLER_REPAIR_E2E_TEST_SOURCE` for destination
@@ -199,12 +206,14 @@ the production objects normally supplied by DePlace; the engine owns only its
 checker/view instances.
 Each behavior has three independently discovered cases; every case constructs
 at least five standard rows. Coverage includes clean/gap/overlap precheck,
+hard-blockage and instance-halo exclusions, a real gap inside the remaining
+legal segment,
 opto-blocking values, deterministic/non-mutating repair, persistent checker
 diagnostics, candidate-universe failures and the row/column frame gates (trailing pad
 accepted, leading pad and off-origin rows refused).
 
-2026-07-18 result: planner 81/81 normal and ASan; E2E 43/43 normal and ASan;
-full CTest 124/124 normal and ASan; all targets passed Werror.
+2026-07-18 result: planner 81/81 normal and ASan; E2E 52/52 normal and ASan;
+full CTest 133/133 normal and ASan; all targets passed Werror.
 
 ## Integration risks
 

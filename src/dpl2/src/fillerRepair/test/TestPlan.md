@@ -7,8 +7,8 @@ Updated: 2026-07-18.
 | Tier | Command | Boundary |
 |---|---|---|
 | Planner unit | `src/dpl2/src/fillerRepair/test/run_tests.sh` | 81 individually registered GoogleTests with private planner doubles |
-| Production E2E | `src/dpl2/src/fillerRepair/test/run_e2e_tests.sh` | 43 GoogleTests; fake UDM data with supplied infra/checker types and production engine/planner |
-| Full CTest | `src/dpl2/test/CMakeLists.txt` | 124 discovered GoogleTests |
+| Production E2E | `src/dpl2/src/fillerRepair/test/run_e2e_tests.sh` | 52 GoogleTests; fake UDM data with supplied infra/checker types and production engine/planner |
+| Full CTest | `src/dpl2/test/CMakeLists.txt` | 133 discovered GoogleTests |
 | Real-UDM compile gate | `cmake -DDPL2_TEST_USE_FAKE_UDM=OFF ...` | `dpl2_filler_repair_compile_check`: all supplied + production sources against real UDM headers |
 
 Normal and AddressSanitizer runs are required. Production builds use
@@ -50,12 +50,18 @@ files remain unmodified.
 1. Clean placement: `isLegal=true`, no diagnostics.
 2. Gap: `isLegal=false`, at least one `Gap` warning diagnostic.
 3. Overlap: `isLegal=false`, at least one `Overlap` warning diagnostic.
+4. A gap entirely inside a hard blockage is outside the legal Grid segments
+   and remains legal.
+5. A gap entirely inside an instance halo/padding reservation is outside the
+   legal Grid segments and remains legal.
+6. With the same blocked row tail, a gap inside the remaining valid,
+   unreserved segment still returns `isLegal=false` and `Gap`.
 
 Each case snapshots all fixture cell origins, masters, status and orientation
 before/after precheck and requires equality. The tests do not pass target,
 newMaster or candidate information to precheck, proving that scope separation.
 
-Clean, gap and overlap are each instantiated for Canonical, ShiftedOrigin and
+All six behaviors are each instantiated for Canonical, ShiftedOrigin and
 FarShiftedOrigin: three independently discovered testcases per behavior.
 
 ## Required repair cases
@@ -120,8 +126,8 @@ cmake --build src/dpl2/test/build-cmake-asan -j2
 ctest --test-dir src/dpl2/test/build-cmake-asan --output-on-failure
 ```
 
-2026-07-18 results: planner 81/81 normal and ASan; production E2E 43/43 normal
-and ASan; full CTest 124/124 normal and ASan; Werror clean. Compile-check mode
+2026-07-18 results: planner 81/81 normal and ASan; production E2E 52/52 normal
+and ASan; full CTest 133/133 normal and ASan; Werror clean. Compile-check mode
 is configured against the UDM-compatible headers.
 
 ## Regression rules

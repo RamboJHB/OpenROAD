@@ -17,8 +17,8 @@ The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
 | Infrastructure | existing production Grid/Network are borrowed; engine owns only final checker/view, registers configured filler masters at init and target master lazily; empty `getFillerMasters()` errors out |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
 | Production API | one `FillerRepairEngine` = precheck + private view/oracle + repair; fails closed before a successful `init()` |
-| E2E | 42 cases in `fillerRepair/test/e2e_test.cpp`; every behavior has 3 cases and every fixture has at least 5 standard rows; fake UDM is the only data substitute |
-| CMake | standalone GoogleTest/CTest harness passes 123/123 normal and ASan; source/test lists live in `src/fillerRepair/sources.cmake`; `DPL2_TEST_USE_FAKE_UDM=OFF` builds the real-UDM compile gate |
+| E2E | 52 cases in `fillerRepair/test/e2e_test.cpp`; every behavior has 3 cases and every fixture has at least 5 standard rows; fake UDM is the only data substitute |
+| CMake | standalone GoogleTest/CTest harness passes 133/133 normal and ASan; source/test lists live in `src/fillerRepair/sources.cmake`; `DPL2_TEST_USE_FAKE_UDM=OFF` builds the real-UDM compile gate |
 
 ## Fixed decisions
 
@@ -26,7 +26,9 @@ The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
 2. This stage supports same-position/same-size filler swaps only.
 3. `ImplantLayerChecker` is the only DRC oracle.
 4. `FillerRepairEngine` is the only production planner boundary.
-5. Opto calls public precheck before mutation; it checks gap/overlap only.
+5. Opto calls public precheck before mutation; it checks gap/overlap only
+   inside maximal supplied-Grid runs where pixels are valid and not reserved
+   by halo/padding. Blockage cuts and legal empty regions are outside scope.
 6. Candidates come only from `fillerSetting::getFillerMasters()`.
 7. Instance/master IDs are `Node::getId()` / `Master::getId()`; physical wire
    handles are `LeafCellID` / `LibCellID` in `FillerCellRecord`.
