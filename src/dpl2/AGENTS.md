@@ -14,11 +14,11 @@ The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
 |---|---|
 | Planner | internal `FillerRepairPlanner`; adaptive-L1, filler domains, per-band ranking/filtering, deterministic output and opt-in `[fr][stage]` transcript complete |
 | Unit tests | 81/81 GoogleTests normal and ASan |
-| Infrastructure | `fillerRepair/RepairInfrastructure` builds production Network/Grid from PhysDesMgr data; empty `getFillerMasters()` errors out |
+| Infrastructure | private inside `FillerRepairEngine`; one init builds/owns Network, Grid and final checker from PhysDesMgr data; empty `getFillerMasters()` errors out |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
 | Production API | one `FillerRepairEngine` = precheck + private view/oracle + repair; fails closed before a successful `init()` |
-| E2E | 33 cases in `fillerRepair/test/e2e_test.cpp`; every behavior has 3 cases and every fixture has at least 5 standard rows; fake UDM is the only data substitute |
-| CMake | standalone GoogleTest/CTest harness passes 114/114 normal and ASan; source/test lists live in `src/fillerRepair/sources.cmake`; `DPL2_TEST_USE_FAKE_UDM=OFF` builds the real-UDM compile gate |
+| E2E | 39 cases in `fillerRepair/test/e2e_test.cpp`; every behavior has 3 cases and every fixture has at least 5 standard rows; fake UDM is the only data substitute |
+| CMake | standalone GoogleTest/CTest harness passes 120/120 normal and ASan; source/test lists live in `src/fillerRepair/sources.cmake`; `DPL2_TEST_USE_FAKE_UDM=OFF` builds the real-UDM compile gate |
 
 ## Fixed decisions
 
@@ -34,12 +34,12 @@ The V2.1 swap-only planner and fake-UDM-only production E2E are complete.
    checker construction, including uninstantiated masters.
 9. Checker batches use one target/guard plus ordered `FillerChanges`; checker
    computes the empty-overlay baseline and returns blocking violations.
-10. Rebuild infrastructure/checker/engine after a design commit.
+10. Construct and init a new engine after a design commit.
 
-## Production infrastructure boundary
+## Production facade boundary
 
-`RepairInfrastructure::build(desMgr, leafCellIds, fillerSetting,
-targetNewMaster)`:
+`FillerRepairEngine::init(desMgr, leafCellIds, fillerSetting,
+targetNewMaster)` performs one private snapshot build:
 
 - validates `fillerSetting` and `PhysDesMgr` belong to the same design;
 - derives core/rows and real Grid state from `PhysDesMgr`;
@@ -48,16 +48,17 @@ targetNewMaster)`:
 - includes uninstantiated target/candidate masters;
 - paints production Grid occupancy.
 
-The caller owns hierarchy traversal and supplies leaf IDs. No placement
+The engine then constructs and owns its final checker and planner view. The
+caller owns hierarchy traversal and supplies leaf IDs, but never constructs
+Grid, Network, a repair checker or another repair-specific object. No placement
 properties are accepted from the caller.
 
 ## Thread/lifetime model
 
-The infrastructure, checker and engine form one design snapshot. Precheck and
-repair are non-mutating; repair does not call precheck. Checker calls are
-serialized privately per engine -- sharing one checker across engines is not
-serialized, so pair each engine with its own checker. `RepairInfrastructure`
-is intentionally one-build; create another object for a new revision.
+One engine privately owns the infrastructure/checker/view for one design
+snapshot. Precheck and repair are non-mutating; repair does not call precheck.
+Checker calls are serialized privately per engine. `init()` is one-shot;
+create another engine for a new revision.
 
 ## Tests
 

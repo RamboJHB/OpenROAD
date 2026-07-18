@@ -1,6 +1,6 @@
 // Tier-1 end-to-end smoke over the REAL repair chain:
-//   fake-UDM DesignDb -> Session -> ipl::ImplantLayerChecker (real
-//   init(desMgr) UDM extraction) -> FillerRepairEngine::{precheck,repair}.
+//   fake-UDM DesignDb -> Session -> FillerRepairEngine::init (private
+//   Grid/Network/final-checker snapshot) -> {precheck,repair}.
 //
 // Every case owns at least five standard-cell rows. The canonical scenario
 // (siteWidth=1, rowHeight=8, WIDTH rule=6, SPACING rule=2) is:
@@ -20,9 +20,7 @@
 
 #include <gtest/gtest.h>
 
-#include "drc/ImplantLayerChecker.h"
 #include "fillerRepair/FillerRepairEngine.h"
-#include "fillerRepair/RepairInfrastructure.h"
 #include "infrastructure/fillerSetting.h"
 
 namespace {
@@ -229,8 +227,8 @@ LayoutCase farShiftedLayout()
 }
 
 // Owns one complete production-chain snapshot. Only DesignDb is fake; the
-// importer, Grid/Network, final checker, engine and planner are production
-// objects compiled from the same sources that are copied to the destination.
+// engine privately owns the production importer, Grid/Network, final checker
+// and planner compiled from the same sources copied to the destination.
 class ProductionHarness
 {
  public:
@@ -239,34 +237,21 @@ class ProductionHarness
   {
     buildDesign(db_, setup);
     filler_setting_.addFillerCell("FL2 FH2 FS2");
-    infrastructure_ready_ = infrastructure_.build(
+    engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>();
+    engine_ready_ = engine_->init(
         db_.design.getPhysDesMgr(), allLeafCells(), filler_setting_,
         db_.design.lib_acc_.getPhysLibCell(2));
-    if (!infrastructure_ready_) {
-      return;
-    }
-    checker_ = std::make_unique<dpl2::ipl::ImplantLayerChecker>(
-        infrastructure_.grid(), infrastructure_.network());
-    engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>(
-        infrastructure_.grid(), infrastructure_.network());
-    engine_ready_ = engine_->init(db_.design.getPhysDesMgr(), checker_.get(),
-                                  &filler_setting_);
   }
 
-  bool infrastructureReady() const { return infrastructure_ready_; }
   bool engineReady() const { return engine_ready_; }
 
   fake_udm::DesignDb& db() { return db_; }
-  dpl2::ipl::ImplantLayerChecker& checker() { return *checker_; }
   dpl2::fillerRepair::FillerRepairEngine& engine() { return *engine_; }
 
  private:
   fake_udm::DesignDb db_;
   dpl2::fillerSetting filler_setting_;
-  dpl2::RepairInfrastructure infrastructure_;
-  std::unique_ptr<dpl2::ipl::ImplantLayerChecker> checker_;
   std::unique_ptr<dpl2::fillerRepair::FillerRepairEngine> engine_;
-  bool infrastructure_ready_ = false;
   bool engine_ready_ = false;
 };
 
@@ -298,7 +283,6 @@ class FillerRepairProductionE2E
 TEST_P(FillerRepairProductionE2E, CleanPlacementPrecheck)
 {
   ProductionHarness harness(GetParam().setup);
-  ASSERT_TRUE(harness.infrastructureReady());
   ASSERT_TRUE(harness.engineReady());
   ASSERT_GE(harness.db().desMgr().getPhysRowIter().size(), kStandardRows);
   const PhysicalSnapshot before = snapshotPhysicalData(harness.db());
@@ -311,7 +295,6 @@ TEST_P(FillerRepairProductionE2E, CleanPlacementPrecheck)
 TEST_P(FillerRepairProductionE2E, GapPlacementPrecheck)
 {
   ProductionHarness harness(GetParam().setup);
-  ASSERT_TRUE(harness.infrastructureReady());
   ASSERT_TRUE(harness.engineReady());
   ASSERT_GE(harness.db().desMgr().getPhysRowIter().size(), kStandardRows);
   eUNL::PhysCellData& moved
@@ -329,7 +312,6 @@ TEST_P(FillerRepairProductionE2E, GapPlacementPrecheck)
 TEST_P(FillerRepairProductionE2E, OverlapPlacementPrecheck)
 {
   ProductionHarness harness(GetParam().setup);
-  ASSERT_TRUE(harness.infrastructureReady());
   ASSERT_TRUE(harness.engineReady());
   ASSERT_GE(harness.db().desMgr().getPhysRowIter().size(), kStandardRows);
   eUNL::PhysCellData& moved
@@ -347,7 +329,6 @@ TEST_P(FillerRepairProductionE2E, OverlapPlacementPrecheck)
 TEST_P(FillerRepairProductionE2E, CleanTargetOverlayNeedsNoFillerChange)
 {
   ProductionHarness harness(GetParam().setup);
-  ASSERT_TRUE(harness.infrastructureReady());
   ASSERT_TRUE(harness.engineReady());
   ASSERT_GE(harness.db().desMgr().getPhysRowIter().size(), kStandardRows);
   const PhysicalSnapshot before = snapshotPhysicalData(harness.db());
@@ -362,7 +343,6 @@ TEST_P(FillerRepairProductionE2E, CleanTargetOverlayNeedsNoFillerChange)
 TEST_P(FillerRepairProductionE2E, ViolatingTargetOverlayFindsFillerSwap)
 {
   ProductionHarness harness(GetParam().setup);
-  ASSERT_TRUE(harness.infrastructureReady());
   ASSERT_TRUE(harness.engineReady());
   ASSERT_GE(harness.db().desMgr().getPhysRowIter().size(), kStandardRows);
   const PhysicalSnapshot before = snapshotPhysicalData(harness.db());
@@ -381,7 +361,6 @@ TEST_P(FillerRepairProductionE2E, ViolatingTargetOverlayFindsFillerSwap)
 TEST_P(FillerRepairProductionE2E, RepeatedRepairIsDeterministicAndNonMutating)
 {
   ProductionHarness harness(GetParam().setup);
-  ASSERT_TRUE(harness.infrastructureReady());
   ASSERT_TRUE(harness.engineReady());
   ASSERT_GE(harness.db().desMgr().getPhysRowIter().size(), kStandardRows);
   const PhysicalSnapshot before = snapshotPhysicalData(harness.db());
@@ -404,10 +383,8 @@ TEST_P(FillerRepairProductionE2E,
   DesignSetup setup = GetParam().setup;
   setup.unusedRuleLayers = true;
   ProductionHarness harness(setup);
-  ASSERT_TRUE(harness.infrastructureReady());
   ASSERT_TRUE(harness.engineReady());
   ASSERT_GE(harness.db().desMgr().getPhysRowIter().size(), kStandardRows);
-  ASSERT_FALSE(harness.checker().getDiags().empty());
   const auto outcome = harness.engine().repair(
       eUNL::LeafCellID(0, kTargetCellIndex),
       harness.db().design.lib_acc_.getPhysLibCell(2));
@@ -416,53 +393,59 @@ TEST_P(FillerRepairProductionE2E,
   EXPECT_EQ(outcome.changes.front().new_lib_cell_.getIndexValue(), 4);
 }
 
-// A configured master absent from the imported Network must fail init rather
-// than silently shrinking the candidate universe.
-TEST_P(FillerRepairProductionE2E, ConfiguredMasterMissingFromNetworkFailsInit)
+// The single facade imports the complete configured filler universe itself,
+// including an uninstantiated master. Callers cannot accidentally build a
+// smaller Network than the engine configuration.
+TEST_P(FillerRepairProductionE2E, ConfiguredMastersAreImportedByEngine)
 {
   fake_udm::DesignDb db;
   buildDesign(db, GetParam().setup);
   ASSERT_GE(db.desMgr().getPhysRowIter().size(), kStandardRows);
-  dpl2::fillerSetting infraSetting(&db.design);
-  infraSetting.addFillerCell("FL2 FH2 FS2");
-  dpl2::RepairInfrastructure infrastructure;
-  ASSERT_TRUE(infrastructure.build(db.design.getPhysDesMgr(), allLeafCells(),
-                                   infraSetting,
-                                   db.design.lib_acc_.getPhysLibCell(2)));
-  dpl2::ipl::ImplantLayerChecker checker(infrastructure.grid(),
-                                         infrastructure.network());
-  dpl2::fillerSetting engineSetting(&db.design);
-  engineSetting.addFillerCell("FL2 FH2 FS2 FX2");
-  dpl2::fillerRepair::FillerRepairEngine engine(infrastructure.grid(),
-                                                 infrastructure.network());
-  EXPECT_FALSE(engine.init(db.design.getPhysDesMgr(), &checker,
-                           &engineSetting));
+  dpl2::fillerSetting fillerSetting(&db.design);
+  fillerSetting.addFillerCell("FL2 FH2 FS2 FX2");
+  dpl2::fillerRepair::FillerRepairEngine engine;
+  EXPECT_TRUE(engine.init(db.design.getPhysDesMgr(), allLeafCells(),
+                          fillerSetting,
+                          db.design.lib_acc_.getPhysLibCell(2)));
 }
 
-// An empty allow list is rejected by both the importer and the facade.
+// An empty allow list is rejected by the single production facade, and the
+// reason remains available through the standard result diagnostics.
 TEST_P(FillerRepairProductionE2E, EmptyFillerAllowListErrorsOut)
 {
   fake_udm::DesignDb db;
   buildDesign(db, GetParam().setup);
   ASSERT_GE(db.desMgr().getPhysRowIter().size(), kStandardRows);
   dpl2::fillerSetting emptySetting(&db.design);
-  dpl2::RepairInfrastructure rejected;
-  EXPECT_FALSE(rejected.build(db.design.getPhysDesMgr(), allLeafCells(),
-                              emptySetting,
-                              db.design.lib_acc_.getPhysLibCell(2)));
-  EXPECT_FALSE(rejected.diagnostics().empty());
-  dpl2::fillerSetting goodSetting(&db.design);
-  goodSetting.addFillerCell("FL2 FH2 FS2");
-  dpl2::RepairInfrastructure infrastructure;
-  ASSERT_TRUE(infrastructure.build(db.design.getPhysDesMgr(), allLeafCells(),
-                                   goodSetting,
-                                   db.design.lib_acc_.getPhysLibCell(2)));
-  dpl2::ipl::ImplantLayerChecker checker(infrastructure.grid(),
-                                         infrastructure.network());
-  dpl2::fillerRepair::FillerRepairEngine engine(infrastructure.grid(),
-                                                 infrastructure.network());
-  EXPECT_FALSE(engine.init(db.design.getPhysDesMgr(), &checker,
-                           &emptySetting));
+  dpl2::fillerRepair::FillerRepairEngine engine;
+  EXPECT_FALSE(engine.init(db.design.getPhysDesMgr(), allLeafCells(),
+                           emptySetting,
+                           db.design.lib_acc_.getPhysLibCell(2)));
+  const auto result = engine.precheck();
+  EXPECT_FALSE(result.isLegal);
+  EXPECT_TRUE(hasDiagnostic(result.diagnostics, "empty_filler_allow_list"));
+}
+
+// The final checker reads its design through UDM Session. The facade must
+// reject an explicit PhysDesMgr from a different design before checker
+// construction, rather than silently creating a mixed snapshot.
+TEST_P(FillerRepairProductionE2E, ActiveDesignMismatchFailsInit)
+{
+  fake_udm::DesignDb requestedDb;
+  buildDesign(requestedDb, GetParam().setup);
+  dpl2::fillerSetting fillerSetting(&requestedDb.design);
+  fillerSetting.addFillerCell("FL2 FH2 FS2");
+
+  fake_udm::DesignDb activeDb;
+  buildDesign(activeDb);  // makes a different design current in Session
+
+  dpl2::fillerRepair::FillerRepairEngine engine;
+  EXPECT_FALSE(engine.init(requestedDb.design.getPhysDesMgr(), allLeafCells(),
+                           fillerSetting,
+                           requestedDb.design.lib_acc_.getPhysLibCell(2)));
+  const auto result = engine.precheck();
+  EXPECT_FALSE(result.isLegal);
+  EXPECT_TRUE(hasDiagnostic(result.diagnostics, "active_design_mismatch"));
 }
 
 // Before or after failed init, every public entry point must fail closed.
@@ -473,12 +456,7 @@ TEST_P(FillerRepairProductionE2E, FailedInitFailsClosed)
   ASSERT_GE(db.desMgr().getPhysRowIter().size(), kStandardRows);
   dpl2::fillerSetting fillerSetting(&db.design);
   fillerSetting.addFillerCell("FL2 FH2 FS2");
-  dpl2::RepairInfrastructure infrastructure;
-  ASSERT_TRUE(infrastructure.build(db.design.getPhysDesMgr(), allLeafCells(),
-                                   fillerSetting,
-                                   db.design.lib_acc_.getPhysLibCell(2)));
-  dpl2::fillerRepair::FillerRepairEngine engine(infrastructure.grid(),
-                                                 infrastructure.network());
+  dpl2::fillerRepair::FillerRepairEngine engine;
   const auto expectClosed = [&](const char* phase) {
     SCOPED_TRACE(phase);
     const auto precheck = engine.precheck();
@@ -493,9 +471,27 @@ TEST_P(FillerRepairProductionE2E, FailedInitFailsClosed)
     EXPECT_TRUE(hasDiagnostic(repair.diagnostics, "engine_not_initialized"));
   };
   expectClosed("before init");
-  EXPECT_FALSE(engine.init(db.design.getPhysDesMgr(), nullptr,
-                           &fillerSetting));
+  EXPECT_FALSE(engine.init(nullptr, allLeafCells(), fillerSetting,
+                           db.design.lib_acc_.getPhysLibCell(2)));
   expectClosed("after failed init");
+}
+
+// One engine owns one coherent design snapshot. A second init is rejected
+// without damaging the already-ready first snapshot.
+TEST_P(FillerRepairProductionE2E, EngineUsesOneInitialization)
+{
+  fake_udm::DesignDb db;
+  buildDesign(db, GetParam().setup);
+  dpl2::fillerSetting fillerSetting(&db.design);
+  fillerSetting.addFillerCell("FL2 FH2 FS2");
+  dpl2::fillerRepair::FillerRepairEngine engine;
+  ASSERT_TRUE(engine.init(db.design.getPhysDesMgr(), allLeafCells(),
+                          fillerSetting,
+                          db.design.lib_acc_.getPhysLibCell(2)));
+  EXPECT_FALSE(engine.init(db.design.getPhysDesMgr(), allLeafCells(),
+                           fillerSetting,
+                           db.design.lib_acc_.getPhysLibCell(2)));
+  EXPECT_TRUE(engine.precheck().isLegal);
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -555,15 +551,10 @@ TEST_P(FillerRepairRowOriginE2E, FirstNonPadRowDefinesSharedXFrame)
   ASSERT_GE(db.desMgr().getPhysRowIter().size(), kStandardRows);
   dpl2::fillerSetting fillerSetting(&db.design);
   fillerSetting.addFillerCell("FL2 FH2 FS2");
-  dpl2::RepairInfrastructure infrastructure;
-  ASSERT_TRUE(infrastructure.build(db.design.getPhysDesMgr(), allLeafCells(),
-                                   fillerSetting,
-                                   db.design.lib_acc_.getPhysLibCell(2)));
-  dpl2::ipl::ImplantLayerChecker checker(infrastructure.grid(),
-                                         infrastructure.network());
-  dpl2::fillerRepair::FillerRepairEngine engine(infrastructure.grid(),
-                                                 infrastructure.network());
-  EXPECT_EQ(engine.init(db.design.getPhysDesMgr(), &checker, &fillerSetting),
+  dpl2::fillerRepair::FillerRepairEngine engine;
+  EXPECT_EQ(engine.init(db.design.getPhysDesMgr(), allLeafCells(),
+                        fillerSetting,
+                        db.design.lib_acc_.getPhysLibCell(2)),
             testCase.expectInit);
 }
 

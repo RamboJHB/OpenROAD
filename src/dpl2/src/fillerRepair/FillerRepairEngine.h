@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Production filler-repair facade. Like ImplantLayerChecker, callers bind
-// Grid/Network once, initialize against one physical-design revision, then
-// issue const pre-commit queries. Neither precheck() nor repair() mutates UDM.
+// Production filler-repair facade. One init() builds and owns the private
+// Grid/Network/checker snapshot for one physical-design revision. Callers do
+// not construct repair infrastructure. Neither precheck() nor repair() mutates
+// UDM.
 
 #pragma once
 
@@ -14,8 +15,6 @@
 
 namespace dpl2 {
 
-class Grid;
-class Network;
 class fillerSetting;
 
 namespace fillerRepair {
@@ -30,7 +29,7 @@ struct RepairOutcome
 class FillerRepairEngine
 {
  public:
-  FillerRepairEngine(Grid* grid, Network* network);
+  FillerRepairEngine();
   ~FillerRepairEngine();
 
   FillerRepairEngine(const FillerRepairEngine&) = delete;
@@ -41,9 +40,15 @@ class FillerRepairEngine
   // acceptance. Configure it outside concurrent precheck()/repair() calls.
   void setDebugLogging(bool enabled);
 
+  // Builds the complete immutable repair snapshot and the final implant
+  // checker in one call. leafCells is the hierarchy traversal result owned by
+  // opto; targetNewMaster is registered even when it is not instantiated.
+  // UDM design/library objects must outlive the engine. An engine is
+  // one-design/one-init: construct a new engine after a commit.
   bool init(eUNL::PhysDesMgr* desMgr,
-            const ipl::ImplantLayerChecker* checker,
-            const fillerSetting* fillerSetting);
+            const std::vector<eUNL::LeafCellID>& leafCells,
+            const fillerSetting& fillerSetting,
+            const eLIB::PhysLibCell& targetNewMaster);
 
   // Placement-only gate for opto to call before any cell mutation.
   // isLegal=false blocks opto and diagnostics contain Gap/Overlap warnings.

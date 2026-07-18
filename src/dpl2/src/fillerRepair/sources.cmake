@@ -8,8 +8,8 @@
 #   DPL2_FILLER_REPAIR_PLANNER_SOURCES     pure planner, no UDM dependency
 #   DPL2_FILLER_REPAIR_PRODUCTION_SOURCES  the complete compile list a
 #                                          destination build adds: planner +
-#                                          UDM-facing facade + infrastructure
-#                                          snapshot builder
+#                                          UDM-facing facade with its private
+#                                          snapshot builder/checker
 #   DPL2_FILLER_REPAIR_E2E_TEST_SOURCE      co-located production E2E GoogleTest
 
 set(DPL2_FILLER_REPAIR_PLANNER_SOURCES
@@ -24,8 +24,7 @@ set(DPL2_FILLER_REPAIR_PLANNER_SOURCES
 
 set(DPL2_FILLER_REPAIR_PRODUCTION_SOURCES
     ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-    "${CMAKE_CURRENT_LIST_DIR}/FillerRepairEngine.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/RepairInfrastructure.cpp")
+    "${CMAKE_CURRENT_LIST_DIR}/FillerRepairEngine.cpp")
 
 # Test source travels with fillerRepair so a destination port can copy this
 # directory and wire one GoogleTest target without finding files elsewhere.

@@ -7,8 +7,8 @@ Updated: 2026-07-18.
 | Tier | Command | Boundary |
 |---|---|---|
 | Planner unit | `src/dpl2/src/fillerRepair/test/run_tests.sh` | 81 individually registered GoogleTests with private planner doubles |
-| Production E2E | `src/dpl2/src/fillerRepair/test/run_e2e_tests.sh` | 33 GoogleTests; fake UDM data with supplied infra/checker and production engine/planner |
-| Full CTest | `src/dpl2/test/CMakeLists.txt` | 114 discovered GoogleTests |
+| Production E2E | `src/dpl2/src/fillerRepair/test/run_e2e_tests.sh` | 39 GoogleTests; fake UDM data with supplied infra/checker types and production engine/planner |
+| Full CTest | `src/dpl2/test/CMakeLists.txt` | 120 discovered GoogleTests |
 | Real-UDM compile gate | `cmake -DDPL2_TEST_USE_FAKE_UDM=OFF ...` | `dpl2_filler_repair_compile_check`: all supplied + production sources against real UDM headers |
 
 Normal and AddressSanitizer runs are required. Production builds use
@@ -21,10 +21,11 @@ enabled for every project source and test execution.
 
 ## Production E2E composition
 
-Included: production RepairInfrastructure, Grid/Network, fillerSetting, final
-ImplantLayerChecker, FillerRepairEngine, internal FillerRepairPlanner and all search
-stages (compile lists from `src/fillerRepair/sources.cmake`). Fake UDM
-provides tech/library/row/cell data only.
+Included: production Grid/Network, fillerSetting, final ImplantLayerChecker,
+FillerRepairEngine (including its private snapshot builder), internal
+FillerRepairPlanner and all search stages (compile lists from
+`src/fillerRepair/sources.cmake`). Fake UDM provides tech/library/row/cell data
+only.
 
 `e2e_test.cpp`, `run_e2e_tests.sh`, this plan and the only test-only fake UDM
 include tree live below `fillerRepair/test`, so an entire-directory port carries
@@ -58,7 +59,9 @@ FarShiftedOrigin: three independently discovered testcases per behavior.
 
 ## Required repair cases
 
-- `init()` succeeds through the single production facade.
+- One `FillerRepairEngine::init()` builds/owns Grid, Network and the final
+  checker through the single production facade; callers construct no repair
+  infrastructure object.
 - Target new master is checked as an overlay with empty filler changes first.
 - A clean target overlay returns success with an empty change list.
 - Existing violating fixture returns the deterministic FH2 filler replacement.
@@ -67,10 +70,14 @@ FarShiftedOrigin: three independently discovered testcases per behavior.
 - Physical UDM snapshots remain unchanged after each repair.
 - Persistent checker init diagnostics (duplicated per result by the checker)
   never mark candidates illegal; repair still succeeds.
-- A configured filler master absent from the Network fails `init()`.
-- An empty `getFillerMasters()` allow list errors out in both
-  `RepairInfrastructure::build()` and `FillerRepairEngine::init()`.
+- Every configured filler master, including an uninstantiated one, is imported
+  by engine initialization before checker construction.
+- An empty `getFillerMasters()` allow list fails engine initialization and its
+  reason is preserved in standard result diagnostics.
+- A PhysDesMgr different from the UDM Session current design is rejected before
+  private checker construction.
 - Before/after a failed `init()`, `precheck()` and `repair()` fail closed.
+- A second `init()` is rejected without damaging the first ready snapshot.
 - The row-origin frame check baselines on the first NON-pad row: pad rows may
   sit anywhere; a misaligned standard row is refused even behind a pad row.
 - Planner tests continue covering adaptive-L1, ranking, subset enumeration,
@@ -103,9 +110,9 @@ cmake --build src/dpl2/test/build-cmake-asan -j2
 ctest --test-dir src/dpl2/test/build-cmake-asan --output-on-failure
 ```
 
-2026-07-18 results: planner 81/81 normal and ASan; production E2E 33/33 normal
-and ASan; full CTest 114/114 normal and ASan; Werror clean; compile-check mode
-configured and built against the UDM-compatible headers.
+2026-07-18 results: planner 81/81 normal and ASan; production E2E 39/39 normal
+and ASan; full CTest 120/120 normal and ASan; Werror clean. Compile-check mode
+is configured against the UDM-compatible headers.
 
 ## Regression rules
 

@@ -6,31 +6,35 @@ Updated: 2026-07-18. Branch: `claude/wizardly-carson-secahu`.
 
 The destination already supplies complete infrastructure and checker sources.
 Production migration therefore copies only `src/dpl2/src/fillerRepair/`
-(which now contains `RepairInfrastructure.{h,cpp}` as well) and optionally
-`src/dpl2/test/` for the harness, then adds the `sources.cmake` list to the
-destination's existing target. No infrastructure/checker source or API change
-is required, and this change set keeps both directories at zero diff.
+and optionally `src/dpl2/test/` for the harness, then adds the `sources.cmake`
+list to the destination's existing target. No infrastructure/checker source or
+API change is required, and this change set keeps both directories at zero
+diff.
 
 The production boundary is now one checker-style class:
 
 ```cpp
-FillerRepairEngine(Grid* grid, Network* network);
+FillerRepairEngine();
 void setDebugLogging(bool enabled);  // optional, disabled by default
 bool init(PhysDesMgr* desMgr,
-          const ImplantLayerChecker* checker,
-          const fillerSetting* fillerSetting);
+          const std::vector<LeafCellID>& leafCells,
+          const fillerSetting& fillerSetting,
+          const PhysLibCell& targetNewMaster);
 ipl::CheckResult precheck() const;
 RepairOutcome repair(LeafCellID targetCell, const PhysLibCell& newMaster);
 ```
 
-The production view/oracle/wire conversion lives in `FillerRepairEngine.cpp`;
-the pure search pipeline is `internal::FillerRepairPlanner`. `init()` must succeed
-before use: until it does, `precheck()` and `repair()` fail closed
+`init()` privately builds and owns Grid, Network, the final checker and the
+view/oracle/wire conversion. The pure search pipeline is
+`internal::FillerRepairPlanner`. `init()` is one-shot and must succeed before
+use: until it does, `precheck()` and `repair()` fail closed
 (`precheck_not_initialized` / `engine_not_initialized`).
 
 ## Required opto sequence
 
-1. Construct engine with the current Grid/Network and call `init()`.
+1. Construct one default `FillerRepairEngine` and call `init()` once with the
+   current PhysDesMgr, hierarchy leaf IDs, filler setting and proposed target
+   master. No separate repair infrastructure/checker object is constructed.
 2. Before any cell mutation, call `precheck()`.
 3. If `precheck().isLegal == false`, stop. `Gap`/`Overlap` diagnostics are
    warnings for logging, but the bool is a hard blocking contract.
@@ -83,8 +87,9 @@ default and does not affect search behavior.
 | implant legality | final `ImplantLayerChecker` |
 | commit | opto/infrastructure |
 
-`RepairInfrastructure` registers placed, target-new and configured candidate
-masters before checker/engine construction, including uninstantiated masters.
+Engine initialization registers placed, target-new and configured candidate
+masters before constructing its private checker, including uninstantiated
+masters.
 
 ## Migration to the destination environment
 
@@ -94,8 +99,8 @@ What to copy (two directories, nothing else):
    `infrastructure/` and `drc/` directories (the production sources include
    `infrastructure/...` and `drc/ImplantLayerChecker.h` relative to that
    common source root). This directory now contains the complete production
-   delivery including `RepairInfrastructure.{h,cpp}`, plus `fake/` and
-   `test/` subdirectories that are used ONLY by the standalone harness.
+   delivery, plus `fake/` and `test/` subdirectories that are used
+   ONLY by the standalone harness.
 2. `src/dpl2/test/` -> anywhere (standalone CMake project); only needed to
    run the harness in the destination environment.
 
@@ -171,32 +176,35 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-All 81 planner cases and 33 production E2E cases are GoogleTests. The portable
+All 81 planner cases and 39 production E2E cases are GoogleTests. The portable
 E2E source/runner and test-only fake UDM include tree live in
 `src/dpl2/src/fillerRepair/test`, and
 `sources.cmake` exports `DPL2_FILLER_REPAIR_E2E_TEST_SOURCE` for destination
-CMake wiring. It uses fake UDM only as data and links supplied Grid/Network,
-RepairInfrastructure, final checker, FillerRepairEngine and internal planner.
+CMake wiring. It uses fake UDM only as data and links supplied
+Grid/Network/final-checker types plus FillerRepairEngine and the internal
+planner. The engine owns the repair snapshot and checker instances.
 Each behavior has three independently discovered cases; every case constructs
 at least five standard rows. Coverage includes clean/gap/overlap precheck,
 opto-blocking values, deterministic/non-mutating repair, persistent checker
 diagnostics, candidate-universe failures and first-non-pad-row validation.
 
-2026-07-18 result: planner 81/81 normal and ASan; E2E 33/33 normal and ASan;
-full CTest 114/114 normal and ASan; all targets passed Werror.
+2026-07-18 result: planner 81/81 normal and ASan; E2E 39/39 normal and ASan;
+full CTest 120/120 normal and ASan; all targets passed Werror.
 
 ## Integration risks
 
 - Opto must honor the explicit precheck ordering; repair has no fallback gate.
-- Engine/Grid/Network/checker/PhysDesMgr must describe one design revision;
-  rebuild after commit.
+- One engine owns Grid/Network/checker for one PhysDesMgr revision. Its init is
+  one-shot; construct a new engine after commit.
+- The supplied PhysDesMgr must be the UDM Session current design because the
+  final checker constructor reads Session; init validates and fails closed on
+  mismatch. The UDM design/library objects must outlive the engine snapshot.
 - Destination build must consume `sources.cmake`; nothing else is part of the
   production delivery.
 - Real-UDM verification still depends on the destination providing its UDM
   include directories and link libraries/targets; no code port remains.
-- Checker calls are serialized inside ONE engine because the checker const
-  overlay path updates counters. Sharing one checker across several engine
-  instances is NOT serialized -- use one checker per engine (or one engine per
-  thread over its own checker).
+- Checker calls are serialized inside one engine because the checker const
+  overlay path updates counters. The checker is private and cannot be
+  accidentally shared across engines.
 - The public facade owns production translation; planner fake/checker types
   must remain outside production targets.

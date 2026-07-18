@@ -43,14 +43,14 @@ synthesizes planner requestId/status values from ordered results.
 
 ## Shared-state requirements
 
-PhysDesMgr, Network, Grid, checker and engine must describe one design
-revision. Production `RepairInfrastructure` registers every placed master,
-the proposed target master and all `getFillerMasters()` masters before checker
-construction. Rebuild the snapshot after commit.
+PhysDesMgr and one engine must describe one design revision. Engine `init()`
+privately builds Network/Grid, registers every placed master, the proposed
+target master and all `getFillerMasters()` masters, then constructs the
+checker. Construct a new engine after commit.
 
 The engine serializes its own checker calls because the current const overlay
-path updates internal counters; that mutex is per engine, so pair each engine
-with its own checker instance.
+path updates internal counters. The checker is engine-owned, so cross-engine
+checker aliasing is no longer possible through the production API.
 
 ## Repair acceptance
 
@@ -70,9 +70,9 @@ No DRC rule or scan behavior changed. Warning-clean integration required only:
 
 ## Verified test boundary
 
-The final E2E uses fake UDM as data only and production Grid, Network,
-RepairInfrastructure, final checker, FillerRepairEngine and planner. Normal
-and ASan builds pass with `-Wall -Wextra -Werror`.
+The final E2E uses fake UDM as data only and production Grid, Network, final
+checker, FillerRepairEngine (including its private snapshot builder) and
+planner. Normal and ASan builds pass with `-Wall -Wextra -Werror`.
 
 Future checker API or semantic changes must be recorded here before engine
 changes are merged.

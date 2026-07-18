@@ -2,16 +2,17 @@
 
 Updated: 2026-07-18.
 
-`FillerRepairEngine` is the only production entry. It exposes a placement-only
-precheck plus pre-commit filler repair and never mutates the database.
-The destination already owns complete Grid/Network/infrastructure/checker
-implementations, so only this directory is migrated; none of those supplied
-sources is patched.
+`FillerRepairEngine` is the only production entry. One `init()` privately
+builds its Grid/Network snapshot and final checker, then exposes a
+placement-only precheck plus pre-commit filler repair. It never mutates the
+database. The destination supplies the existing infrastructure/checker source
+types; only this directory is migrated and none of those supplied sources is
+patched.
 
 ```cpp
-FillerRepairEngine engine(grid, network);
+FillerRepairEngine engine;
 engine.setDebugLogging(true);  // optional [fr][stage] transcript
-engine.init(desMgr, checker, fillerSetting);
+engine.init(desMgr, leafCells, fillerSetting, targetNewMaster);
 
 ipl::CheckResult placement = engine.precheck();  // opto calls before mutation
 RepairOutcome outcome = engine.repair(targetCell, newMaster);
@@ -30,8 +31,7 @@ opto/infrastructure.
 
 | Path | Purpose |
 |---|---|
-| `FillerRepairEngine.h/.cpp` | production API, private view/oracle conversion, precheck and repair |
-| `RepairInfrastructure.h/.cpp` | builds the production Network/Grid snapshot from PhysDesMgr |
+| `FillerRepairEngine.h/.cpp` | production API; owns snapshot builder, Grid/Network, final checker, view/oracle, precheck and repair |
 | `FillerRepairPlanner.h/.cpp` | internal deterministic search pipeline and debug transcript |
 | `OracleGate.h/.cpp` | internal checker abstraction, batching, cache and baseline-delta gate |
 | `PlacementView.h/.cpp` | planner-only read view and candidate filter |
@@ -65,7 +65,7 @@ test/run_e2e_tests.sh
 SANITIZE=address test/run_e2e_tests.sh
 ```
 
-The 81 planner cases and 33 production E2E cases are GoogleTests. E2E source,
+The 81 planner cases and 39 production E2E cases are GoogleTests. E2E source,
 runner, plan and the only test-only fake UDM include tree all live in
 `fillerRepair/test`, so they move with the code;
 `sources.cmake` exports `DPL2_FILLER_REPAIR_E2E_TEST_SOURCE` for the destination
@@ -87,4 +87,5 @@ whose test data comes from fake UDM by design.
 No production source has a fake UDM dependency or compile-time branch. The E2E
 uses fake UDM as the test-data provider only; supplied infrastructure/checker
 and production fillerRepair compile with `-Wall -Wextra -Werror`. Current
-result: planner 81/81, E2E 33/33 and full CTest 114/114, normal+ASan.
+result: planner 81/81 and E2E 39/39 normal+ASan; full CTest 120/120
+normal+ASan; Werror clean.

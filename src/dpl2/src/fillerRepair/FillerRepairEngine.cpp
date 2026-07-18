@@ -8,15 +8,17 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <string>
 #include <tuple>
 #include <utility>
 
+#include "FillerRepairPlanner.h"
 #include "Log.h"
 #include "OracleGate.h"
 #include "PlacementView.h"
-#include "FillerRepairPlanner.h"
 #include "infrastructure/Grid.h"
 #include "infrastructure/Objects.h"
+#include "infrastructure/Padding.h"
 #include "infrastructure/fillerSetting.h"
 #include "infrastructure/network.h"
 
@@ -1104,27 +1106,37 @@ std::vector<CoverageFinding> findGapAndOverlap(eUNL::PhysDesMgr* desMgr,
 class FillerRepairEngine::Impl
 {
  public:
-  Impl(Grid* grid, Network* network) : grid_(grid), network_(network) {}
-
   bool init(eUNL::PhysDesMgr* desMgr,
-            const ipl::ImplantLayerChecker* checker,
-            const fillerSetting* fillerSetting)
+            const std::vector<eUNL::LeafCellID>& leafCells,
+            const fillerSetting& fillerSettings,
+            const eLIB::PhysLibCell& targetNewMaster)
   {
-    des_mgr_ = desMgr;
-    checker_ = checker;
-    filler_setting_ = fillerSetting;
-    view_.reset();
-    initialized_ = false;
-    if (grid_ == nullptr || network_ == nullptr || des_mgr_ == nullptr
-        || checker_ == nullptr || filler_setting_ == nullptr) {
+    // One engine represents exactly one design revision. A second init could
+    // otherwise leave Grid, Network, checker and view bound to mixed snapshots.
+    if (init_attempted_) {
       return false;
     }
+    init_attempted_ = true;
+    des_mgr_ = desMgr;
+    if (!buildSnapshot(desMgr, leafCells, fillerSettings, targetNewMaster)) {
+      return false;
+    }
+
+    // The checker must be created only after every placed, candidate and
+    // target-new master is registered in Network. Its constructor indexes the
+    // current design and the complete master universe.
+    checker_ = std::make_unique<ipl::ImplantLayerChecker>(&grid_, &network_);
     ProductionView::Config config;
     config.verbose = debug_logging_;
     config.repair.verbose = debug_logging_;
     view_ = std::make_unique<ProductionView>(
-        des_mgr_, grid_, network_, checker_, filler_setting_, config);
+        des_mgr_, &grid_, &network_, checker_.get(), &fillerSettings, config);
     initialized_ = view_->isReady();
+    if (!initialized_) {
+      for (const Diagnostic& diagnostic : view_->setupDiagnostics()) {
+        init_diagnostics_.push_back(toProductionDiagnostic(diagnostic));
+      }
+    }
     return initialized_;
   }
 
@@ -1141,13 +1153,14 @@ class FillerRepairEngine::Impl
     ipl::CheckResult result;
     if (!initialized_) {
       result.isLegal = false;
+      result.diagnostics = init_diagnostics_;
       result.diagnostics.push_back(
           {"precheck_not_initialized",
            "warning: init() must succeed before placement precheck"});
       return result;
     }
     const std::vector<CoverageFinding> findings
-        = findGapAndOverlap(des_mgr_, network_);
+        = findGapAndOverlap(des_mgr_, &network_);
     result.isLegal = findings.empty();
     for (const CoverageFinding& finding : findings) {
       result.diagnostics.push_back(
@@ -1176,6 +1189,7 @@ class FillerRepairEngine::Impl
     } activeGuard{repair_active_};
 
     if (!initialized_) {
+      result.diagnostics = init_diagnostics_;
       result.diagnostics.push_back(
           {"engine_not_initialized",
            "fatal: init() must succeed before repair()"});
@@ -1192,21 +1206,139 @@ class FillerRepairEngine::Impl
   }
 
  private:
-  Grid* grid_ = nullptr;
-  Network* network_ = nullptr;
+  void failInit(const std::string& status, const std::string& message)
+  {
+    init_diagnostics_.push_back({status, message});
+  }
+
+  bool buildSnapshot(eUNL::PhysDesMgr* desMgr,
+                     const std::vector<eUNL::LeafCellID>& leafCells,
+                     const fillerSetting& fillerSettings,
+                     const eLIB::PhysLibCell& targetNewMaster)
+  {
+    if (desMgr == nullptr) {
+      failInit("missing_phys_des_mgr", "fatal: missing PhysDesMgr");
+      return false;
+    }
+    if (fillerSettings.getDesign() == nullptr
+        || fillerSettings.getDesign()->getPhysDesMgr() != desMgr) {
+      failInit("design_mismatch",
+               "fatal: fillerSetting and PhysDesMgr describe different designs");
+      return false;
+    }
+    // ImplantLayerChecker currently extracts UDM through Session in its
+    // constructor. Validate that implicit source before constructing it so a
+    // caller cannot accidentally combine an explicit desMgr with another
+    // active design.
+    eUNL::Design* activeDesign
+        = eUNL::Session::getSession().getCurrentDesign();
+    if (activeDesign == nullptr || activeDesign->getPhysDesMgr() != desMgr) {
+      failInit("active_design_mismatch",
+               "fatal: PhysDesMgr is not the Session current design");
+      return false;
+    }
+    if (fillerSettings.getFillerMasters().empty()) {
+      failInit("empty_filler_allow_list",
+               "fatal: fillerSetting::getFillerMasters() is empty");
+      return false;
+    }
+    if (leafCells.empty()) {
+      failInit("empty_leaf_cell_list",
+               "fatal: no leaf cells supplied for Network import");
+      return false;
+    }
+
+    bool haveCore = false;
+    eUTL::Rect core;
+    for (const eUNL::PhysRow& row : desMgr->getPhysRowIter()) {
+      if (row.getSite().getIsPad()) {
+        continue;
+      }
+      core = haveCore ? core.expand(row.getBbox()) : row.getBbox();
+      haveCore = true;
+    }
+    if (!haveCore || core.dx().getStorage() <= 0
+        || core.dy().getStorage() <= 0) {
+      failInit("missing_standard_cell_core",
+               "fatal: no usable non-pad row core");
+      return false;
+    }
+
+    padding_->setDesginManager(desMgr);
+    grid_.setCore(core);
+    grid_.examineRows(desMgr);
+    grid_.initGrid(desMgr, padding_, 100, 100);
+    network_.setCore(core);
+
+    // LibCellID order yields deterministic Master::getId() values and makes
+    // uninstantiated filler/target masters visible before checker creation.
+    std::map<eLIB::LibCellID, const eLIB::PhysLibCell*> masters;
+    std::vector<eUNL::LeafCellID> cells = leafCells;
+    std::sort(cells.begin(), cells.end());
+    cells.erase(std::unique(cells.begin(), cells.end()), cells.end());
+    for (const eUNL::LeafCellID cellId : cells) {
+      const eUNL::PhysCell cell = desMgr->getPhysCell(cellId);
+      if (!cell.isValid()) {
+        failInit("missing_leaf_cell",
+                 cat("fatal: leaf cell ", cellId.getIndexValue(),
+                     " is absent from PhysDesMgr"));
+        continue;
+      }
+      const eLIB::PhysLibCell& master = cell.getPhysMaster();
+      masters[master.getLibCellId()] = &master;
+    }
+    for (const eLIB::PhysLibCell* master
+         : fillerSettings.getFillerMasters()) {
+      if (master == nullptr) {
+        failInit("null_filler_master",
+                 "fatal: getFillerMasters() returned null");
+        continue;
+      }
+      masters[master->getLibCellId()] = master;
+    }
+    masters[targetNewMaster.getLibCellId()] = &targetNewMaster;
+
+    for (const auto& [id, master] : masters) {
+      (void) id;
+      network_.addMaster(*master, &grid_);
+    }
+    if (network_.getMasters().empty()) {
+      failInit("empty_master_universe",
+               "fatal: no physical masters imported");
+      return false;
+    }
+    for (const eUNL::LeafCellID cellId : cells) {
+      if (desMgr->getPhysCell(cellId).isValid()) {
+        network_.addNode(cellId, desMgr);
+      }
+    }
+
+    // Occupancy is part of the private snapshot even though repair itself is
+    // pre-commit. It keeps Grid coherent for the checker and future consumers.
+    for (const auto& node : network_.getNodes()) {
+      if (node != nullptr) {
+        grid_.paintPixel(node.get());
+      }
+    }
+    return init_diagnostics_.empty();
+  }
+
+  std::shared_ptr<Padding> padding_ = std::make_shared<Padding>();
+  Grid grid_;
+  Network network_;
   eUNL::PhysDesMgr* des_mgr_ = nullptr;
-  const ipl::ImplantLayerChecker* checker_ = nullptr;
-  const fillerSetting* filler_setting_ = nullptr;
+  std::unique_ptr<ipl::ImplantLayerChecker> checker_;
   std::unique_ptr<ProductionView> view_;
+  std::vector<ipl::Diagnostic> init_diagnostics_;
   bool debug_logging_ = false;
   // True only after a fully successful init(); every public API fails closed
   // until then (a half-built snapshot must never answer queries).
   bool initialized_ = false;
+  bool init_attempted_ = false;
   std::atomic<bool> repair_active_{false};
 };
 
-FillerRepairEngine::FillerRepairEngine(Grid* grid, Network* network)
-    : impl_(std::make_unique<Impl>(grid, network))
+FillerRepairEngine::FillerRepairEngine() : impl_(std::make_unique<Impl>())
 {
 }
 
@@ -1218,10 +1350,11 @@ void FillerRepairEngine::setDebugLogging(bool enabled)
 }
 
 bool FillerRepairEngine::init(eUNL::PhysDesMgr* desMgr,
-                              const ipl::ImplantLayerChecker* checker,
-                              const fillerSetting* fillerSetting)
+                              const std::vector<eUNL::LeafCellID>& leafCells,
+                              const fillerSetting& fillerSettings,
+                              const eLIB::PhysLibCell& targetNewMaster)
 {
-  return impl_->init(desMgr, checker, fillerSetting);
+  return impl_->init(desMgr, leafCells, fillerSettings, targetNewMaster);
 }
 
 ipl::CheckResult FillerRepairEngine::precheck() const
