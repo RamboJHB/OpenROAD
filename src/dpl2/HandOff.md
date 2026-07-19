@@ -6,7 +6,7 @@ Updated: 2026-07-19. Branch: `claude/wizardly-carson-secahu`.
 
 The destination already supplies complete infrastructure and checker sources.
 Production and tests migrate together by copying only
-`src/dpl2/src/fillerRepair/`. Its `test/` subtree contains eight portable
+`src/dpl2/src/fillerRepair/`. Its `test/` subtree contains 33 portable
 GoogleTests built from the final checker's `ImplantLayerCheckerHelper` and a
 standalone CMake. No DEF/LEF reader or destination fixture provider is needed.
 All 81 fake-based planner unit tests and the repository-local UDM-compatible
@@ -164,9 +164,9 @@ test-side CMake wiring required.
 ## Build and verification
 
 The CMake below `fillerRepair/test` is a portable final-checker test package,
-not production CMake. It compiles the planner, checker/helper and eight E2E
-cases. The separate local harness retains the 81 planner tests and historical
-52 fake-UDM production-facade cases for repository regression.
+not production CMake. It compiles the planner, checker/helper and 33 portable
+cases. The separate local harness retains the 81 planner tests and 64 fake-UDM
+production-facade cases for repository regression.
 
 Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
 
@@ -181,16 +181,21 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-The migration payload has four direct checker overlay cases and four
-planner-to-final-checker repair cases. Each dense fixture contains eight rows
-and 200 sites. The direct cases each check clean, unresolved and new-violation
-overlays; the planner cases prove clean returned overlays and no placement
-mutation. Planner doubles and the historical fake-UDM suite live only under
-`src/dpl2/test/local/`.
+The migration payload has four direct checker overlay cases, 17
+planner-to-final-checker cases and 12 internal exact-coverage precheck
+cases. Each dense checker fixture contains eight rows and 200 sites. The
+planner matrix covers all four rule classes, clean/empty repair, determinism,
+batch invariance, candidates, third VT, budgets, baseline consistency,
+same-size edits, new-violation avoidance, a two-swap solution and safe
+no-partial failure for a checker-legal three-swap overlay outside the current
+adaptive window. The internal precheck matrix covers gaps, overlaps, clipping,
+legal holes, row ordering and deterministic coalescing. Planner doubles and
+the fake-UDM suite live only under `src/dpl2/test/local/`; its 12 newly added
+external instances call the real public `precheck()` facade in opto order.
 
-2026-07-19 split result: planner 81/81, historical production-facade fake-UDM
-E2E 52/52 and portable final-checker E2E 8/8 in both normal and ASan builds;
-full normal CTest 141/141; `-Wall -Wextra -Werror` clean.
+2026-07-19 split result after expansion: planner 81/81, production-facade
+fake-UDM E2E 64/64 and portable final-checker/precheck E2E 33/33 in both normal
+and ASan builds; full normal CTest 178/178; `-Wall -Wextra -Werror` clean.
 
 ## Integration risks
 
@@ -218,6 +223,10 @@ full normal CTest 141/141; `-Wall -Wextra -Werror` clean.
   must remain outside production targets.
 - `repair()` may idempotently add a previously uninstantiated target master to
   Network and rebuild its private checker/view; it still never mutates UDM.
+- The current adaptive window can safely return no solution for a valid repair
+  that requires a third non-L0 filler swap. The portable suite verifies that
+  the exact three-swap overlay is checker-legal and that the planner returns
+  no partial changes; widening that search remains an algorithm enhancement.
 - A destination whose `Network::addMaster` overload has a different signature
   needs one mechanical call-site adaptation in `FillerRepairEngine.cpp`; no
   planner or checker change is involved.

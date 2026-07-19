@@ -38,13 +38,14 @@ in-memory master registry, not UDM placement.
 | Path | Purpose |
 |---|---|
 | `FillerRepairEngine.h/.cpp` | production API; borrows Grid/Network and owns final checker, view/oracle, precheck and repair |
+| `PlacementPrecheck.h/.cpp` | UDM-free gap/overlap coverage sweep used by the public precheck facade and portable boundary tests |
 | `FillerRepairPlanner.h/.cpp` | internal deterministic search pipeline and debug transcript |
 | `OracleGate.h/.cpp` | internal checker abstraction, batching, cache and baseline-delta gate |
 | `PlacementView.h/.cpp` | planner-only read view and candidate filter |
 | `Types.h` | planner-internal IDs, geometry and request/result types |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
 | `sources.cmake` | source-of-truth lists for planner, production and portable E2E |
-| `test/FillerRepairCheckerE2ETest.cpp` | eight helper-built real-checker overlay/planner E2E cases |
+| `test/FillerRepairCheckerE2ETest.cpp` | 33 portable real-checker, planner-to-checker and internal precheck cases |
 | `test/CMakeLists.txt` | standalone destination E2E target |
 
 ## Debug transcript
@@ -70,9 +71,12 @@ repair-specific importer.
 
 The migrated tests construct checker input directly with the final checker's
 `ImplantLayerCheckerHelper`. They do not parse DEF/LEF and do not need a
-destination-specific UDM provider. The fixture contains eight dense rows and
-the cases exercise intra/inter-row width/spacing both directly and through the
-real `FillerRepairPlanner`.
+destination-specific UDM provider. The 33 cases comprise four direct checker
+overlay contracts, 17 planner-to-final-checker repairs/failures and 12
+boundary cases for the exact coverage sweep behind `precheck()`. The checker
+fixtures contain eight dense rows and exercise intra/inter-row width/spacing,
+candidate and budget boundaries, baseline-delta protection, deterministic
+batching, multi-swap minimum width and no-partial-result failure semantics.
 
 ```sh
 cmake -S test -B test/build/e2e \

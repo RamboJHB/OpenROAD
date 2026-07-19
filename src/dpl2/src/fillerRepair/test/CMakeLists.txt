@@ -40,6 +40,7 @@ add_executable(
   dpl2_filler_repair_checker_e2e
   ${DPL2_CHECKER_HELPER_SOURCES}
   ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
+  ${DPL2_FILLER_REPAIR_PRECHECK_SOURCE}
   ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
 
 target_compile_features(dpl2_filler_repair_checker_e2e PRIVATE cxx_std_20)

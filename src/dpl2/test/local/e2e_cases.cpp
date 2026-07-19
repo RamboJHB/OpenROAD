@@ -231,6 +231,68 @@ TEST_P(FillerRepairProductionE2E, GapInsideLegalSegmentStillFails)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
+TEST_P(FillerRepairProductionE2E, RepeatedExternalPrecheckIsStable)
+{
+  ProductionHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  const dpl2::ipl::CheckResult first = harness.engine().precheck();
+  const dpl2::ipl::CheckResult second = harness.engine().precheck();
+  EXPECT_TRUE(first.isLegal);
+  EXPECT_TRUE(second.isLegal);
+  EXPECT_EQ(first.diagnostics.size(), second.diagnostics.size());
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairProductionE2E, OptoStyleExternalGateBlocksMutation)
+{
+  ProductionHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  harness.design().moveCell(frt::CellRole::Row0TailFiller,
+                            harness.design().rowOriginX(0) + frt::kRowSites,
+                            0);
+  const frt::PhysicalSnapshot beforeGate = harness.design().snapshot();
+  const dpl2::ipl::CheckResult gate = harness.engine().precheck();
+  const bool optoMayMutate = gate.isLegal;
+  EXPECT_FALSE(optoMayMutate);
+  EXPECT_TRUE(hasDiagnostic(gate.diagnostics, "Gap"));
+  EXPECT_EQ(harness.design().snapshot(), beforeGate);
+}
+
+TEST_P(FillerRepairProductionE2E, ExternalPrecheckReportsGapAndOverlapTogether)
+{
+  ProductionHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  harness.design().moveCell(frt::CellRole::Row0TailFiller,
+                            harness.design().rowOriginX(0) + frt::kRowSites,
+                            0);
+  harness.design().moveCell(frt::CellRole::Row1TailFiller,
+                            harness.design().rowOriginX(1) + 17,
+                            frt::kRowHeight);
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  const dpl2::ipl::CheckResult result = harness.engine().precheck();
+  EXPECT_FALSE(result.isLegal);
+  EXPECT_TRUE(hasDiagnostic(result.diagnostics, "Gap"));
+  EXPECT_TRUE(hasDiagnostic(result.diagnostics, "Overlap"));
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairProductionE2E, RepairDoesNotImplicitlyCallExternalPrecheck)
+{
+  ProductionHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  harness.design().moveCell(frt::CellRole::Row0TailFiller,
+                            harness.design().rowOriginX(0) + frt::kRowSites,
+                            0);
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::Target),
+      harness.design().master(frt::MasterRole::TargetNew));
+  EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "Gap"));
+  EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "Overlap"));
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
 TEST_P(FillerRepairProductionE2E, CleanTargetOverlayNeedsNoFillerChange)
 {
   ProductionHarness harness(GetParam().setup);

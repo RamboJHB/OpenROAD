@@ -915,13 +915,14 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 ## 10. 测试集
 
 当前 81 个 pure-planner cases 是独立 UDM-free GoogleTests,全部位于迁移目录外的
-`src/dpl2/test/local/planner`。交付目录中的 8 个 portable E2E 集中在
+`src/dpl2/test/local/planner`。交付目录中的 33 个 portable cases 集中在
 `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`:4 个 final-checker overlay contract
-case + 4 个 `FillerRepairPlanner`→final checker repair case。fixture 通过
+case + 17 个 `FillerRepairPlanner`→final checker repair/failure case + 12 个
+internal exact-coverage precheck case。fixture 通过
 `ImplantLayerCheckerHelper` 构造 8 行 × 200 sites 的 Grid/Network/checker input;
 不读 DEF/LEF,不需要 `E2ETestProvider` 或 real-UDM design builder。
 
-历史 52 个 production-facade fake-UDM cases、provider 与完整 local fake regression
+64 个 production-facade fake-UDM cases、provider 与完整 local fake regression
 copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
 
 前置与协议:
@@ -930,6 +931,13 @@ copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
   Warning diagnostics,clean 返回 `isLegal=true`。另覆盖 hard blockage 内空白、
   instance halo 内空白不报 Gap,以及同一 blocked-row 的合法 segment 内真实 Gap
   仍然阻断。
+- internal coverage sweep 覆盖 clean、前/中/后 gap、相邻 overlap 合并、legal
+  segment 间 whitespace 排除、placed span clipping、多 row 排序、空/零宽 span、
+  empty placement、unordered input、triple coverage、touching legal spans 与
+  gap+overlap 确定性顺序。
+- external public facade 在 3 种 layout 上各覆盖 repeated precheck 稳定性、opto
+  hard gate 不 mutation、同次 gap+overlap diagnostics 与 repair 不隐式调用
+  precheck,共 12 个新增 production-style instances。
 - 验证 precheck 与 repair 前后 UDM physical records 完全相同。
 - guard-only filler 出现在 `fillerChanges` 中,判 invalid request。
 - 非 filler instance 出现在 `FillerChange` 中,判 invalid request。
@@ -975,6 +983,13 @@ gate 语义:
   按最后搜索窗口的完备性断言(L0 完备 + L1 截断 ⇒ 非 definitive,V2.1 #10)。
 - 第三 VT 降权但可达:正解需要第三色的犄角 case 仍能被找到。
 - 确定性:同输入两次运行,产出完全相同的 changes/diagnostics/call 序列。
+- portable real-checker matrix 另锁定 clean empty repair、batch size 1/多 batch
+  一致性、empty candidate、one-call budget、fabricated/duplicate original baseline
+  gate、same-size filler-only changes、known new-violation site avoidance 与必须两个
+  atomic swaps 的 MW 修复。
+- 当前 adaptive window 尚不保证覆盖需要第三个 non-L0 filler 的合法三 swap
+  solution;portable case 先证明人工三 swap overlay checker-legal,再要求 planner
+  安全失败且不返回 partial changes。此项是已显式测试的算法扩展风险。
 
 ---
 
@@ -990,9 +1005,10 @@ gate 语义:
 - production `FillerRepairEngine` facade 借用 supplied Grid/Network,私有拥有
   final checker/view;configured filler init-time 注册、target master repair-time
   lazy 注册;
-  portable final-checker GoogleTest E2E 与 CMake/CTest 接入;编译清单唯一定义在
+  portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
+  编译清单唯一定义在
   `src/fillerRepair/sources.cmake`。
-- 81 个 planner unit tests、8 个 portable checker/planner E2E 与历史 52 个
+- 81 个 planner unit tests、33 个 portable checker/planner/precheck cases 与 64 个
   fake-UDM production-facade tests 全为 GoogleTest;
   81 个 fake-based planner tests 完整移至 `src/dpl2/test/local/planner`,
   `fillerRepair/test` 只保留 helper-built portable E2E;precheck/repair 均 non-mutating;

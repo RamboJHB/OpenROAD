@@ -5,12 +5,18 @@ GoogleTest source that builds placement, masters, implant layers and rules
 through the final checker's `ImplantLayerCheckerHelper`; it does not read
 DEF/LEF and does not require a destination-specific UDM fixture/provider.
 
-`FillerRepairCheckerE2ETest.cpp` has eight cases:
+`FillerRepairCheckerE2ETest.cpp` has 33 cases:
 
 - four final-checker overlay contract cases (intra/inter-row WIDTH/SPACING);
-- four end-to-end cases that pass the checker snapshot to
+- 17 end-to-end cases that pass checker snapshots to
   `internal::FillerRepairPlanner`, apply its returned overlay to the final
-  checker, require a clean result, and prove the input placement is unchanged.
+  checker, and cover clean/repair/failure, deterministic batching, candidate
+  and budget boundaries, third-VT reachability, baseline consistency,
+  same-size changes, new-violation rejection and multi-swap minimum width;
+- 12 UDM-free internal precheck cases for exact coverage, leading/middle/
+  trailing gaps, overlaps, legal holes, clipping, multiple rows, empty spans
+  and deterministic mixed diagnostics, plus empty placement, unordered input,
+  triple overlap and touching legal spans.
 
 The test uses no fake checker, fake placement view or fake UDM data. The small
 `PortablePlacementView` in the source is only the planner projection of the
@@ -35,5 +41,5 @@ CMake only needs to include `fillerRepair/sources.cmake`, compile
 `drc/ImplantLayerCheckerHelper.cpp`, then link that owning library and
 `GTest::gtest_main`.
 
-All fake/checker-double tests and the historical fake-UDM 52-case regression
+All fake/checker-double tests and the repository-local fake-UDM 64-case regression
 remain outside the migration payload under `src/dpl2/test/local/`.

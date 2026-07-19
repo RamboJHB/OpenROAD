@@ -3,12 +3,15 @@
 #include <algorithm>
 #include <array>
 #include <map>
+#include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "drc/ImplantLayerChecker.h"
 #include "drc/ImplantLayerCheckerHelper.h"
 #include "fillerRepair/FillerRepairPlanner.h"
+#include "fillerRepair/PlacementPrecheck.h"
 
 namespace dpl2 {
 namespace ipl {
@@ -458,14 +461,15 @@ PhysOrientation toCheckerOrient(fr::Orient orientation)
 class PortablePlacementView final : public fr::PlacementView
 {
  public:
-  explicit PortablePlacementView(const ImplantInput& input)
+  explicit PortablePlacementView(
+      const ImplantInput& input,
+      std::optional<std::vector<fr::MasterId>> configuredFillers = std::nullopt)
       : site_width_(input.siteWidth)
   {
     std::map<LayerId, ImplantLayer> layers;
     for (const ImplantLayer& layer : input.layers) {
       layers[layer.id] = layer;
     }
-
     for (size_t index = 0; index < input.masters.size(); ++index) {
       const MasterItem& master = input.masters[index];
       fr::MasterInfo info;
@@ -486,6 +490,9 @@ class PortablePlacementView final : public fr::PlacementView
       masters_[info.id] = info;
       if (info.isFiller)
         filler_master_ids_.push_back(info.id);
+    }
+    if (configuredFillers.has_value()) {
+      filler_master_ids_ = std::move(*configuredFillers);
     }
 
     for (RowId rowId : input.rows) {
@@ -581,6 +588,8 @@ class PortableCheckerOracle final : public fr::ImplantOverlayChecker
   std::vector<fr::CheckResult> checkPlaceWithOverlays(
       const std::vector<fr::OverlayCheckRequest>& requests) override
   {
+    ++batch_count_;
+    request_count_ += static_cast<int>(requests.size());
     std::vector<fr::CheckResult> results(requests.size());
     if (requests.empty())
       return results;
@@ -655,6 +664,9 @@ class PortableCheckerOracle final : public fr::ImplantOverlayChecker
     return results;
   }
 
+  int requestCount() const { return request_count_; }
+  int batchCount() const { return batch_count_; }
+
  private:
   fr::Violation toPlannerViolation(const Violation& violation,
                                    fr::InstanceId targetId) const
@@ -693,12 +705,16 @@ class PortableCheckerOracle final : public fr::ImplantOverlayChecker
 
   const PortablePlacementView& view_;
   const ImplantLayerChecker& checker_;
+  int request_count_ = 0;
+  int batch_count_ = 0;
 };
 
-fr::TargetPlace plannerTarget(RowId rowId, ColId colId)
+fr::TargetPlace plannerTarget(RowId rowId,
+                              ColId colId,
+                              MasterId masterId = C1_MASTER)
 {
   return fr::TargetPlace{instId(rowId, colId),
-                         C1_MASTER,
+                         masterId,
                          rowId,
                          colId * SITE_WIDTH,
                          fr::Orient::R0};
@@ -713,6 +729,152 @@ fr::Region snapshotRegion(RowId rowId, ColId colId)
       std::max<RowId>(0, rowId - 1),
       std::min<RowId>(ROW_COUNT - 1, rowId + 1)};
 }
+
+bool hasPlannerDiagnostic(const fr::FillerRepairResult& result,
+                          const std::string& code)
+{
+  return std::any_of(result.diagnostics.begin(),
+                     result.diagnostics.end(),
+                     [&code](const fr::Diagnostic& diagnostic) {
+                       return diagnostic.code == code;
+                     });
+}
+
+bool sameChanges(const std::vector<fr::FillerChange>& left,
+                 const std::vector<fr::FillerChange>& right)
+{
+  if (left.size() != right.size()) {
+    return false;
+  }
+  for (size_t index = 0; index < left.size(); ++index) {
+    if (left[index].instanceId != right[index].instanceId
+        || left[index].newMasterId != right[index].newMasterId) {
+      return false;
+    }
+  }
+  return true;
+}
+
+ImplantInput multiSwapWidthInput(int requiredFillers)
+{
+  ImplantInput result = input();
+  for (Rule& candidate : result.rules) {
+    if (candidate.ruleId == F1_WIDTH_RULE) {
+      candidate.minValue = (requiredFillers + 1) * SITE_WIDTH;
+    }
+  }
+  for (RowId rowId = 0; rowId <= 1; ++rowId) {
+    for (ColId colId = 0; colId <= 30; ++colId) {
+      PlacedInst& placed = result.placedInsts[siteIndex(rowId, colId)];
+      placed.masterId = colId % 2 == 0 ? C2_MASTER : F2_FILL_MASTER;
+      placed.isFiller = colId % 2 != 0;
+    }
+  }
+  PlacedInst& target
+      = result.placedInsts[siteIndex(INTRA_WIDTH_ROW, INTRA_WIDTH_COL)];
+  target.masterId = C1_MASTER;
+  target.isFiller = false;
+  for (ColId colId : {12, 13}) {
+    PlacedInst& filler = result.placedInsts[siteIndex(INTRA_WIDTH_ROW, colId)];
+    filler.masterId = F2_FILL_MASTER;
+    filler.isFiller = true;
+  }
+  return result;
+}
+
+ImplantInput thirdVtTargetInput()
+{
+  ImplantInput result = input();
+  for (auto& [slot, layer] : result.tracks.layerBySlot) {
+    (void) slot;
+    layer = F3_LAYER;
+  }
+  return result;
+}
+
+class PlannerCheckerFixture
+{
+ public:
+  explicit PlannerCheckerFixture(
+      ImplantInput testInput = input(),
+      std::optional<std::vector<fr::MasterId>> configuredFillers = std::nullopt)
+      : input_(std::move(testInput)), before_(input_.placedInsts)
+  {
+    helper_.initialize(input_);
+    checker_ = std::make_unique<ImplantLayerChecker>(helper_.getGrid(),
+                                                     helper_.getNetwork());
+    helper_.initChecker(*checker_);
+    view_ = std::make_unique<PortablePlacementView>(
+        input_, std::move(configuredFillers));
+    oracle_ = std::make_unique<PortableCheckerOracle>(*view_, *checker_);
+  }
+
+  const std::vector<Diagnostic>& checkerDiagnostics() const
+  {
+    return checker_->getDiags();
+  }
+
+  const PortablePlacementView& view() const { return *view_; }
+  PortableCheckerOracle& oracle() { return *oracle_; }
+
+  fr::CheckResult baseline(RowId rowId,
+                           ColId colId,
+                           MasterId targetMaster = C1_MASTER)
+  {
+    const fr::TargetPlace target = plannerTarget(rowId, colId, targetMaster);
+    return oracle_->checkPlaceWithOverlay(
+        fr::OverlayCheckRequest{0, target, snapshotRegion(rowId, colId), {}});
+  }
+
+  fr::FillerRepairResult repair(RowId rowId,
+                                ColId colId,
+                                const std::vector<fr::Violation>& violations,
+                                fr::RepairConfig config = {},
+                                MasterId targetMaster = C1_MASTER)
+  {
+    fr::internal::FillerRepairPlanner planner(*view_, *oracle_, config);
+    return planner.repair(fr::FillerRepairRequest{
+        plannerTarget(rowId, colId, targetMaster), violations});
+  }
+
+  fr::CheckResult verify(RowId rowId,
+                         ColId colId,
+                         const std::vector<fr::FillerChange>& changes,
+                         MasterId targetMaster = C1_MASTER)
+  {
+    return oracle_->checkPlaceWithOverlay(
+        fr::OverlayCheckRequest{100,
+                                plannerTarget(rowId, colId, targetMaster),
+                                snapshotRegion(rowId, colId),
+                                changes});
+  }
+
+  bool inputUnchanged() const
+  {
+    if (input_.placedInsts.size() != before_.size()) {
+      return false;
+    }
+    for (size_t index = 0; index < before_.size(); ++index) {
+      const PlacedInst& left = input_.placedInsts[index];
+      const PlacedInst& right = before_[index];
+      if (left.instanceId != right.instanceId || left.masterId != right.masterId
+          || left.rowId != right.rowId || left.colId != right.colId
+          || left.orientation != right.orientation
+          || left.isFiller != right.isFiller) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+ private:
+  ImplantInput input_;
+  std::vector<PlacedInst> before_;
+  ImplantLayerCheckerHelper helper_;
+  std::unique_ptr<ImplantLayerChecker> checker_;
+  std::unique_ptr<PortablePlacementView> view_;
+  std::unique_ptr<PortableCheckerOracle> oracle_;
+};
 
 void expectPlannerRepairsWithFinalChecker(RowId rowId, ColId colId)
 {
@@ -1011,6 +1173,429 @@ TEST(FillerRepairCheckerE2ETest, RepairsInterRowSpacing)
             instId(INTER_SPACING_TARGET_ROW, INTER_SPACING_COL));
   expectPlannerRepairsWithFinalChecker(rowId, colId);
   SUCCEED();
+}
+
+TEST(FillerRepairCheckerE2ETest, CleanSnapshotReturnsEmptyRepair)
+{
+  PlannerCheckerFixture fixture;
+  ASSERT_TRUE(fixture.checkerDiagnostics().empty());
+  const fr::CheckResult clean = fixture.baseline(6, 20);
+  ASSERT_EQ(clean.status, fr::CheckStatus::Checked);
+  ASSERT_TRUE(clean.isLegal);
+  ASSERT_TRUE(clean.violations.empty());
+  const int beforeRequests = fixture.oracle().requestCount();
+  const fr::FillerRepairResult result = fixture.repair(6, 20, {});
+  EXPECT_TRUE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_EQ(fixture.oracle().requestCount(), beforeRequests);
+  EXPECT_TRUE(fixture.inputUnchanged());
+}
+
+TEST(FillerRepairCheckerE2ETest, RepeatedRepairIsDeterministic)
+{
+  PlannerCheckerFixture fixture;
+  const fr::CheckResult baseline
+      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  ASSERT_FALSE(baseline.violations.empty());
+  const fr::FillerRepairResult first
+      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations);
+  const fr::FillerRepairResult second
+      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations);
+  ASSERT_TRUE(first.hasSolution);
+  ASSERT_TRUE(second.hasSolution);
+  EXPECT_TRUE(sameChanges(first.changes, second.changes));
+  EXPECT_TRUE(fixture.inputUnchanged());
+}
+
+TEST(FillerRepairCheckerE2ETest, BatchSizeOneStillFindsSameRepair)
+{
+  PlannerCheckerFixture fixture;
+  const fr::CheckResult baseline
+      = fixture.baseline(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL);
+  ASSERT_FALSE(baseline.violations.empty());
+  fr::RepairConfig config;
+  config.batchSize = 1;
+  const fr::FillerRepairResult result = fixture.repair(
+      INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL, baseline.violations, config);
+  ASSERT_TRUE(result.hasSolution);
+  ASSERT_FALSE(result.changes.empty());
+  const fr::CheckResult verified
+      = fixture.verify(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL, result.changes);
+  EXPECT_TRUE(verified.isLegal);
+  EXPECT_GT(fixture.oracle().batchCount(), 1);
+}
+
+TEST(FillerRepairCheckerE2ETest, BatchSizeDoesNotChangeChosenOverlay)
+{
+  PlannerCheckerFixture smallBatch;
+  PlannerCheckerFixture largeBatch;
+  const fr::CheckResult smallBaseline
+      = smallBatch.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const fr::CheckResult largeBaseline
+      = largeBatch.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  fr::RepairConfig smallConfig;
+  smallConfig.batchSize = 1;
+  fr::RepairConfig largeConfig;
+  largeConfig.batchSize = 64;
+  const fr::FillerRepairResult small = smallBatch.repair(
+      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, smallBaseline.violations, smallConfig);
+  const fr::FillerRepairResult large = largeBatch.repair(
+      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, largeBaseline.violations, largeConfig);
+  ASSERT_TRUE(small.hasSolution);
+  ASSERT_TRUE(large.hasSolution);
+  EXPECT_TRUE(sameChanges(small.changes, large.changes));
+}
+
+TEST(FillerRepairCheckerE2ETest, EmptyCandidateUniverseFailsWithoutPartial)
+{
+  PlannerCheckerFixture fixture(input(), std::vector<fr::MasterId>{});
+  const fr::CheckResult baseline
+      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  ASSERT_FALSE(baseline.violations.empty());
+  fr::RepairConfig config;
+  config.adaptiveStepFillers = 100;
+  config.checkerCallBudgetPerWindow = 32;
+  const fr::FillerRepairResult result = fixture.repair(
+      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, config);
+  EXPECT_FALSE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_TRUE(hasPlannerDiagnostic(result, "NoSwapGenerated")
+              || hasPlannerDiagnostic(result, "NoEditableFiller"));
+  EXPECT_TRUE(fixture.inputUnchanged());
+}
+
+TEST(FillerRepairCheckerE2ETest, ThirdVtOnlyCandidateRemainsReachable)
+{
+  PlannerCheckerFixture fixture(thirdVtTargetInput(),
+                                std::vector<fr::MasterId>{F3_FILL_MASTER});
+  const fr::CheckResult baseline
+      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, C3_MASTER);
+  ASSERT_FALSE(baseline.violations.empty());
+  const fr::FillerRepairResult result = fixture.repair(
+      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, {}, C3_MASTER);
+  ASSERT_TRUE(result.hasSolution);
+  ASSERT_FALSE(result.changes.empty());
+  EXPECT_TRUE(std::all_of(result.changes.begin(),
+                          result.changes.end(),
+                          [](const fr::FillerChange& change) {
+                            return change.newMasterId == F3_FILL_MASTER;
+                          }));
+  EXPECT_TRUE(
+      fixture
+          .verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes, C3_MASTER)
+          .isLegal);
+}
+
+TEST(FillerRepairCheckerE2ETest, OneCallBudgetReturnsNoPartialRepair)
+{
+  PlannerCheckerFixture fixture;
+  const fr::CheckResult baseline
+      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  ASSERT_FALSE(baseline.violations.empty());
+  fr::RepairConfig config;
+  config.checkerCallBudgetPerWindow = 1;
+  config.batchSize = 1;
+  config.adaptiveStepFillers = 100;
+  const fr::FillerRepairResult result = fixture.repair(
+      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, config);
+  EXPECT_FALSE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_TRUE(fixture.inputUnchanged());
+}
+
+TEST(FillerRepairCheckerE2ETest, FabricatedOriginalFailsBaselineGate)
+{
+  PlannerCheckerFixture fixture;
+  const fr::CheckResult baseline
+      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  ASSERT_FALSE(baseline.violations.empty());
+  std::vector<fr::Violation> stale = baseline.violations;
+  stale.front().ruleId += 10000;
+  const fr::FillerRepairResult result
+      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, stale);
+  EXPECT_FALSE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_TRUE(hasPlannerDiagnostic(result, "BaselineMismatch"));
+}
+
+TEST(FillerRepairCheckerE2ETest, DuplicateOriginalFailsOneToOneBaselineGate)
+{
+  PlannerCheckerFixture fixture;
+  const fr::CheckResult baseline
+      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  ASSERT_FALSE(baseline.violations.empty());
+  std::vector<fr::Violation> duplicated = baseline.violations;
+  duplicated.push_back(duplicated.front());
+  const fr::FillerRepairResult result
+      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, duplicated);
+  EXPECT_FALSE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_TRUE(hasPlannerDiagnostic(result, "BaselineMismatch"));
+}
+
+TEST(FillerRepairCheckerE2ETest, ReturnedChangesTouchOnlySameSizeFillers)
+{
+  PlannerCheckerFixture fixture;
+  const fr::CheckResult baseline
+      = fixture.baseline(INTRA_SPACING_ROW, INTRA_SPACING_COL);
+  const fr::FillerRepairResult result = fixture.repair(
+      INTRA_SPACING_ROW, INTRA_SPACING_COL, baseline.violations);
+  ASSERT_TRUE(result.hasSolution);
+  ASSERT_FALSE(result.changes.empty());
+  for (const fr::FillerChange& change : result.changes) {
+    const fr::PlacedInstance* instance
+        = fixture.view().instance(change.instanceId);
+    ASSERT_NE(instance, nullptr);
+    EXPECT_TRUE(instance->isFiller);
+    const fr::MasterInfo* oldMaster
+        = fixture.view().masterInfo(instance->masterId);
+    const fr::MasterInfo* newMaster
+        = fixture.view().masterInfo(change.newMasterId);
+    ASSERT_NE(oldMaster, nullptr);
+    ASSERT_NE(newMaster, nullptr);
+    EXPECT_EQ(oldMaster->width, newMaster->width);
+    EXPECT_EQ(oldMaster->height, newMaster->height);
+  }
+  EXPECT_TRUE(fixture.inputUnchanged());
+}
+
+TEST(FillerRepairCheckerE2ETest, PlannerAvoidsKnownNewViolationSites)
+{
+  PlannerCheckerFixture fixture;
+  const fr::CheckResult baseline
+      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const fr::FillerRepairResult result
+      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations);
+  ASSERT_TRUE(result.hasSolution);
+  const std::array<InstanceId, 4> unrelatedSites{
+      instId(NEW_INTRA_WIDTH_ROW, 101),
+      instId(NEW_INTER_WIDTH_BOTTOM_ROW, NEW_INTER_WIDTH_COL),
+      instId(NEW_INTRA_SPACING_ROW, 143),
+      instId(NEW_INTER_SPACING_BOTTOM_ROW, 163)};
+  for (const fr::FillerChange& change : result.changes) {
+    EXPECT_EQ(
+        std::find(
+            unrelatedSites.begin(), unrelatedSites.end(), change.instanceId),
+        unrelatedSites.end());
+  }
+  EXPECT_TRUE(
+      fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes).isLegal);
+}
+
+TEST(FillerRepairCheckerE2ETest, MinimumWidthCanRequireTwoAtomicSwaps)
+{
+  PlannerCheckerFixture fixture(multiSwapWidthInput(2),
+                                std::vector<fr::MasterId>{F1_FILL_MASTER});
+  const fr::CheckResult baseline
+      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  ASSERT_FALSE(baseline.violations.empty());
+  fr::RepairConfig config;
+  config.checkerCallBudgetPerWindow = 4096;
+  config.memberCapSize3 = 100;
+  config.batchSize = 64;
+  const fr::FillerRepairResult result = fixture.repair(
+      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, config);
+  ASSERT_TRUE(result.hasSolution);
+  EXPECT_EQ(result.changes.size(), 2u);
+  const fr::CheckResult verified
+      = fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes);
+  EXPECT_TRUE(verified.isLegal);
+  EXPECT_TRUE(verified.violations.empty());
+}
+
+TEST(FillerRepairCheckerE2ETest,
+     ThreeSwapSolutionOutsideAdaptiveWindowReturnsNoPartial)
+{
+  PlannerCheckerFixture fixture(multiSwapWidthInput(3),
+                                std::vector<fr::MasterId>{F1_FILL_MASTER});
+  const std::vector<fr::FillerChange> expected{
+      {instId(INTRA_WIDTH_ROW, 9), F1_FILL_MASTER},
+      {instId(INTRA_WIDTH_ROW, 11), F1_FILL_MASTER},
+      {instId(INTRA_WIDTH_ROW, 12), F1_FILL_MASTER}};
+  ASSERT_TRUE(
+      fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, expected).isLegal);
+  const fr::CheckResult baseline
+      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  ASSERT_FALSE(baseline.violations.empty());
+  const fr::FillerRepairResult result
+      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations);
+  EXPECT_FALSE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_TRUE(fixture.inputUnchanged());
+}
+
+using fr::internal::CoverageFinding;
+using fr::internal::CoverageFindingKind;
+using fr::internal::PlacementCoverageRow;
+
+TEST(PlacementPrecheckInternalTest, ExactCoverageIsClean)
+{
+  PlacementCoverageRow row;
+  row.rowId = 0;
+  row.legalSpans = {{0, 40}};
+  row.placedSpans = {{0, 10}, {10, 25}, {25, 40}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row});
+  EXPECT_TRUE(findings.empty());
+}
+
+TEST(PlacementPrecheckInternalTest, LeadingMiddleAndTrailingGapsAreReported)
+{
+  PlacementCoverageRow row;
+  row.rowId = 3;
+  row.legalSpans = {{0, 100}};
+  row.placedSpans = {{10, 30}, {40, 80}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row});
+  ASSERT_EQ(findings.size(), 3u);
+  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Gap);
+  EXPECT_EQ(findings[0].span.xl, 0);
+  EXPECT_EQ(findings[0].span.xh, 10);
+  EXPECT_EQ(findings[1].span.xl, 30);
+  EXPECT_EQ(findings[1].span.xh, 40);
+  EXPECT_EQ(findings[2].span.xl, 80);
+  EXPECT_EQ(findings[2].span.xh, 100);
+}
+
+TEST(PlacementPrecheckInternalTest, AdjacentOverlapSegmentsAreCoalesced)
+{
+  PlacementCoverageRow row;
+  row.rowId = 4;
+  row.legalSpans = {{0, 40}};
+  row.placedSpans = {{0, 30}, {10, 20}, {20, 30}, {30, 40}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row});
+  ASSERT_EQ(findings.size(), 1u);
+  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Overlap);
+  EXPECT_EQ(findings[0].rowId, 4);
+  EXPECT_EQ(findings[0].span.xl, 10);
+  EXPECT_EQ(findings[0].span.xh, 30);
+}
+
+TEST(PlacementPrecheckInternalTest,
+     ExcludedWhitespaceBetweenLegalSpansIsIgnored)
+{
+  PlacementCoverageRow row;
+  row.rowId = 0;
+  row.legalSpans = {{0, 20}, {40, 60}};
+  row.placedSpans = {{0, 20}, {40, 60}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row});
+  EXPECT_TRUE(findings.empty());
+}
+
+TEST(PlacementPrecheckInternalTest, PlacedSpansAreClippedToLegalDomain)
+{
+  PlacementCoverageRow row;
+  row.rowId = 2;
+  row.legalSpans = {{10, 30}};
+  row.placedSpans = {{-100, 20}, {20, 100}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row});
+  EXPECT_TRUE(findings.empty());
+}
+
+TEST(PlacementPrecheckInternalTest, MultipleRowsAreSortedAndIndependent)
+{
+  PlacementCoverageRow row5{5, {{0, 20}}, {{0, 15}, {10, 20}}};
+  PlacementCoverageRow row1{1, {{0, 20}}, {{0, 5}, {10, 20}}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row5, row1});
+  ASSERT_EQ(findings.size(), 2u);
+  EXPECT_EQ(findings[0].rowId, 1);
+  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Gap);
+  EXPECT_EQ(findings[0].span.xl, 5);
+  EXPECT_EQ(findings[0].span.xh, 10);
+  EXPECT_EQ(findings[1].rowId, 5);
+  EXPECT_EQ(findings[1].kind, CoverageFindingKind::Overlap);
+  EXPECT_EQ(findings[1].span.xl, 10);
+  EXPECT_EQ(findings[1].span.xh, 15);
+}
+
+TEST(PlacementPrecheckInternalTest, EmptyAndZeroWidthLegalSpansAreIgnored)
+{
+  PlacementCoverageRow emptyRow;
+  emptyRow.rowId = 0;
+  PlacementCoverageRow zeroRow;
+  zeroRow.rowId = 1;
+  zeroRow.legalSpans = {{10, 10}, {20, 10}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({emptyRow, zeroRow});
+  EXPECT_TRUE(findings.empty());
+}
+
+TEST(PlacementPrecheckInternalTest, MixedGapAndOverlapKeepDeterministicOrder)
+{
+  PlacementCoverageRow row;
+  row.rowId = 7;
+  row.legalSpans = {{0, 50}};
+  row.placedSpans = {{0, 20}, {10, 30}, {40, 50}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row});
+  ASSERT_EQ(findings.size(), 2u);
+  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Overlap);
+  EXPECT_EQ(findings[0].span.xl, 10);
+  EXPECT_EQ(findings[0].span.xh, 20);
+  EXPECT_EQ(findings[1].kind, CoverageFindingKind::Gap);
+  EXPECT_EQ(findings[1].span.xl, 30);
+  EXPECT_EQ(findings[1].span.xh, 40);
+}
+
+TEST(PlacementPrecheckInternalTest, EmptyPlacementReportsWholeLegalSpan)
+{
+  PlacementCoverageRow row;
+  row.rowId = 8;
+  row.legalSpans = {{25, 75}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row});
+  ASSERT_EQ(findings.size(), 1u);
+  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Gap);
+  EXPECT_EQ(findings[0].rowId, 8);
+  EXPECT_EQ(findings[0].span.xl, 25);
+  EXPECT_EQ(findings[0].span.xh, 75);
+}
+
+TEST(PlacementPrecheckInternalTest, UnsortedInputProducesSortedFindings)
+{
+  PlacementCoverageRow row;
+  row.rowId = 9;
+  row.legalSpans = {{40, 60}, {0, 20}};
+  row.placedSpans = {{50, 60}, {0, 10}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row});
+  ASSERT_EQ(findings.size(), 2u);
+  EXPECT_EQ(findings[0].span.xl, 10);
+  EXPECT_EQ(findings[0].span.xh, 20);
+  EXPECT_EQ(findings[1].span.xl, 40);
+  EXPECT_EQ(findings[1].span.xh, 50);
+}
+
+TEST(PlacementPrecheckInternalTest, TripleCoverageReportsOneOverlapSpan)
+{
+  PlacementCoverageRow row;
+  row.rowId = 10;
+  row.legalSpans = {{0, 30}};
+  row.placedSpans = {{0, 30}, {5, 25}, {10, 20}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row});
+  ASSERT_EQ(findings.size(), 1u);
+  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Overlap);
+  EXPECT_EQ(findings[0].span.xl, 5);
+  EXPECT_EQ(findings[0].span.xh, 25);
+}
+
+TEST(PlacementPrecheckInternalTest, TouchingLegalSpansCoalesceContinuousGap)
+{
+  PlacementCoverageRow row;
+  row.rowId = 11;
+  row.legalSpans = {{0, 20}, {20, 40}};
+  row.placedSpans = {{0, 10}, {30, 40}};
+  const std::vector<CoverageFinding> findings
+      = fr::internal::findCoverageFindings({row});
+  ASSERT_EQ(findings.size(), 1u);
+  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Gap);
+  EXPECT_EQ(findings[0].span.xl, 10);
+  EXPECT_EQ(findings[0].span.xh, 30);
 }
 
 }  // namespace

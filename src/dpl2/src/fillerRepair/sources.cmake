@@ -12,6 +12,8 @@
 #                                          checker/view
 #   DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE planner + final-checker E2E that
 #                                           uses ImplantLayerCheckerHelper
+#   DPL2_FILLER_REPAIR_PRECHECK_SOURCE      UDM-free coverage sweep shared by
+#                                           production and portable tests
 
 set(DPL2_FILLER_REPAIR_PLANNER_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/PlacementView.cpp"
@@ -23,8 +25,12 @@ set(DPL2_FILLER_REPAIR_PLANNER_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/OracleGate.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/FillerRepairPlanner.cpp")
 
+set(DPL2_FILLER_REPAIR_PRECHECK_SOURCE
+    "${CMAKE_CURRENT_LIST_DIR}/PlacementPrecheck.cpp")
+
 set(DPL2_FILLER_REPAIR_PRODUCTION_SOURCES
     ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
+    ${DPL2_FILLER_REPAIR_PRECHECK_SOURCE}
     "${CMAKE_CURRENT_LIST_DIR}/FillerRepairEngine.cpp")
 
 set(DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE

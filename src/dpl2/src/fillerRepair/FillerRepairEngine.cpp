@@ -15,6 +15,7 @@
 #include "FillerRepairPlanner.h"
 #include "Log.h"
 #include "OracleGate.h"
+#include "PlacementPrecheck.h"
 #include "PlacementView.h"
 #include "infrastructure/Grid.h"
 #include "infrastructure/Objects.h"
@@ -965,17 +966,10 @@ ipl::Diagnostic toProductionDiagnostic(const Diagnostic& diagnostic)
       cat(severityName(diagnostic.severity), ": ", diagnostic.message)};
 }
 
-struct CoverageFinding
-{
-  const char* status = "Gap";
-  int rowId = 0;
-  int64_t xl = 0;
-  int64_t xh = 0;
-};
-
-std::vector<CoverageFinding> findGapAndOverlap(eUNL::PhysDesMgr* desMgr,
-                                               const Grid* grid,
-                                               const Network* network)
+std::vector<internal::CoverageFinding> findGapAndOverlap(
+    eUNL::PhysDesMgr* desMgr,
+    const Grid* grid,
+    const Network* network)
 {
   struct RowData
   {
@@ -1085,62 +1079,22 @@ std::vector<CoverageFinding> findGapAndOverlap(eUNL::PhysDesMgr* desMgr,
     }
   }
 
-  std::vector<CoverageFinding> findings;
+  std::vector<internal::PlacementCoverageRow> coverageRows;
+  coverageRows.reserve(rows.size());
   for (RowData& row : rows) {
-    for (const auto& legal : row.legalSpans) {
-      std::vector<int64_t> cuts{legal.first, legal.second};
-      std::vector<int64_t> starts;
-      std::vector<int64_t> ends;
-      starts.reserve(row.spans.size());
-      ends.reserve(row.spans.size());
-      for (const auto& span : row.spans) {
-        const int64_t clippedXl = std::max(span.first, legal.first);
-        const int64_t clippedXh = std::min(span.second, legal.second);
-        if (clippedXh <= clippedXl) {
-          continue;
-        }
-        cuts.push_back(clippedXl);
-        cuts.push_back(clippedXh);
-        starts.push_back(clippedXl);
-        ends.push_back(clippedXh);
-      }
-      std::sort(cuts.begin(), cuts.end());
-      cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
-      std::sort(starts.begin(), starts.end());
-      std::sort(ends.begin(), ends.end());
-
-      size_t nextStart = 0;
-      size_t nextEnd = 0;
-      int active = 0;
-      for (size_t i = 0; i + 1 < cuts.size(); ++i) {
-        const int64_t segmentXl = cuts[i];
-        const int64_t segmentXh = cuts[i + 1];
-        while (nextEnd < ends.size() && ends[nextEnd] <= segmentXl) {
-          --active;
-          ++nextEnd;
-        }
-        while (nextStart < starts.size()
-               && starts[nextStart] <= segmentXl) {
-          ++active;
-          ++nextStart;
-        }
-        if (segmentXh <= segmentXl || active == 1) {
-          continue;
-        }
-        const char* findingStatus = active == 0 ? "Gap" : "Overlap";
-        if (!findings.empty()
-            && std::string(findings.back().status) == findingStatus
-            && findings.back().rowId == row.id
-            && findings.back().xh == segmentXl) {
-          findings.back().xh = segmentXh;
-        } else {
-          findings.push_back(
-              CoverageFinding{findingStatus, row.id, segmentXl, segmentXh});
-        }
-      }
+    internal::PlacementCoverageRow coverageRow;
+    coverageRow.rowId = row.id;
+    coverageRow.legalSpans.reserve(row.legalSpans.size());
+    coverageRow.placedSpans.reserve(row.spans.size());
+    for (const auto& span : row.legalSpans) {
+      coverageRow.legalSpans.push_back({span.first, span.second});
     }
+    for (const auto& span : row.spans) {
+      coverageRow.placedSpans.push_back({span.first, span.second});
+    }
+    coverageRows.push_back(std::move(coverageRow));
   }
-  return findings;
+  return internal::findCoverageFindings(std::move(coverageRows));
 }
 
 }  // namespace
@@ -1194,14 +1148,15 @@ class FillerRepairEngine::Impl
            "warning: init() must succeed before placement precheck"});
       return result;
     }
-    const std::vector<CoverageFinding> findings
+    const std::vector<internal::CoverageFinding> findings
         = findGapAndOverlap(des_mgr_, grid_, network_);
     result.isLegal = findings.empty();
-    for (const CoverageFinding& finding : findings) {
+    for (const internal::CoverageFinding& finding : findings) {
+      const char* status = internal::coverageFindingStatus(finding.kind);
       result.diagnostics.push_back(
-          {finding.status,
-           cat("warning: placement ", finding.status, " row=", finding.rowId,
-               " x=[", finding.xl, ",", finding.xh,
+          {status,
+           cat("warning: placement ", status, " row=", finding.rowId,
+               " x=[", finding.span.xl, ",", finding.span.xh,
                ") -> opto must block mutation")});
     }
     return result;
