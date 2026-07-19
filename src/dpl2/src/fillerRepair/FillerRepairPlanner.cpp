@@ -33,30 +33,6 @@ bool betterBest(const OracleGate::SearchResult& candidate,
                  && candidate.bestOverlay.size() < current.bestOverlay.size()));
 }
 
-bool sameBlockingMultiset(const std::vector<Violation>& left,
-                          const std::vector<Violation>& right,
-                          DbCoord siteWidth)
-{
-  if (left.size() != right.size()) {
-    return false;
-  }
-  std::vector<char> consumed(right.size(), 0);
-  for (const Violation& violation : left) {
-    bool matched = false;
-    for (size_t i = 0; i < right.size(); ++i) {
-      if (!consumed[i] && sameSignature(violation, right[i], siteWidth)) {
-        consumed[i] = 1;
-        matched = true;
-        break;
-      }
-    }
-    if (!matched) {
-      return false;
-    }
-  }
-  return true;
-}
-
 std::string windowLabel(const RepairWindow& window)
 {
   return window.level == 0 ? "L0" : cat("adaptive-L1 step ", window.level);
@@ -150,8 +126,6 @@ FillerRepairResult FillerRepairPlanner::repair(
   // (V2.1 #10): an earlier smaller window being complete does not prove the
   // later truncated window has no solution.
   bool lastSearchedDefinitive = false;
-  std::vector<Violation> previousBlocking;
-  bool havePreviousBlocking = false;
   RepairWindow window = buildWindow(0,
                                     request.targetPlace,
                                     violations,
@@ -162,7 +136,6 @@ FillerRepairResult FillerRepairPlanner::repair(
   for (;;) {
     const std::string label = windowLabel(window);
     std::vector<Violation> blockingForExpansion = request.violations;
-    bool searched = false;
     bool currentDefinitive = false;
 
     // One loop iteration is one independently budgeted search question. The
@@ -216,7 +189,6 @@ FillerRepairResult FillerRepairPlanner::repair(
             enumerateOverlays(ranked, config_, budget, log_);
         OracleGate::SearchResult sr =
             gate.search(plan.overlays, window, window.guardRegion, budget);
-        searched = true;
         if (sr.protocolError) {
           result.hasSolution = false;
           result.diagnostics.insert(result.diagnostics.end(),
@@ -273,24 +245,9 @@ FillerRepairResult FillerRepairPlanner::repair(
       }
     }
 
-    if (searched && window.level > 0 && currentDefinitive
-        && havePreviousBlocking
-        && sameBlockingMultiset(blockingForExpansion,
-                                previousBlocking,
-                                view_.siteWidth())) {
-      result.diagnostics.push_back(makeDiag(
-          Severity::Info, "ExpansionCutoff",
-          cat("window ", label,
-              " completed enumeration with unchanged blocking violations -> "
-              "stop adaptive expansion")));
-      log_.msg("planner",
-               cat("window ", label,
-                   " blocking multiset unchanged after complete search -> cutoff"));
-      break;
-    }
-
-    previousBlocking = blockingForExpansion;
-    havePreviousBlocking = true;
+    // A stable blocking set is not a proof that farther fillers cannot form a
+    // clean non-monotone multi-swap. Keep expanding until no adjacent filler
+    // can be added (or the normal per-window search limits stop enumeration).
     const RepairWindow expanded = expandWindowAdaptive(
         window,
         request.targetPlace,

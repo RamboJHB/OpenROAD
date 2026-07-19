@@ -637,20 +637,21 @@ spec 要求之外的功能。不可修的终判只有一个来源:④OracleGate 
 | 级别 | 内容 |
 |---|---|
 | L0 | violation participants ∪ anchor std cell 左右相邻 filler ∪ bridge filler(见下)——最小 participant/bridge 窗口 |
-| adaptive-L1 | 受控渐进扩窗:每步向"当前 best 非-clean candidate 的 blocking violation 所在侧"扩入固定 K 个相邻 filler(K≈2,纵向含耦合相邻行 ±1),重算完备枚举判定;循环到预算尽或扩窗截止 |
+| adaptive-L1 | 受控渐进扩窗:每步优先向"当前 best 非-clean candidate 的 blocking violation 所在侧"扩入固定 K 个相邻 filler(K≈2,纵向含耦合相邻行 ±1);若该单侧无法加入 filler,确定性尝试反方向;重算完备枚举判定并循环到扩窗截止 |
 
 - intra-row violation 从 L0 入,inter-row 从含 ±1 行的 L0 入(bridge 集合天然覆盖)。
 - 扩窗触发:result 非 clean 且 remaining violation 的 xWindow/participants 靠近当前
-  窗口边界;或当前窗口枚举/预算耗尽仍无 clean——每步只向 blocking 侧扩 K 个 filler。
+  窗口边界;或当前窗口枚举/预算耗尽仍无 clean——每步优先向 blocking 侧扩 K 个
+  filler;该单侧被阻塞时再尝试反方向。
 - **为什么渐进扩窗而非一次吞整段 filler run(V2.1 修订 #8)**:早期 L1 会横向 snap
   到最近 fixed cell/blockage/core 边界,可能一次把整条 filler run 拉进窗口——editable
   filler 一多,`3^k > 预算`,完备枚举立刻退化成 size≤4 的截断枚举,"窗口更大"反而
   "更难找到解"。按 best-residual 的 blocking 侧逐步扩,让窗口只在确需的方向增长,
   尽量维持完备枚举区间。
-- **扩窗截止**(借鉴 DAC'23 contour refinement 的终止准则):若扩窗后没有引入任何
-  新的 editable filler/move,或(完备枚举前提下)扩窗后 remaining violation 集合与
-  上一步完全相同,则违例与更远的 filler 无关——停止扩窗,直接进入失败路径,不烧
-  剩余预算。
+- **扩窗截止**:主方向与必要的反方向 fallback 均未引入任何新的 editable
+  filler/move 时停止扩窗并进入失败路径。remaining violation 集合在完备枚举后
+  不变**不是**安全的截止证明:implant 合法性是非单调的,更远 filler 仍可能参与
+  三个及以上的 atomic swap 解。
 - multi-height 预留规则:窗口按行扩展时,跨行 instance 把它占用的所有行拉进同一窗口。
 
 **bridge filler 默认必选**(不是兜底):与 anchor std cell 左右接触的 filler、上下行
@@ -987,9 +988,10 @@ gate 语义:
   一致性、empty candidate、one-call budget、fabricated/duplicate original baseline
   gate、same-size filler-only changes、known new-violation site avoidance 与必须两个
   atomic swaps 的 MW 修复。
-- 当前 adaptive window 尚不保证覆盖需要第三个 non-L0 filler 的合法三 swap
-  solution;portable case 先证明人工三 swap overlay checker-legal,再要求 planner
-  安全失败且不返回 partial changes。此项是已显式测试的算法扩展风险。
+- 三 swap adaptive-direction regression:portable case 先证明人工三 swap overlay
+  checker-legal;当 best residual 把主扩窗方向指向被 fixed cell 阻塞的一侧时,
+  planner 必须尝试反方向、纳入第三个 non-L0 filler、返回完整三 swap 并由 final
+  checker 验证 clean。任何失败路径仍返回空 changes,不允许 partial repair。
 
 ---
 

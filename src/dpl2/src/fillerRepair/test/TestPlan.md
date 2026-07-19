@@ -26,8 +26,9 @@ The 33 portable GoogleTests cover:
    and rejection of candidates that create a known new guard violation;
 9. returned filler records preserve instance geometry/master size;
 10. a minimum-width repair that requires two atomic swaps;
-11. a checker-legal three-swap overlay beyond the current adaptive window,
-    locking the current safe failure/no-partial-result behavior;
+11. a checker-legal three-swap repair whose best residual initially selects a
+    blocked adaptive side; the planner must try the opposite side, return all
+    three atomic changes and pass final-checker verification;
 12. the extracted exact-coverage sweep behind `precheck()`: clean coverage,
     leading/middle/trailing gaps, coalesced overlaps, excluded legal holes,
     clipping, multi-row order, empty spans, empty placement, unordered input,

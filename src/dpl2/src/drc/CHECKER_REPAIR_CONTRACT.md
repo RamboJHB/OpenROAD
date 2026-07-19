@@ -87,13 +87,15 @@ No DRC rule or scan behavior changed. Warning-clean integration required only:
 
 ## Verified test boundary
 
-All final E2E calls/assertions live in the real-UDM
-`fillerRepair/test/e2e_cases.cpp` and use production Grid, Network, final
-checker, FillerRepairEngine and planner. The destination supplies fixture data
-through `E2ETestProvider`. All local test doubles and UDM-compatible test data
-live outside the migration payload under `src/dpl2/test/local`. The production
-engine contains no snapshot builder or test conditional. Normal and ASan local
-builds pass with `-Wall -Wextra -Werror`.
+All portable final-checker calls/assertions live in
+`fillerRepair/test/FillerRepairCheckerE2ETest.cpp`. They construct dense
+`ImplantInput` directly through `ImplantLayerCheckerHelper` and exercise the
+final checker plus `FillerRepairPlanner`; no destination fixture provider or
+DEF/LEF reader is required. Public `FillerRepairEngine` and real-UDM facade
+coverage remains in the repository-local suite under `src/dpl2/test/local`.
+All test doubles and UDM-compatible test data stay outside the migration
+payload. The production engine contains no snapshot builder or test
+conditional. Normal and ASan local builds pass with `-Wall -Wextra -Werror`.
 
 Future checker API or semantic changes must be recorded here before engine
 changes are merged.

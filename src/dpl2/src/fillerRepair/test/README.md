@@ -12,7 +12,9 @@ DEF/LEF and does not require a destination-specific UDM fixture/provider.
   `internal::FillerRepairPlanner`, apply its returned overlay to the final
   checker, and cover clean/repair/failure, deterministic batching, candidate
   and budget boundaries, third-VT reachability, baseline consistency,
-  same-size changes, new-violation rejection and multi-swap minimum width;
+  same-size changes, new-violation rejection and multi-swap minimum width. The
+  three-swap case also verifies opposite-side adaptive fallback when the best
+  residual initially points at a blocked side;
 - 12 UDM-free internal precheck cases for exact coverage, leading/middle/
   trailing gaps, overlaps, legal holes, clipping, multiple rows, empty spans
   and deterministic mixed diagnostics, plus empty placement, unordered input,

@@ -17,8 +17,9 @@ The V2.1 swap-only planner and real-UDM production E2E package are complete.
 | Infrastructure | existing production Grid/Network are borrowed; engine owns only final checker/view, registers configured filler masters at init and target master lazily; empty `getFillerMasters()` errors out |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
 | Production API | one `FillerRepairEngine` = precheck + private view/oracle + repair; fails closed before a successful `init()` |
-| E2E | 52 real-UDM cases in `fillerRepair/test/e2e_cases.cpp`; destination supplies the real-UDM data provider |
-| CMake | `fillerRepair/test/CMakeLists.txt` is real-UDM-only; repository-local regression harness passes 133/133 normal and ASan |
+| Portable E2E | 33 GoogleTests in `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`: final-checker overlay/planner cases plus the UDM-free precheck sweep; no destination fixture provider |
+| Local regression | 81 planner + 64 fake-UDM facade cases; full CTest total 178, normal and ASan |
+| CMake | `fillerRepair/sources.cmake` exports production/planner/precheck/test source sets; the standalone test CMake accepts destination UDM include/link inputs |
 
 ## Fixed decisions
 
@@ -38,6 +39,9 @@ The V2.1 swap-only planner and real-UDM production E2E package are complete.
 9. Checker batches use one target/guard plus ordered `FillerChanges`; checker
    computes the empty-overlay baseline and returns blocking violations.
 10. Construct and init a new engine after a design commit.
+11. Adaptive expansion follows the best residual's side first, but tries the
+    opposite side if the primary side cannot add a filler. Unchanged blocking
+    alone is not a valid cutoff for non-monotone multi-swap repair.
 
 ## Production facade boundary
 
@@ -73,11 +77,13 @@ src/dpl2/test/local/run_fake_udm_e2e.sh
 SANITIZE=address src/dpl2/test/local/run_fake_udm_e2e.sh
 ```
 
-`fillerRepair/test` travels with production and contains only the 52 real-UDM
-E2E assertions, the real-UDM provider contract and CMake. All 81 fake-based
-planner unit cases, their doubles, the local UDM-compatible include tree,
-provider and runners live only under `src/dpl2/test/local`; they are not part
-of the migration payload and never link into production.
+`fillerRepair/test` travels with production and contains 33 portable
+final-checker/planner/precheck GoogleTests plus standalone CMake. Test data is
+built with `ImplantLayerCheckerHelper`; it needs no DEF/LEF reader or
+destination fixture provider. All 81 fake-based planner unit cases, their
+doubles, the local UDM-compatible include tree, provider and 64 facade cases
+live only under `src/dpl2/test/local`; they are not part of the migration
+payload and never link into production.
 
 The destination copies only `fillerRepair/`; existing infrastructure/checker
 remain unmodified. Every test source copied with it targets real UDM.
@@ -87,8 +93,8 @@ static Homebrew TBB archive as encoded in both build entry points.
 
 ## Change rules
 
-- Keep planner algorithms unchanged unless a production-chain regression
-  demonstrates a planner defect.
+- Keep planner algorithms unchanged unless a final-checker production-chain
+  regression demonstrates a planner defect.
 - Checker algorithm changes remain checker-RD-owned. Record any checker source
   compatibility edit in `CHECKER_REPAIR_CONTRACT.md`.
 - Do not add another production abstraction beside `FillerRepairEngine`.

@@ -245,69 +245,86 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
   int addedLeftTotal = 0;
   int addedRightTotal = 0;
 
-  for (const RowId rowId : rowSet) {
-    const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
-    DbCoord leftFrontier = current.x.xl;
-    DbCoord rightFrontier = current.x.xh;
-    bool hasSeed = false;
-    if (rowId == anchor.rowId) {
-      leftFrontier = anchorSpan.xl;
-      rightFrontier = anchorSpan.xh;
-      hasSeed = true;
-    }
-    for (const InstanceId id : current.editableFillers) {
-      const PlacedInstance* inst = view.instance(id);
-      if (inst == nullptr || inst->rowId != rowId) {
-        continue;
+  const auto addOnSides = [&](bool addLeft, bool addRight) {
+    const int before = addedLeftTotal + addedRightTotal;
+    for (const RowId rowId : rowSet) {
+      const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
+      DbCoord leftFrontier = current.x.xl;
+      DbCoord rightFrontier = current.x.xh;
+      bool hasSeed = false;
+      if (rowId == anchor.rowId) {
+        leftFrontier = anchorSpan.xl;
+        rightFrontier = anchorSpan.xh;
+        hasSeed = true;
       }
-      const XInterval span = instanceSpan(view, *inst);
-      leftFrontier = hasSeed ? std::min(leftFrontier, span.xl) : span.xl;
-      rightFrontier = hasSeed ? std::max(rightFrontier, span.xh) : span.xh;
-      hasSeed = true;
-    }
-    if (!hasSeed) {
-      leftFrontier = current.x.xl;
-      rightFrontier = current.x.xh;
-    }
+      for (const InstanceId id : current.editableFillers) {
+        const PlacedInstance* inst = view.instance(id);
+        if (inst == nullptr || inst->rowId != rowId) {
+          continue;
+        }
+        const XInterval span = instanceSpan(view, *inst);
+        leftFrontier = hasSeed ? std::min(leftFrontier, span.xl) : span.xl;
+        rightFrontier = hasSeed ? std::max(rightFrontier, span.xh) : span.xh;
+        hasSeed = true;
+      }
+      if (!hasSeed) {
+        leftFrontier = current.x.xl;
+        rightFrontier = current.x.xh;
+      }
 
-    if (growLeft) {
-      int added = 0;
-      for (int i = static_cast<int>(all.size()) - 1; i >= 0 && added < step;
-           --i) {
-        const XInterval span = instanceSpan(view, all[i]);
-        if (span.xh > leftFrontier || editable.count(all[i].id) > 0) {
-          continue;
+      if (addLeft) {
+        int added = 0;
+        for (int i = static_cast<int>(all.size()) - 1;
+             i >= 0 && added < step;
+             --i) {
+          const XInterval span = instanceSpan(view, all[i]);
+          if (span.xh > leftFrontier || editable.count(all[i].id) > 0) {
+            continue;
+          }
+          if (!all[i].isFiller || span.xh < leftFrontier) {
+            break;
+          }
+          editable.insert(all[i].id);
+          leftFrontier = span.xl;
+          x.xl = std::min(x.xl, span.xl);
+          ++added;
+          ++addedLeftTotal;
         }
-        if (!all[i].isFiller || span.xh < leftFrontier) {
-          break;
+      }
+      if (addRight) {
+        int added = 0;
+        for (const PlacedInstance& inst : all) {
+          if (added >= step) {
+            break;
+          }
+          const XInterval span = instanceSpan(view, inst);
+          if (span.xl < rightFrontier || editable.count(inst.id) > 0) {
+            continue;
+          }
+          if (!inst.isFiller || span.xl > rightFrontier) {
+            break;
+          }
+          editable.insert(inst.id);
+          rightFrontier = span.xh;
+          x.xh = std::max(x.xh, span.xh);
+          ++added;
+          ++addedRightTotal;
         }
-        editable.insert(all[i].id);
-        leftFrontier = span.xl;
-        x.xl = std::min(x.xl, span.xl);
-        ++added;
-        ++addedLeftTotal;
       }
     }
-    if (growRight) {
-      int added = 0;
-      for (const PlacedInstance& inst : all) {
-        if (added >= step) {
-          break;
-        }
-        const XInterval span = instanceSpan(view, inst);
-        if (span.xl < rightFrontier || editable.count(inst.id) > 0) {
-          continue;
-        }
-        if (!inst.isFiller || span.xl > rightFrontier) {
-          break;
-        }
-        editable.insert(inst.id);
-        rightFrontier = span.xh;
-        x.xh = std::max(x.xh, span.xh);
-        ++added;
-        ++addedRightTotal;
-      }
-    }
+    return addedLeftTotal + addedRightTotal > before;
+  };
+
+  // Residual violations choose the primary direction. Because multi-swap
+  // legality is non-monotone, that direction can be locally blocked while a
+  // required filler is immediately available on the other side. In that
+  // case, try the opposite side once before declaring the window exhausted.
+  const bool primaryAdded = addOnSides(growLeft, growRight);
+  if (!primaryAdded && growLeft != growRight) {
+    log.msg("window",
+            cat("primary adaptive direction ", growLeft ? "left" : "right",
+                " added no filler -> try ", growLeft ? "right" : "left"));
+    addOnSides(growRight, growLeft);
   }
 
   log.msg("window",

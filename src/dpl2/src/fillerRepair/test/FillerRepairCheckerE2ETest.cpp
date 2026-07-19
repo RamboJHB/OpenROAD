@@ -1404,7 +1404,7 @@ TEST(FillerRepairCheckerE2ETest, MinimumWidthCanRequireTwoAtomicSwaps)
 }
 
 TEST(FillerRepairCheckerE2ETest,
-     ThreeSwapSolutionOutsideAdaptiveWindowReturnsNoPartial)
+     ThreeSwapSolutionSurvivesAdaptiveDirectionFallback)
 {
   PlannerCheckerFixture fixture(multiSwapWidthInput(3),
                                 std::vector<fr::MasterId>{F1_FILL_MASTER});
@@ -1419,8 +1419,10 @@ TEST(FillerRepairCheckerE2ETest,
   ASSERT_FALSE(baseline.violations.empty());
   const fr::FillerRepairResult result
       = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations);
-  EXPECT_FALSE(result.hasSolution);
-  EXPECT_TRUE(result.changes.empty());
+  ASSERT_TRUE(result.hasSolution);
+  EXPECT_TRUE(sameChanges(result.changes, expected));
+  EXPECT_TRUE(
+      fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes).isLegal);
   EXPECT_TRUE(fixture.inputUnchanged());
 }
 

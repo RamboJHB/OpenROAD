@@ -186,10 +186,10 @@ planner-to-final-checker cases and 12 internal exact-coverage precheck
 cases. Each dense checker fixture contains eight rows and 200 sites. The
 planner matrix covers all four rule classes, clean/empty repair, determinism,
 batch invariance, candidates, third VT, budgets, baseline consistency,
-same-size edits, new-violation avoidance, a two-swap solution and safe
-no-partial failure for a checker-legal three-swap overlay outside the current
-adaptive window. The internal precheck matrix covers gaps, overlaps, clipping,
-legal holes, row ordering and deterministic coalescing. Planner doubles and
+same-size edits, new-violation avoidance, a two-swap solution and a
+checker-legal three-swap repair when the best residual initially points toward
+a blocked adaptive side. The internal precheck matrix covers gaps, overlaps,
+clipping, legal holes, row ordering and deterministic coalescing. Planner doubles and
 the fake-UDM suite live only under `src/dpl2/test/local/`; its 12 newly added
 external instances call the real public `precheck()` facade in opto order.
 
@@ -223,10 +223,11 @@ and ASan builds; full normal CTest 178/178; `-Wall -Wextra -Werror` clean.
   must remain outside production targets.
 - `repair()` may idempotently add a previously uninstantiated target master to
   Network and rebuild its private checker/view; it still never mutates UDM.
-- The current adaptive window can safely return no solution for a valid repair
-  that requires a third non-L0 filler swap. The portable suite verifies that
-  the exact three-swap overlay is checker-legal and that the planner returns
-  no partial changes; widening that search remains an algorithm enhancement.
+- Adaptive growth is still heuristic: it follows the best residual first and
+  falls back to the opposite side only when that primary side adds nothing.
+  Long irrelevant contiguous filler runs may therefore require several
+  budgeted windows before the fallback is reached. Search failure remains
+  atomic and returns no partial changes.
 - A destination whose `Network::addMaster` overload has a different signature
   needs one mechanical call-site adaptation in `FillerRepairEngine.cpp`; no
   planner or checker change is involved.

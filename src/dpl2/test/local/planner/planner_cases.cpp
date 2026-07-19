@@ -1008,6 +1008,37 @@ void testWindowAdaptiveAddsKOnBlockingSide()
   EXPECT_TRUE(window.containsEditable(201));  // row1: second filler added
   EXPECT_TRUE(window.containsEditable(202));  // row1: nearest filler added
   EXPECT_TRUE(!window.containsEditable(200));  // third filler: proves no whole-run sweep
+
+  // If the chosen side is blocked by a non-filler, the opposite side gets one
+  // deterministic chance. This preserves focused growth without treating a
+  // misleading residual violation as proof that the other side is irrelevant.
+  fr::FakeDesign fallback = makeLibrary();
+  fallback.addRow(0, 0, 12)
+      .place(300, cellMaster(kVt1), 0, 0)
+      .place(301, cellMaster(kVt2), 0, 4)
+      .place(302, fillerMaster(2, kVt1), 0, 8)
+      .place(303, fillerMaster(2, kVt1), 0, 10);
+  fr::RepairWindow seed;
+  seed.level = 0;
+  seed.rows = {0};
+  seed.x = {4, 8};
+  seed.guardRegion = {{0, 12}, 0, 0};
+  const fr::TargetPlace fallbackAnchor = anchorPlace(fallback, 301);
+  const fr::Violation leftBlocking = makeViolation(
+      4,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {3, 4});
+  const fr::RepairWindow fallbackWindow = fr::expandWindowAdaptive(
+      seed,
+      fallbackAnchor,
+      {leftBlocking},
+      fallback,
+      1,
+      fr::DebugLog(verbose()));
+  EXPECT_TRUE(fallbackWindow.containsEditable(302));
+  EXPECT_TRUE(!fallbackWindow.containsEditable(303));
 }
 
 void testWindowAdaptiveCoupledRowsAndFixedBoundary()
@@ -2873,7 +2904,7 @@ void testEngineAdaptiveL1FindsFarFiller()
   EXPECT_TRUE(sawAdaptiveSolution);
 }
 
-void testEngineAdaptiveCutoffUnchangedBlocking()
+void testEngineAdaptiveContinuesPastUnchangedBlocking()
 {
   fr::FakeDesign design = makeLibrary();
   design.addRow(0, 0, 20)
@@ -2910,13 +2941,20 @@ void testEngineAdaptiveCutoffUnchangedBlocking()
 
   const fr::FillerRepairResult result = engine.repair(request);
   EXPECT_TRUE(!result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
   bool sawUnchangedCutoff = false;
+  bool sawNoNewFillerCutoff = false;
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
     sawUnchangedCutoff |= diagnostic.code == "ExpansionCutoff"
                           && diagnostic.message.find("unchanged blocking")
                                  != std::string::npos;
+    sawNoNewFillerCutoff |= diagnostic.code == "ExpansionCutoff"
+                            && diagnostic.message.find(
+                                   "adds no new editable filler")
+                                   != std::string::npos;
   }
-  EXPECT_TRUE(sawUnchangedCutoff);
+  EXPECT_TRUE(!sawUnchangedCutoff);
+  EXPECT_TRUE(sawNoNewFillerCutoff);
 }
 
 // V2.1 #10: "definitive no solution" must reflect the LAST searched window.
@@ -3618,8 +3656,8 @@ void registerPlannerTests()
        testEngineAdaptiveSolvesBeyondRing},
       {"engine_adaptive_l1_finds_far_filler",
        testEngineAdaptiveL1FindsFarFiller},
-      {"engine_adaptive_cutoff_unchanged_blocking",
-       testEngineAdaptiveCutoffUnchangedBlocking},
+      {"engine_adaptive_continues_past_unchanged_blocking",
+       testEngineAdaptiveContinuesPastUnchangedBlocking},
       {"gate_baseline_unexpected_inwindow_aborts",
        testGateBaselineUnexpectedInWindowAborts},
       {"gate_baseline_halo_extra_allowed", testGateBaselineHaloExtraAllowed},

@@ -76,7 +76,8 @@ overlay contracts, 17 planner-to-final-checker repairs/failures and 12
 boundary cases for the exact coverage sweep behind `precheck()`. The checker
 fixtures contain eight dense rows and exercise intra/inter-row width/spacing,
 candidate and budget boundaries, baseline-delta protection, deterministic
-batching, multi-swap minimum width and no-partial-result failure semantics.
+batching, multi-swap minimum width, adaptive-direction fallback for a
+checker-legal three-swap repair and atomic no-partial failure semantics.
 
 ```sh
 cmake -S test -B test/build/e2e \
