@@ -580,7 +580,7 @@ class PortablePlannerDataSource final : public fr::PlannerDataSource
   std::vector<fr::MasterId> filler_master_ids_;
 };
 
-class PortableCheckerOracle final : public fr::ImplantOverlayChecker
+class PortableCheckerOracle final : public fr::PlannerOracle
 {
  public:
   PortableCheckerOracle(const PortablePlannerDataSource& view,
@@ -589,26 +589,35 @@ class PortableCheckerOracle final : public fr::ImplantOverlayChecker
   {
   }
 
-  fr::CheckResult checkPlaceWithOverlay(
-      const fr::OverlayCheckRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(
+      const fr::OracleRequest& request) override
   {
-    std::vector<fr::CheckResult> results = checkPlaceWithOverlays({request});
-    return results.empty() ? fr::CheckResult{} : std::move(results.front());
+    std::vector<fr::OracleResult> results = checkPlaceWithOverlays({request});
+    if (results.size() == 1) {
+      return std::move(results.front());
+    }
+    fr::OracleResult failure;
+    failure.requestId = request.requestId;
+    failure.status = fr::OracleStatus::CheckerError;
+    failure.diagnostics.push_back(fr::makeDiag(
+        fr::Severity::Fatal, "CheckerProtocolError",
+        "checker result count does not match the single oracle request"));
+    return failure;
   }
 
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     ++batch_count_;
     request_count_ += static_cast<int>(requests.size());
-    std::vector<fr::CheckResult> results(requests.size());
+    std::vector<fr::OracleResult> results(requests.size());
     if (requests.empty())
       return results;
 
-    const fr::OverlayCheckRequest& first = requests.front();
+    const fr::OracleRequest& first = requests.front();
     std::vector<FillerChanges> changes;
     changes.reserve(requests.size());
-    for (const fr::OverlayCheckRequest& request : requests) {
+    for (const fr::OracleRequest& request : requests) {
       changes.push_back(request.fillerChanges);
     }
 
@@ -626,17 +635,13 @@ class PortableCheckerOracle final : public fr::ImplantOverlayChecker
     const std::vector<CheckResult> raw
         = checker_.checkPlaceWithOverlays(target, guardRect, changes);
 
+    if (raw.size() != requests.size()) {
+      return std::vector<fr::OracleResult>(raw.size());
+    }
+
     for (size_t index = 0; index < requests.size(); ++index) {
-      fr::CheckResult& result = results[index];
+      fr::OracleResult& result = results[index];
       result.requestId = requests[index].requestId;
-      if (index >= raw.size()) {
-        result.status = fr::CheckStatus::CheckerError;
-        result.diagnostics.push_back(
-            fr::makeDiag(fr::Severity::Fatal,
-                         "CheckerProtocolError",
-                         "checker result count does not match request count"));
-        continue;
-      }
       const CheckResult& checkerResult = raw[index];
       for (const Diagnostic& diagnostic : checkerResult.diagnostics) {
         result.diagnostics.push_back(fr::makeDiag(
@@ -648,10 +653,10 @@ class PortableCheckerOracle final : public fr::ImplantOverlayChecker
       }
       if (result.violations.empty() && !checkerResult.isLegal
           && !result.diagnostics.empty()) {
-        result.status = fr::CheckStatus::InvalidOverlay;
+        result.status = fr::OracleStatus::InvalidOverlay;
         result.isLegal = false;
       } else {
-        result.status = fr::CheckStatus::Checked;
+        result.status = fr::OracleStatus::Checked;
         result.isLegal
             = result.violations.empty() && result.diagnostics.empty();
       }
@@ -811,13 +816,13 @@ class PlannerCheckerFixture
   const PortablePlannerDataSource& view() const { return *view_; }
   PortableCheckerOracle& oracle() { return *oracle_; }
 
-  fr::CheckResult baseline(RowId rowId,
+  fr::OracleResult baseline(RowId rowId,
                            ColId colId,
                            MasterId targetMaster = C1_MASTER)
   {
     const fr::TargetPlace target = plannerTarget(rowId, colId, targetMaster);
     return oracle_->checkPlaceWithOverlay(
-        fr::OverlayCheckRequest{0, target, snapshotRegion(rowId, colId), {}});
+        fr::OracleRequest{0, target, snapshotRegion(rowId, colId), {}});
   }
 
   fr::FillerRepairResult repair(RowId rowId,
@@ -831,13 +836,13 @@ class PlannerCheckerFixture
         plannerTarget(rowId, colId, targetMaster), violations});
   }
 
-  fr::CheckResult verify(RowId rowId,
+  fr::OracleResult verify(RowId rowId,
                          ColId colId,
                          const dpl2::ipl::FillerChanges& changes,
                          MasterId targetMaster = C1_MASTER)
   {
     return oracle_->checkPlaceWithOverlay(
-        fr::OverlayCheckRequest{100,
+        fr::OracleRequest{100,
                                 plannerTarget(rowId, colId, targetMaster),
                                 snapshotRegion(rowId, colId),
                                 changes});
@@ -885,10 +890,10 @@ void expectPlannerRepairsWithFinalChecker(RowId rowId, ColId colId)
   PortableCheckerOracle oracle(view, checker);
   const fr::TargetPlace target = plannerTarget(rowId, colId);
   const fr::Region snapshot = snapshotRegion(rowId, colId);
-  fr::OverlayCheckRequest baselineRequest{0, target, snapshot, {}};
-  const fr::CheckResult baseline
+  fr::OracleRequest baselineRequest{0, target, snapshot, {}};
+  const fr::OracleResult baseline
       = oracle.checkPlaceWithOverlay(baselineRequest);
-  ASSERT_EQ(baseline.status, fr::CheckStatus::Checked);
+  ASSERT_EQ(baseline.status, fr::OracleStatus::Checked);
   ASSERT_FALSE(baseline.isLegal);
   ASSERT_FALSE(baseline.violations.empty());
 
@@ -898,9 +903,9 @@ void expectPlannerRepairsWithFinalChecker(RowId rowId, ColId colId)
   ASSERT_TRUE(repaired.hasSolution);
   ASSERT_FALSE(repaired.changes.empty());
 
-  fr::OverlayCheckRequest verifyRequest{1, target, snapshot, repaired.changes};
-  const fr::CheckResult verified = oracle.checkPlaceWithOverlay(verifyRequest);
-  EXPECT_EQ(verified.status, fr::CheckStatus::Checked);
+  fr::OracleRequest verifyRequest{1, target, snapshot, repaired.changes};
+  const fr::OracleResult verified = oracle.checkPlaceWithOverlay(verifyRequest);
+  EXPECT_EQ(verified.status, fr::OracleStatus::Checked);
   EXPECT_TRUE(verified.isLegal);
   EXPECT_TRUE(verified.violations.empty());
 
@@ -1173,8 +1178,8 @@ TEST(FillerRepairCheckerE2ETest, CleanSnapshotReturnsEmptyRepair)
 {
   PlannerCheckerFixture fixture;
   ASSERT_TRUE(fixture.checkerDiagnostics().empty());
-  const fr::CheckResult clean = fixture.baseline(6, 20);
-  ASSERT_EQ(clean.status, fr::CheckStatus::Checked);
+  const fr::OracleResult clean = fixture.baseline(6, 20);
+  ASSERT_EQ(clean.status, fr::OracleStatus::Checked);
   ASSERT_TRUE(clean.isLegal);
   ASSERT_TRUE(clean.violations.empty());
   const int beforeRequests = fixture.oracle().requestCount();
@@ -1188,7 +1193,7 @@ TEST(FillerRepairCheckerE2ETest, CleanSnapshotReturnsEmptyRepair)
 TEST(FillerRepairCheckerE2ETest, RepeatedRepairIsDeterministic)
 {
   PlannerCheckerFixture fixture;
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   ASSERT_FALSE(baseline.violations.empty());
   const fr::FillerRepairResult first
@@ -1204,7 +1209,7 @@ TEST(FillerRepairCheckerE2ETest, RepeatedRepairIsDeterministic)
 TEST(FillerRepairCheckerE2ETest, BatchSizeOneStillFindsSameRepair)
 {
   PlannerCheckerFixture fixture;
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL);
   ASSERT_FALSE(baseline.violations.empty());
   fr::RepairConfig config;
@@ -1213,7 +1218,7 @@ TEST(FillerRepairCheckerE2ETest, BatchSizeOneStillFindsSameRepair)
       INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL, baseline.violations, config);
   ASSERT_TRUE(result.hasSolution);
   ASSERT_FALSE(result.changes.empty());
-  const fr::CheckResult verified
+  const fr::OracleResult verified
       = fixture.verify(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL, result.changes);
   EXPECT_TRUE(verified.isLegal);
   EXPECT_GT(fixture.oracle().batchCount(), 1);
@@ -1223,9 +1228,9 @@ TEST(FillerRepairCheckerE2ETest, BatchSizeDoesNotChangeChosenOverlay)
 {
   PlannerCheckerFixture smallBatch;
   PlannerCheckerFixture largeBatch;
-  const fr::CheckResult smallBaseline
+  const fr::OracleResult smallBaseline
       = smallBatch.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
-  const fr::CheckResult largeBaseline
+  const fr::OracleResult largeBaseline
       = largeBatch.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   fr::RepairConfig smallConfig;
   smallConfig.batchSize = 1;
@@ -1243,7 +1248,7 @@ TEST(FillerRepairCheckerE2ETest, BatchSizeDoesNotChangeChosenOverlay)
 TEST(FillerRepairCheckerE2ETest, EmptyCandidateUniverseFailsWithoutPartial)
 {
   PlannerCheckerFixture fixture(input(), std::vector<fr::MasterId>{});
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   ASSERT_FALSE(baseline.violations.empty());
   fr::RepairConfig config;
@@ -1262,7 +1267,7 @@ TEST(FillerRepairCheckerE2ETest, ThirdVtOnlyCandidateRemainsReachable)
 {
   PlannerCheckerFixture fixture(thirdVtTargetInput(),
                                 std::vector<fr::MasterId>{F3_FILL_MASTER});
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, C3_MASTER);
   ASSERT_FALSE(baseline.violations.empty());
   const fr::FillerRepairResult result = fixture.repair(
@@ -1284,7 +1289,7 @@ TEST(FillerRepairCheckerE2ETest, ThirdVtOnlyCandidateRemainsReachable)
 TEST(FillerRepairCheckerE2ETest, OneCallBudgetReturnsNoPartialRepair)
 {
   PlannerCheckerFixture fixture;
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   ASSERT_FALSE(baseline.violations.empty());
   fr::RepairConfig config;
@@ -1301,7 +1306,7 @@ TEST(FillerRepairCheckerE2ETest, OneCallBudgetReturnsNoPartialRepair)
 TEST(FillerRepairCheckerE2ETest, FabricatedOriginalFailsBaselineGate)
 {
   PlannerCheckerFixture fixture;
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   ASSERT_FALSE(baseline.violations.empty());
   std::vector<fr::Violation> stale = baseline.violations;
@@ -1316,7 +1321,7 @@ TEST(FillerRepairCheckerE2ETest, FabricatedOriginalFailsBaselineGate)
 TEST(FillerRepairCheckerE2ETest, DuplicateOriginalFailsOneToOneBaselineGate)
 {
   PlannerCheckerFixture fixture;
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   ASSERT_FALSE(baseline.violations.empty());
   std::vector<fr::Violation> duplicated = baseline.violations;
@@ -1331,7 +1336,7 @@ TEST(FillerRepairCheckerE2ETest, DuplicateOriginalFailsOneToOneBaselineGate)
 TEST(FillerRepairCheckerE2ETest, ReturnedChangesTouchOnlySameSizeFillers)
 {
   PlannerCheckerFixture fixture;
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTRA_SPACING_ROW, INTRA_SPACING_COL);
   const fr::FillerRepairResult result = fixture.repair(
       INTRA_SPACING_ROW, INTRA_SPACING_COL, baseline.violations);
@@ -1357,7 +1362,7 @@ TEST(FillerRepairCheckerE2ETest, ReturnedChangesTouchOnlySameSizeFillers)
 TEST(FillerRepairCheckerE2ETest, PlannerAvoidsKnownNewViolationSites)
 {
   PlannerCheckerFixture fixture;
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   const fr::FillerRepairResult result
       = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations);
@@ -1383,7 +1388,7 @@ TEST(FillerRepairCheckerE2ETest, MinimumWidthCanRequireTwoAtomicSwaps)
 {
   PlannerCheckerFixture fixture(multiSwapWidthInput(2),
                                 std::vector<fr::MasterId>{F1_FILL_MASTER});
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   ASSERT_FALSE(baseline.violations.empty());
   fr::RepairConfig config;
@@ -1394,7 +1399,7 @@ TEST(FillerRepairCheckerE2ETest, MinimumWidthCanRequireTwoAtomicSwaps)
       INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, config);
   ASSERT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 2u);
-  const fr::CheckResult verified
+  const fr::OracleResult verified
       = fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes);
   EXPECT_TRUE(verified.isLegal);
   EXPECT_TRUE(verified.violations.empty());
@@ -1414,7 +1419,7 @@ TEST(FillerRepairCheckerE2ETest,
                                       F1_FILL_MASTER)};
   ASSERT_TRUE(
       fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, expected).isLegal);
-  const fr::CheckResult baseline
+  const fr::OracleResult baseline
       = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   ASSERT_FALSE(baseline.violations.empty());
   const fr::FillerRepairResult result

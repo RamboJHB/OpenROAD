@@ -131,7 +131,7 @@ struct MasterCandidateResult
   std::vector<Diagnostic> diagnostics;
 };
 
-// --- Wire types shared with the checker (spec section 5.1 / 5.2) -----------
+// --- Shared planner model (spec sections 5.1 / 5.2) -------------------------
 
 // Anchor: the std cell changed by upstream opto/ECO. Not a repair window.
 struct TargetPlace
@@ -184,16 +184,9 @@ struct Violation
   std::vector<ViolationParticipant> participants;
 };
 
-using OverlayRequestId = int32_t;
-
-struct OverlayCheckRequest
-{
-  OverlayRequestId requestId = -1;  // planner-generated, unique per batch
-  TargetPlace targetPlace;
-  Region guardRegion;  // repair window expanded by a two-cell guard halo
-  ipl::FillerChanges fillerChanges;  // one atomic overlay candidate
-};
-
+// Exact final-checker wire helpers. The record itself is deliberately not
+// duplicated in fillerRepair: the planner, oracle and public result all carry
+// ipl::FillerCellRecord unchanged.
 inline InstanceId fillerRecordInstanceId(const FillerCellRecord& change)
 {
   return static_cast<InstanceId>(change.cell_id_.getIndexValue());
@@ -213,24 +206,6 @@ inline bool sameFillerCellRecord(const FillerCellRecord& left,
          && left.orig_lib_cell_ == right.orig_lib_cell_
          && left.new_lib_cell_ == right.new_lib_cell_;
 }
-
-enum class CheckStatus
-{
-  Checked,
-  InvalidOverlay,
-  CheckerError
-};
-
-struct CheckResult
-{
-  OverlayRequestId requestId = -1;  // must echo OverlayCheckRequest.requestId
-  CheckStatus status = CheckStatus::CheckerError;
-
-  bool isLegal = false;  // meaningful only when status == Checked
-
-  std::vector<Violation> violations;
-  std::vector<Diagnostic> diagnostics;
-};
 
 // --- Planner entry types (spec section 5.4) --------------------------------
 

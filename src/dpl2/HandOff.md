@@ -1,6 +1,6 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-07-19. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-20. Branch: `claude/wizardly-carson-secahu`.
 
 ## Result
 
@@ -146,7 +146,7 @@ The migrated E2E uses real Grid/Network/checker code and helper-built data.
 Portable E2E wiring in the destination environment:
 
 ```sh
-# Full production engine + planner + final checker/helper against destination:
+# Full runtime engine + planner + final checker/helper against destination:
 cmake -S <srcroot>/fillerRepair/test -B build-e2e \
   -DDPL2_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
   -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>' \
@@ -164,8 +164,8 @@ supplied infrastructure/checker sources.
 ## Build and verification
 
 The CMake below `fillerRepair/test` is a portable final-checker test package,
-not the destination's production owner. Its executable nevertheless compiles
-the complete production engine source list, checker/helper and 33 portable
+not the destination's runtime owner. Its executable nevertheless compiles
+the complete runtime engine source list, checker/helper and 33 portable
 cases, which makes real boundary compilation part of the migration gate. The
 separate local harness retains the 82 planner tests and 67 fake-UDM engine
 cases for repository regression.
@@ -195,9 +195,10 @@ clipping, legal holes, row ordering and deterministic coalescing. Planner double
 the fake-UDM suite live only under `src/dpl2/test/local/`; its 12 newly added
 external instances call the real public `precheck()` API in opto order.
 
-2026-07-19 split result after expansion: planner 82/82, engine
+2026-07-20 verification result: planner 82/82, engine
 fake-UDM E2E 67/67 and portable final-checker/precheck E2E 33/33 in both normal
-and ASan builds; full normal CTest 182/182; `-Wall -Wextra -Werror` clean. The
+and ASan builds; full normal and ASan CTest 182/182;
+`-Wall -Wextra -Werror` clean. The
 engine cases include three layouts proving that unused-layer persistent
 checker diagnostics remain non-blocking while a used implant layer with a
 missing rule makes initialization fail closed.
@@ -226,6 +227,11 @@ missing rule makes initialization fail closed.
   accidentally shared across engines.
 - The engine owns checker diagnostics translation; planner fake/checker types
   must remain outside runtime targets.
+- `Types.h` remains a standalone bottom-level model header. Oracle-only
+  `OracleRequest`/`OracleResult`/`OracleStatus` and `PlannerOracle` live in
+  `OracleGate.h`; the public `RepairOutcome` remains in `FillerRepairEngine.h`.
+  This avoids a second wire format and keeps Engine/Planner/Oracle dependencies
+  one-way.
 - `repair()` may idempotently add a previously uninstantiated target master to
   Network and rebuild its private checker/snapshot; it still never mutates UDM.
 - Adaptive growth is still heuristic: it follows the best residual first and
@@ -234,5 +240,5 @@ missing rule makes initialization fail closed.
   budgeted windows before the fallback is reached. Search failure remains
   atomic and returns no partial changes.
 - A destination whose `Network::addMaster` overload has a different signature
-  needs one mechanical call-site adaptation in `FillerRepairEngine.cpp`; no
-  planner or checker change is involved.
+  needs one mechanical change in the private `ensureMasterRegistered()` seam;
+  no planner or checker change is involved.

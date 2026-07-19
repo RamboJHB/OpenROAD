@@ -3,7 +3,7 @@
 
 // Fake implant overlay checker for planner unit tests.
 //
-// Purpose: lock the OverlayCheckRequest/CheckResult protocol and give the
+// Purpose: lock the OracleRequest/OracleResult protocol and give the
 // planner a rule-parameterized oracle for unit tests. The rule model is a
 // deliberate simplification (single implant band per row, VT id == layer id):
 //
@@ -20,7 +20,7 @@
 // the checker-as-oracle boundary the fake exists to enforce.
 //
 // Protocol guarantees implemented here and asserted by tests:
-//  - every CheckResult echoes the request's requestId;
+//  - every OracleResult echoes the request's requestId;
 //  - batch results are returned in input order (planner must not rely on it);
 //  - one invalid request affects only its own result;
 //  - status != Checked always carries diagnostics;
@@ -44,7 +44,7 @@ struct FakeImplantRules
   DbCoord msInter = 0;
 };
 
-class FakeImplantChecker : public ImplantOverlayChecker
+class FakeImplantChecker : public PlannerOracle
 {
  public:
   FakeImplantChecker(const FakeDesign& design, FakeImplantRules rules)
@@ -52,9 +52,9 @@ class FakeImplantChecker : public ImplantOverlayChecker
   {
   }
 
-  CheckResult checkPlaceWithOverlay(const OverlayCheckRequest& request) override;
-  std::vector<CheckResult> checkPlaceWithOverlays(
-      const std::vector<OverlayCheckRequest>& requests) override;
+  OracleResult checkPlaceWithOverlay(const OracleRequest& request) override;
+  std::vector<OracleResult> checkPlaceWithOverlays(
+      const std::vector<OracleRequest>& requests) override;
 
   // Telemetry for tests: total requests evaluated / batch calls made.
   int requestCount() const { return request_count_; }
@@ -68,16 +68,16 @@ class FakeImplantChecker : public ImplantOverlayChecker
     std::vector<const PlacedInstance*> insts;
   };
 
-  CheckResult evaluate(const OverlayCheckRequest& request) const;
+  OracleResult evaluate(const OracleRequest& request) const;
 
   // Effective master of an instance under the overlay: fillerChanges first,
   // then the target-place master override, else the placed master.
   MasterId effectiveMaster(const PlacedInstance& inst,
-                           const OverlayCheckRequest& request,
+                           const OracleRequest& request,
                            const std::map<InstanceId, MasterId>& overlay) const;
 
   std::vector<Run> buildRuns(RowId rowId,
-                             const OverlayCheckRequest& request,
+                             const OracleRequest& request,
                              const std::map<InstanceId, MasterId>& overlay) const;
 
   const FakeDesign& design_;

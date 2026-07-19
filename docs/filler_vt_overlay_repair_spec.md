@@ -149,7 +149,7 @@ opto 改动次数,所以"好排序让首批候选命中"比"搜索策略高级"�
 ### 3.1 职责边界
 
 - **checker RD**:只做 non-mutating overlay DRC verify。输入一批
-  `OverlayCheckRequest`(每个是一个 atomic overlay 方案),输出对应的真实 violation
+  `OracleRequest`(每个是一个 atomic overlay 方案),输出对应的真实 violation
   snapshot。checker 是唯一的 DRC oracle——MW/MS/P/N/PRL 的全部规则细节封装在
   checker 内,repair engine 对其免疫。
 - **infrastructure RD**:只做 filler 替换候选查询(第一版 per-instance,演进为
@@ -211,7 +211,7 @@ opto: engine.repair(targetCell, newMaster)   [pre-commit,不调 precheck]
   → final checker: target overlay + empty filler changes
   → 无 violation: success + empty FillerChanges
   → 有 violation: internal::FillerRepairPlanner
-       → internal PlannerDataSource/ImplantOverlayChecker protocol
+       → internal PlannerDataSource/PlannerOracle protocol
        → final checker ordered CheckResult batches
   → RepairOutcome(ipl::FillerChanges)
 opto/infrastructure: commit
@@ -220,10 +220,12 @@ opto/infrastructure: commit
 若 `newMaster` 尚未实例化、因而不在现有 Network 中,`repair()` 先以幂等
 `Network::addMaster()` 注册它,再重建 private checker/planner snapshot;调用方无需在 init 时
 预告 target master。snapshot/oracle 全部在 `FillerRepairEngine::Impl` 内。
-planner-only `OverlayCheckRequest`/`CheckStatus`/`requestId`
+planner-only `OracleRequest`/`OracleStatus`/`requestId`
 abstraction 位于 `OracleGate.h`,只供 `internal::FillerRepairPlanner` 与 unit-test
 fake 使用；其 change payload 与 public result 都直接使用 final checker 的
 `ipl::FillerChanges`/`FillerCellRecord`，不存在第二套 change 类型或转换层。
+`Types.h` 有意保持为独立叶子，只放 geometry、planner model 与终版 checker wire
+helper；不并入 Engine、Planner 或 OracleGate，避免任一上层反向成为共享依赖。
 runtime 签名只使用 final checker 的 `ipl::CheckResult`、`ipl::Diagnostic`、
 `ipl::FillerChanges`。`init()` 成功前,
 `precheck()`/`repair()` 一律 fail-closed。
@@ -299,7 +301,7 @@ delta 相关性判定(§6.2)、swap-unfixable 快速判定(§6.2)都是几何计
 
 - 一个 **overlay 候选** = 一组 Swap 的集合,原子应用。
 - cache key = `sorted_unique((instanceId, newMasterId))`,order-independent。
-  checker call 前必须用它去重并查 cache;cache value 至少含 `CheckResult`、
+  checker call 前必须用它去重并查 cache;cache value 至少含 `OracleResult`、
   score 摘要和 checker call index。同一 key 的 overlay 在一次 repair 内只调用
   一次 checker。
 - **不需要冲突判定机制**:③层枚举按 filler 分组(每个 filler 至多选一个目标
@@ -344,38 +346,38 @@ checker 侧必须保证:
 ### 5.2 Planner 内部 checker oracle API
 
 ```cpp
-using OverlayRequestId = int;
+using OracleRequestId = int;
 
-struct OverlayCheckRequest
+struct OracleRequest
 {
-    OverlayRequestId requestId = -1;  // repair 生成,batch 内唯一
+    OracleRequestId requestId = -1;  // repair 生成,batch 内唯一
     TargetPlace targetPlace;
     Rect guardRegion;                 // repair window 外扩 two-cell guard halo
     ipl::FillerChanges fillerChanges;  // 一个 atomic overlay 候选
 };
 
-enum class CheckStatus { Checked, InvalidOverlay, CheckerError };
+enum class OracleStatus { Checked, InvalidOverlay, CheckerError };
 
-struct CheckResult
+struct OracleResult
 {
-    OverlayRequestId requestId = -1;  // 必须 echo 请求的 requestId
-    CheckStatus status = CheckStatus::CheckerError;
+    OracleRequestId requestId = -1;  // 必须 echo 请求的 requestId
+    OracleStatus status = OracleStatus::CheckerError;
     bool isLegal = false;             // 仅 status == Checked 时有意义
     std::vector<Violation> violations;
     std::vector<Diagnostic> diagnostics;
 };
 
-class ImplantOverlayChecker
+class PlannerOracle
 {
  public:
-  CheckResult checkPlaceWithOverlay(const OverlayCheckRequest& request) const;
-  std::vector<CheckResult> checkPlaceWithOverlays(
-      const std::vector<OverlayCheckRequest>& requests) const;
+  OracleResult checkPlaceWithOverlay(const OracleRequest& request);
+  std::vector<OracleResult> checkPlaceWithOverlays(
+      const std::vector<OracleRequest>& requests);
 };
 ```
 
 planner 的 `Swap` 是搜索元数据；`PlannerDataSource::fillerCellRecord()` 在创建
-oracle request 时一次性生成终版 checker wire。`OverlayCheckRequest`、planner
+oracle request 时一次性生成终版 checker wire。`OracleRequest`、planner
 result、checker batch 和 `RepairOutcome` 全程复用同一个 `FillerCellRecord`。
 
 #### 5.2.1 checker 实际交付形态(终版契约,2026-07-18)
@@ -416,7 +418,7 @@ struct CheckResult {                  // 没有 status 枚举
   再保留触及 target 或不被 old baseline 包含的候选 violation。engine 仍保留
   自己的 baseline-delta gate;original snapshot、baseline 与 candidates 必须都
   经同一 engine/checker 路径,保证分类一致。
-- **requestId/CheckStatus 取消**:关联按顺序(结果数==输入数、序一致);
+- **requestId/status 取消**:关联按顺序(结果数==输入数、序一致);
   invalid 候选以 diagnostics 表达(dup/非 filler/尺寸不符等),逐候选隔离。
   engine private boundary 按 index 合成 planner id/status。
 - **batch 形态**:单 target/guard + N 变更列表,与 engine 每窗口用法一致。
@@ -677,7 +679,7 @@ guardRegion = expandByCellRing(repairWindow, 2)
 即 two-cell guard halo:横向包含窗口左右各两圈相邻 placed instance,纵向包含上下各
 两条相邻 row 中与窗口 xRange 相交或贴近的 instance。只能用几何距离近似时,必须取
 不小于 two-cell ring 的 conservative expansion,并在 diagnostics 打印实际
-`repairWindow`、`guardRegion` 与 halo 来源。同一窗口生成的所有 `OverlayCheckRequest`
+`repairWindow`、`guardRegion` 与 halo 来源。同一窗口生成的所有 `OracleRequest`
 携带同一个 `guardRegion`;guard-only 区域的 filler 只参与 checking/diagnostics,
 不得出现在 `fillerChanges` 中(违反判 invalid request)。
 
@@ -801,7 +803,7 @@ baseline 的 repairWindow 内 / 与 anchor 相关的 violation 不能多于这�
 
 过门后,candidate 判 **delta-clean** 当且仅当:
 
-1. `status == CheckStatus::Checked`、无 checker fatal/protocol diagnostics,且结果
+1. `status == OracleStatus::Checked`、无 checker fatal/protocol diagnostics,且结果
    自洽——`isLegal` 与 `violations 是否为空` 必须一致(V2.1 修订 #1:`isLegal &&
    violations 非空` 与 `!isLegal && violations 空` 两种矛盾形态都判不 clean);
 2. 初始 snapshot 的 original violations 在 overlay result 中全部消失
@@ -932,7 +934,7 @@ internal exact-coverage precheck case。fixture 通过
 `ImplantLayerCheckerHelper` 构造 8 行 × 200 sites 的 Grid/Network/checker input;
 不读 DEF/LEF,不需要 `E2ETestProvider` 或 real-UDM design builder。
 
-64 个 engine fake-UDM cases、provider 与完整 local fake regression
+67 个 engine fake-UDM cases、provider 与完整 local fake regression
 copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
 
 前置与协议:
@@ -1006,7 +1008,7 @@ gate 语义:
 
 ## 11. 实现状态
 
-全部功能已实现并验证(2026-07-19):
+全部功能已实现并验证(2026-07-20):
 
 - pure planner 完整落地:`Swap`/cache key、violation 归一化 + signature、
   L0 + adaptive-L1 window + guardRegion、swap 生成器、Ranker(5 特征,
@@ -1019,7 +1021,7 @@ gate 语义:
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译清单唯一定义在
   `src/fillerRepair/sources.cmake`。
-- 82 个 planner unit tests、33 个 portable checker/planner/precheck cases 与 64 个
+- 82 个 planner unit tests、33 个 portable checker/planner/precheck cases 与 67 个
   fake-UDM engine tests 全为 GoogleTest;
   82 个 fake-based planner tests 完整移至 `src/dpl2/test/local/planner`,
   `fillerRepair/test` 只保留 helper-built portable E2E;precheck/repair 均 non-mutating;
@@ -1047,7 +1049,7 @@ gate 语义:
 保留不变的 V1 决策:checker-as-oracle(不复刻 DRC)、只在 checker 结果上 accept、
 baseline-delta gate 与 guard halo 语义、two-cell guardRegion、canonical cache、batch
 协议(planner 内部 requestId/status 由 engine private boundary 合成)、pure planner、
-失败不返回 partial、diagnostics 要求。生产 checker 现按 candidate 顺序关联结果,
+失败不返回 partial、diagnostics 要求。终版 checker 现按 candidate 顺序关联结果,
 engine private boundary 合成 planner 内部 requestId/status;placement gate 是独立
 public precheck,不进入 repair pipeline。
 

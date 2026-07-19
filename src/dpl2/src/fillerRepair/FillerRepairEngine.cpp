@@ -29,7 +29,7 @@ namespace fillerRepair {
 struct PrecheckDomains;
 
 class FillerRepairEngine::Impl final : private PlannerDataSource,
-                                       private ImplantOverlayChecker
+                                       private PlannerOracle
 {
  public:
   Impl(Grid* grid, Network* network);
@@ -57,6 +57,7 @@ class FillerRepairEngine::Impl final : private PlannerDataSource,
       const ipl::Diagnostic& diagnostic) const;
   bool bindInfrastructure(eUNL::PhysDesMgr* desMgr,
                           const fillerSetting& fillerSettings);
+  bool ensureMasterRegistered(const eLIB::PhysLibCell& master);
   bool rebuildOracle();
   void failInit(const std::string& status, const std::string& message);
   const std::vector<RowId>& rows() const override { return row_list_; }
@@ -70,9 +71,9 @@ class FillerRepairEngine::Impl final : private PlannerDataSource,
   }
   FillerCellRecord fillerCellRecord(InstanceId instanceId,
                                     MasterId newMasterId) const override;
-  CheckResult checkPlaceWithOverlay(const OverlayCheckRequest& request) override;
-  std::vector<CheckResult> checkPlaceWithOverlays(
-      const std::vector<OverlayCheckRequest>& requests) override;
+  OracleResult checkPlaceWithOverlay(const OracleRequest& request) override;
+  std::vector<OracleResult> checkPlaceWithOverlays(
+      const std::vector<OracleRequest>& requests) override;
 
   void addProblem(Severity severity,
                   const std::string& code,
@@ -764,25 +765,34 @@ FillerCellRecord FillerRepairEngine::Impl::fillerCellRecord(
   return record;
 }
 
-CheckResult FillerRepairEngine::Impl::checkPlaceWithOverlay(
-    const OverlayCheckRequest& request)
+OracleResult FillerRepairEngine::Impl::checkPlaceWithOverlay(
+    const OracleRequest& request)
 {
-  std::vector<CheckResult> results = checkPlaceWithOverlays({request});
-  return results.empty() ? CheckResult{} : std::move(results.front());
+  std::vector<OracleResult> results = checkPlaceWithOverlays({request});
+  if (results.size() == 1) {
+    return std::move(results.front());
+  }
+  OracleResult failure;
+  failure.requestId = request.requestId;
+  failure.status = OracleStatus::CheckerError;
+  failure.diagnostics.push_back(makeDiag(
+      Severity::Fatal, "CheckerProtocolError",
+      "checker result count does not match the single oracle request"));
+  return failure;
 }
 
-std::vector<CheckResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
-    const std::vector<OverlayCheckRequest>& requests)
+std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
+    const std::vector<OracleRequest>& requests)
 {
-  std::vector<CheckResult> results(requests.size());
+  std::vector<OracleResult> results(requests.size());
   if (requests.empty()) {
     return results;
   }
 
   // One (target, guard) + N candidates per batch, by engine construction; a
   // mixed batch is a protocol error.
-  const OverlayCheckRequest& first = requests.front();
-  for (const OverlayCheckRequest& request : requests) {
+  const OracleRequest& first = requests.front();
+  for (const OracleRequest& request : requests) {
     const bool same =
         request.targetPlace.instanceId == first.targetPlace.instanceId
         && request.targetPlace.masterId == first.targetPlace.masterId
@@ -796,7 +806,7 @@ std::vector<CheckResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     if (!same) {
       for (size_t i = 0; i < requests.size(); ++i) {
         results[i].requestId = requests[i].requestId;
-        results[i].status = CheckStatus::CheckerError;
+        results[i].status = OracleStatus::CheckerError;
         results[i].diagnostics.push_back(makeDiag(
             Severity::Fatal, "CheckerProtocolError",
             "mixed (targetPlace, guardRegion) in one overlay batch"));
@@ -809,7 +819,7 @@ std::vector<CheckResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   const ::Rect guard = toGuardRect(first.guardRegion);
   std::vector<ipl::FillerChanges> changes;
   changes.reserve(requests.size());
-  for (const OverlayCheckRequest& request : requests) {
+  for (const OracleRequest& request : requests) {
     changes.push_back(request.fillerChanges);
   }
 
@@ -822,6 +832,17 @@ std::vector<CheckResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   log_.msg("engine",
            cat("overlay batch: ", changes.size(), " candidate(s) -> ",
                raw.size(), " result(s)"));
+
+  // Ordered correlation is the final checker's entire batch protocol. Any
+  // missing OR extra result invalidates the whole batch. Preserve only the
+  // returned cardinality so OracleGate can diagnose the exact mismatch; no
+  // checker finding from a mis-correlated batch is consumed.
+  if (raw.size() != requests.size()) {
+    log_.msg("engine",
+             cat("overlay batch protocol error: expected ", requests.size(),
+                 " result(s), received ", raw.size()));
+    return std::vector<OracleResult>(raw.size());
+  }
 
   // The final checker copies its approved, non-blocking PERSISTENT init
   // diagnostics into every result -- once directly (checkPlaceWithOverlay)
@@ -855,16 +876,8 @@ std::vector<CheckResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
       };
 
   for (size_t i = 0; i < requests.size(); ++i) {
-    CheckResult& out = results[i];
+    OracleResult& out = results[i];
     out.requestId = requests[i].requestId;  // order IS the correlation
-    if (i >= raw.size()) {
-      out.status = CheckStatus::CheckerError;
-      out.diagnostics.push_back(makeDiag(
-          Severity::Fatal, "CheckerProtocolError",
-          cat("checker returned ", raw.size(), " result(s) for ",
-              changes.size(), " candidate(s)")));
-      continue;
-    }
     const ipl::CheckResult& r = raw[i];
     for (size_t d = requestDiagOffset(r.diagnostics); d < r.diagnostics.size();
          ++d) {
@@ -880,10 +893,10 @@ std::vector<CheckResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     // Candidate-shape classification: request-level validation failures come
     // back as extra diagnostics with NO violations -> InvalidOverlay.
     if (out.violations.empty() && !r.isLegal && !out.diagnostics.empty()) {
-      out.status = CheckStatus::InvalidOverlay;
+      out.status = OracleStatus::InvalidOverlay;
       out.isLegal = false;
     } else {
-      out.status = CheckStatus::Checked;
+      out.status = OracleStatus::Checked;
       out.isLegal = out.violations.empty() && out.diagnostics.empty();
     }
   }
@@ -950,7 +963,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   // Register it once, then rebuild this engine's checker and planner snapshot
   // so every id table shares the expanded Network universe.
   if (network_->getMaster(newMaster.getLibCellId()) == nullptr) {
-    const bool registered = network_->addMaster(newMaster, grid_) != nullptr;
+    const bool registered = ensureMasterRegistered(newMaster);
     const bool rebuilt = registered && rebuildOracle();
     if (!rebuilt) {
       initialized_ = false;
@@ -1026,7 +1039,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   // 2) Initial snapshot: the new target place with ZERO filler changes.
   // Snapshot and every later engine baseline/candidate go through this same
   // object -> one consistent oracle worldview.
-  OverlayCheckRequest snapshotRequest;
+  OracleRequest snapshotRequest;
   snapshotRequest.requestId = 0;
   snapshotRequest.targetPlace = target;
   snapshotRequest.guardRegion = snapshotGuard(target);
@@ -1034,8 +1047,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
            cat("snapshot: target inst=", target.instanceId, " newMaster=",
                target.masterId, " guard=",
                show(snapshotRequest.guardRegion)));
-  const CheckResult snapshot = checkPlaceWithOverlay(snapshotRequest);
-  if (snapshot.status != CheckStatus::Checked) {
+  const OracleResult snapshot = checkPlaceWithOverlay(snapshotRequest);
+  if (snapshot.status != OracleStatus::Checked) {
     for (const Diagnostic& diagnostic : snapshot.diagnostics) {
       result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
     }
@@ -1382,9 +1395,29 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                "fatal: getFillerMasters() returned null");
       continue;
     }
-    network_->addMaster(*master, grid_);
+    if (!ensureMasterRegistered(*master)) {
+      failInit("filler_master_registration_failed",
+               cat("fatal: configured filler master libCell ",
+                   static_cast<int>(master->getLibCellId().getIndexValue()),
+                   " could not be registered in Network"));
+    }
   }
   return init_diagnostics_.empty();
+}
+
+bool FillerRepairEngine::Impl::ensureMasterRegistered(
+    const eLIB::PhysLibCell& master)
+{
+  if (network_ == nullptr || grid_ == nullptr) {
+    return false;
+  }
+  if (network_->getMaster(master.getLibCellId()) != nullptr) {
+    return true;
+  }
+  // This is the only infrastructure-version-sensitive registration call in
+  // fillerRepair. A destination with a different addMaster signature adapts
+  // this one private seam; planner/oracle code remains unchanged.
+  return network_->addMaster(master, grid_) != nullptr;
 }
 
 bool FillerRepairEngine::Impl::rebuildOracle()

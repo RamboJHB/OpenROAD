@@ -42,20 +42,20 @@ bool inGuardRegion(const Violation& v, const Region& region)
 
 }  // namespace
 
-CheckResult FakeImplantChecker::checkPlaceWithOverlay(
-    const OverlayCheckRequest& request)
+OracleResult FakeImplantChecker::checkPlaceWithOverlay(
+    const OracleRequest& request)
 {
   ++request_count_;
   return evaluate(request);
 }
 
-std::vector<CheckResult> FakeImplantChecker::checkPlaceWithOverlays(
-    const std::vector<OverlayCheckRequest>& requests)
+std::vector<OracleResult> FakeImplantChecker::checkPlaceWithOverlays(
+    const std::vector<OracleRequest>& requests)
 {
   ++batch_count_;
-  std::vector<CheckResult> results;
+  std::vector<OracleResult> results;
   results.reserve(requests.size());
-  for (const OverlayCheckRequest& request : requests) {
+  for (const OracleRequest& request : requests) {
     ++request_count_;
     // Each request is evaluated independently: an invalid overlay produces
     // its own InvalidOverlay result and cannot leak into its neighbors.
@@ -66,7 +66,7 @@ std::vector<CheckResult> FakeImplantChecker::checkPlaceWithOverlays(
 
 MasterId FakeImplantChecker::effectiveMaster(
     const PlacedInstance& inst,
-    const OverlayCheckRequest& request,
+    const OracleRequest& request,
     const std::map<InstanceId, MasterId>& overlay) const
 {
   const auto it = overlay.find(inst.id);
@@ -81,7 +81,7 @@ MasterId FakeImplantChecker::effectiveMaster(
 
 std::vector<FakeImplantChecker::Run> FakeImplantChecker::buildRuns(
     RowId rowId,
-    const OverlayCheckRequest& request,
+    const OracleRequest& request,
     const std::map<InstanceId, MasterId>& overlay) const
 {
   std::vector<Run> runs;
@@ -102,16 +102,16 @@ std::vector<FakeImplantChecker::Run> FakeImplantChecker::buildRuns(
   return runs;
 }
 
-CheckResult FakeImplantChecker::evaluate(const OverlayCheckRequest& request) const
+OracleResult FakeImplantChecker::evaluate(const OracleRequest& request) const
 {
-  CheckResult result;
+  OracleResult result;
   result.requestId = request.requestId;  // echo, always
 
   // --- Request validation (one atomic overlay). Any defect makes only this
   // request InvalidOverlay, with diagnostics as the protocol demands.
   std::map<InstanceId, MasterId> overlay;
   const auto invalid = [&](std::string why) {
-    result.status = CheckStatus::InvalidOverlay;
+    result.status = OracleStatus::InvalidOverlay;
     result.diagnostics.push_back(
         makeDiag(Severity::Error, "InvalidOverlay", std::move(why)));
     return result;
@@ -270,7 +270,7 @@ CheckResult FakeImplantChecker::evaluate(const OverlayCheckRequest& request) con
     }
   }
 
-  result.status = CheckStatus::Checked;
+  result.status = OracleStatus::Checked;
   result.isLegal = result.violations.empty();
   return result;
 }

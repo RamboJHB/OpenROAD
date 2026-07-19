@@ -414,7 +414,7 @@ void testEngineSolvesWithUdmProvider()
 
   // Snapshot from the checker, as runtime does.
   fr::FakeImplantChecker snapshotChecker(design, rules);
-  fr::OverlayCheckRequest snapReq;
+  fr::OracleRequest snapReq;
   snapReq.requestId = 0;
   snapReq.targetPlace = anchor;
   snapReq.guardRegion = fr::Region{fr::XInterval{0, 16}, 0, 0};
@@ -442,11 +442,11 @@ void testEngineSolvesWithUdmProvider()
 // row1 below it (inter-row MS), plus everything else VT1. Recoloring the
 // row1 filler to VT1... would merge with neighbors; instead the clean fix is
 // recoloring it to VT2? See per-test comments; rules are chosen per case.
-fr::OverlayCheckRequest baselineRequest(const fr::FakeDesign& design,
+fr::OracleRequest baselineRequest(const fr::FakeDesign& design,
                                         fr::InstanceId anchor,
-                                        fr::OverlayRequestId id)
+                                        fr::OracleRequestId id)
 {
-  fr::OverlayCheckRequest request;
+  fr::OracleRequest request;
   request.requestId = id;
   request.targetPlace = anchorPlace(design, anchor);
   request.guardRegion = wholeDesignRegion();
@@ -458,8 +458,8 @@ void testCheckerEchoAndOrder()
   RowFixture f = makeCoveredRow();
   fr::FakeImplantChecker checker(f.design, {});
 
-  std::vector<fr::OverlayCheckRequest> batch;
-  for (const fr::OverlayRequestId id : {7, 3, 5}) {
+  std::vector<fr::OracleRequest> batch;
+  for (const fr::OracleRequestId id : {7, 3, 5}) {
     batch.push_back(baselineRequest(f.design, f.anchor, id));
   }
   const auto results = checker.checkPlaceWithOverlays(batch);
@@ -485,10 +485,10 @@ void testCheckerInvalidIsolated()
   auto valid2 = baselineRequest(f.design, f.anchor, 3);
 
   const auto results = checker.checkPlaceWithOverlays({valid, invalid, valid2});
-  EXPECT_TRUE(results[0].status == fr::CheckStatus::Checked);
-  EXPECT_TRUE(results[1].status == fr::CheckStatus::InvalidOverlay);
+  EXPECT_TRUE(results[0].status == fr::OracleStatus::Checked);
+  EXPECT_TRUE(results[1].status == fr::OracleStatus::InvalidOverlay);
   EXPECT_TRUE(!results[1].diagnostics.empty());  // status != Checked carries diags
-  EXPECT_TRUE(results[2].status == fr::CheckStatus::Checked);
+  EXPECT_TRUE(results[2].status == fr::OracleStatus::Checked);
 }
 
 void testCheckerIntraMsDetectAndClear()
@@ -504,7 +504,7 @@ void testCheckerIntraMsDetectAndClear()
 
   const auto baseline = checker.checkPlaceWithOverlay(
       baselineRequest(f.design, /*anchor=*/100, 1));
-  EXPECT_TRUE(baseline.status == fr::CheckStatus::Checked);
+  EXPECT_TRUE(baseline.status == fr::OracleStatus::Checked);
   EXPECT_TRUE(!baseline.isLegal);
   EXPECT_EQ(baseline.violations.size(), 1u);
   EXPECT_TRUE(baseline.violations[0].kind == fr::ViolationKind::MinSpacing);
@@ -516,8 +516,8 @@ void testCheckerIntraMsDetectAndClear()
   overlay.fillerChanges = {
       f.design.fillerCellRecord(103, fillerMaster(2, kVt1))};
   const auto fixed = checker.checkPlaceWithOverlay(overlay);
-  EXPECT_TRUE(fixed.status == fr::CheckStatus::Checked);
-  EXPECT_TRUE(fr::isRawCheckerSnapshotClean(fixed));
+  EXPECT_TRUE(fixed.status == fr::OracleStatus::Checked);
+  EXPECT_TRUE(fr::isOracleSnapshotClean(fixed));
 }
 
 void testCheckerInterRowRules()
@@ -542,7 +542,7 @@ void testCheckerInterRowRules()
   fr::FakeImplantChecker checker(design, rules);
 
   const auto result = checker.checkPlaceWithOverlay(baselineRequest(design, 100, 1));
-  EXPECT_TRUE(result.status == fr::CheckStatus::Checked);
+  EXPECT_TRUE(result.status == fr::OracleStatus::Checked);
   EXPECT_EQ(result.violations.size(), 1u);
   EXPECT_TRUE(result.violations[0].kind == fr::ViolationKind::MinWidth);
   EXPECT_TRUE(result.violations[0].relation == fr::ViolationRelation::InterRow);
@@ -576,7 +576,7 @@ void testCheckerGuardRegionFilter()
   auto request = baselineRequest(f.design, 100, 1);
   request.guardRegion = fr::Region{fr::XInterval{0, 8}, 0, 0};
   const auto result = checker.checkPlaceWithOverlay(request);
-  EXPECT_TRUE(result.status == fr::CheckStatus::Checked);
+  EXPECT_TRUE(result.status == fr::OracleStatus::Checked);
   EXPECT_TRUE(result.violations.empty());
 }
 
@@ -609,7 +609,7 @@ void testCheckerTargetOverrideSeedsViolation()
   // Before the change (target master == placed master): VT2 filler 203 has
   // no same-VT neighbor shape -> clean.
   const auto before = checker.checkPlaceWithOverlay(baselineRequest(design, 102, 1));
-  EXPECT_TRUE(fr::isRawCheckerSnapshotClean(before));
+  EXPECT_TRUE(fr::isOracleSnapshotClean(before));
 
   // Opto change: anchor becomes VT2 -> its shape [10,14) overlaps filler
   // 203's shape [9,11) by 1 < 2 -> inter-row MW violation with the target.
@@ -631,7 +631,7 @@ void testCheckerTargetOverrideSeedsViolation()
   repaired.fillerChanges = {
       design.fillerCellRecord(203, fillerMaster(2, kVt1))};
   const auto fixed = checker.checkPlaceWithOverlay(repaired);
-  EXPECT_TRUE(fr::isRawCheckerSnapshotClean(fixed));
+  EXPECT_TRUE(fr::isOracleSnapshotClean(fixed));
 }
 
 
@@ -1156,7 +1156,7 @@ void testEngineNoEditableFillerZeroCalls()
   EXPECT_EQ(checker.requestCount(), 0);  // no editable filler -> no calls
 }
 
-class ReentrantChecker : public fr::ImplantOverlayChecker
+class ReentrantChecker : public fr::PlannerOracle
 {
  public:
   fr::internal::FillerRepairPlanner* engine = nullptr;
@@ -1165,26 +1165,26 @@ class ReentrantChecker : public fr::ImplantOverlayChecker
   fr::FillerRepairResult inner;
   bool fired = false;
 
-  fr::CheckResult checkPlaceWithOverlay(
-      const fr::OverlayCheckRequest& r) override
+  fr::OracleResult checkPlaceWithOverlay(
+      const fr::OracleRequest& r) override
   {
     if (!fired && engine != nullptr && request != nullptr) {
       fired = true;
       inner = engine->repair(*request);  // illegal callback (spec 3.3)
     }
-    fr::CheckResult result;
+    fr::OracleResult result;
     result.requestId = r.requestId;
-    result.status = fr::CheckStatus::Checked;
+    result.status = fr::OracleStatus::Checked;
     if (r.fillerChanges.empty()) {
       result.violations = {original};  // baseline reproduces the snapshot
     }
     result.isLegal = result.violations.empty();
     return result;
   }
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
-    std::vector<fr::CheckResult> results;
+    std::vector<fr::OracleResult> results;
     for (const auto& r : requests) {
       results.push_back(checkPlaceWithOverlay(r));
     }
@@ -1833,19 +1833,19 @@ void testEngineSolvesPairNonMonotone()
 // A protocol-honest oracle for complex search-order tests. Baseline and every
 // partial candidate retain the original violation multiset; an overlay becomes
 // clean only after it contains every required (instance, master) assignment.
-class RequiredChangesChecker : public fr::ImplantOverlayChecker
+class RequiredChangesChecker : public fr::PlannerOracle
 {
  public:
   std::vector<fr::Violation> originals;
   dpl2::ipl::FillerChanges required;
 
-  fr::CheckResult checkPlaceWithOverlay(
-      const fr::OverlayCheckRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(
+      const fr::OracleRequest& request) override
   {
     ++request_count_;
-    fr::CheckResult result;
+    fr::OracleResult result;
     result.requestId = request.requestId;
-    result.status = fr::CheckStatus::Checked;
+    result.status = fr::OracleStatus::Checked;
     const bool solved = std::all_of(
         required.begin(),
         required.end(),
@@ -1864,13 +1864,13 @@ class RequiredChangesChecker : public fr::ImplantOverlayChecker
     return result;
   }
 
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     ++batch_count_;
-    std::vector<fr::CheckResult> results;
+    std::vector<fr::OracleResult> results;
     results.reserve(requests.size());
-    for (const fr::OverlayCheckRequest& request : requests) {
+    for (const fr::OracleRequest& request : requests) {
       results.push_back(checkPlaceWithOverlay(request));
     }
     return results;
@@ -2167,16 +2167,16 @@ void testGateCacheSingleEvaluation()
 
 // A checker that violates the requestId echo protocol must abort the repair
 // with CheckerProtocolError instead of producing a result.
-class MisbehavingChecker : public fr::ImplantOverlayChecker
+class MisbehavingChecker : public fr::PlannerOracle
 {
  public:
   explicit MisbehavingChecker(fr::FakeImplantChecker& inner) : inner_(inner) {}
-  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& request) override
   {
     return inner_.checkPlaceWithOverlay(request);  // baseline stays honest
   }
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     auto results = inner_.checkPlaceWithOverlays(requests);
     for (auto& result : results) {
@@ -2209,16 +2209,16 @@ void testEngineDetectsProtocolError()
 
 // Batch result order must not matter: a checker returning results reversed
 // (with honest ids) yields the identical solution.
-class ReversingChecker : public fr::ImplantOverlayChecker
+class ReversingChecker : public fr::PlannerOracle
 {
  public:
   explicit ReversingChecker(fr::FakeImplantChecker& inner) : inner_(inner) {}
-  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& request) override
   {
     return inner_.checkPlaceWithOverlay(request);
   }
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     auto results = inner_.checkPlaceWithOverlays(requests);
     std::reverse(results.begin(), results.end());
@@ -2273,29 +2273,29 @@ bool sameDiagnostics(const std::vector<fr::Diagnostic>& a,
   return true;
 }
 
-class RecordingChecker : public fr::ImplantOverlayChecker
+class RecordingChecker : public fr::PlannerOracle
 {
  public:
-  explicit RecordingChecker(fr::ImplantOverlayChecker& inner) : inner_(inner) {}
+  explicit RecordingChecker(fr::PlannerOracle& inner) : inner_(inner) {}
 
-  fr::CheckResult checkPlaceWithOverlay(
-      const fr::OverlayCheckRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(
+      const fr::OracleRequest& request) override
   {
     requests.push_back(request);
     return inner_.checkPlaceWithOverlay(request);
   }
 
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& batch) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& batch) override
   {
     requests.insert(requests.end(), batch.begin(), batch.end());
     return inner_.checkPlaceWithOverlays(batch);
   }
 
-  std::vector<fr::OverlayCheckRequest> requests;
+  std::vector<fr::OracleRequest> requests;
 
  private:
-  fr::ImplantOverlayChecker& inner_;
+  fr::PlannerOracle& inner_;
 };
 
 void testEngineBatchSizeInvariance()
@@ -2381,7 +2381,7 @@ void testEngineNeverEditsGuardOnly()
 
 // Scripted checker: fixed violation sets per overlay key, honest protocol.
 // Lets us hit each delta-classification branch exactly (spec 6.8).
-class ScriptedChecker : public fr::ImplantOverlayChecker
+class ScriptedChecker : public fr::PlannerOracle
 {
  public:
   std::map<std::string, std::vector<fr::Violation>> byKey;
@@ -2406,19 +2406,19 @@ class ScriptedChecker : public fr::ImplantOverlayChecker
     return key;
   }
 
-  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& request) override
   {
-    fr::CheckResult result;
+    fr::OracleResult result;
     result.requestId = request.requestId;
-    result.status = fr::CheckStatus::Checked;
+    result.status = fr::OracleStatus::Checked;
     result.violations = byKey[keyOf(request.fillerChanges)];
     result.isLegal = result.violations.empty();
     return result;
   }
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
-    std::vector<fr::CheckResult> results;
+    std::vector<fr::OracleResult> results;
     for (const auto& request : requests) {
       results.push_back(checkPlaceWithOverlay(request));
     }
@@ -2426,26 +2426,26 @@ class ScriptedChecker : public fr::ImplantOverlayChecker
   }
 };
 
-class ResultScriptedChecker : public fr::ImplantOverlayChecker
+class ResultScriptedChecker : public fr::PlannerOracle
 {
  public:
-  std::map<std::string, fr::CheckResult> byKey;
+  std::map<std::string, fr::OracleResult> byKey;
   bool extraBatchResult = false;
   bool wrongSingleEcho = false;
 
-  static fr::CheckResult checked(std::vector<fr::Violation> violations = {})
+  static fr::OracleResult checked(std::vector<fr::Violation> violations = {})
   {
-    fr::CheckResult result;
-    result.status = fr::CheckStatus::Checked;
+    fr::OracleResult result;
+    result.status = fr::OracleStatus::Checked;
     result.violations = std::move(violations);
     result.isLegal = result.violations.empty();
     return result;
   }
 
-  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& request) override
   {
     const std::string key = ScriptedChecker::keyOf(request.fillerChanges);
-    fr::CheckResult result;
+    fr::OracleResult result;
     const auto it = byKey.find(key);
     if (it != byKey.end()) {
       result = it->second;
@@ -2456,15 +2456,15 @@ class ResultScriptedChecker : public fr::ImplantOverlayChecker
     return result;
   }
 
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
-    std::vector<fr::CheckResult> results;
+    std::vector<fr::OracleResult> results;
     for (const auto& request : requests) {
       results.push_back(checkPlaceWithOverlay(request));
     }
     if (extraBatchResult) {
-      fr::CheckResult extra = checked();
+      fr::OracleResult extra = checked();
       extra.requestId = 999999;
       results.push_back(extra);
     }
@@ -2548,15 +2548,15 @@ void testGateDeltaClassificationBranches()
 // for any candidate overlay; the baseline honestly reproduces the original.
 // This is the shape the real checker returns for a blocking overlap / off-grid
 // / polarity mismatch, which the fake checker never produces.
-class IllegalEmptyChecker : public fr::ImplantOverlayChecker
+class IllegalEmptyChecker : public fr::PlannerOracle
 {
  public:
   fr::Violation original;
-  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& r) override
+  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& r) override
   {
-    fr::CheckResult res;
+    fr::OracleResult res;
     res.requestId = r.requestId;
-    res.status = fr::CheckStatus::Checked;
+    res.status = fr::OracleStatus::Checked;
     if (r.fillerChanges.empty()) {
       res.violations = {original};  // baseline: original present
       res.isLegal = false;
@@ -2565,10 +2565,10 @@ class IllegalEmptyChecker : public fr::ImplantOverlayChecker
     }
     return res;
   }
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& rs) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& rs) override
   {
-    std::vector<fr::CheckResult> out;
+    std::vector<fr::OracleResult> out;
     for (const auto& r : rs) {
       out.push_back(checkPlaceWithOverlay(r));
     }
@@ -2716,23 +2716,23 @@ void testGatePerViolationRuleDistance()
 // A checker for which no overlay is ever clean: it returns the original
 // violation for the baseline AND for every candidate. Lets an engine test
 // drive the window/definitive control flow without the fake rule model.
-class AlwaysUnsolvedChecker : public fr::ImplantOverlayChecker
+class AlwaysUnsolvedChecker : public fr::PlannerOracle
 {
  public:
   fr::Violation original;
-  fr::CheckResult checkPlaceWithOverlay(const fr::OverlayCheckRequest& r) override
+  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& r) override
   {
-    fr::CheckResult res;
+    fr::OracleResult res;
     res.requestId = r.requestId;
-    res.status = fr::CheckStatus::Checked;
+    res.status = fr::OracleStatus::Checked;
     res.violations = {original};  // baseline and every candidate stay unsolved
     res.isLegal = false;
     return res;
   }
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& rs) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& rs) override
   {
-    std::vector<fr::CheckResult> out;
+    std::vector<fr::OracleResult> out;
     for (const auto& r : rs) {
       out.push_back(checkPlaceWithOverlay(r));
     }
@@ -2784,18 +2784,18 @@ void testEngineBudgetCeiling()
 // Scripted oracle for adaptive-L1: every overlay remains blocked until it
 // changes `solutionInstance`. This isolates window-growth control flow from
 // the fake DRC model while preserving the real baseline-delta protocol.
-class AdaptiveSolutionChecker : public fr::ImplantOverlayChecker
+class AdaptiveSolutionChecker : public fr::PlannerOracle
 {
  public:
   fr::Violation original;
   fr::InstanceId solutionInstance = 0;
 
-  fr::CheckResult checkPlaceWithOverlay(
-      const fr::OverlayCheckRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(
+      const fr::OracleRequest& request) override
   {
-    fr::CheckResult result;
+    fr::OracleResult result;
     result.requestId = request.requestId;
-    result.status = fr::CheckStatus::Checked;
+    result.status = fr::OracleStatus::Checked;
     const bool solved = std::any_of(
         request.fillerChanges.begin(),
         request.fillerChanges.end(),
@@ -2809,10 +2809,10 @@ class AdaptiveSolutionChecker : public fr::ImplantOverlayChecker
     return result;
   }
 
-  std::vector<fr::CheckResult> checkPlaceWithOverlays(
-      const std::vector<fr::OverlayCheckRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
-    std::vector<fr::CheckResult> results;
+    std::vector<fr::OracleResult> results;
     for (const auto& request : requests) {
       results.push_back(checkPlaceWithOverlay(request));
     }
@@ -3263,8 +3263,8 @@ void testGateStatusNotCheckedCarriesOn()
   const fr::Overlay bad = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
   const fr::Overlay clean = {*fr::makeSwap(design, 501, fillerMaster(2, kVt2))};
 
-  fr::CheckResult invalid;
-  invalid.status = fr::CheckStatus::InvalidOverlay;
+  fr::OracleResult invalid;
+  invalid.status = fr::OracleStatus::InvalidOverlay;
   invalid.isLegal = false;
 
   ResultScriptedChecker checker;
@@ -3300,7 +3300,7 @@ void testGateFatalDiagMakesUnusable()
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   const fr::Overlay overlay = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
 
-  fr::CheckResult fatal = ResultScriptedChecker::checked();
+  fr::OracleResult fatal = ResultScriptedChecker::checked();
   fatal.diagnostics.push_back(
       fr::makeDiag(fr::Severity::Fatal, "CheckerFatal", "scripted fatal"));
 
@@ -3608,7 +3608,7 @@ void testEngineUserGridMwMs1()
   anchor.x = 36;
 
   fr::FakeImplantChecker snapshotChecker(design, rules);
-  fr::OverlayCheckRequest snapReq;
+  fr::OracleRequest snapReq;
   snapReq.requestId = 0;
   snapReq.targetPlace = anchor;
   snapReq.guardRegion = fr::Region{fr::XInterval{-1, 1000}, 0, 4};

@@ -46,14 +46,14 @@ class FillerRepairPlanner
 {
  public:
   FillerRepairPlanner(const PlannerDataSource& view,
-                      ImplantOverlayChecker& checker,
+                      PlannerOracle& oracle,
                       RepairConfig config = {});
 
   FillerRepairResult repair(const FillerRepairRequest& request);
 
  private:
   const PlannerDataSource& view_;
-  ImplantOverlayChecker& checker_;
+  PlannerOracle& oracle_;
   RepairConfig config_;
   DebugLog log_;
   // Guards spec 3.3's no-reentrancy contract AND flags concurrent use of one

@@ -1,6 +1,6 @@
 # Test Plan — portable fillerRepair E2E
 
-Updated: 2026-07-19.
+Updated: 2026-07-20.
 
 ## Migration gate
 
@@ -74,7 +74,10 @@ source fallback.
 The 82 planner tests, their fake checker/data source, fake UDM headers and the
 67 engine cases are retained under
 `src/dpl2/test/local/`. They do not move with `fillerRepair/` and are not linked
-by the portable E2E target. Twelve of those 67 instances exercise the public
+by the portable E2E target. The planner suite directly validates the internal
+`PlannerOracle` protocol, including missing, duplicate, unknown and extra
+`OracleResult` records; every batch-cardinality mismatch fails closed. Twelve
+of those 67 instances exercise the public
 `FillerRepairEngine::precheck()` boundary in opto-style external call order:
 stable repeated calls, hard blocking without mutation, simultaneous gap plus
 overlap diagnostics, and proof that `repair()` does not invoke precheck

@@ -1,6 +1,6 @@
 # ImplantLayerChecker ↔ fillerRepair contract
 
-Updated: 2026-07-19.
+Updated: 2026-07-20.
 
 ## Final checker API
 
@@ -43,9 +43,17 @@ classification; a count-based single-prefix strip is wrong.
 - relationship: `IntraRow` or `InterRow`.
 
 `FillerRepairEngine` converts violation/diagnostic types and synthesizes
-planner requestId/status values from ordered results. It does not convert the
-change list: planner requests, checker calls and `RepairOutcome` all carry the
-same `ipl::FillerChanges`/`FillerCellRecord` records.
+planner oracle requestId/status values from ordered results. Missing or extra
+ordered results invalidate the entire batch and stop the search. It does not
+convert the change list: planner requests, checker calls and `RepairOutcome`
+all carry the same `ipl::FillerChanges`/`FillerCellRecord` records.
+
+The planner-only protocol is owned by `OracleGate.h` and is named
+`PlannerOracle` plus `OracleRequest`/`OracleResult`/`OracleStatus`; these names
+are intentionally distinct from final-checker `ImplantLayerChecker` and
+`ipl::CheckResult`. Shared planner geometry/model types remain in standalone
+`Types.h`. This is a fillerRepair-only ownership cleanup; checker source and
+DRC behavior are unchanged.
 
 ## 2026-07-19 fillerRepair wire simplification
 

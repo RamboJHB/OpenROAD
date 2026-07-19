@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <map>
 #include <string>
 #include <vector>
@@ -34,32 +35,53 @@ namespace dpl2::fillerRepair {
 
 struct RepairConfig;
 
-// Planner-internal checker protocol. Callers never see these requestId/status
-// types. FillerRepairEngine translates checker results privately while the
-// change payload remains the exact final-checker FillerChanges type. Test doubles may implement
-// this interface to inject protocol failures and exact search states.
-class ImplantOverlayChecker
-{
- public:
-  virtual ~ImplantOverlayChecker() = default;
+// Planner-internal oracle protocol. These types live with their sole owner
+// instead of the shared model in Types.h. Runtime callers never see an oracle
+// request id or status; FillerRepairEngine translates final-checker results at
+// this boundary while the FillerChanges payload remains unchanged.
+using OracleRequestId = int32_t;
 
-  virtual CheckResult checkPlaceWithOverlay(
-      const OverlayCheckRequest& request) = 0;
-  virtual std::vector<CheckResult> checkPlaceWithOverlays(
-      const std::vector<OverlayCheckRequest>& requests) = 0;
+struct OracleRequest
+{
+  OracleRequestId requestId = -1;  // planner-generated, unique per batch
+  TargetPlace targetPlace;
+  Region guardRegion;  // repair window expanded by a two-cell guard halo
+  ipl::FillerChanges fillerChanges;  // one atomic overlay candidate
 };
 
-inline bool isRawCheckerSnapshotClean(const CheckResult& result)
+enum class OracleStatus
 {
-  return result.status == CheckStatus::Checked && result.isLegal
-         && result.violations.empty();
-}
+  Checked,
+  InvalidOverlay,
+  CheckerError
+};
 
-inline bool isCheckedResultUsable(const CheckResult& result)
+struct OracleResult
 {
-  return result.status == CheckStatus::Checked
-         && (result.isLegal || !result.violations.empty()
-             || !result.diagnostics.empty());
+  OracleRequestId requestId = -1;  // must echo OracleRequest.requestId
+  OracleStatus status = OracleStatus::CheckerError;
+  bool isLegal = false;  // meaningful only when status == Checked
+  std::vector<Violation> violations;
+  std::vector<Diagnostic> diagnostics;
+};
+
+// Runtime and test implementations provide the oracle. The interface is not
+// a second DRC checker: the final ImplantLayerChecker remains the sole source
+// of legality.
+class PlannerOracle
+{
+ public:
+  virtual ~PlannerOracle() = default;
+
+  virtual OracleResult checkPlaceWithOverlay(const OracleRequest& request) = 0;
+  virtual std::vector<OracleResult> checkPlaceWithOverlays(
+      const std::vector<OracleRequest>& requests) = 0;
+};
+
+inline bool isOracleSnapshotClean(const OracleResult& result)
+{
+  return result.status == OracleStatus::Checked && result.isLegal
+         && result.violations.empty();
 }
 
 // Delta classification of one checker result against the baseline.
@@ -81,7 +103,7 @@ class OracleGate
 {
  public:
   OracleGate(const PlannerDataSource& dataSource,
-             ImplantOverlayChecker& checker,
+             PlannerOracle& oracle,
              const TargetPlace& anchor,
              const std::vector<Violation>& originals,
              DbCoord siteWidth,
@@ -125,11 +147,11 @@ class OracleGate
  private:
   std::string cacheKey(const Region& guard, const Overlay& overlay) const;
   // nullptr on protocol error / budget exhaustion (flags set accordingly).
-  const CheckResult* resolve(const std::vector<Overlay>& chunk,
-                             const Region& guard,
-                             int& budget,
-                             bool& protocolError);
-  DeltaSummary classify(const CheckResult& result,
+  const OracleResult* resolve(const std::vector<Overlay>& chunk,
+                              const Region& guard,
+                              int& budget,
+                              bool& protocolError);
+  DeltaSummary classify(const OracleResult& result,
                         const Overlay& overlay,
                         const RepairWindow& window) const;
   // Baseline consistency gate (spec 6.8, V2.1 #2+#4). Uses the already-fetched
@@ -138,7 +160,7 @@ class OracleGate
   bool checkBaselineConsistency(const RepairWindow& window);
 
   const PlannerDataSource& data_source_;
-  ImplantOverlayChecker& checker_;
+  PlannerOracle& oracle_;
   const TargetPlace& anchor_;
   const std::vector<Violation>& originals_;
   DbCoord site_width_;
@@ -146,9 +168,9 @@ class OracleGate
   const RepairConfig& config_;
   const DebugLog& log_;
 
-  std::map<std::string, CheckResult> cache_;
-  const CheckResult* baseline_ = nullptr;  // points into cache_
-  OverlayRequestId next_request_id_ = 0;
+  std::map<std::string, OracleResult> cache_;
+  const OracleResult* baseline_ = nullptr;  // points into cache_
+  OracleRequestId next_request_id_ = 0;
   int requests_sent_ = 0;
   int batches_sent_ = 0;
   int cache_hits_ = 0;

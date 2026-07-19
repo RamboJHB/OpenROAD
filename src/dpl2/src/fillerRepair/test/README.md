@@ -38,7 +38,7 @@ ctest --test-dir build-filler-repair-e2e --output-on-failure
 ```
 
 The executable always compiles `${DPL2_FILLER_REPAIR_SOURCES}`, including the
-public production engine. If the destination already has owning dpl2/checker
+public runtime engine. If the destination already has owning dpl2/checker
 targets, pass them through `DPL2_RUNTIME_LIBRARIES`; otherwise the standalone
 fallback compiles the adjacent supplied sources. The test cannot pass merely
 by compiling the planner while the engine/real-UDM boundary is broken.

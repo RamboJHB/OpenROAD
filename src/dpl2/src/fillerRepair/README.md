@@ -1,6 +1,6 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-07-19.
+Updated: 2026-07-20.
 
 `FillerRepairEngine` is the only runtime entry. It borrows the initialized
 Grid/Network already owned by DePlace and privately owns its final checker and
@@ -40,13 +40,13 @@ in-memory master registry, not UDM placement.
 | `FillerRepairEngine.h/.cpp` | only external API; its `Impl` owns final checker, planner snapshot/oracle, precheck and repair |
 | `PlacementPrecheck.h/.cpp` | UDM-free gap/overlap coverage sweep used by the public precheck API and portable boundary tests |
 | `FillerRepairPlanner.h/.cpp` | internal deterministic search pipeline and debug transcript |
-| `OracleGate.h/.cpp` | internal checker abstraction, batching, cache and baseline-delta gate |
+| `OracleGate.h/.cpp` | owns `PlannerOracle` plus `OracleRequest/Result/Status`, batching, cache and baseline-delta gate |
 | `PlannerDataSource.h/.cpp` | small planner-only data contract and candidate filter; implemented privately by `FillerRepairEngine::Impl` |
-| `Types.h` | planner-internal IDs, geometry and request/result types |
+| `Types.h` | deliberately standalone leaf: planner IDs, geometry/model types and exact final-checker wire helpers |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
 | `sources.cmake` | source-of-truth lists for planner, runtime and portable E2E |
 | `test/FillerRepairCheckerE2ETest.cpp` | 33 portable real-checker, planner-to-checker and internal precheck cases |
-| `test/CMakeLists.txt` | standalone destination E2E plus complete production-engine compile/link gate |
+| `test/CMakeLists.txt` | standalone destination E2E plus complete runtime-engine compile/link gate |
 
 ## Debug transcript
 
@@ -58,7 +58,7 @@ violations, L0/adaptive-L1 windows, emitted swaps, ranked filler domains,
 subset counts, checker batches/cache/budget, best non-clean candidate and the
 final decision. Logging never changes search order or acceptance.
 
-Planner `OverlayCheckRequest`, `CheckStatus` and requestId stay internal to
+Planner `OracleRequest`, `OracleStatus` and requestId stay internal to
 `OracleGate`; their change payload and the public result are both the exact
 final-checker `ipl::FillerChanges`/`FillerCellRecord` wire. Destination builds compile
 `DPL2_FILLER_REPAIR_SOURCES` from `sources.cmake` -- never a
@@ -66,6 +66,14 @@ hand-copied file list. Migration steps live in `src/dpl2/HandOff.md`.
 The engine consumes only borrowed Grid/Network pointers and the idempotent
 `Network::addMaster(PhysLibCell, Grid)` registration API; there is no
 repair-specific importer.
+
+`Types.h` is intentionally not merged into Engine, Planner or OracleGate.
+Geometry, diagnostics, violations and planner entry records are used by
+multiple sibling stages, so merging them upward would reverse the dependency
+direction. Only the oracle protocol is owned by `OracleGate.h`; only the public
+runtime result is owned by `FillerRepairEngine.h`. The sole infrastructure-
+sensitive `Network::addMaster()` call is centralized in the engine's private
+master-registration seam.
 
 ## Portable final-checker verification
 

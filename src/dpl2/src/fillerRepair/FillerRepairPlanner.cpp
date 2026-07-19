@@ -44,10 +44,10 @@ namespace internal {
 
 FillerRepairPlanner::FillerRepairPlanner(
     const PlannerDataSource& view,
-    ImplantOverlayChecker& checker,
+    PlannerOracle& oracle,
     RepairConfig config)
     : view_(view),
-      checker_(checker),
+      oracle_(oracle),
       config_(config),
       log_(config.verbose)
 {
@@ -116,7 +116,7 @@ FillerRepairResult FillerRepairPlanner::repair(
            cat("normalized=", violations.size(), " siteWidth=",
                view_.siteWidth(), " ruleDistance=", ruleDistance,
                " -> build L0 window"));
-  OracleGate gate(view_, checker_, request.targetPlace, request.violations,
+  OracleGate gate(view_, oracle_, request.targetPlace, request.violations,
                   view_.siteWidth(), ruleDistance, config_, log_);
 
   // Stages 3..7 under the adaptive window loop (spec 6.3/6.7/6.8,

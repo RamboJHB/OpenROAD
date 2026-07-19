@@ -52,7 +52,7 @@ bool inGuardRegion(const Violation& v, const Region& guard)
 }  // namespace
 
 OracleGate::OracleGate(const PlannerDataSource& dataSource,
-                       ImplantOverlayChecker& checker,
+                       PlannerOracle& oracle,
                        const TargetPlace& anchor,
                        const std::vector<Violation>& originals,
                        DbCoord siteWidth,
@@ -60,7 +60,7 @@ OracleGate::OracleGate(const PlannerDataSource& dataSource,
                        const RepairConfig& config,
                        const DebugLog& log)
     : data_source_(dataSource),
-      checker_(checker),
+      oracle_(oracle),
       anchor_(anchor),
       originals_(originals),
       site_width_(siteWidth),
@@ -91,14 +91,14 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
       log_.msg("gate", "baseline skipped: checker budget is exhausted");
       return false;
     }
-    OverlayCheckRequest request;
+    OracleRequest request;
     request.requestId = next_request_id_++;
     request.targetPlace = anchor_;
     request.guardRegion = guard;
     log_.msg("gate",
              cat("baseline send id=", request.requestId, " guard=",
                  show(guard), " budgetBefore=", budget));
-    const CheckResult result = checker_.checkPlaceWithOverlay(request);
+    const OracleResult result = oracle_.checkPlaceWithOverlay(request);
     ++requests_sent_;
     --budget;
     if (result.requestId != request.requestId) {
@@ -116,7 +116,7 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
   }
 
   baseline_ = &it->second;
-  if (baseline_->status != CheckStatus::Checked) {
+  if (baseline_->status != OracleStatus::Checked) {
     diagnostics_.push_back(makeDiag(Severity::Error, "BaselineUnusable",
                                     "baseline check did not complete"));
     baseline_ = nullptr;
@@ -202,12 +202,12 @@ bool OracleGate::checkBaselineConsistency(const RepairWindow& window)
   return true;
 }
 
-DeltaSummary OracleGate::classify(const CheckResult& result,
+DeltaSummary OracleGate::classify(const OracleResult& result,
                                   const Overlay& overlay,
                                   const RepairWindow& window) const
 {
   DeltaSummary summary;
-  summary.usable = result.status == CheckStatus::Checked;
+  summary.usable = result.status == OracleStatus::Checked;
   for (const Diagnostic& diag : result.diagnostics) {
     summary.usable &= diag.severity != Severity::Fatal;
   }
@@ -277,13 +277,13 @@ DeltaSummary OracleGate::classify(const CheckResult& result,
   return summary;
 }
 
-const CheckResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
-                                       const Region& guard,
-                                       int& budget,
-                                       bool& protocolError)
+const OracleResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
+                                        const Region& guard,
+                                        int& budget,
+                                        bool& protocolError)
 {
   // Send everything in the chunk that is not cached yet as one batch.
-  std::vector<OverlayCheckRequest> requests;
+  std::vector<OracleRequest> requests;
   std::vector<std::string> keys;
   int cachedInChunk = 0;
   int skippedForBudget = 0;
@@ -300,7 +300,7 @@ const CheckResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
       }
       continue;
     }
-    OverlayCheckRequest request;
+    OracleRequest request;
     request.requestId = next_request_id_++;
     request.targetPlace = anchor_;
     request.guardRegion = guard;
@@ -315,8 +315,8 @@ const CheckResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
                  requests.size(), " cached=", cachedInChunk,
                  " skippedForBudget=", skippedForBudget, " guard=",
                  show(guard), " budget ", budgetBefore, " -> ", budget));
-    const std::vector<CheckResult> results =
-        checker_.checkPlaceWithOverlays(requests);
+    const std::vector<OracleResult> results =
+        oracle_.checkPlaceWithOverlays(requests);
     ++batches_sent_;
     requests_sent_ += static_cast<int>(requests.size());
 
@@ -333,8 +333,8 @@ const CheckResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
                    " requests=", requests.size()));
       return nullptr;
     }
-    std::map<OverlayRequestId, const CheckResult*> byId;
-    for (const CheckResult& result : results) {
+    std::map<OracleRequestId, const OracleResult*> byId;
+    for (const OracleResult& result : results) {
       if (!byId.emplace(result.requestId, &result).second) {
         diagnostics_.push_back(makeDiag(Severity::Fatal, "CheckerProtocolError",
                                         cat("duplicate requestId ", result.requestId)));
