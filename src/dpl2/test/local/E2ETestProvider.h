@@ -3,11 +3,11 @@
 
 // Data-provider boundary for the production-chain E2E suite.
 //
-// The cases in e2e_cases.cpp contain every assertion and call the real
+// The repository-local cases in e2e_cases.cpp contain every assertion and call
 // FillerRepairEngine.  A provider only creates the requested UDM design,
 // exposes the already-wired production Grid/Network, and performs the few
-// test mutations needed to create gap/overlap inputs. The destination supplies
-// this fixture implementation using its real UDM design APIs.
+// test mutations needed to create gap/overlap inputs. The adjacent local
+// provider supplies the fixture through UDM-compatible test-only types.
 
 #pragma once
 
@@ -101,7 +101,7 @@ class E2ETestProvider
  public:
   virtual ~E2ETestProvider() = default;
 
-  // The destination provider loads or creates the canonical real-UDM fixture.
+  // The local provider creates the canonical UDM-compatible fixture.
   virtual std::unique_ptr<E2ETestDesign> createDesign(
       const DesignSetup& setup) = 0;
   virtual std::unique_ptr<E2ETestInfrastructure> createInfrastructure(
@@ -109,7 +109,7 @@ class E2ETestProvider
       const DesignSetup& setup) = 0;
 };
 
-// Supplied exactly once by the destination's real-UDM test runner.
+// Supplied exactly once by the local fake-UDM test runner.
 std::unique_ptr<E2ETestProvider> makeE2ETestProvider();
 
 }  // namespace dpl2::fillerRepair::test

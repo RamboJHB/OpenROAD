@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Local-only runner for the provider-neutral production E2E cases. Fake UDM
-# supplies the provider; the case source is identical to the real-UDM target.
+# Local-only runner for the historical production-facade regression. Both the
+# case source and its fake-UDM provider live outside the migration payload.
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "$0")" && pwd)"

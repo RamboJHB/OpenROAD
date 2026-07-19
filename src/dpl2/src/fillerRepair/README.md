@@ -43,10 +43,9 @@ in-memory master registry, not UDM placement.
 | `PlacementView.h/.cpp` | planner-only read view and candidate filter |
 | `Types.h` | planner-internal IDs, geometry and request/result types |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
-| `sources.cmake` | single source-of-truth compile lists (planner / production / real-UDM E2E) |
-| `test/e2e_cases.cpp` | all 52 production E2E assertions for real UDM |
-| `test/E2ETestProvider.h` | data-only boundary implemented by the destination real-UDM fixture |
-| `test/CMakeLists.txt` | real-UDM production-chain compile and E2E targets |
+| `sources.cmake` | source-of-truth lists for planner, production and portable E2E |
+| `test/FillerRepairCheckerE2ETest.cpp` | eight helper-built real-checker overlay/planner E2E cases |
+| `test/CMakeLists.txt` | standalone destination E2E target |
 
 ## Debug transcript
 
@@ -67,24 +66,23 @@ The facade consumes only borrowed Grid/Network pointers and the idempotent
 `Network::addMaster(PhysLibCell, Grid)` registration API; there is no
 repair-specific importer.
 
-## Real-UDM verification
+## Portable final-checker verification
 
-Only tests that compile against the destination's real UDM remain below this
-directory. The 52 production E2E cases move with the production sources; every
-behavior has three cases and each fixture has at least five standard rows.
+The migrated tests construct checker input directly with the final checker's
+`ImplantLayerCheckerHelper`. They do not parse DEF/LEF and do not need a
+destination-specific UDM provider. The fixture contains eight dense rows and
+the cases exercise intra/inter-row width/spacing both directly and through the
+real `FillerRepairPlanner`.
 
 ```sh
-cmake -S test -B test/build/real-udm \
-  -DDPL2_REAL_UDM_INCLUDE_DIRS='<real include dirs>' \
-  -DDPL2_REAL_UDM_LIBRARIES='<real libraries or CMake targets>'
-cmake --build test/build/real-udm
+cmake -S test -B test/build/e2e \
+  -DDPL2_UDM_INCLUDE_DIRS='<real include dirs>' \
+  -DDPL2_UDM_LIBRARIES='<real libraries or CMake targets>'
+cmake --build test/build/e2e
+ctest --test-dir test/build/e2e --output-on-failure
 ```
-
-This builds the complete chain and all 52 case objects against real UDM. Add
-`DPL2_REAL_UDM_PROVIDER_SOURCE=<provider.cpp>` to link and run the E2E. The
-provider only loads/creates canonical fixture data; assertions stay shared.
 
 The complete repository-local regression copy—including all 81 planner unit
 cases, their doubles, the UDM-compatible test data provider and its runners—is
-outside this directory at `src/dpl2/test/local/`. Current local result: planner
-81/81 and E2E 52/52; full CTest 133/133, normal+ASan; Werror clean.
+outside this directory at `src/dpl2/test/local/`. It is not part of the copied
+payload.

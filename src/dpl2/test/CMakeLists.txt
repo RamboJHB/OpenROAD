@@ -90,6 +90,14 @@ set(DPL2_SUPPLIED_CHAIN_SOURCES
     "${DPL2_SRC}/infrastructure/fillerSetting.cpp"
     "${DPL2_SRC}/drc/ImplantLayerChecker.cpp")
 
+set(DPL2_CHECKER_HELPER_SOURCES
+    "${DPL2_SRC}/infrastructure/Grid.cpp"
+    "${DPL2_SRC}/infrastructure/Object.cpp"
+    "${DPL2_SRC}/infrastructure/network.cpp"
+    "${DPL2_SRC}/infrastructure/Padding.cpp"
+    "${DPL2_SRC}/drc/ImplantLayerChecker.cpp"
+    "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp")
+
 function(dpl2_configure_chain_target target)
   target_include_directories(
     ${target}
@@ -111,7 +119,7 @@ if(DPL2_TEST_USE_FAKE_UDM)
     dpl2_filler_repair_e2e
     ${DPL2_SUPPLIED_CHAIN_SOURCES}
     ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES}
-    ${DPL2_FILLER_REPAIR_E2E_CASE_SOURCE}
+    "${CMAKE_CURRENT_LIST_DIR}/local/e2e_cases.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/local/FakeUdmE2ETestProvider.cpp")
   target_link_libraries(dpl2_filler_repair_e2e PRIVATE GTest::gtest_main)
   dpl2_configure_chain_target(dpl2_filler_repair_e2e)
@@ -120,24 +128,43 @@ if(DPL2_TEST_USE_FAKE_UDM)
     TEST_PREFIX "e2e."
     NO_PRETTY_VALUES
     DISCOVERY_TIMEOUT 30)
+
+  # Migration payload E2E: pure planner wired to the final checker through
+  # ImplantLayerCheckerHelper. Fake UDM headers satisfy only infra type names;
+  # all placement/rule/master test data comes from the official helper input.
+  add_executable(
+    dpl2_filler_repair_checker_e2e
+    ${DPL2_CHECKER_HELPER_SOURCES}
+    ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
+    ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
+  target_link_libraries(
+    dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main)
+  dpl2_configure_chain_target(dpl2_filler_repair_checker_e2e)
+  gtest_discover_tests(
+    dpl2_filler_repair_checker_e2e
+    TEST_PREFIX "portable-e2e."
+    DISCOVERY_TIMEOUT 30)
 else()
-  # Real-UDM mode: the E2E's data provider IS the fake UDM, so there is no
-  # runnable E2E here. Instead verify that every supplied and production
-  # source compiles and links against the real UDM headers -- the migration
-  # gate for the destination environment.
+  # Verify that every supplied and production source compiles and links
+  # against the real UDM headers -- the production migration gate.
   add_library(
     dpl2_filler_repair_compile_check STATIC
     ${DPL2_SUPPLIED_CHAIN_SOURCES}
     ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES})
   dpl2_configure_chain_target(dpl2_filler_repair_compile_check)
 
-  # Compile every provider-neutral E2E assertion against real UDM as an
-  # object library. The destination links these objects with its concrete
-  # RealUdmE2ETestProvider and production owning target to run them.
-  add_library(
-    dpl2_filler_repair_real_udm_e2e_cases OBJECT
-    ${DPL2_FILLER_REPAIR_E2E_CASE_SOURCE})
+  # The portable helper-built E2E remains runnable in real-UDM mode because
+  # its data is ImplantInput, not a fake or destination-specific provider.
+  add_executable(
+    dpl2_filler_repair_checker_e2e
+    ${DPL2_CHECKER_HELPER_SOURCES}
+    ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
+    ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
   target_link_libraries(
-    dpl2_filler_repair_real_udm_e2e_cases PRIVATE GTest::gtest)
-  dpl2_configure_chain_target(dpl2_filler_repair_real_udm_e2e_cases)
+    dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main)
+  dpl2_configure_chain_target(dpl2_filler_repair_checker_e2e)
+  gtest_discover_tests(
+    dpl2_filler_repair_checker_e2e
+    TEST_PREFIX "portable-e2e."
+    DISCOVERY_TIMEOUT 30)
 endif()

@@ -10,7 +10,8 @@
 #                                          destination build adds: planner +
 #                                          UDM-facing facade with its private
 #                                          checker/view
-#   DPL2_FILLER_REPAIR_E2E_CASE_SOURCE      real-UDM production E2E
+#   DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE planner + final-checker E2E that
+#                                           uses ImplantLayerCheckerHelper
 
 set(DPL2_FILLER_REPAIR_PLANNER_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/PlacementView.cpp"
@@ -26,5 +27,5 @@ set(DPL2_FILLER_REPAIR_PRODUCTION_SOURCES
     ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
     "${CMAKE_CURRENT_LIST_DIR}/FillerRepairEngine.cpp")
 
-set(DPL2_FILLER_REPAIR_E2E_CASE_SOURCE
-    "${CMAKE_CURRENT_LIST_DIR}/test/e2e_cases.cpp")
+set(DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE
+    "${CMAKE_CURRENT_LIST_DIR}/test/FillerRepairCheckerE2ETest.cpp")

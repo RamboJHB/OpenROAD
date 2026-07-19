@@ -6,8 +6,9 @@ Updated: 2026-07-19. Branch: `claude/wizardly-carson-secahu`.
 
 The destination already supplies complete infrastructure and checker sources.
 Production and tests migrate together by copying only
-`src/dpl2/src/fillerRepair/`. Its `test/` subtree contains only the 52
-real-UDM production E2E assertions, fixture contract and standalone CMake.
+`src/dpl2/src/fillerRepair/`. Its `test/` subtree contains eight portable
+GoogleTests built from the final checker's `ImplantLayerCheckerHelper` and a
+standalone CMake. No DEF/LEF reader or destination fixture provider is needed.
 All 81 fake-based planner unit tests and the repository-local UDM-compatible
 harness are outside this payload at `src/dpl2/test/local/`.
 No infrastructure/checker source or API change is required.
@@ -114,7 +115,7 @@ What to copy (one directory, nothing else):
    `infrastructure/` and `drc/` directories (the production sources include
    `infrastructure/...` and `drc/ImplantLayerChecker.h` relative to that
    common source root). This directory contains the complete production
-   delivery plus its real-UDM `test/` package. It contains no local test double
+   delivery plus its portable final-checker `test/` package. It contains no local test double
    or UDM-compatible test-data implementation.
 
 Production wiring (their CMake, 2 lines):
@@ -140,31 +141,32 @@ leaf traversal or placement importer is copied into production.
 
 Do not hand-copy file names -- both production and test CMake include the same
 `sources.cmake`. Do not add `fillerRepair/test/*` to a production target.
-Every migrated E2E source is compiled against real UDM.
+The migrated E2E uses real Grid/Network/checker code and helper-built data.
 
-Real-UDM test wiring in the destination environment:
+Portable E2E wiring in the destination environment:
 
 ```sh
-# Complete chain + all 52 assertion objects against REAL UDM:
-cmake -S <srcroot>/fillerRepair/test -B build-real \
-  -DDPL2_REAL_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
-  -DDPL2_REAL_UDM_LIBRARIES='<real UDM libs/targets>'
-cmake --build build-real
+# Planner + final checker/helper against the destination UDM headers:
+cmake -S <srcroot>/fillerRepair/test -B build-e2e \
+  -DDPL2_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
+  -DDPL2_UDM_LIBRARIES='<real UDM libs/targets>'
+cmake --build build-e2e
+ctest --test-dir build-e2e --output-on-failure
 ```
 
-To run those 52 cases, pass
-`DPL2_REAL_UDM_PROVIDER_SOURCE=<RealUdmE2ETestProvider.cpp>`. The provider
-implements only canonical fixture creation/loading and the operations declared
-in `E2ETestProvider.h`; the shared source owns every engine call/assertion.
-This provider is destination-specific because UDM design-construction/loading
-APIs are not part of fillerRepair.
+When the destination already has an owning dpl2/checker target, it may instead
+create one GoogleTest executable from
+`${DPL2_FILLER_REPAIR_PLANNER_SOURCES}`,
+`${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE}` and
+`drc/ImplantLayerCheckerHelper.cpp`, then link that target. This is the only
+test-side CMake wiring required.
 
 ## Build and verification
 
-The CMake below `fillerRepair/test` is a real-UDM test package, not production
-CMake. It compiles the complete chain/E2E assertions against real UDM. The
-separate local harness retains the 81 planner tests and UDM-compatible E2E data
-provider only for repository verification.
+The CMake below `fillerRepair/test` is a portable final-checker test package,
+not production CMake. It compiles the planner, checker/helper and eight E2E
+cases. The separate local harness retains the 81 planner tests and historical
+52 fake-UDM production-facade cases for repository regression.
 
 Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
 
@@ -179,22 +181,16 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-All 81 planner cases and 52 production E2E cases are GoogleTests. Planner cases
-and doubles live only under `src/dpl2/test/local/planner`; `fillerRepair/test`
-contains only real-UDM E2E sources, and `sources.cmake` exports only production
-and real-UDM E2E lists. The local E2E harness reuses `e2e_cases.cpp`, so case
-additions and changes are automatically synchronized.
-Each behavior has three independently discovered cases; every case constructs
-at least five standard rows. Coverage includes clean/gap/overlap precheck,
-hard-blockage and instance-halo exclusions, a real gap inside the remaining
-legal segment,
-opto-blocking values, deterministic/non-mutating repair, persistent checker
-diagnostics, candidate-universe failures and the row/column frame gates (trailing pad
-accepted, leading pad and off-origin rows refused).
+The migration payload has four direct checker overlay cases and four
+planner-to-final-checker repair cases. Each dense fixture contains eight rows
+and 200 sites. The direct cases each check clean, unresolved and new-violation
+overlays; the planner cases prove clean returned overlays and no placement
+mutation. Planner doubles and the historical fake-UDM suite live only under
+`src/dpl2/test/local/`.
 
-2026-07-19 split result: local planner 81/81 and production E2E through the
-local UDM-compatible provider 52/52 in both normal and ASan builds; full
-CTest 133/133; `-Wall -Wextra -Werror` clean.
+2026-07-19 split result: planner 81/81, historical production-facade fake-UDM
+E2E 52/52 and portable final-checker E2E 8/8 in both normal and ASan builds;
+full normal CTest 141/141; `-Wall -Wextra -Werror` clean.
 
 ## Integration risks
 
@@ -212,8 +208,9 @@ CTest 133/133; `-Wall -Wextra -Werror` clean.
   mismatch. The UDM design/library objects must outlive the engine.
 - Destination build must consume `sources.cmake`; nothing else is part of the
   production delivery.
-- Real-UDM verification still depends on the destination providing its UDM
-  include directories and link libraries/targets; no code port remains.
+- Destination verification still depends on its UDM include directories and
+  link libraries/targets because Grid/Network headers use UDM types. Test data
+  itself has no UDM/DEF/LEF dependency.
 - Checker calls are serialized inside one engine because the checker const
   overlay path updates counters. The checker is private and cannot be
   accidentally shared across engines.

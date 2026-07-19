@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Production E2E cases for the destination's real UDM environment. Fixture
-// construction is supplied through E2ETestProvider; every engine call and
-// assertion remains in this file.
+// Historical repository-local production-facade regression. Fixture
+// construction uses the adjacent fake-UDM provider; this suite is deliberately
+// outside the migration payload.
 
 #include "E2ETestProvider.h"
 
