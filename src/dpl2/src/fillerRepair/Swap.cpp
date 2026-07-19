@@ -11,7 +11,7 @@
 
 namespace dpl2::fillerRepair {
 
-std::optional<Swap> makeSwap(const PlacementView& view,
+std::optional<Swap> makeSwap(const PlannerDataSource& view,
                              InstanceId instanceId,
                              MasterId newMasterId,
                              std::string* error)
@@ -75,24 +75,26 @@ std::string canonicalKey(const Overlay& overlay)
   return key;
 }
 
-std::vector<FillerChange> toFillerChanges(const Overlay& overlay)
+ipl::FillerChanges toFillerChanges(const Overlay& overlay,
+                                   const PlannerDataSource& dataSource)
 {
-  std::vector<FillerChange> changes;
+  ipl::FillerChanges changes;
   changes.reserve(overlay.size());
   for (const Swap& swap : overlay) {
-    changes.push_back(swap.change());
+    changes.push_back(
+        dataSource.fillerCellRecord(swap.instanceId, swap.newMasterId));
   }
   std::sort(changes.begin(),
             changes.end(),
-            [](const FillerChange& a, const FillerChange& b) {
-              return a.instanceId < b.instanceId;
+            [](const FillerCellRecord& a, const FillerCellRecord& b) {
+              return a.cell_id_.getIndexValue() < b.cell_id_.getIndexValue();
             });
   return changes;
 }
 
 SwapGenerationResult generateSwaps(
     const RepairWindow& window,
-    const PlacementView& view,
+    const PlannerDataSource& view,
     const DebugLog& log)
 {
   SwapGenerationResult result;

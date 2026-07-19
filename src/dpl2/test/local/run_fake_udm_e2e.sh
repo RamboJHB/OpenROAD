@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Local-only runner for the historical production-facade regression. Both the
+# Local-only runner for the historical engine regression. Both the
 # case source and its fake-UDM provider live outside the migration payload.
 set -euo pipefail
 

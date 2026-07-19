@@ -26,7 +26,7 @@
 
 #include "Log.h"
 #include "Swap.h"
-#include "PlacementView.h"
+#include "PlannerDataSource.h"
 #include "Types.h"
 
 namespace dpl2::fillerRepair {
@@ -52,7 +52,7 @@ struct NormalizedViolation
 // violation (signature summary -> derived footprint).
 std::vector<NormalizedViolation> normalizeViolations(
     const FillerRepairRequest& request,
-    const PlacementView& view,
+    const PlannerDataSource& view,
     const DebugLog& log);
 
 // Pinned signature match across two checker snapshots (see file header).

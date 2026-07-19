@@ -1,19 +1,19 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "PlacementView.h"
+#include "PlannerDataSource.h"
 
 #include "Log.h"
 
 namespace dpl2::fillerRepair {
 
-const std::vector<PlacedInstance>& PlacementView::emptyInstances()
+const std::vector<PlacedInstance>& PlannerDataSource::emptyInstances()
 {
   static const std::vector<PlacedInstance> kEmpty;
   return kEmpty;
 }
 
-MasterCandidateResult PlacementView::getUsableMasterCandidates(
+MasterCandidateResult PlannerDataSource::getUsableMasterCandidates(
     const MasterCandidateRequest& request) const
 {
   MasterCandidateResult result;

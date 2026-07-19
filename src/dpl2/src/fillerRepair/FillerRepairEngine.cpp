@@ -17,7 +17,7 @@
 #include "Log.h"
 #include "OracleGate.h"
 #include "PlacementPrecheck.h"
-#include "PlacementView.h"
+#include "PlannerDataSource.h"
 #include "infrastructure/Grid.h"
 #include "infrastructure/Objects.h"
 #include "infrastructure/fillerSetting.h"
@@ -26,19 +26,23 @@
 namespace dpl2 {
 namespace fillerRepair {
 
-namespace {
+struct PrecheckDomains;
 
-struct PlannedOutcome
-{
-  bool hasSolution = false;
-  ipl::FillerChanges changes;
-  std::vector<Diagnostic> diagnostics;
-};
-
-class ProductionView final : public PlacementView,
-                             public ImplantOverlayChecker
+class FillerRepairEngine::Impl final : private PlannerDataSource,
+                                       private ImplantOverlayChecker
 {
  public:
+  Impl(Grid* grid, Network* network);
+  ~Impl();
+
+  bool init(eUNL::PhysDesMgr* desMgr,
+            const fillerSetting& fillerSettings);
+  void setDebugLogging(bool enabled);
+  ipl::CheckResult precheck() const;
+  RepairOutcome repair(eUNL::LeafCellID targetCell,
+                       const eLIB::PhysLibCell& newMaster);
+
+ private:
   struct Config
   {
     RepairConfig repair;
@@ -47,29 +51,13 @@ class ProductionView final : public PlacementView,
     bool verbose = false;
   };
 
-  ProductionView(eUNL::PhysDesMgr* desMgr,
-                 Grid* grid,
-                 Network* network,
-                 const ipl::ImplantLayerChecker* checker,
-                 const std::vector<const eLIB::PhysLibCell*>& fillerMasters,
-                 Config config);
-
+  void buildPlannerData();
   bool isReady() const;
-  void setDebugLogging(bool enabled)
-  {
-    config_.verbose = enabled;
-    config_.repair.verbose = enabled;
-    log_.setEnabled(enabled);
-  }
-  const std::vector<Diagnostic>& setupDiagnostics() const
-  {
-    return setup_diagnostics_;
-  }
-  PlannedOutcome repair(eUNL::LeafCellID targetCell,
-                        const eLIB::PhysLibCell& newMaster);
-
+  bool bindInfrastructure(eUNL::PhysDesMgr* desMgr,
+                          const fillerSetting& fillerSettings);
+  bool rebuildOracle();
+  void failInit(const std::string& status, const std::string& message);
   const std::vector<RowId>& rows() const override { return row_list_; }
-  XInterval rowLegalSpan(RowId rowId) const override;
   DbCoord siteWidth() const override { return site_width_; }
   const std::vector<PlacedInstance>& instancesInRow(RowId rowId) const override;
   const PlacedInstance* instance(InstanceId id) const override;
@@ -78,11 +66,12 @@ class ProductionView final : public PlacementView,
   {
     return filler_master_ids_;
   }
+  FillerCellRecord fillerCellRecord(InstanceId instanceId,
+                                    MasterId newMasterId) const override;
   CheckResult checkPlaceWithOverlay(const OverlayCheckRequest& request) override;
   std::vector<CheckResult> checkPlaceWithOverlays(
       const std::vector<OverlayCheckRequest>& requests) override;
 
- private:
   void addProblem(Severity severity,
                   const std::string& code,
                   const std::string& message);
@@ -90,7 +79,6 @@ class ProductionView final : public PlacementView,
   ::Rect toGuardRect(const Region& region) const;
   Violation toPlannerViolation(const ipl::Violation& violation,
                                InstanceId targetInstance) const;
-  FillerCellRecord toFillerCellRecord(const FillerChange& change) const;
   Region snapshotGuard(const TargetPlace& target) const;
 
   // Grows `table` so `id` is a valid index (ids can exceed the presized
@@ -103,8 +91,11 @@ class ProductionView final : public PlacementView,
     }
   }
 
+  Grid* grid_ = nullptr;
   Network* network_ = nullptr;
-  const ipl::ImplantLayerChecker* checker_ = nullptr;
+  eUNL::PhysDesMgr* des_mgr_ = nullptr;
+  std::vector<const eLIB::PhysLibCell*> filler_masters_;
+  std::unique_ptr<ipl::ImplantLayerChecker> checker_;
   Config config_;
   DebugLog log_;
   DbCoord site_width_ = 0;
@@ -115,7 +106,6 @@ class ProductionView final : public PlacementView,
   // building and ranking hit these on every step, and std::map lookups were
   // measurable on large snapshots. All tables are immutable after
   // construction, so returned pointers stay valid for the view's lifetime.
-  std::vector<XInterval> row_spans_;  // empty interval = pad row / no span
   std::vector<RowId> row_list_;
   std::vector<std::optional<MasterInfo>> masters_;
   std::vector<std::optional<PlacedInstance>> instances_;
@@ -131,9 +121,19 @@ class ProductionView final : public PlacementView,
   std::vector<std::vector<PlacedInstance>> by_row_;
   std::vector<MasterId> filler_master_ids_;
   std::vector<Diagnostic> setup_diagnostics_;
+  std::vector<ipl::Diagnostic> init_diagnostics_;
+  std::vector<ipl::Diagnostic> oracle_diagnostics_;
+  std::unique_ptr<PrecheckDomains> precheck_domains_;
+  bool debug_logging_ = false;
+  bool initialized_ = false;
+  bool init_attempted_ = false;
+  std::atomic<bool> repair_active_{false};
   mutable std::mutex checker_mutex_;
 };
 
+namespace {
+
+ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic);
 
 Orient toPlannerOrient(eUTL::PhysOrientation orientation)
 {
@@ -187,18 +187,24 @@ ViolationRelation toRelation(ipl::Relationship relationship)
 
 }  // namespace
 
-ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
-                             Grid* grid,
-                             Network* network,
-                             const ipl::ImplantLayerChecker* checker,
-                             const std::vector<const eLIB::PhysLibCell*>&
-                                 fillerMasters,
-                             Config config)
-    : network_(network),
-      checker_(checker),
-      config_(config),
-      log_(config.verbose)
+void FillerRepairEngine::Impl::buildPlannerData()
 {
+  eUNL::PhysDesMgr* desMgr = des_mgr_;
+  Grid* grid = grid_;
+  Network* network = network_;
+  const ipl::ImplantLayerChecker* checker = checker_.get();
+  const auto& fillerMasters = filler_masters_;
+  site_width_ = 0;
+  row_height_ = 0;
+  default_halo_x_ = 0;
+  row_list_.clear();
+  masters_.clear();
+  instances_.clear();
+  udm_refs_.clear();
+  master_lib_ids_.clear();
+  by_row_.clear();
+  filler_master_ids_.clear();
+  setup_diagnostics_.clear();
   config_.repair.verbose = config_.repair.verbose || config_.verbose;
   if (desMgr == nullptr || grid == nullptr || network == nullptr
       || checker == nullptr) {
@@ -245,14 +251,11 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
           addProblem(Severity::Fatal, "InvalidRowSpan",
                      cat("row ", rowId, " has an invalid legal span"));
         }
-        ensureSlot(row_spans_, static_cast<size_t>(rowId));
-        row_spans_[rowId] = XInterval{0, spanWidth};
         row_list_.push_back(rowId);
       }
       frames.push_back(frame);
       ++rowId;
     }
-    row_spans_.resize(frames.size());  // trailing pad rows -> empty spans
     by_row_.resize(frames.size());
   }
   if (site_width_ <= 0 || row_height_ <= 0 || row_list_.empty()) {
@@ -586,14 +589,14 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
                " defaultHaloX=", default_halo_x_));
 }
 
-bool ProductionView::isReady() const
+bool FillerRepairEngine::Impl::isReady() const
 {
   return std::none_of(
       setup_diagnostics_.begin(), setup_diagnostics_.end(),
       [](const Diagnostic& d) { return d.severity == Severity::Fatal; });
 }
 
-void ProductionView::addProblem(Severity severity,
+void FillerRepairEngine::Impl::addProblem(Severity severity,
                                const std::string& code,
                                const std::string& message)
 {
@@ -601,14 +604,7 @@ void ProductionView::addProblem(Severity severity,
   log_.msg("engine", cat(code, ": ", message));
 }
 
-XInterval ProductionView::rowLegalSpan(RowId rowId) const
-{
-  return rowId >= 0 && static_cast<size_t>(rowId) < row_spans_.size()
-             ? row_spans_[rowId]
-             : XInterval{};
-}
-
-const std::vector<PlacedInstance>& ProductionView::instancesInRow(
+const std::vector<PlacedInstance>& FillerRepairEngine::Impl::instancesInRow(
     RowId rowId) const
 {
   return rowId >= 0 && static_cast<size_t>(rowId) < by_row_.size()
@@ -616,7 +612,7 @@ const std::vector<PlacedInstance>& ProductionView::instancesInRow(
              : emptyInstances();
 }
 
-const PlacedInstance* ProductionView::instance(InstanceId id) const
+const PlacedInstance* FillerRepairEngine::Impl::instance(InstanceId id) const
 {
   return id >= 0 && static_cast<size_t>(id) < instances_.size()
                  && instances_[id].has_value()
@@ -624,7 +620,7 @@ const PlacedInstance* ProductionView::instance(InstanceId id) const
              : nullptr;
 }
 
-const MasterInfo* ProductionView::masterInfo(MasterId id) const
+const MasterInfo* FillerRepairEngine::Impl::masterInfo(MasterId id) const
 {
   return id >= 0 && static_cast<size_t>(id) < masters_.size()
                  && masters_[id].has_value()
@@ -634,7 +630,7 @@ const MasterInfo* ProductionView::masterInfo(MasterId id) const
 
 // --- oracle: direct calls into the final ipl checker -----------------------
 
-ipl::CheckRequest ProductionView::toCheckRequest(const TargetPlace& place) const
+ipl::CheckRequest FillerRepairEngine::Impl::toCheckRequest(const TargetPlace& place) const
 {
   ipl::CheckRequest request;
   request.instanceId = static_cast<ipl::InstanceId>(place.instanceId);
@@ -646,7 +642,7 @@ ipl::CheckRequest ProductionView::toCheckRequest(const TargetPlace& place) const
   return request;
 }
 
-::Rect ProductionView::toGuardRect(const Region& region) const
+::Rect FillerRepairEngine::Impl::toGuardRect(const Region& region) const
 {
   // The checker's isInGuard uses the synthetic frame y = rowId * rowHeight;
   // (rowHi+1)*rowHeight - 1 keeps a touching adjacent row out.
@@ -659,7 +655,7 @@ ipl::CheckRequest ProductionView::toCheckRequest(const TargetPlace& place) const
                 eUTL::UvDist(static_cast<int64_t>(yh)));
 }
 
-Violation ProductionView::toPlannerViolation(const ipl::Violation& v,
+Violation FillerRepairEngine::Impl::toPlannerViolation(const ipl::Violation& v,
                                             InstanceId targetInstance) const
 {
   Violation out;
@@ -696,36 +692,36 @@ Violation ProductionView::toPlannerViolation(const ipl::Violation& v,
   return out;
 }
 
-FillerCellRecord ProductionView::toFillerCellRecord(
-    const FillerChange& change) const
+FillerCellRecord FillerRepairEngine::Impl::fillerCellRecord(
+    InstanceId instanceId,
+    MasterId newMasterId) const
 {
   FillerCellRecord record{};
   record.op_ = dpl2::OpType::Replace;
-  const bool haveRef = change.instanceId >= 0
-                       && static_cast<size_t>(change.instanceId)
-                              < udm_refs_.size()
-                       && udm_refs_[change.instanceId].has_value();
+  const bool haveRef = instanceId >= 0
+                       && static_cast<size_t>(instanceId) < udm_refs_.size()
+                       && udm_refs_[instanceId].has_value();
   if (haveRef) {
-    const UdmRef& ref = *udm_refs_[change.instanceId];
+    const UdmRef& ref = *udm_refs_[instanceId];
     record.cell_id_ = ref.cellId;
     record.orig_lib_cell_ = ref.libCellId;
     record.origin_x_ = ref.originX;
     record.origin_y_ = ref.originY;
   }
-  if (masterInfo(change.newMasterId) != nullptr) {
-    record.new_lib_cell_ = master_lib_ids_[change.newMasterId];
+  if (masterInfo(newMasterId) != nullptr) {
+    record.new_lib_cell_ = master_lib_ids_[newMasterId];
   }
   return record;
 }
 
-CheckResult ProductionView::checkPlaceWithOverlay(
+CheckResult FillerRepairEngine::Impl::checkPlaceWithOverlay(
     const OverlayCheckRequest& request)
 {
   std::vector<CheckResult> results = checkPlaceWithOverlays({request});
   return results.empty() ? CheckResult{} : std::move(results.front());
 }
 
-std::vector<CheckResult> ProductionView::checkPlaceWithOverlays(
+std::vector<CheckResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     const std::vector<OverlayCheckRequest>& requests)
 {
   std::vector<CheckResult> results(requests.size());
@@ -764,12 +760,7 @@ std::vector<CheckResult> ProductionView::checkPlaceWithOverlays(
   std::vector<ipl::FillerChanges> changes;
   changes.reserve(requests.size());
   for (const OverlayCheckRequest& request : requests) {
-    ipl::FillerChanges list;
-    list.reserve(request.fillerChanges.size());
-    for (const FillerChange& change : request.fillerChanges) {
-      list.push_back(toFillerCellRecord(change));
-    }
-    changes.push_back(std::move(list));
+    changes.push_back(request.fillerChanges);
   }
 
   std::vector<ipl::CheckResult> raw;
@@ -849,7 +840,7 @@ std::vector<CheckResult> ProductionView::checkPlaceWithOverlays(
 
 // --- repair entry -----------------------------------------------------------
 
-Region ProductionView::snapshotGuard(const TargetPlace& target) const
+Region FillerRepairEngine::Impl::snapshotGuard(const TargetPlace& target) const
 {
   const MasterInfo* master = masterInfo(target.masterId);
   const DbCoord width = master != nullptr ? master->width : 0;
@@ -871,15 +862,61 @@ Region ProductionView::snapshotGuard(const TargetPlace& target) const
   return guard;
 }
 
-PlannedOutcome ProductionView::repair(eUNL::LeafCellID targetCell,
-                                      const eLIB::PhysLibCell& newMaster)
+RepairOutcome FillerRepairEngine::Impl::repair(
+    eUNL::LeafCellID targetCell,
+    const eLIB::PhysLibCell& newMaster)
 {
-  PlannedOutcome result;
+  RepairOutcome result;
+  const auto addDiagnostic = [&result](Severity severity,
+                                       const std::string& code,
+                                       const std::string& message) {
+    result.diagnostics.push_back(
+        toPublicDiagnostic(makeDiag(severity, code, message)));
+  };
+
+  if (repair_active_.exchange(true, std::memory_order_acq_rel)) {
+    addDiagnostic(Severity::Fatal,
+                  "ReentrantRepair",
+                  "repair() re-entered on one FillerRepairEngine");
+    return result;
+  }
+  struct ActiveGuard
+  {
+    std::atomic<bool>& flag;
+    ~ActiveGuard() { flag.store(false, std::memory_order_release); }
+  } activeGuard{repair_active_};
+
+  if (!initialized_) {
+    result.diagnostics = init_diagnostics_;
+    addDiagnostic(Severity::Fatal,
+                  "engine_not_initialized",
+                  "init() must succeed before repair()");
+    return result;
+  }
+
+  // DePlace may not have imported an uninstantiated target replacement yet.
+  // Register it once, then rebuild this engine's checker and planner snapshot
+  // so every id table shares the expanded Network universe.
+  if (network_->getMaster(newMaster.getLibCellId()) == nullptr) {
+    const bool registered = network_->addMaster(newMaster, grid_) != nullptr;
+    const bool rebuilt = registered && rebuildOracle();
+    if (!rebuilt) {
+      initialized_ = false;
+      result.diagnostics = oracle_diagnostics_;
+      addDiagnostic(Severity::Fatal,
+                    "TargetMasterRegistrationFailed",
+                    "target master could not be added to the repair oracle");
+      return result;
+    }
+  }
+
   if (!isReady()) {
-    result.diagnostics = setup_diagnostics_;
-    result.diagnostics.push_back(makeDiag(
-        Severity::Fatal, "EngineNotReady",
-        "infrastructure snapshot failed validation -> repair refused"));
+    for (const Diagnostic& diagnostic : setup_diagnostics_) {
+      result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
+    }
+    addDiagnostic(Severity::Fatal,
+                  "EngineNotReady",
+                  "infrastructure snapshot failed validation; repair refused");
     return result;
   }
 
@@ -889,10 +926,11 @@ PlannedOutcome ProductionView::repair(eUNL::LeafCellID targetCell,
   const PlacedInstance* inst =
       targetId >= 0 ? instance(static_cast<InstanceId>(targetId)) : nullptr;
   if (inst == nullptr) {
-    result.diagnostics.push_back(makeDiag(
-        Severity::Fatal, "UnknownTarget",
-        cat("leaf cell ", static_cast<int>(targetCell.getIndexValue()),
-            " is not a placed node in this view")));
+    addDiagnostic(Severity::Fatal,
+                  "UnknownTarget",
+                  cat("leaf cell ",
+                      static_cast<int>(targetCell.getIndexValue()),
+                      " is not a placed node in this engine snapshot"));
     return result;
   }
   const int newMasterId = network_->getMasterId(newMaster.getLibCellId());
@@ -900,29 +938,29 @@ PlannedOutcome ProductionView::repair(eUNL::LeafCellID targetCell,
       newMasterId >= 0 ? masterInfo(static_cast<MasterId>(newMasterId))
                        : nullptr;
   if (replacement == nullptr) {
-    result.diagnostics.push_back(makeDiag(
-        Severity::Fatal, "TargetMasterUnknown",
-        "the target's new master is not in the Network master table"));
+    addDiagnostic(Severity::Fatal,
+                  "TargetMasterUnknown",
+                  "the target's new master is not in the Network master table");
     return result;
   }
   const MasterInfo* oldMaster = masterInfo(inst->masterId);
   if (oldMaster == nullptr) {
-    result.diagnostics.push_back(makeDiag(
-        Severity::Fatal, "TargetMasterUnknown",
-        "the target's current master is absent from the view"));
+    addDiagnostic(Severity::Fatal,
+                  "TargetMasterUnknown",
+                  "the target's current master is absent from the snapshot");
     return result;
   }
   if (inst->isFiller || oldMaster->isFiller || replacement->isFiller) {
-    result.diagnostics.push_back(makeDiag(
-        Severity::Fatal, "TargetNotStdCell",
-        "target and replacement master must both be standard cells"));
+    addDiagnostic(Severity::Fatal,
+                  "TargetNotStdCell",
+                  "target and replacement master must both be standard cells");
     return result;
   }
   if (oldMaster->width != replacement->width
       || oldMaster->height != replacement->height) {
-    result.diagnostics.push_back(makeDiag(
-        Severity::Fatal, "TargetSizeMismatch",
-        "target VT replacement must preserve width and height"));
+    addDiagnostic(Severity::Fatal,
+                  "TargetSizeMismatch",
+                  "target VT replacement must preserve width and height");
     return result;
   }
 
@@ -946,21 +984,23 @@ PlannedOutcome ProductionView::repair(eUNL::LeafCellID targetCell,
                show(snapshotRequest.guardRegion)));
   const CheckResult snapshot = checkPlaceWithOverlay(snapshotRequest);
   if (snapshot.status != CheckStatus::Checked) {
-    result.diagnostics = snapshot.diagnostics;
-    result.diagnostics.push_back(makeDiag(
-        Severity::Fatal, "SnapshotFailed",
-        "checker rejected the target-place snapshot request"));
+    for (const Diagnostic& diagnostic : snapshot.diagnostics) {
+      result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
+    }
+    addDiagnostic(Severity::Fatal,
+                  "SnapshotFailed",
+                  "checker rejected the target-place snapshot request");
     return result;
   }
   if (snapshot.violations.empty()) {
     result.hasSolution = true;  // legal as-is: empty change list
-    result.diagnostics.push_back(makeDiag(
-        Severity::Info, "NoRepairNeeded",
-        "the new target place is already legal -> no filler changes"));
+    addDiagnostic(Severity::Info,
+                  "NoRepairNeeded",
+                  "the new target place is already legal; no filler changes");
     return result;
   }
 
-  // 3) Pure planner over this object (view AND oracle).
+  // 3) Pure search over this object's data-source and oracle interfaces.
   FillerRepairRequest request;
   request.targetPlace = target;
   request.violations = snapshot.violations;
@@ -968,24 +1008,23 @@ PlannedOutcome ProductionView::repair(eUNL::LeafCellID targetCell,
   const FillerRepairResult planned = planner.repair(request);
 
   result.hasSolution = planned.hasSolution;
-  result.diagnostics.insert(result.diagnostics.end(),
-                            planned.diagnostics.begin(),
-                            planned.diagnostics.end());
+  for (const Diagnostic& diagnostic : planned.diagnostics) {
+    result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
+  }
 
-  // 4) Checker/commit wire form.
-  for (const FillerChange& change : planned.changes) {
-    const FillerCellRecord record = toFillerCellRecord(change);
-    if (!record.cell_id_.isValid()) {
+  // The planner request, checker request and public result all use this same
+  // FillerCellRecord wire. Validate the accepted records, then copy directly.
+  for (const FillerCellRecord& change : planned.changes) {
+    if (!change.cell_id_.isValid() || !change.new_lib_cell_.isValid()) {
       result.hasSolution = false;
       result.changes.clear();
-      result.diagnostics.push_back(makeDiag(
-          Severity::Fatal, "MappingLost",
-          cat("accepted change (inst=", change.instanceId, " -> master=",
-              change.newMasterId, ") has no UDM mapping")));
+      addDiagnostic(Severity::Fatal,
+                    "MappingLost",
+                    "accepted filler record has an invalid UDM id mapping");
       return result;
     }
-    result.changes.push_back(record);
   }
+  result.changes = planned.changes;
   return result;
 }
 
@@ -1002,12 +1041,14 @@ const char* severityName(Severity severity)
   return "unknown";
 }
 
-ipl::Diagnostic toProductionDiagnostic(const Diagnostic& diagnostic)
+ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
 {
   return ipl::Diagnostic{
       diagnostic.code,
       cat(severityName(diagnostic.severity), ": ", diagnostic.message)};
 }
+
+}  // namespace
 
 // Grid legal domain for one precheck row plus the y-sorted lookup index.
 // The Grid legal domain (rows, blockages, padding reservations) is immutable
@@ -1026,6 +1067,8 @@ struct PrecheckDomains
   std::vector<size_t> order;      // row indices sorted by yl (ties by id)
   std::vector<int64_t> sortedYl;  // rows[order[i]].yl, for binary search
 };
+
+namespace {
 
 PrecheckDomains buildPrecheckDomains(const Grid* grid)
 {
@@ -1156,241 +1199,159 @@ std::vector<internal::CoverageFinding> findGapAndOverlap(
 
 }  // namespace
 
-class FillerRepairEngine::Impl
+FillerRepairEngine::Impl::Impl(Grid* grid, Network* network)
+    : grid_(grid), network_(network), log_(false)
 {
- public:
-  Impl(Grid* grid, Network* network) : grid_(grid), network_(network) {}
+}
 
-  bool init(eUNL::PhysDesMgr* desMgr,
-            const fillerSetting& fillerSettings)
-  {
-    // One engine represents exactly one design revision. A second init could
-    // otherwise leave the private checker/view bound to mixed infrastructure.
-    if (init_attempted_) {
-      return false;
-    }
-    init_attempted_ = true;
-    des_mgr_ = desMgr;
-    if (!bindInfrastructure(desMgr, fillerSettings)) {
-      return false;
-    }
+FillerRepairEngine::Impl::~Impl() = default;
 
-    // Build once here to validate the borrowed infrastructure. repair() may
-    // rebuild after lazily registering an uninstantiated target master.
-    initialized_ = rebuildOracle();
-    if (!initialized_) {
-      init_diagnostics_.insert(init_diagnostics_.end(),
-                               oracle_diagnostics_.begin(),
-                               oracle_diagnostics_.end());
-      return false;
-    }
-    // The Grid legal domain is immutable within this snapshot (only PLACED
-    // cells move between precheck calls), so walk the pixels once instead of
-    // on every precheck.
-    precheck_domains_ = buildPrecheckDomains(grid_);
-    return initialized_;
+bool FillerRepairEngine::Impl::init(eUNL::PhysDesMgr* desMgr,
+                                    const fillerSetting& fillerSettings)
+{
+  if (init_attempted_) {
+    return false;
   }
-
-  void setDebugLogging(bool enabled)
-  {
-    debug_logging_ = enabled;
-    if (view_ != nullptr) {
-      view_->setDebugLogging(enabled);
-    }
-  }
-
-  ipl::CheckResult precheck() const
-  {
-    ipl::CheckResult result;
-    if (!initialized_) {
-      result.isLegal = false;
-      result.diagnostics = init_diagnostics_;
-      result.diagnostics.push_back(
-          {"precheck_not_initialized",
-           "warning: init() must succeed before placement precheck"});
-      return result;
-    }
-    const std::vector<internal::CoverageFinding> findings
-        = findGapAndOverlap(des_mgr_, network_, precheck_domains_);
-    result.isLegal = findings.empty();
-    for (const internal::CoverageFinding& finding : findings) {
-      const char* status = internal::coverageFindingStatus(finding.kind);
-      result.diagnostics.push_back(
-          {status,
-           cat("warning: placement ", status, " row=", finding.rowId,
-               " x=[", finding.span.xl, ",", finding.span.xh,
-               ") -> opto must block mutation")});
-    }
-    return result;
-  }
-
-  RepairOutcome repair(eUNL::LeafCellID targetCell,
-                       const eLIB::PhysLibCell& newMaster)
-  {
-    RepairOutcome result;
-    if (repair_active_.exchange(true, std::memory_order_acq_rel)) {
-      result.diagnostics.push_back(
-          {"ReentrantRepair",
-           "fatal: repair() re-entered on one FillerRepairEngine"});
-      return result;
-    }
-    struct ActiveGuard
-    {
-      std::atomic<bool>& flag;
-      ~ActiveGuard() { flag.store(false, std::memory_order_release); }
-    } activeGuard{repair_active_};
-
-    if (!initialized_) {
-      result.diagnostics = init_diagnostics_;
-      result.diagnostics.push_back(
-          {"engine_not_initialized",
-           "fatal: init() must succeed before repair()"});
-      return result;
-    }
-
-    // DePlace normally imports masters from instantiated cells only. Register
-    // an uninstantiated target replacement on demand, then rebuild the private
-    // checker/view so both share the expanded Master::getId() universe.
-    if (network_->getMaster(newMaster.getLibCellId()) == nullptr) {
-      if (network_->addMaster(newMaster, grid_) == nullptr || !rebuildOracle()) {
-        result.diagnostics = oracle_diagnostics_;
-        result.diagnostics.push_back(
-            {"target_master_registration_failed",
-             "fatal: target master could not be added to the repair oracle"});
-        return result;
-      }
-    }
-    const PlannedOutcome planned = view_->repair(targetCell, newMaster);
-    result.hasSolution = planned.hasSolution;
-    result.changes = planned.changes;
-    result.diagnostics.reserve(planned.diagnostics.size());
-    for (const Diagnostic& diagnostic : planned.diagnostics) {
-      result.diagnostics.push_back(toProductionDiagnostic(diagnostic));
-    }
-    return result;
-  }
-
- private:
-  void failInit(const std::string& status, const std::string& message)
-  {
-    init_diagnostics_.push_back({status, message});
-  }
-
-  bool bindInfrastructure(eUNL::PhysDesMgr* desMgr,
-                          const fillerSetting& fillerSettings)
-  {
-    if (grid_ == nullptr || network_ == nullptr) {
-      failInit("missing_infrastructure",
-               "fatal: missing initialized Grid or Network");
-      return false;
-    }
-    if (desMgr == nullptr) {
-      failInit("missing_phys_des_mgr", "fatal: missing PhysDesMgr");
-      return false;
-    }
-    if (fillerSettings.getDesign() == nullptr
-        || fillerSettings.getDesign()->getPhysDesMgr() != desMgr) {
-      failInit("design_mismatch",
-               "fatal: fillerSetting and PhysDesMgr describe different designs");
-      return false;
-    }
-    // ImplantLayerChecker currently extracts UDM through Session in its
-    // constructor. Validate that implicit source before constructing it so a
-    // caller cannot accidentally combine an explicit desMgr with another
-    // active design.
-    eUNL::Design* activeDesign
-        = eUNL::Session::getSession().getCurrentDesign();
-    if (activeDesign == nullptr || activeDesign->getPhysDesMgr() != desMgr) {
-      failInit("active_design_mismatch",
-               "fatal: PhysDesMgr is not the Session current design");
-      return false;
-    }
-    if (fillerSettings.getFillerMasters().empty()) {
-      failInit("empty_filler_allow_list",
-               "fatal: fillerSetting::getFillerMasters() is empty");
-      return false;
-    }
-    if (network_->getNodes().empty() || network_->getMasters().empty()) {
-      failInit("empty_infrastructure",
-               "fatal: Grid/Network must be initialized by dpl2 before repair");
-      return false;
-    }
-    // Reject a Network borrowed from another design even when its LeafCellID
-    // values happen to collide with the active design's IDs.
-    for (const auto& node : network_->getNodes()) {
-      if (node == nullptr || node->getMaster() == nullptr
-          || node->getMaster()->getPhysLibCell() == nullptr) {
-        failInit("invalid_network_node",
-                 "fatal: Network contains an incomplete node/master mapping");
-        return false;
-      }
-      const eUNL::PhysCell cell = desMgr->getPhysCell(node->getDbInst());
-      if (!cell.isValid()
-          || cell.getPhysMaster().getLibCellId()
-                 != node->getMaster()->getDbMaster()) {
-        failInit("infrastructure_design_mismatch",
-                 cat("fatal: Network node ", node->getId(),
-                     " does not match the active PhysDesMgr"));
-        return false;
-      }
-    }
-
-    // Candidate masters may be uninstantiated. Extending the infrastructure
-    // master registry is idempotent and does not mutate UDM placement.
-    filler_masters_ = fillerSettings.getFillerMasters();
-    for (const eLIB::PhysLibCell* master : filler_masters_) {
-      if (master == nullptr) {
-        failInit("null_filler_master",
-                 "fatal: getFillerMasters() returned null");
-        continue;
-      }
-      network_->addMaster(*master, grid_);
-    }
-    return init_diagnostics_.empty();
-  }
-
-  bool rebuildOracle()
-  {
-    view_.reset();
-    checker_.reset();
-    oracle_diagnostics_.clear();
-
-    checker_ = std::make_unique<ipl::ImplantLayerChecker>(grid_, network_);
-    ProductionView::Config config;
-    config.verbose = debug_logging_;
-    config.repair.verbose = debug_logging_;
-    view_ = std::make_unique<ProductionView>(des_mgr_,
-                                             grid_,
-                                             network_,
-                                             checker_.get(),
-                                             filler_masters_,
-                                             config);
-    if (view_->isReady()) {
-      return true;
-    }
-    for (const Diagnostic& diagnostic : view_->setupDiagnostics()) {
-      oracle_diagnostics_.push_back(toProductionDiagnostic(diagnostic));
-    }
+  init_attempted_ = true;
+  des_mgr_ = desMgr;
+  if (!bindInfrastructure(desMgr, fillerSettings)) {
     return false;
   }
 
-  Grid* grid_ = nullptr;
-  Network* network_ = nullptr;
-  eUNL::PhysDesMgr* des_mgr_ = nullptr;
-  std::vector<const eLIB::PhysLibCell*> filler_masters_;
-  std::unique_ptr<ipl::ImplantLayerChecker> checker_;
-  std::unique_ptr<ProductionView> view_;
-  std::vector<ipl::Diagnostic> init_diagnostics_;
-  std::vector<ipl::Diagnostic> oracle_diagnostics_;
-  // Grid legal domain cached at init; precheck only refreshes placed spans.
-  PrecheckDomains precheck_domains_;
-  bool debug_logging_ = false;
-  // True only after a fully successful init(); every public API fails closed
-  // until then (a half-built snapshot must never answer queries).
-  bool initialized_ = false;
-  bool init_attempted_ = false;
-  std::atomic<bool> repair_active_{false};
-};
+  initialized_ = rebuildOracle();
+  if (!initialized_) {
+    init_diagnostics_.insert(init_diagnostics_.end(),
+                             oracle_diagnostics_.begin(),
+                             oracle_diagnostics_.end());
+    return false;
+  }
+  precheck_domains_ =
+      std::make_unique<PrecheckDomains>(buildPrecheckDomains(grid_));
+  return true;
+}
+
+void FillerRepairEngine::Impl::setDebugLogging(bool enabled)
+{
+  debug_logging_ = enabled;
+  config_.verbose = enabled;
+  config_.repair.verbose = enabled;
+  log_.setEnabled(enabled);
+}
+
+ipl::CheckResult FillerRepairEngine::Impl::precheck() const
+{
+  ipl::CheckResult result;
+  if (!initialized_ || precheck_domains_ == nullptr) {
+    result.isLegal = false;
+    result.diagnostics = init_diagnostics_;
+    result.diagnostics.push_back(
+        {"precheck_not_initialized",
+         "warning: init() must succeed before placement precheck"});
+    return result;
+  }
+  const std::vector<internal::CoverageFinding> findings
+      = findGapAndOverlap(des_mgr_, network_, *precheck_domains_);
+  result.isLegal = findings.empty();
+  for (const internal::CoverageFinding& finding : findings) {
+    const char* status = internal::coverageFindingStatus(finding.kind);
+    result.diagnostics.push_back(
+        {status,
+         cat("warning: placement ", status, " row=", finding.rowId,
+             " x=[", finding.span.xl, ",", finding.span.xh,
+             ") -> opto must block mutation")});
+  }
+  return result;
+}
+
+void FillerRepairEngine::Impl::failInit(const std::string& status,
+                                        const std::string& message)
+{
+  init_diagnostics_.push_back({status, message});
+}
+
+bool FillerRepairEngine::Impl::bindInfrastructure(
+    eUNL::PhysDesMgr* desMgr,
+    const fillerSetting& fillerSettings)
+{
+  if (grid_ == nullptr || network_ == nullptr) {
+    failInit("missing_infrastructure",
+             "fatal: missing initialized Grid or Network");
+    return false;
+  }
+  if (desMgr == nullptr) {
+    failInit("missing_phys_des_mgr", "fatal: missing PhysDesMgr");
+    return false;
+  }
+  if (fillerSettings.getDesign() == nullptr
+      || fillerSettings.getDesign()->getPhysDesMgr() != desMgr) {
+    failInit("design_mismatch",
+             "fatal: fillerSetting and PhysDesMgr describe different designs");
+    return false;
+  }
+  eUNL::Design* activeDesign
+      = eUNL::Session::getSession().getCurrentDesign();
+  if (activeDesign == nullptr || activeDesign->getPhysDesMgr() != desMgr) {
+    failInit("active_design_mismatch",
+             "fatal: PhysDesMgr is not the Session current design");
+    return false;
+  }
+  if (fillerSettings.getFillerMasters().empty()) {
+    failInit("empty_filler_allow_list",
+             "fatal: fillerSetting::getFillerMasters() is empty");
+    return false;
+  }
+  if (network_->getNodes().empty() || network_->getMasters().empty()) {
+    failInit("empty_infrastructure",
+             "fatal: Grid/Network must be initialized by dpl2 before repair");
+    return false;
+  }
+  for (const auto& node : network_->getNodes()) {
+    if (node == nullptr || node->getMaster() == nullptr
+        || node->getMaster()->getPhysLibCell() == nullptr) {
+      failInit("invalid_network_node",
+               "fatal: Network contains an incomplete node/master mapping");
+      return false;
+    }
+    const eUNL::PhysCell cell = desMgr->getPhysCell(node->getDbInst());
+    if (!cell.isValid()
+        || cell.getPhysMaster().getLibCellId()
+               != node->getMaster()->getDbMaster()) {
+      failInit("infrastructure_design_mismatch",
+               cat("fatal: Network node ", node->getId(),
+                   " does not match the active PhysDesMgr"));
+      return false;
+    }
+  }
+
+  filler_masters_ = fillerSettings.getFillerMasters();
+  for (const eLIB::PhysLibCell* master : filler_masters_) {
+    if (master == nullptr) {
+      failInit("null_filler_master",
+               "fatal: getFillerMasters() returned null");
+      continue;
+    }
+    network_->addMaster(*master, grid_);
+  }
+  return init_diagnostics_.empty();
+}
+
+bool FillerRepairEngine::Impl::rebuildOracle()
+{
+  checker_.reset();
+  oracle_diagnostics_.clear();
+  config_.verbose = debug_logging_;
+  config_.repair.verbose = debug_logging_;
+  log_.setEnabled(debug_logging_);
+  checker_ = std::make_unique<ipl::ImplantLayerChecker>(grid_, network_);
+  buildPlannerData();
+  if (isReady()) {
+    return true;
+  }
+  for (const Diagnostic& diagnostic : setup_diagnostics_) {
+    oracle_diagnostics_.push_back(toPublicDiagnostic(diagnostic));
+  }
+  return false;
+}
 
 FillerRepairEngine::FillerRepairEngine(Grid* grid, Network* network)
     : impl_(std::make_unique<Impl>(grid, network))

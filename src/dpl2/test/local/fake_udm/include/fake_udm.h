@@ -3,7 +3,7 @@
 //
 // Scope: everything the repair chain compiles against --
 // infrastructure (Network/Grid/fillerSetting), the final
-// ipl::ImplantLayerChecker, and the fillerRepair production engine (including
+// ipl::ImplantLayerChecker, and the fillerRepair runtime engine (including
 // the test-only fixture that wires supplied Grid/Network).
 // NOT a behavioral UDM: only the accessors those files call are modeled.
 //
@@ -631,7 +631,7 @@ class PhysDesMgr
   void iterateAllPhysNets(Arena&, Visitor&, bool, bool) const
   {
     // The fake-UDM fixture has no routed nets.  This is data, not a Grid
-    // behavioral substitute: production Grid still executes its real scan.
+    // behavioral substitute: runtime Grid still executes its real scan.
   }
 
   // --- test-population helpers ---

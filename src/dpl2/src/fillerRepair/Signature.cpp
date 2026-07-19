@@ -43,7 +43,7 @@ DbCoord intervalDistance(const XInterval& a, const XInterval& b)
 
 std::vector<NormalizedViolation> normalizeViolations(
     const FillerRepairRequest& request,
-    const PlacementView& view,
+    const PlannerDataSource& view,
     const DebugLog& log)
 {
   std::vector<NormalizedViolation> result;

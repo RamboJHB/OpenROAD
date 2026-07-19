@@ -38,8 +38,19 @@ result before classifying it; a count-based single-prefix strip is wrong.
   orig_lib_cell_, new_lib_cell_}`;
 - relationship: `IntraRow` or `InterRow`.
 
-`FillerRepairEngine` privately converts checker and planner types and
-synthesizes planner requestId/status values from ordered results.
+`FillerRepairEngine` converts violation/diagnostic types and synthesizes
+planner requestId/status values from ordered results. It does not convert the
+change list: planner requests, checker calls and `RepairOutcome` all carry the
+same `ipl::FillerChanges`/`FillerCellRecord` records.
+
+## 2026-07-19 fillerRepair wire simplification
+
+No checker source or DRC behavior changed. fillerRepair removed its private,
+reduced change-record representation. `PlannerDataSource` now materializes the
+exact `FillerCellRecord` above when an overlay is created; the engine
+passes that record unchanged to `checkPlaceWithOverlays()` and returns the
+accepted records unchanged to opto. This pins all three boundaries to
+`new_lib_cell_` and prevents mapping drift between checked and returned data.
 
 ## Row/column frames
 
@@ -62,12 +73,12 @@ PhysDesMgr, Grid, Network and one engine must describe one design revision.
 The engine borrows the initialized Grid/Network, registers all
 `getFillerMasters()` candidates, then constructs the checker. If repair first
 sees an uninstantiated target master, it registers that master in Network and
-rebuilds its private checker/view before issuing the overlay query. Construct a
+rebuilds its private checker/snapshot before issuing the overlay query. Construct a
 new engine after commit.
 
 The engine serializes its own checker calls because the current const overlay
 path updates internal counters. The checker is engine-owned, so cross-engine
-checker aliasing is no longer possible through the production API.
+checker aliasing is no longer possible through the runtime API.
 
 ## Repair acceptance
 
@@ -91,10 +102,10 @@ All portable final-checker calls/assertions live in
 `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`. They construct dense
 `ImplantInput` directly through `ImplantLayerCheckerHelper` and exercise the
 final checker plus `FillerRepairPlanner`; no destination fixture provider or
-DEF/LEF reader is required. Public `FillerRepairEngine` and real-UDM facade
+DEF/LEF reader is required. Public `FillerRepairEngine` and real-UDM engine
 coverage remains in the repository-local suite under `src/dpl2/test/local`.
 All test doubles and UDM-compatible test data stay outside the migration
-payload. The production engine contains no snapshot builder or test
+payload. The runtime engine contains no snapshot builder or test
 conditional. Normal and ASan local builds pass with `-Wall -Wextra -Werror`.
 
 Future checker API or semantic changes must be recorded here before engine

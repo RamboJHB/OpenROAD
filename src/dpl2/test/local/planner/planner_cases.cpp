@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Repository-local unit tests for the UDM-free fillerRepair planner: Swap primitives,
-// test checker / candidate-provider protocol, and the
+// Repository-local unit tests for the database-free fillerRepair planner. The
+// test-only fake UDM supplies the exact final-checker wire identifiers for Swap
+// primitives, the checker/candidate-provider protocol, and the
 // placement coverage scanner. Each legacy case is registered as an individual
 // GoogleTest so it remains independently filterable and reportable.
 //
-// These cases and all their test doubles remain outside the production
+// These cases and all their test doubles remain outside the runtime
 // migration directory.
 
 #include <algorithm>
@@ -194,13 +195,13 @@ void testWireConversion()
   auto m1 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
   auto m2 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3));
 
-  const auto changes = fr::toFillerChanges({m1, m2});
+  const auto changes = fr::toFillerChanges({m1, m2}, f.design);
   EXPECT_EQ(changes.size(), 2u);
   // Deterministic order: sorted by instanceId.
-  EXPECT_EQ(changes[0].instanceId, 100);
-  EXPECT_EQ(changes[0].newMasterId, fillerMaster(4, kVt3));
-  EXPECT_EQ(changes[1].instanceId, 101);
-  EXPECT_EQ(changes[1].newMasterId, fillerMaster(2, kVt2));
+  EXPECT_EQ(fr::fillerRecordInstanceId(changes[0]), 100);
+  EXPECT_EQ(fr::fillerRecordNewMasterId(changes[0]), fillerMaster(4, kVt3));
+  EXPECT_EQ(fr::fillerRecordInstanceId(changes[1]), 101);
+  EXPECT_EQ(fr::fillerRecordNewMasterId(changes[1]), fillerMaster(2, kVt2));
 }
 
 void testPlannerDoesNotRunPlacementPrecheck()
@@ -217,7 +218,7 @@ void testPlannerDoesNotRunPlacementPrecheck()
   request.targetPlace = anchorPlace(f.design, f.anchor);
   const auto result = engine.repair(request);
 
-  // The production facade's public precheck owns the placement gate. The
+  // The engine's public precheck owns the placement gate. The
   // pure planner sees an empty implant snapshot and succeeds without ever
   // inspecting placement coverage.
   EXPECT_TRUE(result.hasSolution);
@@ -244,7 +245,7 @@ void testCandidateProvider()
   EXPECT_TRUE(!cellResult.diagnostics.empty());
 }
 
-// --- Fake-UDM candidate provider (production-boundary rehearsal) -------------
+// --- Fake-UDM candidate provider (runtime-boundary rehearsal) -------------
 //
 // Derivation must match the checker's buildMasters/parseLayerName path: VT is
 // the FAMILY of the implant layers under the master's shapes (VTS=0 VTL=1
@@ -365,7 +366,7 @@ void testUdmProviderCandidatesContract()
   EXPECT_TRUE(unknown.candidates.empty());
   EXPECT_TRUE(!unknown.diagnostics.empty());
 
-  // registerInto synced width/height/vt into the PlacementView.
+  // registerInto synced width/height/vt into the PlannerDataSource.
   const fr::MasterInfo* info = design.masterInfo(43);
   EXPECT_TRUE(info != nullptr);
   EXPECT_EQ(info->width, 4);
@@ -374,7 +375,7 @@ void testUdmProviderCandidatesContract()
 }
 
 // E2E smoke: the engine solves a single-swap case with the appendix-A
-// catalog driving both the PlacementView master table and the candidates.
+// catalog driving both the PlannerDataSource master table and the candidates.
 //
 // Vt Type: 0=VTS, 1=VTL, 3=VTUL  |  Widths: {2, 4}
 // cell type: 1=std cell, 0=filler  |  Format: (vt type, width, cell type)
@@ -411,7 +412,7 @@ void testEngineSolvesWithUdmProvider()
   anchor.rowId = 0;
   anchor.x = 0;
 
-  // Snapshot from the checker, as production does.
+  // Snapshot from the checker, as runtime does.
   fr::FakeImplantChecker snapshotChecker(design, rules);
   fr::OverlayCheckRequest snapReq;
   snapReq.requestId = 0;
@@ -431,8 +432,8 @@ void testEngineSolvesWithUdmProvider()
   const auto result = engine.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(result.changes[0].instanceId, 601);
-  EXPECT_EQ(result.changes[0].newMasterId, 21);  // w2 VTL
+  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 601);
+  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), 21);  // w2 VTL
 }
 
 // --- Fake checker protocol ---------------------------------------------------
@@ -478,7 +479,9 @@ void testCheckerInvalidIsolated()
   auto valid = baselineRequest(f.design, f.anchor, 1);
   auto invalid = baselineRequest(f.design, f.anchor, 2);
   // Duplicate instance in one overlay -> InvalidOverlay for this request only.
-  invalid.fillerChanges = {{101, fillerMaster(2, kVt2)}, {101, fillerMaster(2, kVt3)}};
+  invalid.fillerChanges = {
+      f.design.fillerCellRecord(101, fillerMaster(2, kVt2)),
+      f.design.fillerCellRecord(101, fillerMaster(2, kVt3))};
   auto valid2 = baselineRequest(f.design, f.anchor, 3);
 
   const auto results = checker.checkPlaceWithOverlays({valid, invalid, valid2});
@@ -510,7 +513,8 @@ void testCheckerIntraMsDetectAndClear()
 
   // Overlay: recolor 103 to VT1 -> single VT1 run [0,16) -> clean.
   auto overlay = baselineRequest(f.design, 100, 2);
-  overlay.fillerChanges = {{103, fillerMaster(2, kVt1)}};
+  overlay.fillerChanges = {
+      f.design.fillerCellRecord(103, fillerMaster(2, kVt1))};
   const auto fixed = checker.checkPlaceWithOverlay(overlay);
   EXPECT_TRUE(fixed.status == fr::CheckStatus::Checked);
   EXPECT_TRUE(fr::isRawCheckerSnapshotClean(fixed));
@@ -624,7 +628,8 @@ void testCheckerTargetOverrideSeedsViolation()
   // -> row1 becomes one VT1 run, anchor's VT2 shape has no partner -> clean.
   auto repaired = changed;
   repaired.requestId = 3;
-  repaired.fillerChanges = {{203, fillerMaster(2, kVt1)}};
+  repaired.fillerChanges = {
+      design.fillerCellRecord(203, fillerMaster(2, kVt1))};
   const auto fixed = checker.checkPlaceWithOverlay(repaired);
   EXPECT_TRUE(fr::isRawCheckerSnapshotClean(fixed));
 }
@@ -1307,7 +1312,7 @@ void testSwapGeneratorNoUsableMaster()
   EXPECT_TRUE(sawNoUsable);
 }
 
-class MixedValidityPlacementView : public fr::FakeDesign
+class MixedValidityPlannerDataSource : public fr::FakeDesign
 {
  public:
   fr::MasterCandidateResult getUsableMasterCandidates(
@@ -1324,7 +1329,7 @@ void testSwapgenRejectedCandidateDiag()
 {
   // Vt Type: 1 | Widths: {2} | cell type: 0=filler
   // Provider returns one valid width-2 and one invalid width-4 replacement.
-  MixedValidityPlacementView design;
+  MixedValidityPlannerDataSource design;
   design.setSiteWidth(1)
       .addMaster(fillerMaster(2, kVt1), 2, 1, true, kVt1)
       .addMaster(fillerMaster(2, kVt2), 2, 1, true, kVt2)
@@ -1762,8 +1767,8 @@ void testEngineSolvesSingleSwap()
   const auto result = engine.repair(sc.request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(result.changes[0].instanceId, 203);
-  EXPECT_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt1));
+  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 203);
+  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt1));
   // One baseline + at most one batch (clean overlay is the top-ranked
   // candidate; the final check is a cache hit, not a new request).
   EXPECT_TRUE(checker.requestCount() <= 1 + config.batchSize);
@@ -1774,8 +1779,8 @@ void testEngineSolvesSingleSwap()
   const auto result2 = engine2.repair(sc.request);
   EXPECT_TRUE(result2.hasSolution);
   EXPECT_EQ(result2.changes.size(), result.changes.size());
-  EXPECT_EQ(result2.changes[0].instanceId, result.changes[0].instanceId);
-  EXPECT_EQ(result2.changes[0].newMasterId, result.changes[0].newMasterId);
+  EXPECT_EQ(fr::fillerRecordInstanceId(result2.changes[0]), fr::fillerRecordInstanceId(result.changes[0]));
+  EXPECT_EQ(fr::fillerRecordNewMasterId(result2.changes[0]), fr::fillerRecordNewMasterId(result.changes[0]));
   EXPECT_EQ(checker2.requestCount(), checker.requestCount());
 }
 
@@ -1816,10 +1821,10 @@ void testEngineSolvesPairNonMonotone()
   const auto result = engine.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 2u);
-  EXPECT_EQ(result.changes[0].instanceId, 110);
-  EXPECT_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt2));
-  EXPECT_EQ(result.changes[1].instanceId, 111);
-  EXPECT_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt2));
+  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 110);
+  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt2));
+  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[1]), 111);
+  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[1]), fillerMaster(2, kVt2));
   // All size-1 candidates were evaluated and rejected before the pair won:
   // 6 swaps (3 fillers x 2 usable VTs) + baseline at least.
   EXPECT_TRUE(checker.requestCount() >= 7);
@@ -1832,7 +1837,7 @@ class RequiredChangesChecker : public fr::ImplantOverlayChecker
 {
  public:
   std::vector<fr::Violation> originals;
-  std::vector<fr::FillerChange> required;
+  dpl2::ipl::FillerChanges required;
 
   fr::CheckResult checkPlaceWithOverlay(
       const fr::OverlayCheckRequest& request) override
@@ -1844,13 +1849,12 @@ class RequiredChangesChecker : public fr::ImplantOverlayChecker
     const bool solved = std::all_of(
         required.begin(),
         required.end(),
-        [&](const fr::FillerChange& need) {
+        [&](const dpl2::FillerCellRecord& need) {
           return std::any_of(
               request.fillerChanges.begin(),
               request.fillerChanges.end(),
-              [&](const fr::FillerChange& change) {
-                return change.instanceId == need.instanceId
-                       && change.newMasterId == need.newMasterId;
+              [&](const dpl2::FillerCellRecord& change) {
+                return fr::sameFillerCellRecord(change, need);
               });
         });
     if (!solved) {
@@ -1954,8 +1958,9 @@ void testEngineComplexRankedPairFast()
   ComplexSearchFixture fixture = makeComplexSearchFixture();
   RequiredChangesChecker checker;
   checker.originals = fixture.request.violations;
-  checker.required = {{102, fillerMaster(2, kVt2)},
-                      {202, fillerMaster(2, kVt2)}};
+  checker.required = {
+      fixture.design.fillerCellRecord(102, fillerMaster(2, kVt2)),
+      fixture.design.fillerCellRecord(202, fillerMaster(2, kVt2))};
   fr::RepairConfig config;
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
@@ -1967,10 +1972,10 @@ void testEngineComplexRankedPairFast()
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 2u);
   if (result.changes.size() == 2) {
-    EXPECT_EQ(result.changes[0].instanceId, 102);
-    EXPECT_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt2));
-    EXPECT_EQ(result.changes[1].instanceId, 202);
-    EXPECT_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt2));
+    EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 102);
+    EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt2));
+    EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[1]), 202);
+    EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[1]), fillerMaster(2, kVt2));
   }
   // The correct fillers are the two highest-ranked direct participants and
   // VT2 is the anchor-follow first option. Even with many decoys, the engine
@@ -1992,10 +1997,10 @@ void testEngineComplexRankedPairFast()
   EXPECT_EQ(again.changes.size(), result.changes.size());
   if (again.changes.size() == result.changes.size()) {
     for (size_t index = 0; index < result.changes.size(); ++index) {
-      EXPECT_EQ(again.changes[index].instanceId,
-               result.changes[index].instanceId);
-      EXPECT_EQ(again.changes[index].newMasterId,
-               result.changes[index].newMasterId);
+      EXPECT_EQ(fr::fillerRecordInstanceId(again.changes[index]),
+               fr::fillerRecordInstanceId(result.changes[index]));
+      EXPECT_EQ(fr::fillerRecordNewMasterId(again.changes[index]),
+               fr::fillerRecordNewMasterId(result.changes[index]));
     }
   }
   EXPECT_EQ(checkerAgain.requestCount(), checker.requestCount());
@@ -2009,8 +2014,9 @@ void testEngineComplexThirdVtStillSucceeds()
   checker.originals = fixture.request.violations;
   // Both fillers require the domain-tail third VT. This is deliberately a
   // harder solution than anchor-follow and proves demotion does not prune it.
-  checker.required = {{102, fillerMaster(2, kVt3)},
-                      {202, fillerMaster(2, kVt3)}};
+  checker.required = {
+      fixture.design.fillerCellRecord(102, fillerMaster(2, kVt3)),
+      fixture.design.fillerCellRecord(202, fillerMaster(2, kVt3))};
   fr::RepairConfig config;
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
@@ -2022,10 +2028,10 @@ void testEngineComplexThirdVtStillSucceeds()
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 2u);
   if (result.changes.size() == 2) {
-    EXPECT_EQ(result.changes[0].instanceId, 102);
-    EXPECT_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt3));
-    EXPECT_EQ(result.changes[1].instanceId, 202);
-    EXPECT_EQ(result.changes[1].newMasterId, fillerMaster(2, kVt3));
+    EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 102);
+    EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt3));
+    EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[1]), 202);
+    EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[1]), fillerMaster(2, kVt3));
   }
   EXPECT_TRUE(checker.requestCount() <= 21);
   EXPECT_TRUE(checker.batchCount() <= 7);
@@ -2060,7 +2066,7 @@ void testEngineIgnoresUnrelatedHaloViolation()
   request.targetPlace = anchorPlace(design, 102);
   request.targetPlace.masterId = cellMaster(kVt2);
 
-  // Target-local initial snapshot derived from the checker (as production does,
+  // Target-local initial snapshot derived from the checker (as runtime does,
   // so signatures/layers match the baseline): a narrow guard around the anchor
   // captures only the anchor-caused MW and excludes the far VT3 pre-existing
   // violation at x=[2,3). That pre-existing MW then appears only in the engine's
@@ -2083,7 +2089,7 @@ void testEngineIgnoresUnrelatedHaloViolation()
   // being unrelated to any changed filler it must not veto the fix.
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(result.changes[0].instanceId, 203);
+  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 203);
 }
 
 // mwIntra=100 makes every run violate: no overlay can ever be clean. The
@@ -2140,7 +2146,7 @@ void testGateCacheSingleEvaluation()
   fr::FakeImplantChecker checker(sc.design, sc.rules);
   fr::RepairConfig config;
   fr::DebugLog log(verbose());
-  fr::OracleGate gate(checker, sc.request.targetPlace, sc.request.violations,
+  fr::OracleGate gate(sc.design, checker, sc.request.targetPlace, sc.request.violations,
                       1, 2, config, log);
 
   const auto normalized =
@@ -2234,19 +2240,18 @@ void testEngineOrderIndependentBatches()
   const auto result = engine.repair(sc.request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(result.changes[0].instanceId, 203);
-  EXPECT_EQ(result.changes[0].newMasterId, fillerMaster(2, kVt1));
+  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 203);
+  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt1));
 }
 
-bool sameChanges(const std::vector<fr::FillerChange>& a,
-                 const std::vector<fr::FillerChange>& b)
+bool sameChanges(const dpl2::ipl::FillerChanges& a,
+                 const dpl2::ipl::FillerChanges& b)
 {
   if (a.size() != b.size()) {
     return false;
   }
   for (size_t i = 0; i < a.size(); ++i) {
-    if (a[i].instanceId != b[i].instanceId
-        || a[i].newMasterId != b[i].newMasterId) {
+    if (!fr::sameFillerCellRecord(a[i], b[i])) {
       return false;
     }
   }
@@ -2365,9 +2370,10 @@ void testEngineNeverEditsGuardOnly()
   EXPECT_TRUE(!checker.requests.empty());
   for (const auto& request : checker.requests) {
     for (const auto& change : request.fillerChanges) {
-      EXPECT_TRUE(l0.containsEditable(change.instanceId));
-      EXPECT_TRUE(change.instanceId != 100);
-      EXPECT_TRUE(change.instanceId != 200);
+      const fr::InstanceId instanceId = fr::fillerRecordInstanceId(change);
+      EXPECT_TRUE(l0.containsEditable(instanceId));
+      EXPECT_TRUE(instanceId != 100);
+      EXPECT_TRUE(instanceId != 200);
     }
   }
 }
@@ -2380,18 +2386,22 @@ class ScriptedChecker : public fr::ImplantOverlayChecker
  public:
   std::map<std::string, std::vector<fr::Violation>> byKey;
 
-  static std::string keyOf(const std::vector<fr::FillerChange>& changes)
+  static std::string keyOf(const dpl2::ipl::FillerChanges& changes)
   {
-    std::vector<fr::FillerChange> sorted = changes;
+    dpl2::ipl::FillerChanges sorted = changes;
     std::sort(sorted.begin(), sorted.end(),
-              [](const fr::FillerChange& a, const fr::FillerChange& b) {
-                return a.instanceId != b.instanceId
-                           ? a.instanceId < b.instanceId
-                           : a.newMasterId < b.newMasterId;
+              [](const dpl2::FillerCellRecord& a, const dpl2::FillerCellRecord& b) {
+                const fr::InstanceId aId = fr::fillerRecordInstanceId(a);
+                const fr::InstanceId bId = fr::fillerRecordInstanceId(b);
+                return aId != bId
+                           ? aId < bId
+                           : fr::fillerRecordNewMasterId(a)
+                                 < fr::fillerRecordNewMasterId(b);
               });
     std::string key;
     for (const auto& c : sorted) {
-      key += std::to_string(c.instanceId) + ">" + std::to_string(c.newMasterId) + "|";
+      key += std::to_string(fr::fillerRecordInstanceId(c)) + ">"
+             + std::to_string(fr::fillerRecordNewMasterId(c)) + "|";
     }
     return key;
   }
@@ -2502,9 +2512,9 @@ void testGateDeltaClassificationBranches()
 
   ScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] = {original};
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o1))] = {newInWindow};
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o2))] = {relatedInHalo};
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o3))] = {unrelatedInHalo};
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o1, design))] = {newInWindow};
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o2, design))] = {relatedInHalo};
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o3, design))] = {unrelatedInHalo};
 
   fr::RepairWindow window;
   window.rows = {0};
@@ -2515,7 +2525,7 @@ void testGateDeltaClassificationBranches()
   const std::vector<fr::Violation> originals = {original};
   fr::RepairConfig config;
   fr::DebugLog log(verbose());
-  fr::OracleGate gate(checker, anchor, originals, /*siteWidth=*/1,
+  fr::OracleGate gate(design, checker, anchor, originals, /*siteWidth=*/1,
                       /*ruleDistance=*/2, config, log);
 
   int budget = 100;
@@ -2586,7 +2596,7 @@ void testGateRejectsUnexplainedIllegal()
   const std::vector<fr::Violation> originals = {original};
   fr::RepairConfig config;
   fr::DebugLog log(verbose());
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));
@@ -2618,7 +2628,7 @@ void testGateBaselineMismatchAbortsSearch()
   const std::vector<fr::Violation> originals = {original};
   fr::RepairConfig config;
   fr::DebugLog log(verbose());
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(!gate.runBaseline(window, budget));  // consistency gate fails
@@ -2646,7 +2656,7 @@ void testGateMultisetNewViolationNotAbsorbed()
   const fr::Overlay o = {*fr::makeSwap(design, 501, fillerMaster(2, kVt2))};
   ScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] = {O, H};  // baseline: original + one H
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o))] = {H, H};  // O gone, two H
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o, design))] = {H, H};  // O gone, two H
 
   fr::RepairWindow window;
   window.rows = {0};
@@ -2656,7 +2666,7 @@ void testGateMultisetNewViolationNotAbsorbed()
   const std::vector<fr::Violation> originals = {O};
   fr::RepairConfig config;
   fr::DebugLog log(verbose());
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));  // H is out-of-window -> baseline consistent
@@ -2681,7 +2691,7 @@ void testGatePerViolationRuleDistance()
   const fr::Overlay o = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
   ScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] = {O};
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o))] = {N};  // O gone, N appears
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o, design))] = {N};  // O gone, N appears
 
   fr::RepairWindow window;
   window.rows = {0};
@@ -2693,7 +2703,7 @@ void testGatePerViolationRuleDistance()
   fr::DebugLog log(verbose());
   // Original rule distance is small (2); only max(2, N.requiredValue=6)=6 makes
   // N (5 away) count as related.
-  fr::OracleGate gate(checker, anchor, originals, 1, /*ruleDistance=*/2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, /*ruleDistance=*/2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));
@@ -2789,8 +2799,8 @@ class AdaptiveSolutionChecker : public fr::ImplantOverlayChecker
     const bool solved = std::any_of(
         request.fillerChanges.begin(),
         request.fillerChanges.end(),
-        [&](const fr::FillerChange& change) {
-          return change.instanceId == solutionInstance;
+        [&](const dpl2::FillerCellRecord& change) {
+          return fr::fillerRecordInstanceId(change) == solutionInstance;
         });
     if (!solved) {
       result.violations = {original};
@@ -2843,7 +2853,7 @@ void testEngineAdaptiveSolvesBeyondRing()
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
   if (!result.changes.empty()) {
-    EXPECT_EQ(result.changes.front().instanceId, 141);
+    EXPECT_EQ(fr::fillerRecordInstanceId(result.changes.front()), 141);
   }
   bool sawAdaptiveSolution = false;
   for (const auto& diagnostic : result.diagnostics) {
@@ -2894,7 +2904,7 @@ void testEngineAdaptiveL1FindsFarFiller()
   const fr::FillerRepairResult result = engine.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(result.changes.front().instanceId, 141);
+  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes.front()), 141);
   bool sawAdaptiveSolution = false;
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
     sawAdaptiveSolution |= diagnostic.code == "Solution"
@@ -3074,6 +3084,7 @@ void testEngineDefinitiveReflectsLastWindow()
 
 void testGateBaselineUnexpectedInWindowAborts()
 {
+  fr::FakeDesign design;
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   const fr::Violation extra = makeViolation(
@@ -3090,7 +3101,7 @@ void testGateBaselineUnexpectedInWindowAborts()
   fr::DebugLog log(verbose());
   fr::TargetPlace anchor{};
   const std::vector<fr::Violation> originals = {original};
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(!gate.runBaseline(window, budget));
@@ -3109,7 +3120,7 @@ void testGateBaselineHaloExtraAllowed()
 
   ScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] = {original, haloExtra};
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay))] = {};
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay, design))] = {};
 
   fr::RepairWindow window;
   window.rows = {0};
@@ -3119,7 +3130,7 @@ void testGateBaselineHaloExtraAllowed()
   fr::DebugLog log(verbose());
   fr::TargetPlace anchor{};
   const std::vector<fr::Violation> originals = {original};
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));
@@ -3130,6 +3141,7 @@ void testGateBaselineHaloExtraAllowed()
 
 void testGateBaselineOutsideGuardOriginalSkipped()
 {
+  fr::FakeDesign design;
   const fr::Violation inGuard = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   const fr::Violation outsideGuard = makeViolation(
@@ -3146,7 +3158,7 @@ void testGateBaselineOutsideGuardOriginalSkipped()
   fr::DebugLog log(verbose());
   fr::TargetPlace anchor{};
   const std::vector<fr::Violation> originals = {inGuard, outsideGuard};
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));
@@ -3163,7 +3175,7 @@ void testGateResidualOneToOne()
 
   ScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] = {original, original};
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay))] = {original};
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay, design))] = {original};
 
   fr::RepairWindow window;
   window.rows = {0};
@@ -3173,7 +3185,7 @@ void testGateResidualOneToOne()
   fr::DebugLog log(verbose());
   fr::TargetPlace anchor{};
   const std::vector<fr::Violation> originals = {original, original};
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));
@@ -3195,7 +3207,7 @@ void testGateBatchExtraResultRejected()
   checker.extraBatchResult = true;
   checker.byKey[ScriptedChecker::keyOf({})] =
       ResultScriptedChecker::checked({original});
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay))] =
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay, design))] =
       ResultScriptedChecker::checked();
 
   fr::RepairWindow window;
@@ -3206,7 +3218,7 @@ void testGateBatchExtraResultRejected()
   fr::DebugLog log(verbose());
   fr::TargetPlace anchor{};
   const std::vector<fr::Violation> originals = {original};
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));
@@ -3217,6 +3229,7 @@ void testGateBatchExtraResultRejected()
 
 void testGateSingleWrongEchoOnBaseline()
 {
+  fr::FakeDesign design;
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   ResultScriptedChecker checker;
@@ -3232,7 +3245,7 @@ void testGateSingleWrongEchoOnBaseline()
   fr::DebugLog log(verbose());
   fr::TargetPlace anchor{};
   const std::vector<fr::Violation> originals = {original};
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(!gate.runBaseline(window, budget));
@@ -3257,8 +3270,8 @@ void testGateStatusNotCheckedCarriesOn()
   ResultScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] =
       ResultScriptedChecker::checked({original});
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(bad))] = invalid;
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(clean))] =
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(bad, design))] = invalid;
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(clean, design))] =
       ResultScriptedChecker::checked();
 
   fr::RepairWindow window;
@@ -3270,7 +3283,7 @@ void testGateStatusNotCheckedCarriesOn()
   fr::DebugLog log(verbose());
   fr::TargetPlace anchor{};
   const std::vector<fr::Violation> originals = {original};
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));
@@ -3294,7 +3307,7 @@ void testGateFatalDiagMakesUnusable()
   ResultScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] =
       ResultScriptedChecker::checked({original});
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay))] = fatal;
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay, design))] = fatal;
 
   fr::RepairWindow window;
   window.rows = {0};
@@ -3304,7 +3317,7 @@ void testGateFatalDiagMakesUnusable()
   fr::DebugLog log(verbose());
   fr::TargetPlace anchor{};
   const std::vector<fr::Violation> originals = {original};
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));
@@ -3326,7 +3339,7 @@ void testGateNewViolationNoRowsGoesHalo()
 
   ScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] = {original};
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay))] = {noRows};
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay, design))] = {noRows};
 
   fr::RepairWindow window;
   window.rows = {0};
@@ -3336,7 +3349,7 @@ void testGateNewViolationNoRowsGoesHalo()
   fr::DebugLog log(verbose());
   fr::TargetPlace anchor{};
   const std::vector<fr::Violation> originals = {original};
-  fr::OracleGate gate(checker, anchor, originals, 1, 2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, 1, 2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));
@@ -3620,8 +3633,8 @@ void testEngineUserGridMwMs1()
   // newInWindow=0, relatedInHalo=0.
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(result.changes[0].instanceId, 2012);
-  EXPECT_EQ(result.changes[0].newMasterId, grid::filler(4, 0));
+  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 2012);
+  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), grid::filler(4, 0));
 
   // Same input -> identical result (planner determinism).
   fr::FakeImplantChecker checker2(design, rules);
@@ -3629,7 +3642,7 @@ void testEngineUserGridMwMs1()
   const auto result2 = engine2.repair(request);
   EXPECT_TRUE(result2.hasSolution);
   EXPECT_EQ(result2.changes.size(), 1u);
-  EXPECT_EQ(result2.changes[0].instanceId, 2012);
+  EXPECT_EQ(fr::fillerRecordInstanceId(result2.changes[0]), 2012);
 }
 
 void registerPlannerTests()

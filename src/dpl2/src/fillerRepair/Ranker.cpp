@@ -19,13 +19,13 @@ namespace {
 // only through the single facing band pair across the row boundary
 // (checker: activeKindByBoundary) -- one band vote.
 // Tie breaks toward the smaller VT id (deterministic).
-VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
+VtId neighborMajorityVt(const PlannerDataSource& view, const PlacedInstance& inst)
 {
   const XInterval span = instanceSpan(view, inst);
   std::map<VtId, int> votes;
 
   // Defensive: an instance with a missing master must not crash the vote
-  // (upstream validation makes it unreachable in production, but the ranker
+  // (upstream validation makes it unreachable in runtime, but the ranker
   // must not rely on two layers above it).
   for (const PlacedInstance& other : view.instancesInRow(inst.rowId)) {
     if (other.id == inst.id) {
@@ -99,7 +99,7 @@ std::vector<FillerDomain> rankFillers(
     const TargetPlace& anchor,
     const std::vector<NormalizedViolation>& violations,
     const RepairWindow& window,
-    const PlacementView& view,
+    const PlannerDataSource& view,
     const DebugLog& log)
 {
   const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);

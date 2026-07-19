@@ -2,9 +2,9 @@
 
 Updated: 2026-07-19.
 
-`FillerRepairEngine` is the only production entry. It borrows the initialized
-Grid/Network already owned by DePlace and privately owns only its final
-checker/view, then exposes a placement-only precheck plus pre-commit filler
+`FillerRepairEngine` is the only runtime entry. It borrows the initialized
+Grid/Network already owned by DePlace and privately owns its final checker and
+immutable planner snapshot, then exposes a placement-only precheck plus pre-commit filler
 repair. It never mutates UDM. The destination supplies the existing
 infrastructure/checker source types; only this directory is migrated and none
 of those supplied sources is patched.
@@ -30,27 +30,27 @@ changes. A clean snapshot succeeds with empty changes; otherwise the internal
 planner searches same-position/same-size filler swaps. Commit remains with
 opto/infrastructure. Configured filler masters are registered in the existing
 Network during init. An uninstantiated target `newMaster` is registered lazily
-by repair, followed by a private checker/view rebuild; this changes only the
+by repair, followed by a private checker/snapshot rebuild; this changes only the
 in-memory master registry, not UDM placement.
 
 ## Main files
 
 | Path | Purpose |
 |---|---|
-| `FillerRepairEngine.h/.cpp` | production API; borrows Grid/Network and owns final checker, view/oracle, precheck and repair |
-| `PlacementPrecheck.h/.cpp` | UDM-free gap/overlap coverage sweep used by the public precheck facade and portable boundary tests |
+| `FillerRepairEngine.h/.cpp` | only external API; its `Impl` owns final checker, planner snapshot/oracle, precheck and repair |
+| `PlacementPrecheck.h/.cpp` | UDM-free gap/overlap coverage sweep used by the public precheck API and portable boundary tests |
 | `FillerRepairPlanner.h/.cpp` | internal deterministic search pipeline and debug transcript |
 | `OracleGate.h/.cpp` | internal checker abstraction, batching, cache and baseline-delta gate |
-| `PlacementView.h/.cpp` | planner-only read view and candidate filter |
+| `PlannerDataSource.h/.cpp` | small planner-only data contract and candidate filter; implemented privately by `FillerRepairEngine::Impl` |
 | `Types.h` | planner-internal IDs, geometry and request/result types |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
-| `sources.cmake` | source-of-truth lists for planner, production and portable E2E |
+| `sources.cmake` | source-of-truth lists for planner, runtime and portable E2E |
 | `test/FillerRepairCheckerE2ETest.cpp` | 33 portable real-checker, planner-to-checker and internal precheck cases |
 | `test/CMakeLists.txt` | standalone destination E2E target |
 
 ## Debug transcript
 
-Debug output is disabled by default. Production callers may call
+Debug output is disabled by default. Runtime callers may call
 `engine.setDebugLogging(true)` before or after `init()`; planner tests use
 `FR_VERBOSE=1` on the unit-test executable. The deterministic transcript is printed as
 `[fr][stage]` lines and records the request/configuration, normalized
@@ -59,11 +59,11 @@ subset counts, checker batches/cache/budget, best non-clean candidate and the
 final decision. Logging never changes search order or acceptance.
 
 Planner `OverlayCheckRequest`, `CheckStatus` and requestId stay internal to
-`OracleGate`; the public API uses final checker `CheckResult`, `Diagnostic`,
-`FillerChanges` and `FillerCellRecord`. Destination builds compile
-`DPL2_FILLER_REPAIR_PRODUCTION_SOURCES` from `sources.cmake` -- never a
+`OracleGate`; their change payload and the public result are both the exact
+final-checker `ipl::FillerChanges`/`FillerCellRecord` wire. Destination builds compile
+`DPL2_FILLER_REPAIR_SOURCES` from `sources.cmake` -- never a
 hand-copied file list. Migration steps live in `src/dpl2/HandOff.md`.
-The facade consumes only borrowed Grid/Network pointers and the idempotent
+The engine consumes only borrowed Grid/Network pointers and the idempotent
 `Network::addMaster(PhysLibCell, Grid)` registration API; there is no
 repair-specific importer.
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Historical repository-local production-facade regression. Fixture
+// Historical repository-local engine regression. Fixture
 // construction uses the adjacent fake-UDM provider; this suite is deliberately
 // outside the migration payload.
 
@@ -103,10 +103,10 @@ class ProviderObjects
   std::unique_ptr<frt::E2ETestInfrastructure> infrastructure_;
 };
 
-class ProductionHarness
+class EngineHarness
 {
  public:
-  explicit ProductionHarness(const frt::DesignSetup& setup)
+  explicit EngineHarness(const frt::DesignSetup& setup)
       : objects_(setup)
   {
     if (!objects_.hasDesign() || !objects_.hasInfrastructure()) {
@@ -132,16 +132,16 @@ class ProductionHarness
   bool engine_ready_ = false;
 };
 
-class FillerRepairProductionE2E
+class FillerRepairEngineE2E
     : public ::testing::TestWithParam<LayoutCase>
 {
 };
 
 }  // namespace
 
-TEST_P(FillerRepairProductionE2E, CleanPlacementPrecheck)
+TEST_P(FillerRepairEngineE2E, CleanPlacementPrecheck)
 {
-  ProductionHarness harness(GetParam().setup);
+  EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   ASSERT_GE(harness.design().standardRowCount(), frt::kStandardRows);
   const frt::PhysicalSnapshot before = harness.design().snapshot();
@@ -151,9 +151,9 @@ TEST_P(FillerRepairProductionE2E, CleanPlacementPrecheck)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E, GapPlacementPrecheck)
+TEST_P(FillerRepairEngineE2E, GapPlacementPrecheck)
 {
-  ProductionHarness harness(GetParam().setup);
+  EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   harness.design().moveCell(
       frt::CellRole::Row0TailFiller,
@@ -166,9 +166,9 @@ TEST_P(FillerRepairProductionE2E, GapPlacementPrecheck)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E, OverlapPlacementPrecheck)
+TEST_P(FillerRepairEngineE2E, OverlapPlacementPrecheck)
 {
-  ProductionHarness harness(GetParam().setup);
+  EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   harness.design().moveCell(frt::CellRole::Row1TailFiller,
                             harness.design().rowOriginX(1) + 17,
@@ -180,11 +180,11 @@ TEST_P(FillerRepairProductionE2E, OverlapPlacementPrecheck)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E, GapInsideHardBlockageIsIgnored)
+TEST_P(FillerRepairEngineE2E, GapInsideHardBlockageIsIgnored)
 {
   frt::DesignSetup setup = GetParam().setup;
   setup.row0TailHardBlockage = true;
-  ProductionHarness harness(setup);
+  EngineHarness harness(setup);
   ASSERT_TRUE(harness.engineReady());
   harness.design().moveCell(
       frt::CellRole::Row0TailFiller,
@@ -197,11 +197,11 @@ TEST_P(FillerRepairProductionE2E, GapInsideHardBlockageIsIgnored)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E, GapInsideInstanceHaloIsIgnored)
+TEST_P(FillerRepairEngineE2E, GapInsideInstanceHaloIsIgnored)
 {
   frt::DesignSetup setup = GetParam().setup;
   setup.row0TailHaloWidth = 2;
-  ProductionHarness harness(setup);
+  EngineHarness harness(setup);
   ASSERT_TRUE(harness.engineReady());
   harness.design().moveCell(
       frt::CellRole::Row0TailFiller,
@@ -214,11 +214,11 @@ TEST_P(FillerRepairProductionE2E, GapInsideInstanceHaloIsIgnored)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E, GapInsideLegalSegmentStillFails)
+TEST_P(FillerRepairEngineE2E, GapInsideLegalSegmentStillFails)
 {
   frt::DesignSetup setup = GetParam().setup;
   setup.row0TailHardBlockage = true;
-  ProductionHarness harness(setup);
+  EngineHarness harness(setup);
   ASSERT_TRUE(harness.engineReady());
   harness.design().moveCell(
       frt::CellRole::Row0ThirdCell,
@@ -231,9 +231,9 @@ TEST_P(FillerRepairProductionE2E, GapInsideLegalSegmentStillFails)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E, RepeatedExternalPrecheckIsStable)
+TEST_P(FillerRepairEngineE2E, RepeatedExternalPrecheckIsStable)
 {
-  ProductionHarness harness(GetParam().setup);
+  EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   const frt::PhysicalSnapshot before = harness.design().snapshot();
   const dpl2::ipl::CheckResult first = harness.engine().precheck();
@@ -244,9 +244,9 @@ TEST_P(FillerRepairProductionE2E, RepeatedExternalPrecheckIsStable)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E, OptoStyleExternalGateBlocksMutation)
+TEST_P(FillerRepairEngineE2E, OptoStyleExternalGateBlocksMutation)
 {
-  ProductionHarness harness(GetParam().setup);
+  EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   harness.design().moveCell(frt::CellRole::Row0TailFiller,
                             harness.design().rowOriginX(0) + frt::kRowSites,
@@ -259,9 +259,9 @@ TEST_P(FillerRepairProductionE2E, OptoStyleExternalGateBlocksMutation)
   EXPECT_EQ(harness.design().snapshot(), beforeGate);
 }
 
-TEST_P(FillerRepairProductionE2E, ExternalPrecheckReportsGapAndOverlapTogether)
+TEST_P(FillerRepairEngineE2E, ExternalPrecheckReportsGapAndOverlapTogether)
 {
-  ProductionHarness harness(GetParam().setup);
+  EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   harness.design().moveCell(frt::CellRole::Row0TailFiller,
                             harness.design().rowOriginX(0) + frt::kRowSites,
@@ -277,9 +277,9 @@ TEST_P(FillerRepairProductionE2E, ExternalPrecheckReportsGapAndOverlapTogether)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E, RepairDoesNotImplicitlyCallExternalPrecheck)
+TEST_P(FillerRepairEngineE2E, RepairDoesNotImplicitlyCallExternalPrecheck)
 {
-  ProductionHarness harness(GetParam().setup);
+  EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   harness.design().moveCell(frt::CellRole::Row0TailFiller,
                             harness.design().rowOriginX(0) + frt::kRowSites,
@@ -293,9 +293,9 @@ TEST_P(FillerRepairProductionE2E, RepairDoesNotImplicitlyCallExternalPrecheck)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E, CleanTargetOverlayNeedsNoFillerChange)
+TEST_P(FillerRepairEngineE2E, CleanTargetOverlayReturnsNoChanges)
 {
-  ProductionHarness harness(GetParam().setup);
+  EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   const auto before = harness.design().snapshot();
   const auto outcome = harness.engine().repair(
@@ -306,9 +306,9 @@ TEST_P(FillerRepairProductionE2E, CleanTargetOverlayNeedsNoFillerChange)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E, ViolatingTargetOverlayFindsFillerSwap)
+TEST_P(FillerRepairEngineE2E, ViolatingTargetOverlayFindsFillerSwap)
 {
-  ProductionHarness harness(GetParam().setup);
+  EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   const auto& targetMaster
       = harness.design().master(frt::MasterRole::TargetNew);
@@ -331,10 +331,10 @@ TEST_P(FillerRepairProductionE2E, ViolatingTargetOverlayFindsFillerSwap)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E,
+TEST_P(FillerRepairEngineE2E,
        RepeatedRepairIsDeterministicAndNonMutating)
 {
-  ProductionHarness harness(GetParam().setup);
+  EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   const auto before = harness.design().snapshot();
   const auto& newMaster = harness.design().master(frt::MasterRole::TargetNew);
@@ -347,12 +347,12 @@ TEST_P(FillerRepairProductionE2E,
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairProductionE2E,
+TEST_P(FillerRepairEngineE2E,
        PersistentCheckerDiagnosticsDoNotBlockRepair)
 {
   frt::DesignSetup setup = GetParam().setup;
   setup.unusedRuleLayers = true;
-  ProductionHarness harness(setup);
+  EngineHarness harness(setup);
   ASSERT_TRUE(harness.engineReady());
   const auto outcome = harness.engine().repair(
       harness.design().cell(frt::CellRole::Target),
@@ -364,7 +364,7 @@ TEST_P(FillerRepairProductionE2E,
                 .getLibCellId());
 }
 
-TEST_P(FillerRepairProductionE2E, ConfiguredMastersAreRegisteredByEngine)
+TEST_P(FillerRepairEngineE2E, ConfiguredMastersAreRegisteredByEngine)
 {
   ProviderObjects objects(GetParam().setup);
   ASSERT_TRUE(objects.hasDesign());
@@ -381,7 +381,7 @@ TEST_P(FillerRepairProductionE2E, ConfiguredMastersAreRegisteredByEngine)
   EXPECT_GE(objects.infrastructure().network()->getMasterId(extraId), 0);
 }
 
-TEST_P(FillerRepairProductionE2E, EmptyFillerAllowListErrorsOut)
+TEST_P(FillerRepairEngineE2E, EmptyFillerAllowListErrorsOut)
 {
   ProviderObjects objects(GetParam().setup);
   ASSERT_TRUE(objects.hasDesign());
@@ -395,7 +395,7 @@ TEST_P(FillerRepairProductionE2E, EmptyFillerAllowListErrorsOut)
   EXPECT_TRUE(hasDiagnostic(result.diagnostics, "empty_filler_allow_list"));
 }
 
-TEST_P(FillerRepairProductionE2E, MissingInfrastructureErrorsOut)
+TEST_P(FillerRepairEngineE2E, MissingInfrastructureErrorsOut)
 {
   ProviderObjects objects(GetParam().setup, false);
   ASSERT_TRUE(objects.hasDesign());
@@ -408,7 +408,7 @@ TEST_P(FillerRepairProductionE2E, MissingInfrastructureErrorsOut)
   EXPECT_TRUE(hasDiagnostic(result.diagnostics, "missing_infrastructure"));
 }
 
-TEST_P(FillerRepairProductionE2E, ActiveDesignMismatchFailsInit)
+TEST_P(FillerRepairEngineE2E, ActiveDesignMismatchFailsInit)
 {
   auto provider = frt::makeE2ETestProvider();
   ASSERT_NE(provider, nullptr);
@@ -430,7 +430,7 @@ TEST_P(FillerRepairProductionE2E, ActiveDesignMismatchFailsInit)
   EXPECT_TRUE(hasDiagnostic(result.diagnostics, "active_design_mismatch"));
 }
 
-TEST_P(FillerRepairProductionE2E, FailedInitFailsClosed)
+TEST_P(FillerRepairEngineE2E, FailedInitFailsClosed)
 {
   ProviderObjects objects(GetParam().setup);
   ASSERT_TRUE(objects.hasDesign());
@@ -457,7 +457,7 @@ TEST_P(FillerRepairProductionE2E, FailedInitFailsClosed)
   expectClosed("after failed init");
 }
 
-TEST_P(FillerRepairProductionE2E, EngineUsesOneInitialization)
+TEST_P(FillerRepairEngineE2E, EngineUsesOneInitialization)
 {
   ProviderObjects objects(GetParam().setup);
   ASSERT_TRUE(objects.hasDesign());
@@ -473,7 +473,7 @@ TEST_P(FillerRepairProductionE2E, EngineUsesOneInitialization)
 
 INSTANTIATE_TEST_SUITE_P(
     FiveRowLayouts,
-    FillerRepairProductionE2E,
+    FillerRepairEngineE2E,
     ::testing::Values(canonicalLayout(), shiftedLayout(), farShiftedLayout()),
     [](const ::testing::TestParamInfo<LayoutCase>& info) {
       return info.param.name;

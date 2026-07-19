@@ -32,7 +32,7 @@
 #include <vector>
 
 #include "Log.h"
-#include "PlacementView.h"
+#include "PlannerDataSource.h"
 #include "Signature.h"
 #include "Swap.h"
 #include "Window.h"
@@ -52,7 +52,7 @@ std::vector<FillerDomain> rankFillers(
     const TargetPlace& anchor,
     const std::vector<NormalizedViolation>& violations,
     const RepairWindow& window,
-    const PlacementView& view,
+    const PlannerDataSource& view,
     const DebugLog& log);
 
 }  // namespace dpl2::fillerRepair

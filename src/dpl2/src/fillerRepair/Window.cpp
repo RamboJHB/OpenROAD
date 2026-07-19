@@ -13,7 +13,7 @@ namespace {
 // Instances of one row overlapping `x`, plus up to `ring` whole instances
 // beyond each side. This is the shared "cell ring" primitive for guard
 // regions and the unfixable fast check.
-std::vector<PlacedInstance> instancesInRing(const PlacementView& view,
+std::vector<PlacedInstance> instancesInRing(const PlannerDataSource& view,
                                             RowId rowId,
                                             const XInterval& x,
                                             int ring)
@@ -59,7 +59,7 @@ std::vector<PlacedInstance> instancesInRing(const PlacementView& view,
   return result;
 }
 
-std::vector<RowId> clampRows(const PlacementView& view, RowId lo, RowId hi)
+std::vector<RowId> clampRows(const PlannerDataSource& view, RowId lo, RowId hi)
 {
   std::vector<RowId> result;
   for (const RowId row : view.rows()) {
@@ -75,7 +75,7 @@ RepairWindow finalizeWindow(int level,
                             const std::set<InstanceId>& editable,
                             const std::set<InstanceId>& bridge,
                             XInterval x,
-                            const PlacementView& view,
+                            const PlannerDataSource& view,
                             const DebugLog& log)
 {
   RepairWindow window;
@@ -124,7 +124,7 @@ bool RepairWindow::containsEditable(InstanceId id) const
 RepairWindow buildWindow(int level,
                          const TargetPlace& anchor,
                          const std::vector<NormalizedViolation>& violations,
-                         const PlacementView& view,
+                         const PlannerDataSource& view,
                          DbCoord ruleDistance,
                          const DebugLog& log)
 {
@@ -192,7 +192,7 @@ RepairWindow buildWindow(int level,
 RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                   const TargetPlace& anchor,
                                   const std::vector<Violation>& blocking,
-                                  const PlacementView& view,
+                                  const PlannerDataSource& view,
                                   int fillersPerRow,
                                   const DebugLog& log)
 {

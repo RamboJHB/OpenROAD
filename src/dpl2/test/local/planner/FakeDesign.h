@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// In-memory PlacementView for unit tests.
+// In-memory PlannerDataSource for unit tests.
 //
 // A FakeDesign is built fluently:
 //   design.setSiteWidth(1)
@@ -11,10 +11,10 @@
 // It is deliberately dumb: no legality checks on construction, so tests can
 // build broken layouts (gaps, overlaps) for the pre-check cases.
 //
-// PlacementView's reference-returning queries are served from caches that
-// every mutator invalidates and the next query rebuilds. Unlike production
+// PlannerDataSource's reference-returning queries are served from caches that
+// every mutator invalidates and the next query rebuilds. Unlike runtime
 // views this object stays mutable, so it is SINGLE-THREADED by design
-// (tests only) -- the thread-safety contract lives with the production engine.
+// (tests only) -- the thread-safety contract lives with the runtime engine.
 
 #pragma once
 
@@ -23,11 +23,11 @@
 #include <utility>
 #include <vector>
 
-#include "fillerRepair/PlacementView.h"
+#include "fillerRepair/PlannerDataSource.h"
 
 namespace dpl2::fillerRepair {
 
-class FakeDesign : public PlacementView
+class FakeDesign : public PlannerDataSource
 {
  public:
   FakeDesign& setSiteWidth(DbCoord w)
@@ -76,18 +76,12 @@ class FakeDesign : public PlacementView
     return *this;
   }
 
-  // PlacementView -----------------------------------------------------------
+  // PlannerDataSource -----------------------------------------------------------
 
   const std::vector<RowId>& rows() const override
   {
     refreshCaches();
     return row_list_;
-  }
-
-  XInterval rowLegalSpan(RowId rowId) const override
-  {
-    const auto it = row_spans_.find(rowId);
-    return it != row_spans_.end() ? it->second : XInterval{};
   }
 
   DbCoord siteWidth() const override { return site_width_; }
@@ -115,6 +109,20 @@ class FakeDesign : public PlacementView
   {
     refreshCaches();
     return filler_master_list_;
+  }
+
+  FillerCellRecord fillerCellRecord(InstanceId instanceId,
+                                    MasterId newMasterId) const override
+  {
+    const PlacedInstance* placed = instance(instanceId);
+    const MasterId originalMaster
+        = placed != nullptr ? placed->masterId : MasterId{};
+    return FillerCellRecord{OpType::Replace,
+                            eUNL::LeafCellID(0, instanceId),
+                            eUTL::UvDist(placed != nullptr ? placed->x : 0),
+                            eUTL::UvDist(placed != nullptr ? placed->rowId : 0),
+                            eLIB::LibCellID(0, originalMaster),
+                            eLIB::LibCellID(0, newMasterId)};
   }
 
  private:

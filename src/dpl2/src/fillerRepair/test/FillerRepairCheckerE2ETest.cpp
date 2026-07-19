@@ -458,10 +458,10 @@ PhysOrientation toCheckerOrient(fr::Orient orientation)
 // checker's official test helper.  It deliberately implements only the pure
 // planner boundary: no UDM session, DEF/LEF reader, or database mutation is
 // required to exercise planner -> overlay checker end to end.
-class PortablePlacementView final : public fr::PlacementView
+class PortablePlannerDataSource final : public fr::PlannerDataSource
 {
  public:
-  explicit PortablePlacementView(
+  explicit PortablePlannerDataSource(
       const ImplantInput& input,
       std::optional<std::vector<fr::MasterId>> configuredFillers = std::nullopt)
       : site_width_(input.siteWidth)
@@ -527,12 +527,6 @@ class PortablePlacementView final : public fr::PlacementView
 
   const std::vector<fr::RowId>& rows() const override { return rows_; }
 
-  fr::XInterval rowLegalSpan(fr::RowId rowId) const override
-  {
-    const auto found = row_spans_.find(rowId);
-    return found == row_spans_.end() ? fr::XInterval{} : found->second;
-  }
-
   fr::DbCoord siteWidth() const override { return site_width_; }
 
   const std::vector<fr::PlacedInstance>& instancesInRow(
@@ -559,6 +553,23 @@ class PortablePlacementView final : public fr::PlacementView
     return filler_master_ids_;
   }
 
+  FillerCellRecord fillerCellRecord(fr::InstanceId instanceId,
+                                    fr::MasterId newMasterId) const override
+  {
+    const fr::PlacedInstance* placed = instance(instanceId);
+    if (placed == nullptr) {
+      return {};
+    }
+    return FillerCellRecord{
+        OpType::Replace,
+        leafCellId(placed->rowId,
+                   static_cast<ColId>(placed->x / siteWidth())),
+        UvDist(placed->x),
+        UvDist(placed->rowId * ROW_HEIGHT),
+        libCellId(placed->masterId),
+        libCellId(newMasterId)};
+  }
+
  private:
   fr::DbCoord site_width_ = 0;
   std::vector<fr::RowId> rows_;
@@ -572,7 +583,7 @@ class PortablePlacementView final : public fr::PlacementView
 class PortableCheckerOracle final : public fr::ImplantOverlayChecker
 {
  public:
-  PortableCheckerOracle(const PortablePlacementView& view,
+  PortableCheckerOracle(const PortablePlannerDataSource& view,
                         const ImplantLayerChecker& checker)
       : view_(view), checker_(checker)
   {
@@ -598,23 +609,7 @@ class PortableCheckerOracle final : public fr::ImplantOverlayChecker
     std::vector<FillerChanges> changes;
     changes.reserve(requests.size());
     for (const fr::OverlayCheckRequest& request : requests) {
-      FillerChanges candidate;
-      candidate.reserve(request.fillerChanges.size());
-      for (const fr::FillerChange& change : request.fillerChanges) {
-        const fr::PlacedInstance* instance = view_.instance(change.instanceId);
-        if (instance == nullptr) {
-          continue;
-        }
-        candidate.push_back(FillerCellRecord{
-            OpType::Replace,
-            leafCellId(instance->rowId,
-                       static_cast<ColId>(instance->x / view_.siteWidth())),
-            UvDist(static_cast<int32_t>(instance->x)),
-            UvDist(static_cast<int32_t>(instance->rowId * ROW_HEIGHT)),
-            libCellId(instance->masterId),
-            libCellId(change.newMasterId)});
-      }
-      changes.push_back(std::move(candidate));
+      changes.push_back(request.fillerChanges);
     }
 
     const CheckRequest target{
@@ -703,7 +698,7 @@ class PortableCheckerOracle final : public fr::ImplantOverlayChecker
     return result;
   }
 
-  const PortablePlacementView& view_;
+  const PortablePlannerDataSource& view_;
   const ImplantLayerChecker& checker_;
   int request_count_ = 0;
   int batch_count_ = 0;
@@ -740,15 +735,14 @@ bool hasPlannerDiagnostic(const fr::FillerRepairResult& result,
                      });
 }
 
-bool sameChanges(const std::vector<fr::FillerChange>& left,
-                 const std::vector<fr::FillerChange>& right)
+bool sameChanges(const dpl2::ipl::FillerChanges& left,
+                 const dpl2::ipl::FillerChanges& right)
 {
   if (left.size() != right.size()) {
     return false;
   }
   for (size_t index = 0; index < left.size(); ++index) {
-    if (left[index].instanceId != right[index].instanceId
-        || left[index].newMasterId != right[index].newMasterId) {
+    if (!fr::sameFillerCellRecord(left[index], right[index])) {
       return false;
     }
   }
@@ -804,7 +798,7 @@ class PlannerCheckerFixture
     checker_ = std::make_unique<ImplantLayerChecker>(helper_.getGrid(),
                                                      helper_.getNetwork());
     helper_.initChecker(*checker_);
-    view_ = std::make_unique<PortablePlacementView>(
+    view_ = std::make_unique<PortablePlannerDataSource>(
         input_, std::move(configuredFillers));
     oracle_ = std::make_unique<PortableCheckerOracle>(*view_, *checker_);
   }
@@ -814,7 +808,7 @@ class PlannerCheckerFixture
     return checker_->getDiags();
   }
 
-  const PortablePlacementView& view() const { return *view_; }
+  const PortablePlannerDataSource& view() const { return *view_; }
   PortableCheckerOracle& oracle() { return *oracle_; }
 
   fr::CheckResult baseline(RowId rowId,
@@ -839,7 +833,7 @@ class PlannerCheckerFixture
 
   fr::CheckResult verify(RowId rowId,
                          ColId colId,
-                         const std::vector<fr::FillerChange>& changes,
+                         const dpl2::ipl::FillerChanges& changes,
                          MasterId targetMaster = C1_MASTER)
   {
     return oracle_->checkPlaceWithOverlay(
@@ -872,7 +866,7 @@ class PlannerCheckerFixture
   std::vector<PlacedInst> before_;
   ImplantLayerCheckerHelper helper_;
   std::unique_ptr<ImplantLayerChecker> checker_;
-  std::unique_ptr<PortablePlacementView> view_;
+  std::unique_ptr<PortablePlannerDataSource> view_;
   std::unique_ptr<PortableCheckerOracle> oracle_;
 };
 
@@ -887,7 +881,7 @@ void expectPlannerRepairsWithFinalChecker(RowId rowId, ColId colId)
   helper.initChecker(checker);
   ASSERT_TRUE(checker.getDiags().empty());
 
-  PortablePlacementView view(immutableInput);
+  PortablePlannerDataSource view(immutableInput);
   PortableCheckerOracle oracle(view, checker);
   const fr::TargetPlace target = plannerTarget(rowId, colId);
   const fr::Region snapshot = snapshotRegion(rowId, colId);
@@ -1277,8 +1271,9 @@ TEST(FillerRepairCheckerE2ETest, ThirdVtOnlyCandidateRemainsReachable)
   ASSERT_FALSE(result.changes.empty());
   EXPECT_TRUE(std::all_of(result.changes.begin(),
                           result.changes.end(),
-                          [](const fr::FillerChange& change) {
-                            return change.newMasterId == F3_FILL_MASTER;
+                          [](const dpl2::FillerCellRecord& change) {
+                            return fr::fillerRecordNewMasterId(change)
+                                   == F3_FILL_MASTER;
                           }));
   EXPECT_TRUE(
       fixture
@@ -1342,15 +1337,15 @@ TEST(FillerRepairCheckerE2ETest, ReturnedChangesTouchOnlySameSizeFillers)
       INTRA_SPACING_ROW, INTRA_SPACING_COL, baseline.violations);
   ASSERT_TRUE(result.hasSolution);
   ASSERT_FALSE(result.changes.empty());
-  for (const fr::FillerChange& change : result.changes) {
+  for (const dpl2::FillerCellRecord& change : result.changes) {
     const fr::PlacedInstance* instance
-        = fixture.view().instance(change.instanceId);
+        = fixture.view().instance(fr::fillerRecordInstanceId(change));
     ASSERT_NE(instance, nullptr);
     EXPECT_TRUE(instance->isFiller);
     const fr::MasterInfo* oldMaster
         = fixture.view().masterInfo(instance->masterId);
     const fr::MasterInfo* newMaster
-        = fixture.view().masterInfo(change.newMasterId);
+        = fixture.view().masterInfo(fr::fillerRecordNewMasterId(change));
     ASSERT_NE(oldMaster, nullptr);
     ASSERT_NE(newMaster, nullptr);
     EXPECT_EQ(oldMaster->width, newMaster->width);
@@ -1372,10 +1367,12 @@ TEST(FillerRepairCheckerE2ETest, PlannerAvoidsKnownNewViolationSites)
       instId(NEW_INTER_WIDTH_BOTTOM_ROW, NEW_INTER_WIDTH_COL),
       instId(NEW_INTRA_SPACING_ROW, 143),
       instId(NEW_INTER_SPACING_BOTTOM_ROW, 163)};
-  for (const fr::FillerChange& change : result.changes) {
+  for (const dpl2::FillerCellRecord& change : result.changes) {
     EXPECT_EQ(
         std::find(
-            unrelatedSites.begin(), unrelatedSites.end(), change.instanceId),
+            unrelatedSites.begin(),
+            unrelatedSites.end(),
+            fr::fillerRecordInstanceId(change)),
         unrelatedSites.end());
   }
   EXPECT_TRUE(
@@ -1408,10 +1405,13 @@ TEST(FillerRepairCheckerE2ETest,
 {
   PlannerCheckerFixture fixture(multiSwapWidthInput(3),
                                 std::vector<fr::MasterId>{F1_FILL_MASTER});
-  const std::vector<fr::FillerChange> expected{
-      {instId(INTRA_WIDTH_ROW, 9), F1_FILL_MASTER},
-      {instId(INTRA_WIDTH_ROW, 11), F1_FILL_MASTER},
-      {instId(INTRA_WIDTH_ROW, 12), F1_FILL_MASTER}};
+  const dpl2::ipl::FillerChanges expected{
+      fixture.view().fillerCellRecord(instId(INTRA_WIDTH_ROW, 9),
+                                      F1_FILL_MASTER),
+      fixture.view().fillerCellRecord(instId(INTRA_WIDTH_ROW, 11),
+                                      F1_FILL_MASTER),
+      fixture.view().fillerCellRecord(instId(INTRA_WIDTH_ROW, 12),
+                                      F1_FILL_MASTER)};
   ASSERT_TRUE(
       fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, expected).isLegal);
   const fr::CheckResult baseline

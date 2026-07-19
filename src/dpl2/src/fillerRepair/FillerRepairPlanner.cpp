@@ -43,7 +43,7 @@ std::string windowLabel(const RepairWindow& window)
 namespace internal {
 
 FillerRepairPlanner::FillerRepairPlanner(
-    const PlacementView& view,
+    const PlannerDataSource& view,
     ImplantOverlayChecker& checker,
     RepairConfig config)
     : view_(view),
@@ -76,7 +76,7 @@ FillerRepairResult FillerRepairPlanner::repair(
   } activeGuard{repair_active_};
 
   // The transcript starts with both the immutable request and every search
-  // knob. This makes a production failure reproducible from one captured log
+  // knob. This makes a runtime failure reproducible from one captured log
   // without relying on hidden defaults.
   log_.msg("planner",
            cat("repair start: anchor inst=", request.targetPlace.instanceId,
@@ -93,7 +93,7 @@ FillerRepairResult FillerRepairPlanner::repair(
                "] adaptiveStep=", config_.adaptiveStepFillers,
                " maxAdaptiveLevels=", config_.maxAdaptiveLevels));
 
-  // Placement coverage is intentionally not checked here. Production opto
+  // Placement coverage is intentionally not checked here. Runtime opto
   // calls FillerRepairEngine::precheck() before any mutation; keeping that
   // gate out of repair preserves the explicit orchestration contract.
   // Empty snapshot: nothing to repair is a success with no changes.
@@ -116,7 +116,7 @@ FillerRepairResult FillerRepairPlanner::repair(
            cat("normalized=", violations.size(), " siteWidth=",
                view_.siteWidth(), " ruleDistance=", ruleDistance,
                " -> build L0 window"));
-  OracleGate gate(checker_, request.targetPlace, request.violations,
+  OracleGate gate(view_, checker_, request.targetPlace, request.violations,
                   view_.siteWidth(), ruleDistance, config_, log_);
 
   // Stages 3..7 under the adaptive window loop (spec 6.3/6.7/6.8,
@@ -204,7 +204,7 @@ FillerRepairResult FillerRepairPlanner::repair(
 
         if (sr.foundClean) {
           result.hasSolution = true;
-          result.changes = toFillerChanges(sr.cleanOverlay);
+          result.changes = toFillerChanges(sr.cleanOverlay, view_);
           result.diagnostics.push_back(makeDiag(
               Severity::Info, "Solution",
               cat("window ", label, ": ", result.changes.size(),

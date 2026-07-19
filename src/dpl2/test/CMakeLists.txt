@@ -31,7 +31,7 @@ set(DPL2_LOCAL_PLANNER_TEST_SOURCES
     "${CMAKE_CURRENT_LIST_DIR}/local/planner/FakeUdmCandidateProvider.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/local/planner/planner_cases.cpp")
 
-# This interface target is the only fake/real UDM switch. Production sources
+# This interface target is the only fake/real UDM switch. Runtime sources
 # contain no fake include, compile definition, or conditional code. The fake
 # headers mirror the real eUNL/eLIB/ePHY/eUTL names and signatures and are used
 # solely to construct deterministic test data.
@@ -71,8 +71,13 @@ add_executable(
   dpl2_filler_repair_planner_test
   ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
   ${DPL2_LOCAL_PLANNER_TEST_SOURCES})
-target_include_directories(dpl2_filler_repair_planner_test PRIVATE "${DPL2_SRC}")
-target_link_libraries(dpl2_filler_repair_planner_test PRIVATE GTest::gtest_main)
+target_include_directories(
+  dpl2_filler_repair_planner_test
+  PRIVATE "${DPL2_SRC}" "${CMAKE_CURRENT_LIST_DIR}/../include")
+target_include_directories(
+  dpl2_filler_repair_planner_test SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
+target_link_libraries(
+  dpl2_filler_repair_planner_test PRIVATE GTest::gtest_main dpl2_test_udm)
 dpl2_configure_test(dpl2_filler_repair_planner_test 17)
 gtest_discover_tests(
   dpl2_filler_repair_planner_test
@@ -114,11 +119,11 @@ endfunction()
 
 if(DPL2_TEST_USE_FAKE_UDM)
   # Standalone E2E: fake UDM provides the test DATA, everything else is the
-  # production chain.
+  # runtime chain.
   add_executable(
     dpl2_filler_repair_e2e
     ${DPL2_SUPPLIED_CHAIN_SOURCES}
-    ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES}
+    ${DPL2_FILLER_REPAIR_SOURCES}
     "${CMAKE_CURRENT_LIST_DIR}/local/e2e_cases.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/local/FakeUdmE2ETestProvider.cpp")
   target_link_libraries(dpl2_filler_repair_e2e PRIVATE GTest::gtest_main)
@@ -146,12 +151,12 @@ if(DPL2_TEST_USE_FAKE_UDM)
     TEST_PREFIX "portable-e2e."
     DISCOVERY_TIMEOUT 30)
 else()
-  # Verify that every supplied and production source compiles and links
-  # against the real UDM headers -- the production migration gate.
+  # Verify that every supplied and runtime source compiles and links
+  # against the real UDM headers -- the runtime migration gate.
   add_library(
     dpl2_filler_repair_compile_check STATIC
     ${DPL2_SUPPLIED_CHAIN_SOURCES}
-    ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES})
+    ${DPL2_FILLER_REPAIR_SOURCES})
   dpl2_configure_chain_target(dpl2_filler_repair_compile_check)
 
   # The portable helper-built E2E remains runnable in real-UDM mode because

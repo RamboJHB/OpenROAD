@@ -11,7 +11,7 @@ namespace dpl2::fillerRepair {
 
 namespace {
 
-ViolationParticipant participantOf(const PlacementView& view,
+ViolationParticipant participantOf(const PlannerDataSource& view,
                                    const PlacedInstance& inst,
                                    const TargetPlace& target)
 {
@@ -121,26 +121,28 @@ CheckResult FakeImplantChecker::evaluate(const OverlayCheckRequest& request) con
     return invalid(cat("target instance ", request.targetPlace.instanceId,
                        " not found"));
   }
-  for (const FillerChange& change : request.fillerChanges) {
-    const PlacedInstance* inst = design_.instance(change.instanceId);
+  for (const FillerCellRecord& change : request.fillerChanges) {
+    const InstanceId instanceId = change.cell_id_.getIndexValue();
+    const MasterId newMasterId = change.new_lib_cell_.getIndexValue();
+    const PlacedInstance* inst = design_.instance(instanceId);
     if (inst == nullptr) {
-      return invalid(cat("instance ", change.instanceId, " not found"));
+      return invalid(cat("instance ", instanceId, " not found"));
     }
     if (!inst->isFiller) {
-      return invalid(cat("instance ", change.instanceId, " is not a filler"));
+      return invalid(cat("instance ", instanceId, " is not a filler"));
     }
     const MasterInfo* oldMaster = design_.masterInfo(inst->masterId);
-    const MasterInfo* newMaster = design_.masterInfo(change.newMasterId);
+    const MasterInfo* newMaster = design_.masterInfo(newMasterId);
     if (newMaster == nullptr || !newMaster->isFiller) {
-      return invalid(cat("master ", change.newMasterId, " unknown or not a filler"));
+      return invalid(cat("master ", newMasterId, " unknown or not a filler"));
     }
     if (newMaster->width != oldMaster->width
         || newMaster->height != oldMaster->height) {
-      return invalid(cat("size mismatch for instance ", change.instanceId,
-                         ": new master ", change.newMasterId));
+      return invalid(cat("size mismatch for instance ", instanceId,
+                         ": new master ", newMasterId));
     }
-    if (!overlay.emplace(change.instanceId, change.newMasterId).second) {
-      return invalid(cat("duplicate instance ", change.instanceId,
+    if (!overlay.emplace(instanceId, newMasterId).second) {
+      return invalid(cat("duplicate instance ", instanceId,
                          " in one overlay"));
     }
   }

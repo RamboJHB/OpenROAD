@@ -65,8 +65,8 @@ Both configurations compile with `-Wall -Wextra -Werror` and C++20.
 
 ## Separate local regression
 
-The 82 pure-planner tests, their fake checker/view, fake UDM headers and the
-64 production-facade cases are retained under
+The 82 planner tests, their fake checker/data source, fake UDM headers and the
+64 engine cases are retained under
 `src/dpl2/test/local/`. They do not move with `fillerRepair/` and are not linked
 by the portable E2E target. Twelve of those 64 instances exercise the public
 `FillerRepairEngine::precheck()` boundary in opto-style external call order:

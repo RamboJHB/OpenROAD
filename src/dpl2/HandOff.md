@@ -5,7 +5,7 @@ Updated: 2026-07-19. Branch: `claude/wizardly-carson-secahu`.
 ## Result
 
 The destination already supplies complete infrastructure and checker sources.
-Production and tests migrate together by copying only
+Runtime and tests migrate together by copying only
 `src/dpl2/src/fillerRepair/`. Its `test/` subtree contains 33 portable
 GoogleTests built from the final checker's `ImplantLayerCheckerHelper` and a
 standalone CMake. No DEF/LEF reader or destination fixture provider is needed.
@@ -13,7 +13,7 @@ All 82 fake-based planner unit tests and the repository-local UDM-compatible
 harness are outside this payload at `src/dpl2/test/local/`.
 No infrastructure/checker source or API change is required.
 
-The production boundary is one checker-style class that reuses DePlace's
+The runtime boundary is one checker-style class that reuses DePlace's
 already initialized infrastructure:
 
 ```cpp
@@ -25,8 +25,8 @@ ipl::CheckResult precheck() const;
 RepairOutcome repair(LeafCellID targetCell, const PhysLibCell& newMaster);
 ```
 
-The engine borrows Grid/Network and privately owns the final checker plus the
-view/oracle/wire conversion. It does not import hierarchy cells or repaint a
+The engine borrows Grid/Network and its `Impl` privately owns the final checker,
+immutable planner snapshot and oracle calls. It does not import hierarchy cells or repaint a
 second Grid. The pure search pipeline is
 `internal::FillerRepairPlanner`. `init()` is one-shot and must succeed before
 use: until it does, `precheck()` and `repair()` fail closed
@@ -76,7 +76,7 @@ not call precheck again.
 
 If the target new master is not yet represented in Network (for example it is
 uninstantiated), repair registers it with `Network::addMaster()` and rebuilds
-its private checker/view. The first implant query then overlays the target new
+its private checker/snapshot. The first implant query then overlays the target new
 master with an empty filler change list. No violation returns success with
 empty changes. Violations enter
 the unchanged adaptive-L1/ranker/subset/cache/budget/baseline-delta planner.
@@ -95,7 +95,7 @@ default and does not affect search behavior.
 |---|---|
 | rows and physical placement | `PhysDesMgr` |
 | precheck coverage-required legal segments | supplied Grid valid, unreserved pixels |
-| cell/master topology and checker IDs | production Network |
+| cell/master topology and checker IDs | runtime Network |
 | filler allow-list | `fillerSetting::getFillerMasters()` |
 | VT family/band polarity | `PhysLibCell` implant shapes + checker layers |
 | implant legality | final `ImplantLayerChecker` |
@@ -104,7 +104,7 @@ default and does not affect search behavior.
 Placed masters come from the existing Network. Engine init idempotently
 registers configured candidate masters before constructing its private checker.
 Repair idempotently registers an uninstantiated target-new master and rebuilds
-that checker/view before querying it. These registry updates do not mutate UDM
+that checker/snapshot before querying it. These registry updates do not mutate UDM
 placement.
 
 ## Migration to the destination environment
@@ -112,17 +112,17 @@ placement.
 What to copy (one directory, nothing else):
 
 1. `src/dpl2/src/fillerRepair/` -> next to the destination's existing
-   `infrastructure/` and `drc/` directories (the production sources include
+   `infrastructure/` and `drc/` directories (the runtime sources include
    `infrastructure/...` and `drc/ImplantLayerChecker.h` relative to that
-   common source root). This directory contains the complete production
+   common source root). This directory contains the complete runtime
    delivery plus its portable final-checker `test/` package. It contains no local test double
    or UDM-compatible test-data implementation.
 
-Production wiring (their CMake, 2 lines):
+Runtime wiring (their CMake, 2 lines):
 
 ```cmake
 include(<srcroot>/fillerRepair/sources.cmake)
-target_sources(<owning-target> PRIVATE ${DPL2_FILLER_REPAIR_PRODUCTION_SOURCES})
+target_sources(<owning-target> PRIVATE ${DPL2_FILLER_REPAIR_SOURCES})
 ```
 
 `<owning-target>` is the target that already compiles Grid/Network/checker,
@@ -131,16 +131,16 @@ only modifications that may be needed on their side:
 
 - the common source root must be on the include path (theirs already is if
   `infrastructure/...`-style includes work today);
-- C++17 or newer for the production sources (the harness builds them at 17
+- C++17 or newer for the runtime sources (the harness builds them at 17
   for the planner and 20 for the chain).
 
 The reused-infrastructure boundary requires the APIs already present in this
 branch: `DePlace::getGrid()`, `getNetwork()`, `getDesMgr()` and idempotent
 `Network::addMaster(const PhysLibCell&, const Grid*)`. No RepairInfrastructure,
-leaf traversal or placement importer is copied into production.
+leaf traversal or placement importer is copied into runtime.
 
-Do not hand-copy file names -- both production and test CMake include the same
-`sources.cmake`. Do not add `fillerRepair/test/*` to a production target.
+Do not hand-copy file names -- both runtime and test CMake include the same
+`sources.cmake`. Do not add `fillerRepair/test/*` to a runtime target.
 The migrated E2E uses real Grid/Network/checker code and helper-built data.
 
 Portable E2E wiring in the destination environment:
@@ -164,9 +164,9 @@ test-side CMake wiring required.
 ## Build and verification
 
 The CMake below `fillerRepair/test` is a portable final-checker test package,
-not production CMake. It compiles the planner, checker/helper and 33 portable
+not runtime CMake. It compiles the planner, checker/helper and 33 portable
 cases. The separate local harness retains the 82 planner tests and 64 fake-UDM
-production-facade cases for repository regression.
+engine cases for repository regression.
 
 Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
 
@@ -191,9 +191,9 @@ checker-legal three-swap repair when the best residual initially points toward
 a blocked adaptive side. The internal precheck matrix covers gaps, overlaps,
 clipping, legal holes, row ordering and deterministic coalescing. Planner doubles and
 the fake-UDM suite live only under `src/dpl2/test/local/`; its 12 newly added
-external instances call the real public `precheck()` facade in opto order.
+external instances call the real public `precheck()` API in opto order.
 
-2026-07-19 split result after expansion: planner 82/82, production-facade
+2026-07-19 split result after expansion: planner 82/82, engine
 fake-UDM E2E 64/64 and portable final-checker/precheck E2E 33/33 in both normal
 and ASan builds; full normal CTest 179/179; `-Wall -Wextra -Werror` clean.
 
@@ -212,17 +212,17 @@ and ASan builds; full normal CTest 179/179; `-Wall -Wextra -Werror` clean.
   final checker constructor reads Session; init validates and fails closed on
   mismatch. The UDM design/library objects must outlive the engine.
 - Destination build must consume `sources.cmake`; nothing else is part of the
-  production delivery.
+  runtime delivery.
 - Destination verification still depends on its UDM include directories and
   link libraries/targets because Grid/Network headers use UDM types. Test data
   itself has no UDM/DEF/LEF dependency.
 - Checker calls are serialized inside one engine because the checker const
   overlay path updates counters. The checker is private and cannot be
   accidentally shared across engines.
-- The public facade owns production translation; planner fake/checker types
-  must remain outside production targets.
+- The engine owns checker diagnostics translation; planner fake/checker types
+  must remain outside runtime targets.
 - `repair()` may idempotently add a previously uninstantiated target master to
-  Network and rebuild its private checker/view; it still never mutates UDM.
+  Network and rebuild its private checker/snapshot; it still never mutates UDM.
 - Adaptive growth is still heuristic: it follows the best residual first and
   falls back to the opposite side only when that primary side adds nothing.
   Long irrelevant contiguous filler runs may therefore require several

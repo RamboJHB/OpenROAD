@@ -3,9 +3,9 @@
 
 // Swap: the planner's atomic operation of this stage (spec section 4).
 //
-// A Swap is exactly the FillerChange wire semantics (instanceId +
-// newMasterId) plus the geometry/rank metadata the planner needs (row, span,
-// VTs). There is deliberately NO generic "Move" abstraction layer: this
+// A Swap is one FillerCellRecord replacement operation plus the geometry/rank
+// metadata the planner needs (row, span, VTs). There is deliberately NO
+// generic "Move" abstraction layer: this
 // stage's operation is swap; the next stage's is rewrite (spec 4.3 / 8.1).
 //
 // One overlay candidate = a set of Swaps applied atomically. The subset
@@ -20,7 +20,7 @@
 #include <string>
 #include <vector>
 
-#include "PlacementView.h"
+#include "PlannerDataSource.h"
 #include "Types.h"
 
 namespace dpl2::fillerRepair {
@@ -37,8 +37,6 @@ struct Swap
   XInterval span;
   VtId oldVt = kUnknownVt;
   VtId newVt = kUnknownVt;
-
-  FillerChange change() const { return FillerChange{instanceId, newMasterId}; }
 };
 
 using Overlay = std::vector<Swap>;
@@ -47,7 +45,7 @@ using Overlay = std::vector<Swap>;
 // be a placed filler and the new master a same-width/same-height filler
 // master different from the current one. On failure *error (if given)
 // receives the reason.
-std::optional<Swap> makeSwap(const PlacementView& view,
+std::optional<Swap> makeSwap(const PlannerDataSource& view,
                              InstanceId instanceId,
                              MasterId newMasterId,
                              std::string* error = nullptr);
@@ -57,7 +55,8 @@ std::optional<Swap> makeSwap(const PlacementView& view,
 std::string canonicalKey(const Overlay& overlay);
 
 // Wire conversion, deterministic order (sorted by instanceId).
-std::vector<FillerChange> toFillerChanges(const Overlay& overlay);
+ipl::FillerChanges toFillerChanges(const Overlay& overlay,
+                                   const PlannerDataSource& dataSource);
 
 struct SwapGenerationResult
 {
@@ -71,7 +70,7 @@ struct SwapGenerationResult
 
 SwapGenerationResult generateSwaps(
     const RepairWindow& window,
-    const PlacementView& view,
+    const PlannerDataSource& view,
     const DebugLog& log);
 
 

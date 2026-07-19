@@ -69,7 +69,7 @@ class Network
                     const PlacementDRC* drc_engine);
   // Repair/checker infrastructure only needs physical master geometry.  Edge
   // spacing decoration is optional and belongs to PlacementDRC; this overload
-  // keeps the production Network usable when that checker is not in the
+  // keeps the runtime Network usable when that checker is not in the
   // repair-only link target.
   Master* addMaster(const PhysLibCell& db_master, const Grid* grid);
   // [fillerRepair-fix] was unique_ptr<Node*> / inst_to_node_idx__ (typos).

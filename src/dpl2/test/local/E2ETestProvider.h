@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Data-provider boundary for the production-chain E2E suite.
+// Data-provider boundary for the runtime-chain E2E suite.
 //
 // The repository-local cases in e2e_cases.cpp contain every assertion and call
 // FillerRepairEngine.  A provider only creates the requested UDM design,
-// exposes the already-wired production Grid/Network, and performs the few
+// exposes the already-wired runtime Grid/Network, and performs the few
 // test mutations needed to create gap/overlap inputs. The adjacent local
 // provider supplies the fixture through UDM-compatible test-only types.
 

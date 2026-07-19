@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Production filler-repair facade. It borrows the Grid/Network already owned
-// by dpl2, and privately owns only the checker/view needed for one physical-
+// Filler-repair entry point. It borrows the Grid/Network already owned
+// by dpl2, and privately owns the checker/snapshot needed for one physical-
 // design revision. Neither precheck() nor repair() mutates UDM.
 
 #pragma once
@@ -30,7 +30,7 @@ struct RepairOutcome
 class FillerRepairEngine
 {
  public:
-  // grid and network are the initialized production objects (normally
+  // grid and network are the initialized dpl2 objects (normally
   // DePlace::getGrid()/getNetwork()) and must outlive this engine.
   FillerRepairEngine(Grid* grid, Network* network);
   ~FillerRepairEngine();

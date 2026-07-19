@@ -4,14 +4,14 @@
 // Read-only placement/DB view consumed by the repair planner.
 //
 // This is the planner's only window into the infrastructure database. The
-// FillerRepairEngine's private view wraps UDM. The planner never mutates the
-// design -- commit stays with the infrastructure (spec section 3.1).
+// FillerRepairEngine::Impl implements this contract over its UDM snapshot.
+// The planner never mutates the design; commit stays with the infrastructure.
 //
-// Thread model: after construction a production view is an immutable
-// snapshot -- all const methods must be safe for CONCURRENT readers (any
+// Thread model: after initialization the engine snapshot is immutable. All
+// const methods must be safe for CONCURRENT readers (any
 // internal lazy cache must synchronize itself), and returned references stay
 // valid for the view's lifetime. Test implementations may use mutable builders
-// but are not part of this production directory.
+// but are test-only.
 
 #pragma once
 
@@ -49,20 +49,15 @@ struct PlacedInstance
   bool isFiller = false;
 };
 
-class PlacementView
+class PlannerDataSource
 {
  public:
-  virtual ~PlacementView() = default;
+  virtual ~PlannerDataSource() = default;
 
-  // Sorted ascending. The reference stays valid for the view's lifetime;
+  // Sorted ascending. The reference stays valid for the data source's lifetime;
   // window building and guard clamping call this on every step, so
   // implementations must NOT rebuild the list per call.
   virtual const std::vector<RowId>& rows() const = 0;
-
-  // Legal std-cell site range of a row in DBU. Macros/blockages/core cutouts
-  // must already be excluded by the production view; anything a
-  // std cell or filler may legally occupy is inside this span.
-  virtual XInterval rowLegalSpan(RowId rowId) const = 0;
 
   virtual DbCoord siteWidth() const = 0;
 
@@ -82,6 +77,10 @@ class PlacementView
   // Configured replacement universe, sorted ascending and unique (the
   // default candidate filter relies on that order for determinism).
   virtual const std::vector<MasterId>& fillerMasterIds() const = 0;
+  // Build the exact checker/public wire record for one planner swap. This is
+  // the sole mapping point from dense planner ids to UDM ids and coordinates.
+  virtual FillerCellRecord fillerCellRecord(InstanceId instanceId,
+                                            MasterId newMasterId) const = 0;
   virtual MasterCandidateResult getUsableMasterCandidates(
       const MasterCandidateRequest& request) const;
 
@@ -91,7 +90,7 @@ class PlacementView
 };
 
 // Occupied x span of a placed instance (width comes from its master).
-inline XInterval instanceSpan(const PlacementView& view, const PlacedInstance& inst)
+inline XInterval instanceSpan(const PlannerDataSource& view, const PlacedInstance& inst)
 {
   const MasterInfo* master = view.masterInfo(inst.masterId);
   const DbCoord width = master != nullptr ? master->width : 0;

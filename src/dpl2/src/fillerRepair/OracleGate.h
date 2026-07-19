@@ -34,9 +34,9 @@ namespace dpl2::fillerRepair {
 
 struct RepairConfig;
 
-// Planner-internal checker protocol. Production callers never see these
-// requestId/status types; FillerRepairEngine translates ordered final-checker
-// CheckResult/FillerChanges at its private boundary. Test doubles may implement
+// Planner-internal checker protocol. Callers never see these requestId/status
+// types. FillerRepairEngine translates checker results privately while the
+// change payload remains the exact final-checker FillerChanges type. Test doubles may implement
 // this interface to inject protocol failures and exact search states.
 class ImplantOverlayChecker
 {
@@ -80,7 +80,8 @@ struct DeltaSummary
 class OracleGate
 {
  public:
-  OracleGate(ImplantOverlayChecker& checker,
+  OracleGate(const PlannerDataSource& dataSource,
+             ImplantOverlayChecker& checker,
              const TargetPlace& anchor,
              const std::vector<Violation>& originals,
              DbCoord siteWidth,
@@ -136,6 +137,7 @@ class OracleGate
   // returns false when the snapshot is stale/inconsistent.
   bool checkBaselineConsistency(const RepairWindow& window);
 
+  const PlannerDataSource& data_source_;
   ImplantOverlayChecker& checker_;
   const TargetPlace& anchor_;
   const std::vector<Violation>& originals_;

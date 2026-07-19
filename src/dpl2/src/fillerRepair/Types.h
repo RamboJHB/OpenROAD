@@ -3,14 +3,14 @@
 
 // Shared base types for the filler VT overlay repair planner.
 //
-// The planner is a pure, deterministic component (spec section 3.1): it
-// depends only on PlacementView plus the planner-internal oracle protocol in
-// OracleGate.h, never on UDM or the real checker headers. Test doubles implement
-// that protocol outside this directory; FillerRepairEngine translates it privately.
+// The planner is a deterministic, non-mutating component (spec section 3.1): it
+// depends only on PlannerDataSource plus the planner-internal oracle protocol in
+// OracleGate.h. The only shared checker wire type is ipl::FillerChanges; test
+// builds provide the same UDM ID/value types through their test-only UDM shim.
 //
 // Conventions:
 //  - All x coordinates are DBU. Site alignment comes from
-//    PlacementView::siteWidth().
+//    PlannerDataSource::siteWidth().
 //  - All intervals are half-open [xl, xh).
 //  - Row ranges in Region are inclusive [rowLo, rowHi].
 
@@ -21,6 +21,8 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "drc/ImplantLayerChecker.h"
 
 namespace dpl2::fillerRepair {
 
@@ -67,7 +69,7 @@ enum class BandPolarity : uint8_t
 };
 
 // Placement orientation. The checker draft uses eUTL::PhysOrientation (a
-// UDM type); the pure planner keeps this minimal enum and the production
+// UDM type); the pure planner keeps this minimal enum and the runtime
 // engine boundary maps between the two.
 enum class Orient : uint8_t
 {
@@ -78,7 +80,7 @@ enum class Orient : uint8_t
 };
 
 // Planner-side guard region. The wire-level checker API uses a geometric
-// Rect; converting rows to y coordinates is the production boundary's concern, so the
+// Rect; converting rows to y coordinates is the runtime boundary's concern, so the
 // pure planner keeps the row-based form everywhere.
 struct Region
 {
@@ -98,7 +100,7 @@ enum class Severity
 };
 
 // Stable machine-readable code + human-readable message used inside the pure
-// planner. Production converts these to final-checker ipl::Diagnostic.
+// planner. Runtime converts these to final-checker ipl::Diagnostic.
 struct Diagnostic
 {
   Severity severity = Severity::Info;
@@ -139,13 +141,6 @@ struct TargetPlace
   RowId rowId = 0;
   DbCoord x = 0;
   Orient orientation = Orient::R0;
-};
-
-// V1 wire format: same-size master swap on one filler instance.
-struct FillerChange
-{
-  InstanceId instanceId = 0;
-  MasterId newMasterId = 0;
 };
 
 enum class ViolationKind
@@ -196,8 +191,28 @@ struct OverlayCheckRequest
   OverlayRequestId requestId = -1;  // planner-generated, unique per batch
   TargetPlace targetPlace;
   Region guardRegion;  // repair window expanded by a two-cell guard halo
-  std::vector<FillerChange> fillerChanges;  // one atomic overlay candidate
+  ipl::FillerChanges fillerChanges;  // one atomic overlay candidate
 };
+
+inline InstanceId fillerRecordInstanceId(const FillerCellRecord& change)
+{
+  return static_cast<InstanceId>(change.cell_id_.getIndexValue());
+}
+
+inline MasterId fillerRecordNewMasterId(const FillerCellRecord& change)
+{
+  return static_cast<MasterId>(change.new_lib_cell_.getIndexValue());
+}
+
+inline bool sameFillerCellRecord(const FillerCellRecord& left,
+                                 const FillerCellRecord& right)
+{
+  return left.op_ == right.op_ && left.cell_id_ == right.cell_id_
+         && left.origin_x_ == right.origin_x_
+         && left.origin_y_ == right.origin_y_
+         && left.orig_lib_cell_ == right.orig_lib_cell_
+         && left.new_lib_cell_ == right.new_lib_cell_;
+}
 
 enum class CheckStatus
 {
@@ -228,7 +243,7 @@ struct FillerRepairRequest
 struct FillerRepairResult
 {
   bool hasSolution = false;
-  std::vector<FillerChange> changes;
+  ipl::FillerChanges changes;
   std::vector<Diagnostic> diagnostics;
 };
 

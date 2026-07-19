@@ -6,10 +6,10 @@ UDM-compatible include tree, the 64-case `E2ETestProvider` suite
 and both runners.
 
 The planner suite is self-contained below `local/planner/` and links only the
-production planner sources. The historical production-facade E2E source and
+runtime planner sources. The historical engine E2E source and
 its fake-UDM provider now both live here. The migration payload instead owns a
 separate helper-built final-checker E2E, so no fake/provider include crosses
-the directory boundary. Nothing below this directory is copied to production.
+the directory boundary. Nothing below this directory is copied to runtime.
 
 ```sh
 src/dpl2/test/local/run_planner_tests.sh

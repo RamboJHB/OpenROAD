@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Repository-local data provider for the portable production E2E cases.
+// Repository-local data provider for the portable runtime E2E cases.
 // This is the only source that knows fake_udm. It is intentionally outside
 // the fillerRepair delivery directory.
 

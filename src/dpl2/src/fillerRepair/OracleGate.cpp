@@ -51,14 +51,16 @@ bool inGuardRegion(const Violation& v, const Region& guard)
 
 }  // namespace
 
-OracleGate::OracleGate(ImplantOverlayChecker& checker,
+OracleGate::OracleGate(const PlannerDataSource& dataSource,
+                       ImplantOverlayChecker& checker,
                        const TargetPlace& anchor,
                        const std::vector<Violation>& originals,
                        DbCoord siteWidth,
                        DbCoord ruleDistance,
                        const RepairConfig& config,
                        const DebugLog& log)
-    : checker_(checker),
+    : data_source_(dataSource),
+      checker_(checker),
       anchor_(anchor),
       originals_(originals),
       site_width_(siteWidth),
@@ -302,7 +304,7 @@ const CheckResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
     request.requestId = next_request_id_++;
     request.targetPlace = anchor_;
     request.guardRegion = guard;
-    request.fillerChanges = toFillerChanges(overlay);
+    request.fillerChanges = toFillerChanges(overlay, data_source_);
     requests.push_back(std::move(request));
     keys.push_back(key);
     --budget;

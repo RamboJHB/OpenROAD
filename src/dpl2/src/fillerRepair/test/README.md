@@ -21,7 +21,7 @@ DEF/LEF and does not require a destination-specific UDM fixture/provider.
   triple overlap and touching legal spans.
 
 The test uses no fake checker, fake placement view or fake UDM data. The small
-`PortablePlacementView` in the source is only the planner projection of the
+`PortablePlannerDataSource` in the source is only the planner projection of the
 same `ImplantInput` owned by `ImplantLayerCheckerHelper`.
 
 ## Destination CMake

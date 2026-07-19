@@ -3,7 +3,7 @@
 
 // Fake-UDM master catalog + candidate provider.
 //
-// Purpose: rehearse the production engine's master/candidate data path in
+// Purpose: rehearse the runtime engine's master/candidate data path in
 // planner unit tests. The real derivation runs inside the checker
 // (ImplantLayerChecker::buildMasters, parseLayerName, rebuildMasterShapes);
 // this fake replicates it UDM-free, with the same rules:
@@ -32,7 +32,7 @@
 #include <vector>
 
 #include "fillerRepair/Log.h"
-#include "fillerRepair/PlacementView.h"
+#include "fillerRepair/PlannerDataSource.h"
 #include "FakeDesign.h"
 
 namespace dpl2::fillerRepair {
@@ -112,7 +112,7 @@ class FakeUdmCandidateProvider
   // ascending master id. Non-filler input / no replacement -> diagnostics,
   // never an error.
 
-  // Sync every usable master into a FakeDesign so the engine's PlacementView
+  // Sync every usable master into a FakeDesign so the engine's PlannerDataSource
   // and this provider agree on width/height/vt (the engine validates each
   // candidate against view.masterInfo when constructing Swaps).
   void registerInto(FakeDesign& design) const;

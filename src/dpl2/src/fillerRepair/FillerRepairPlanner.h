@@ -15,7 +15,7 @@
 
 #include "Log.h"
 #include "OracleGate.h"
-#include "PlacementView.h"
+#include "PlannerDataSource.h"
 #include "Types.h"
 
 namespace dpl2::fillerRepair {
@@ -45,14 +45,14 @@ namespace internal {
 class FillerRepairPlanner
 {
  public:
-  FillerRepairPlanner(const PlacementView& view,
+  FillerRepairPlanner(const PlannerDataSource& view,
                       ImplantOverlayChecker& checker,
                       RepairConfig config = {});
 
   FillerRepairResult repair(const FillerRepairRequest& request);
 
  private:
-  const PlacementView& view_;
+  const PlannerDataSource& view_;
   ImplantOverlayChecker& checker_;
   RepairConfig config_;
   DebugLog log_;

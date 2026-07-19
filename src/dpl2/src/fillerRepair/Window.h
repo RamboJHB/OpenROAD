@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "Log.h"
-#include "PlacementView.h"
+#include "PlannerDataSource.h"
 #include "Signature.h"
 #include "Types.h"
 
@@ -56,7 +56,7 @@ struct RepairWindow
 RepairWindow buildWindow(int level,
                          const TargetPlace& anchor,
                          const std::vector<NormalizedViolation>& violations,
-                         const PlacementView& view,
+                         const PlannerDataSource& view,
                          DbCoord ruleDistance,
                          const DebugLog& log);
 
@@ -69,7 +69,7 @@ RepairWindow buildWindow(int level,
 RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                   const TargetPlace& anchor,
                                   const std::vector<Violation>& blocking,
-                                  const PlacementView& view,
+                                  const PlannerDataSource& view,
                                   int fillersPerRow,
                                   const DebugLog& log);
 
