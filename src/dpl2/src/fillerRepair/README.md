@@ -46,7 +46,7 @@ in-memory master registry, not UDM placement.
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
 | `sources.cmake` | source-of-truth lists for planner, runtime and portable E2E |
 | `test/FillerRepairCheckerE2ETest.cpp` | 33 portable real-checker, planner-to-checker and internal precheck cases |
-| `test/CMakeLists.txt` | standalone destination E2E target |
+| `test/CMakeLists.txt` | standalone destination E2E plus complete production-engine compile/link gate |
 
 ## Debug transcript
 
@@ -82,10 +82,17 @@ checker-legal three-swap repair and atomic no-partial failure semantics.
 ```sh
 cmake -S test -B test/build/e2e \
   -DDPL2_UDM_INCLUDE_DIRS='<real include dirs>' \
+  -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>' \
   -DDPL2_UDM_LIBRARIES='<real libraries or CMake targets>'
 cmake --build test/build/e2e
 ctest --test-dir test/build/e2e --output-on-failure
 ```
+
+The test executable consumes the complete `DPL2_FILLER_REPAIR_SOURCES`, so a
+destination build cannot pass while `FillerRepairEngine.cpp` is incompatible
+with its real UDM/infrastructure/checker headers. Supplying
+`DPL2_RUNTIME_LIBRARIES` reuses the destination's owning targets; when omitted,
+the standalone fallback compiles the sibling infrastructure/checker sources.
 
 The complete repository-local regression copy—including all 82 planner unit
 cases, their doubles, the UDM-compatible test data provider and its runners—is

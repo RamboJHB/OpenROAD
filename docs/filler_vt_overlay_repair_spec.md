@@ -547,6 +547,13 @@ PhysDesMgr/fillerSetting/active UDM design 一致,注册 configured filler maste
 `newMaster` 时先按需注册并重建 private checker/snapshot。同一 engine 拒绝第二次 init;
 design commit 后构造新 engine。
 
+final checker 的 persistent init diagnostics 在接受 oracle 前分类：
+`skipped_phys_status`，以及 Network 中所有 master 都未使用的 implant layer 的
+`missing_rule_parameter`/`skipped_missing_rule_parameter` 是非阻断提示；其余 init
+diagnostics（包括实际使用层缺规则、shape/band/placement 结构问题）使 `init()`
+fail-closed。初始化成功后，engine 才从每个 overlay result 的前缀中移除这一整段已批准
+persistent diagnostics，request-specific diagnostics 不移除。
+
 `precheck()` 的 contract:
 
 - `isLegal=true`:合法 row segments 内没有 gap/overlap;

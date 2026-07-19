@@ -31,17 +31,17 @@ The standalone CMake works when given the destination UDM includes/targets:
 ```sh
 cmake -S fillerRepair/test -B build-filler-repair-e2e \
   -DDPL2_UDM_INCLUDE_DIRS='<real UDM includes>' \
+  -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>' \
   -DDPL2_UDM_LIBRARIES='<real UDM targets/libraries>'
 cmake --build build-filler-repair-e2e
 ctest --test-dir build-filler-repair-e2e --output-on-failure
 ```
 
-If the destination already has an owning dpl2/checker library, its parent
-CMake only needs to include `fillerRepair/sources.cmake`, compile
-`${DPL2_FILLER_REPAIR_PLANNER_SOURCES}` plus
-`${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE}` and
-`drc/ImplantLayerCheckerHelper.cpp`, then link that owning library and
-`GTest::gtest_main`.
+The executable always compiles `${DPL2_FILLER_REPAIR_SOURCES}`, including the
+public production engine. If the destination already has owning dpl2/checker
+targets, pass them through `DPL2_RUNTIME_LIBRARIES`; otherwise the standalone
+fallback compiles the adjacent supplied sources. The test cannot pass merely
+by compiling the planner while the engine/real-UDM boundary is broken.
 
-All fake/checker-double tests and the repository-local fake-UDM 64-case regression
+All fake/checker-double tests and the repository-local fake-UDM 67-case regression
 remain outside the migration payload under `src/dpl2/test/local/`.

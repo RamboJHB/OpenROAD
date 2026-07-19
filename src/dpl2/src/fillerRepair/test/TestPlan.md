@@ -49,6 +49,7 @@ and repair that creates a new violation.
 ```sh
 cmake -S fillerRepair/test -B build-e2e \
   -DDPL2_UDM_INCLUDE_DIRS='<real UDM includes>' \
+  -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>' \
   -DDPL2_UDM_LIBRARIES='<real UDM targets/libraries>'
 cmake --build build-e2e
 ctest --test-dir build-e2e --output-on-failure
@@ -56,20 +57,28 @@ ctest --test-dir build-e2e --output-on-failure
 cmake -S fillerRepair/test -B build-e2e-asan \
   -DDPL2_ENABLE_ASAN=ON \
   -DDPL2_UDM_INCLUDE_DIRS='<real UDM includes>' \
+  -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>' \
   -DDPL2_UDM_LIBRARIES='<real UDM targets/libraries>'
 cmake --build build-e2e-asan
 ctest --test-dir build-e2e-asan --output-on-failure
 ```
 
-Both configurations compile with `-Wall -Wextra -Werror` and C++20.
+Both configurations compile the complete `${DPL2_FILLER_REPAIR_SOURCES}`
+(including `FillerRepairEngine.cpp`) with `-Wall -Wextra -Werror` and C++20,
+then link it into the portable checker executable. `DPL2_RUNTIME_LIBRARIES`
+reuses destination infra/checker targets; omitting it selects the adjacent
+source fallback.
 
 ## Separate local regression
 
 The 82 planner tests, their fake checker/data source, fake UDM headers and the
-64 engine cases are retained under
+67 engine cases are retained under
 `src/dpl2/test/local/`. They do not move with `fillerRepair/` and are not linked
-by the portable E2E target. Twelve of those 64 instances exercise the public
+by the portable E2E target. Twelve of those 67 instances exercise the public
 `FillerRepairEngine::precheck()` boundary in opto-style external call order:
 stable repeated calls, hard blocking without mutation, simultaneous gap plus
 overlap diagnostics, and proof that `repair()` does not invoke precheck
-implicitly. The same four behaviors run across all three local layouts.
+implicitly. The same four behaviors run across all three local layouts. Three
+additional instances verify that a missing rule on a layer used by Network
+masters makes `init()` fail closed; the existing three persistent-diagnostic
+repair instances prove that missing rules on unused layers remain non-blocking.

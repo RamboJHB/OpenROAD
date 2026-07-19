@@ -146,27 +146,29 @@ The migrated E2E uses real Grid/Network/checker code and helper-built data.
 Portable E2E wiring in the destination environment:
 
 ```sh
-# Planner + final checker/helper against the destination UDM headers:
+# Full production engine + planner + final checker/helper against destination:
 cmake -S <srcroot>/fillerRepair/test -B build-e2e \
   -DDPL2_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
+  -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>' \
   -DDPL2_UDM_LIBRARIES='<real UDM libs/targets>'
 cmake --build build-e2e
 ctest --test-dir build-e2e --output-on-failure
 ```
 
-When the destination already has an owning dpl2/checker target, it may instead
-create one GoogleTest executable from
-`${DPL2_FILLER_REPAIR_PLANNER_SOURCES}`,
-`${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE}` and
-`drc/ImplantLayerCheckerHelper.cpp`, then link that target. This is the only
-test-side CMake wiring required.
+The standalone target always consumes `${DPL2_FILLER_REPAIR_SOURCES}`, not only
+the planner subset, so it compiles and links `FillerRepairEngine.cpp` against
+the destination headers. `DPL2_RUNTIME_LIBRARIES` should name the existing
+dpl2/checker owning targets; if omitted, the fallback compiles the adjacent
+supplied infrastructure/checker sources.
 
 ## Build and verification
 
 The CMake below `fillerRepair/test` is a portable final-checker test package,
-not runtime CMake. It compiles the planner, checker/helper and 33 portable
-cases. The separate local harness retains the 82 planner tests and 64 fake-UDM
-engine cases for repository regression.
+not the destination's production owner. Its executable nevertheless compiles
+the complete production engine source list, checker/helper and 33 portable
+cases, which makes real boundary compilation part of the migration gate. The
+separate local harness retains the 82 planner tests and 67 fake-UDM engine
+cases for repository regression.
 
 Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
 
@@ -194,8 +196,11 @@ the fake-UDM suite live only under `src/dpl2/test/local/`; its 12 newly added
 external instances call the real public `precheck()` API in opto order.
 
 2026-07-19 split result after expansion: planner 82/82, engine
-fake-UDM E2E 64/64 and portable final-checker/precheck E2E 33/33 in both normal
-and ASan builds; full normal CTest 179/179; `-Wall -Wextra -Werror` clean.
+fake-UDM E2E 67/67 and portable final-checker/precheck E2E 33/33 in both normal
+and ASan builds; full normal CTest 182/182; `-Wall -Wextra -Werror` clean. The
+engine cases include three layouts proving that unused-layer persistent
+checker diagnostics remain non-blocking while a used implant layer with a
+missing rule makes initialization fail closed.
 
 ## Integration risks
 

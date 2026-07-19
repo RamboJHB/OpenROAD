@@ -80,7 +80,8 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
 {
   db.coreSite.width_ = eUTL::UvDist(kSiteWidth);
   db.coreSite.height_ = eUTL::UvDist(kRowHeight);
-  db.tech().addLayer("VTL_N", true, 0, 6, 2);
+  db.tech().addLayer(
+      "VTL_N", true, 0, 6, setup.usedLayerMissingRule ? 0 : 2);
   db.tech().addLayer("VTL_P", true, 1, 6, 2);
   db.tech().addLayer("VTH_N", true, 2, 6, 2);
   db.tech().addLayer("VTH_P", true, 3, 6, 2);

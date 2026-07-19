@@ -53,6 +53,8 @@ class FillerRepairEngine::Impl final : private PlannerDataSource,
 
   void buildPlannerData();
   bool isReady() const;
+  bool isNonBlockingCheckerInitDiagnostic(
+      const ipl::Diagnostic& diagnostic) const;
   bool bindInfrastructure(eUNL::PhysDesMgr* desMgr,
                           const fillerSetting& fillerSettings);
   bool rebuildOracle();
@@ -596,6 +598,54 @@ bool FillerRepairEngine::Impl::isReady() const
       [](const Diagnostic& d) { return d.severity == Severity::Fatal; });
 }
 
+bool FillerRepairEngine::Impl::isNonBlockingCheckerInitDiagnostic(
+    const ipl::Diagnostic& diagnostic) const
+{
+  // A non-placed Network node is outside both the checker snapshot and the
+  // planner view. The checker reports the skip persistently, but it does not
+  // make the placed design's oracle incomplete.
+  if (diagnostic.status == "skipped_phys_status") {
+    return true;
+  }
+
+  // Missing rules are safe only for an implant layer unused by EVERY master
+  // in the shared Network. This preserves informational diagnostics for spare
+  // technology layers without allowing a used layer to silently lose WIDTH or
+  // SPACING coverage. All other checker-init statuses fail closed below.
+  if (diagnostic.status != "missing_rule_parameter"
+      && diagnostic.status != "skipped_missing_rule_parameter") {
+    return false;
+  }
+  if (des_mgr_ == nullptr || network_ == nullptr || checker_ == nullptr) {
+    return false;
+  }
+
+  std::set<std::string> usedLayerNames;
+  const eLIB::TechLib& tech = des_mgr_->getTopTech();
+  for (const auto& masterPtr : network_->getMasters()) {
+    if (masterPtr == nullptr || masterPtr->getPhysLibCell() == nullptr) {
+      continue;
+    }
+    for (const auto& obstruction :
+         masterPtr->getPhysLibCell()->getObstruction()) {
+      for (const auto& [layerRelId, shapes] :
+           obstruction.getShapes(eUTL::PhysOrientationE::R0)) {
+        if (!shapes.empty()) {
+          usedLayerNames.insert(tech.getTechLayer(layerRelId).getName());
+        }
+      }
+    }
+  }
+
+  for (const ipl::ImplantLayer& layer : checker_->getLayers()) {
+    const std::string marker = cat("layer ", layer.name, " ");
+    if (diagnostic.message.find(marker) != std::string::npos) {
+      return usedLayerNames.count(layer.name) == 0;
+    }
+  }
+  return false;
+}
+
 void FillerRepairEngine::Impl::addProblem(Severity severity,
                                const std::string& code,
                                const std::string& message)
@@ -773,13 +823,15 @@ std::vector<CheckResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
            cat("overlay batch: ", changes.size(), " candidate(s) -> ",
                raw.size(), " result(s)"));
 
-  // The final checker copies its PERSISTENT init diagnostics into every
-  // result -- once directly (checkPlaceWithOverlay) and once more inside the
+  // The final checker copies its approved, non-blocking PERSISTENT init
+  // diagnostics into every result -- once directly (checkPlaceWithOverlay)
+  // and once more inside the
   // embedded region result (checkOverlayRegion) -- and folds them into
   // isLegal. Strip every leading repetition of that sequence so only
   // request-specific findings drive the candidate status; otherwise a single
   // benign init diagnostic (e.g. missing_rule_parameter on an unused layer)
-  // would make every candidate permanently illegal.
+  // would make every candidate permanently illegal. Structural init
+  // diagnostics never reach this path because rebuildOracle() fails closed.
   const auto& initDiags = checker_->getDiags();
   const auto requestDiagOffset =
       [&initDiags](const std::vector<ipl::Diagnostic>& diagnostics) {
@@ -1344,7 +1396,23 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   log_.setEnabled(debug_logging_);
   checker_ = std::make_unique<ipl::ImplantLayerChecker>(grid_, network_);
   buildPlannerData();
-  if (isReady()) {
+  bool checkerReady = true;
+  for (const ipl::Diagnostic& diagnostic : checker_->getDiags()) {
+    if (isNonBlockingCheckerInitDiagnostic(diagnostic)) {
+      log_.msg("engine",
+               cat("non-blocking checker init diagnostic: ",
+                   diagnostic.status, " ", diagnostic.message));
+      continue;
+    }
+    checkerReady = false;
+    oracle_diagnostics_.push_back(
+        {diagnostic.status,
+         cat("fatal: checker initialization: ", diagnostic.message)});
+    log_.msg("engine",
+             cat("blocking checker init diagnostic: ", diagnostic.status,
+                 " ", diagnostic.message));
+  }
+  if (checkerReady && isReady()) {
     return true;
   }
   for (const Diagnostic& diagnostic : setup_diagnostics_) {

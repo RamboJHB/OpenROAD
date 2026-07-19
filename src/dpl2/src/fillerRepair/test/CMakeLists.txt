@@ -18,29 +18,34 @@ set(DPL2_UDM_INCLUDE_DIRS "" CACHE STRING
     "Destination UDM include directories")
 set(DPL2_UDM_LIBRARIES "" CACHE STRING
     "Destination UDM libraries or CMake targets")
+set(DPL2_RUNTIME_LIBRARIES "" CACHE STRING
+    "Destination targets owning the existing dpl2 infrastructure/checker")
 
 find_package(GTest REQUIRED)
 find_package(Boost REQUIRED)
 find_package(TBB REQUIRED)
 include("${CMAKE_CURRENT_LIST_DIR}/../sources.cmake")
 
-# The destination already owns these files. Keeping the short list here makes
-# this directory runnable standalone after only supplying UDM include/link
-# settings; a parent CMake may instead copy the same sources into its test
-# target and link its existing infra/checker targets.
+# Prefer the destination's existing runtime targets so its exact infrastructure
+# and checker implementation are linked once. With no target supplied, compile
+# the sibling sources as a standalone fallback.
 set(DPL2_CHECKER_HELPER_SOURCES
-    "${DPL2_SOURCE_ROOT}/infrastructure/Grid.cpp"
-    "${DPL2_SOURCE_ROOT}/infrastructure/Object.cpp"
-    "${DPL2_SOURCE_ROOT}/infrastructure/network.cpp"
-    "${DPL2_SOURCE_ROOT}/infrastructure/Padding.cpp"
-    "${DPL2_SOURCE_ROOT}/drc/ImplantLayerChecker.cpp"
     "${DPL2_SOURCE_ROOT}/drc/ImplantLayerCheckerHelper.cpp")
+if(NOT DPL2_RUNTIME_LIBRARIES)
+  list(PREPEND DPL2_CHECKER_HELPER_SOURCES
+      "${DPL2_SOURCE_ROOT}/infrastructure/Grid.cpp"
+      "${DPL2_SOURCE_ROOT}/infrastructure/Object.cpp"
+      "${DPL2_SOURCE_ROOT}/infrastructure/network.cpp"
+      "${DPL2_SOURCE_ROOT}/infrastructure/architecture.cpp"
+      "${DPL2_SOURCE_ROOT}/infrastructure/Padding.cpp"
+      "${DPL2_SOURCE_ROOT}/infrastructure/fillerSetting.cpp"
+      "${DPL2_SOURCE_ROOT}/drc/ImplantLayerChecker.cpp")
+endif()
 
 add_executable(
   dpl2_filler_repair_checker_e2e
   ${DPL2_CHECKER_HELPER_SOURCES}
-  ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-  ${DPL2_FILLER_REPAIR_PRECHECK_SOURCE}
+  ${DPL2_FILLER_REPAIR_SOURCES}
   ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
 
 target_compile_features(dpl2_filler_repair_checker_e2e PRIVATE cxx_std_20)
@@ -56,7 +61,8 @@ target_include_directories(
   dpl2_filler_repair_checker_e2e SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
 target_link_libraries(
   dpl2_filler_repair_checker_e2e
-  PRIVATE GTest::gtest_main TBB::tbb ${DPL2_UDM_LIBRARIES})
+  PRIVATE GTest::gtest_main TBB::tbb ${DPL2_RUNTIME_LIBRARIES}
+          ${DPL2_UDM_LIBRARIES})
 
 if(DPL2_ENABLE_ASAN)
   target_compile_options(

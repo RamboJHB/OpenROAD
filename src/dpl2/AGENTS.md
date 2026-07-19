@@ -18,7 +18,7 @@ The V2.1 swap-only planner and real-UDM runtime E2E package are complete.
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
 | Runtime API | one `FillerRepairEngine` = precheck + private snapshot/oracle + repair; fails closed before a successful `init()` |
 | Portable E2E | 33 GoogleTests in `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`: final-checker overlay/planner cases plus the UDM-free precheck sweep; no destination fixture provider |
-| Local regression | 82 planner + 64 fake-UDM engine cases; full CTest total 179, normal and ASan |
+| Local regression | 82 planner + 67 fake-UDM engine cases; full CTest total 182, normal and ASan |
 | CMake | `fillerRepair/sources.cmake` exports runtime/planner/precheck/test source sets; the standalone test CMake accepts destination UDM include/link inputs |
 
 ## Fixed decisions
@@ -83,7 +83,7 @@ SANITIZE=address src/dpl2/test/local/run_fake_udm_e2e.sh
 final-checker/planner/precheck GoogleTests plus standalone CMake. Test data is
 built with `ImplantLayerCheckerHelper`; it needs no DEF/LEF reader or
 destination fixture provider. All 82 fake-based planner unit cases, their
-doubles, the local UDM-compatible include tree, provider and 64 engine cases
+doubles, the local UDM-compatible include tree, provider and 67 engine cases
 live only under `src/dpl2/test/local`; they are not part of the migration
 payload and never link into runtime.
 

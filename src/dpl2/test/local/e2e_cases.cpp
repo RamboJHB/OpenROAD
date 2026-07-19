@@ -364,6 +364,24 @@ TEST_P(FillerRepairEngineE2E,
                 .getLibCellId());
 }
 
+TEST_P(FillerRepairEngineE2E,
+       StructuralCheckerDiagnosticsBlockInitialization)
+{
+  frt::DesignSetup setup = GetParam().setup;
+  setup.usedLayerMissingRule = true;
+  ProviderObjects objects(setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::fillerSetting setting(objects.design().design());
+  setting.addFillerCell(kDefaultFillers);
+  dpl2::fillerRepair::FillerRepairEngine engine(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+  EXPECT_FALSE(engine.init(objects.design().desMgr(), setting));
+  const auto precheck = engine.precheck();
+  EXPECT_FALSE(precheck.isLegal);
+  EXPECT_TRUE(hasDiagnostic(precheck.diagnostics, "missing_rule_parameter"));
+}
+
 TEST_P(FillerRepairEngineE2E, ConfiguredMastersAreRegisteredByEngine)
 {
   ProviderObjects objects(GetParam().setup);

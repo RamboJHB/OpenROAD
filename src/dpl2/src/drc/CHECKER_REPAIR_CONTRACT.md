@@ -24,9 +24,13 @@ diagnostics are empty. Invalid candidates are isolated.
 
 Persistent init diagnostics (`getDiags()`) are copied into every result --
 once by `checkPlaceWithOverlay` and once more inside the embedded
-`checkOverlayRegion` result -- and folded into `isLegal`. The engine boundary
-therefore strips EVERY leading repetition of the `getDiags()` sequence from a
-result before classifying it; a count-based single-prefix strip is wrong.
+`checkOverlayRegion` result -- and folded into `isLegal`. Before accepting the
+checker, the engine classifies that sequence: `skipped_phys_status` and missing
+rule parameters on implant layers unused by every Network master are
+non-blocking; every other init diagnostic makes `FillerRepairEngine::init()`
+fail closed. Once initialization succeeds, the engine strips every leading
+repetition of the approved sequence from each result before request-level
+classification; a count-based single-prefix strip is wrong.
 
 ## IDs and wire
 
