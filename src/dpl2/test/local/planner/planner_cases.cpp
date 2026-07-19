@@ -2904,6 +2904,65 @@ void testEngineAdaptiveL1FindsFarFiller()
   EXPECT_TRUE(sawAdaptiveSolution);
 }
 
+// The same fixture whose solution lives at adaptive-L1 step 1, but with the
+// level cap at 0: the planner must stop after L0 with the TRUNCATED verdict
+// (never "definitive" -- unexpanded windows were not searched) and no
+// partial changes.
+void testEngineAdaptiveLevelCapTruncates()
+{
+  fr::FakeDesign design = makeLibrary();
+  design.addRow(0, 0, 20)
+      .place(100, fillerMaster(4, kVt1), 0, 0)
+      .place(101, fillerMaster(4, kVt1), 0, 4)
+      .place(102, cellMaster(kVt2), 0, 8)
+      .place(140, fillerMaster(2, kVt1), 0, 12)
+      .place(141, fillerMaster(2, kVt1), 0, 14)
+      .place(142, fillerMaster(4, kVt1), 0, 16);
+
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {11, 14});
+  fr::ViolationParticipant participant;
+  participant.instanceId = 140;
+  participant.masterId = fillerMaster(2, kVt1);
+  participant.rowId = 0;
+  participant.xRange = {12, 14};
+  participant.isFiller = true;
+  original.participants = {participant};
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  request.violations = {original};
+
+  AdaptiveSolutionChecker checker;
+  checker.original = original;
+  checker.solutionInstance = 141;
+  fr::RepairConfig config;
+  config.adaptiveStepFillers = 1;
+  config.maxAdaptiveLevels = 0;
+  config.verbose = verbose();
+  fr::internal::FillerRepairPlanner engine(design, checker, config);
+
+  const fr::FillerRepairResult result = engine.repair(request);
+  EXPECT_TRUE(!result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  bool sawCap = false;
+  bool sawTruncated = false;
+  for (const fr::Diagnostic& diagnostic : result.diagnostics) {
+    sawCap |= diagnostic.code == "ExpansionCutoff"
+              && diagnostic.message.find("maxAdaptiveLevels")
+                     != std::string::npos;
+    sawTruncated |= diagnostic.code == "NoCleanOverlay"
+                    && diagnostic.message.find("truncated")
+                           != std::string::npos;
+  }
+  EXPECT_TRUE(sawCap);
+  EXPECT_TRUE(sawTruncated);
+}
+
 void testEngineAdaptiveContinuesPastUnchangedBlocking()
 {
   fr::FakeDesign design = makeLibrary();
@@ -3656,6 +3715,8 @@ void registerPlannerTests()
        testEngineAdaptiveSolvesBeyondRing},
       {"engine_adaptive_l1_finds_far_filler",
        testEngineAdaptiveL1FindsFarFiller},
+      {"engine_adaptive_level_cap_truncates",
+       testEngineAdaptiveLevelCapTruncates},
       {"engine_adaptive_continues_past_unchanged_blocking",
        testEngineAdaptiveContinuesPastUnchangedBlocking},
       {"gate_baseline_unexpected_inwindow_aborts",

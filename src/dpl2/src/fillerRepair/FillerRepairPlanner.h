@@ -31,6 +31,12 @@ struct RepairConfig
   int memberCapSize3 = 12;        // N_3
   int memberCapSize4 = 8;         // N_4
   int adaptiveStepFillers = 2;    // K per relevant row/side (spec 6.3 #8)
+  // Safety valve for the NO-SOLUTION path: without it adaptive expansion
+  // keeps adding fillers until the window rows are exhausted (levels ~
+  // fillers/(2K), each level up to one window budget of checker calls).
+  // Reaching the cap ends the search with the existing "truncated"
+  // semantics -- never a wrong answer, only a bounded give-up.
+  int maxAdaptiveLevels = 32;
   bool verbose = false;           // enables the [fr] debug transcript
 };
 

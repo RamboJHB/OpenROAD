@@ -87,7 +87,7 @@ cmake --build test/build/e2e
 ctest --test-dir test/build/e2e --output-on-failure
 ```
 
-The complete repository-local regression copy—including all 81 planner unit
+The complete repository-local regression copy—including all 82 planner unit
 cases, their doubles, the UDM-compatible test data provider and its runners—is
 outside this directory at `src/dpl2/test/local/`. It is not part of the copied
 payload.

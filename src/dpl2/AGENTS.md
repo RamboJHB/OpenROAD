@@ -13,12 +13,12 @@ The V2.1 swap-only planner and real-UDM production E2E package are complete.
 | Area | State |
 |---|---|
 | Planner | internal `FillerRepairPlanner`; adaptive-L1, filler domains, per-band ranking/filtering, deterministic output and opt-in `[fr][stage]` transcript complete |
-| Unit tests | 81/81 GoogleTests normal and ASan; local-only under `src/dpl2/test/local/planner` |
+| Unit tests | 82/82 GoogleTests normal and ASan; local-only under `src/dpl2/test/local/planner` |
 | Infrastructure | existing production Grid/Network are borrowed; engine owns only final checker/view, registers configured filler masters at init and target master lazily; empty `getFillerMasters()` errors out |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
 | Production API | one `FillerRepairEngine` = precheck + private view/oracle + repair; fails closed before a successful `init()` |
 | Portable E2E | 33 GoogleTests in `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`: final-checker overlay/planner cases plus the UDM-free precheck sweep; no destination fixture provider |
-| Local regression | 81 planner + 64 fake-UDM facade cases; full CTest total 178, normal and ASan |
+| Local regression | 82 planner + 64 fake-UDM facade cases; full CTest total 179, normal and ASan |
 | CMake | `fillerRepair/sources.cmake` exports production/planner/precheck/test source sets; the standalone test CMake accepts destination UDM include/link inputs |
 
 ## Fixed decisions
@@ -80,7 +80,7 @@ SANITIZE=address src/dpl2/test/local/run_fake_udm_e2e.sh
 `fillerRepair/test` travels with production and contains 33 portable
 final-checker/planner/precheck GoogleTests plus standalone CMake. Test data is
 built with `ImplantLayerCheckerHelper`; it needs no DEF/LEF reader or
-destination fixture provider. All 81 fake-based planner unit cases, their
+destination fixture provider. All 82 fake-based planner unit cases, their
 doubles, the local UDM-compatible include tree, provider and 64 facade cases
 live only under `src/dpl2/test/local`; they are not part of the migration
 payload and never link into production.

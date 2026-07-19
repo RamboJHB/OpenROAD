@@ -652,6 +652,10 @@ spec 要求之外的功能。不可修的终判只有一个来源:④OracleGate 
   filler/move 时停止扩窗并进入失败路径。remaining violation 集合在完备枚举后
   不变**不是**安全的截止证明:implant 合法性是非单调的,更远 filler 仍可能参与
   三个及以上的 atomic swap 解。
+- **层数安全阀**:`RepairConfig::maxAdaptiveLevels`(默认 32)限制无解场景的
+  扩窗层数上限——没有它,长 filler run 上的无解 case 会一直扩到 filler 耗尽
+  (层数 ~ filler 数/(2K),每层最多一个 window 预算的 checker 调用)。触发上限
+  按既有 **truncated** 语义收尾(不得声明 definitive),仍然不返回 partial。
 - multi-height 预留规则:窗口按行扩展时,跨行 instance 把它占用的所有行拉进同一窗口。
 
 **bridge filler 默认必选**(不是兜底):与 anchor std cell 左右接触的 filler、上下行

@@ -35,6 +35,11 @@ The 33 portable GoogleTests cover:
     triple coverage, touching legal spans and mixed deterministic findings;
 13. no placement mutation by checker overlay queries or planner repair.
 
+The local planner suite additionally pins `RepairConfig::maxAdaptiveLevels`:
+reaching the cap ends a no-solution search with the TRUNCATED verdict (never
+"definitive") and empty changes
+(`planner.FillerRepairPlanner.engine_adaptive_level_cap_truncates`).
+
 Each dense fixture has eight rows and 200 sites per row. Each direct overlay
 test evaluates at least three candidates: clean repair, unresolved violation,
 and repair that creates a new violation.
@@ -60,7 +65,7 @@ Both configurations compile with `-Wall -Wextra -Werror` and C++20.
 
 ## Separate local regression
 
-The 81 pure-planner tests, their fake checker/view, fake UDM headers and the
+The 82 pure-planner tests, their fake checker/view, fake UDM headers and the
 64 production-facade cases are retained under
 `src/dpl2/test/local/`. They do not move with `fillerRepair/` and are not linked
 by the portable E2E target. Twelve of those 64 instances exercise the public

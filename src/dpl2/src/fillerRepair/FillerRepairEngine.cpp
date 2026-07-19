@@ -5,12 +5,13 @@
 
 #include <algorithm>
 #include <atomic>
-#include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <tuple>
 #include <utility>
+#include <vector>
 
 #include "FillerRepairPlanner.h"
 #include "Log.h"
@@ -92,6 +93,16 @@ class ProductionView final : public PlacementView,
   FillerCellRecord toFillerCellRecord(const FillerChange& change) const;
   Region snapshotGuard(const TargetPlace& target) const;
 
+  // Grows `table` so `id` is a valid index (ids can exceed the presized
+  // container counts only if the Network id spaces are not dense).
+  template <typename T>
+  static void ensureSlot(std::vector<T>& table, size_t id)
+  {
+    if (id >= table.size()) {
+      table.resize(id + 1);
+    }
+  }
+
   Network* network_ = nullptr;
   const ipl::ImplantLayerChecker* checker_ = nullptr;
   Config config_;
@@ -99,10 +110,15 @@ class ProductionView final : public PlacementView,
   DbCoord site_width_ = 0;
   DbCoord row_height_ = 0;
   DbCoord default_halo_x_ = 0;
-  std::map<RowId, XInterval> row_spans_;
+  // Dense tables over the dense id spaces (RowId = PhysRow iteration index,
+  // InstanceId = Node::getId(), MasterId = Master::getId()); planner window
+  // building and ranking hit these on every step, and std::map lookups were
+  // measurable on large snapshots. All tables are immutable after
+  // construction, so returned pointers stay valid for the view's lifetime.
+  std::vector<XInterval> row_spans_;  // empty interval = pad row / no span
   std::vector<RowId> row_list_;
-  std::map<MasterId, MasterInfo> masters_;
-  std::map<InstanceId, PlacedInstance> instances_;
+  std::vector<std::optional<MasterInfo>> masters_;
+  std::vector<std::optional<PlacedInstance>> instances_;
   struct UdmRef
   {
     eUNL::LeafCellID cellId;
@@ -110,9 +126,9 @@ class ProductionView final : public PlacementView,
     eUTL::UvDist originX;
     eUTL::UvDist originY;
   };
-  std::map<InstanceId, UdmRef> udm_refs_;
-  std::map<MasterId, eLIB::LibCellID> master_lib_ids_;
-  std::map<RowId, std::vector<PlacedInstance>> by_row_;
+  std::vector<std::optional<UdmRef>> udm_refs_;
+  std::vector<eLIB::LibCellID> master_lib_ids_;  // valid iff masters_[id]
+  std::vector<std::vector<PlacedInstance>> by_row_;
   std::vector<MasterId> filler_master_ids_;
   std::vector<Diagnostic> setup_diagnostics_;
   mutable std::mutex checker_mutex_;
@@ -229,13 +245,17 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
           addProblem(Severity::Fatal, "InvalidRowSpan",
                      cat("row ", rowId, " has an invalid legal span"));
         }
+        ensureSlot(row_spans_, static_cast<size_t>(rowId));
         row_spans_[rowId] = XInterval{0, spanWidth};
+        row_list_.push_back(rowId);
       }
       frames.push_back(frame);
       ++rowId;
     }
+    row_spans_.resize(frames.size());  // trailing pad rows -> empty spans
+    by_row_.resize(frames.size());
   }
-  if (site_width_ <= 0 || row_height_ <= 0 || row_spans_.empty()) {
+  if (site_width_ <= 0 || row_height_ <= 0 || row_list_.empty()) {
     addProblem(Severity::Fatal, "MissingRowGeometry",
                "no usable standard-cell row geometry");
   }
@@ -262,11 +282,6 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
       }
     }
   }
-  row_list_.reserve(row_spans_.size());
-  for (const auto& [id, span] : row_spans_) {
-    row_list_.push_back(id);
-  }
-
   // y -> row lookup; ties on yLo resolve to the FIRST row in row order,
   // mirroring the checker's linear first-match scan.
   struct RowRange
@@ -321,6 +336,8 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
     return nullptr;
   };
 
+  masters_.resize(network->getMasters().size());
+  master_lib_ids_.resize(network->getMasters().size());
   for (const auto& masterPtr : network->getMasters()) {
     const Master* nm = masterPtr.get();
     if (nm == nullptr || nm->getPhysLibCell() == nullptr) {
@@ -328,6 +345,9 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
     }
     const eLIB::PhysLibCell* cell = nm->getPhysLibCell();
     const MasterId id = static_cast<MasterId>(nm->getId());
+    if (id < 0) {
+      continue;
+    }
 
     MasterInfo info;
     info.id = id;
@@ -365,6 +385,8 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
       }
     }
 
+    ensureSlot(masters_, static_cast<size_t>(id));
+    ensureSlot(master_lib_ids_, static_cast<size_t>(id));
     masters_[id] = info;
     master_lib_ids_[id] = cell->getLibCellId();
   }
@@ -389,8 +411,8 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
                        " is not in the Network"));
         continue;
       }
-      const auto it = masters_.find(static_cast<MasterId>(id));
-      if (it == masters_.end() || !it->second.isFiller) {
+      const MasterInfo* info = masterInfo(static_cast<MasterId>(id));
+      if (info == nullptr || !info->isFiller) {
         addProblem(Severity::Fatal, "ConfiguredMasterNotFiller",
                    cat("configured master ", id, " is not a filler master"));
         continue;
@@ -412,6 +434,8 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
 
   // --- placed instances: Network nodes with the checker's exact filters and
   // frame (state from the PhysCell, x relative to the row origin).
+  instances_.resize(network->getNodes().size());
+  udm_refs_.resize(network->getNodes().size());
   for (const auto& nodePtr : network->getNodes()) {
     const Node* node = nodePtr.get();
     if (node == nullptr || node->getMaster() == nullptr
@@ -506,6 +530,8 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
                  cat("placed filler ", id, " uses master ", masterId,
                      " without implant VT metadata -> not swappable"));
     }
+    ensureSlot(instances_, static_cast<size_t>(id));
+    ensureSlot(udm_refs_, static_cast<size_t>(id));
     instances_[id] = placed;
     udm_refs_[id] = UdmRef{lcId, cell->getLibCellId(), origin.getX(),
                            origin.getY()};
@@ -524,7 +550,7 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
       by_row_[rowCopy.rowId].push_back(rowCopy);
     }
   }
-  for (auto& [rowId, list] : by_row_) {
+  for (std::vector<PlacedInstance>& list : by_row_) {
     std::sort(list.begin(), list.end(),
               [](const PlacedInstance& a, const PlacedInstance& b) {
                 return a.x != b.x ? a.x < b.x : a.id < b.id;
@@ -545,9 +571,17 @@ ProductionView::ProductionView(eUNL::PhysDesMgr* desMgr,
     default_halo_x_ = 2 * maxRule;
   }
 
+  const auto placedCount = std::count_if(
+      instances_.begin(), instances_.end(),
+      [](const std::optional<PlacedInstance>& slot) {
+        return slot.has_value();
+      });
+  const auto masterCount = std::count_if(
+      masters_.begin(), masters_.end(),
+      [](const std::optional<MasterInfo>& slot) { return slot.has_value(); });
   log_.msg("engine",
-           cat("placement view: ", instances_.size(), " node(s), ",
-               masters_.size(), " master(s), ", filler_master_ids_.size(),
+           cat("placement view: ", placedCount, " node(s), ",
+               masterCount, " master(s), ", filler_master_ids_.size(),
                " configured filler master(s), siteWidth=", site_width_,
                " defaultHaloX=", default_halo_x_));
 }
@@ -569,27 +603,33 @@ void ProductionView::addProblem(Severity severity,
 
 XInterval ProductionView::rowLegalSpan(RowId rowId) const
 {
-  const auto it = row_spans_.find(rowId);
-  return it == row_spans_.end() ? XInterval{} : it->second;
+  return rowId >= 0 && static_cast<size_t>(rowId) < row_spans_.size()
+             ? row_spans_[rowId]
+             : XInterval{};
 }
 
 const std::vector<PlacedInstance>& ProductionView::instancesInRow(
     RowId rowId) const
 {
-  const auto it = by_row_.find(rowId);
-  return it == by_row_.end() ? emptyInstances() : it->second;
+  return rowId >= 0 && static_cast<size_t>(rowId) < by_row_.size()
+             ? by_row_[rowId]
+             : emptyInstances();
 }
 
 const PlacedInstance* ProductionView::instance(InstanceId id) const
 {
-  const auto it = instances_.find(id);
-  return it == instances_.end() ? nullptr : &it->second;
+  return id >= 0 && static_cast<size_t>(id) < instances_.size()
+                 && instances_[id].has_value()
+             ? &*instances_[id]
+             : nullptr;
 }
 
 const MasterInfo* ProductionView::masterInfo(MasterId id) const
 {
-  const auto it = masters_.find(id);
-  return it == masters_.end() ? nullptr : &it->second;
+  return id >= 0 && static_cast<size_t>(id) < masters_.size()
+                 && masters_[id].has_value()
+             ? &*masters_[id]
+             : nullptr;
 }
 
 // --- oracle: direct calls into the final ipl checker -----------------------
@@ -661,16 +701,19 @@ FillerCellRecord ProductionView::toFillerCellRecord(
 {
   FillerCellRecord record{};
   record.op_ = dpl2::OpType::Replace;
-  const auto refIt = udm_refs_.find(change.instanceId);
-  if (refIt != udm_refs_.end()) {
-    record.cell_id_ = refIt->second.cellId;
-    record.orig_lib_cell_ = refIt->second.libCellId;
-    record.origin_x_ = refIt->second.originX;
-    record.origin_y_ = refIt->second.originY;
+  const bool haveRef = change.instanceId >= 0
+                       && static_cast<size_t>(change.instanceId)
+                              < udm_refs_.size()
+                       && udm_refs_[change.instanceId].has_value();
+  if (haveRef) {
+    const UdmRef& ref = *udm_refs_[change.instanceId];
+    record.cell_id_ = ref.cellId;
+    record.orig_lib_cell_ = ref.libCellId;
+    record.origin_x_ = ref.originX;
+    record.origin_y_ = ref.originY;
   }
-  const auto libIt = master_lib_ids_.find(change.newMasterId);
-  if (libIt != master_lib_ids_.end()) {
-    record.new_lib_cell_ = libIt->second;
+  if (masterInfo(change.newMasterId) != nullptr) {
+    record.new_lib_cell_ = master_lib_ids_[change.newMasterId];
   }
   return record;
 }
@@ -966,35 +1009,41 @@ ipl::Diagnostic toProductionDiagnostic(const Diagnostic& diagnostic)
       cat(severityName(diagnostic.severity), ": ", diagnostic.message)};
 }
 
-std::vector<internal::CoverageFinding> findGapAndOverlap(
-    eUNL::PhysDesMgr* desMgr,
-    const Grid* grid,
-    const Network* network)
+// Grid legal domain for one precheck row plus the y-sorted lookup index.
+// The Grid legal domain (rows, blockages, padding reservations) is immutable
+// within one engine snapshot -- only PLACED cells move between precheck
+// calls -- so this is computed once at init and reused per call.
+struct PrecheckDomains
 {
-  struct RowData
+  struct Row
   {
     int id = 0;
     int64_t yl = 0;
     int64_t yh = 0;
-    std::vector<std::pair<int64_t, int64_t>> legalSpans;
-    std::vector<std::pair<int64_t, int64_t>> spans;
+    std::vector<XInterval> legalSpans;
   };
+  std::vector<Row> rows;
+  std::vector<size_t> order;      // row indices sorted by yl (ties by id)
+  std::vector<int64_t> sortedYl;  // rows[order[i]].yl, for binary search
+};
 
+PrecheckDomains buildPrecheckDomains(const Grid* grid)
+{
   // Grid is the infrastructure authority for placeable row sites. A valid
   // pixel belongs to a physical row and is not cut by a hard blockage/group
   // boundary; padding_reserved_by marks a halo/padding site where whitespace
   // is intentional. Only maximal runs satisfying both conditions require
   // exactly one placed-cell cover.
-  std::vector<RowData> rows;
+  PrecheckDomains domains;
   const eUTL::Rect core = grid->getCore();
   const int64_t coreXl = core.getXL().getStorage();
   const int64_t coreYl = core.getYL().getStorage();
   const int64_t siteWidth = grid->getSiteWidth().v;
   if (siteWidth <= 0) {
-    return {};
+    return domains;
   }
   for (GridY y{0}; y < grid->getRowCount(); ++y) {
-    RowData row;
+    PrecheckDomains::Row row;
     row.id = y.v;
     row.yl = coreYl + grid->gridYToDbu(y).v;
     row.yh = coreYl + grid->gridYToDbu(y + 1).v;
@@ -1010,37 +1059,47 @@ std::vector<internal::CoverageFinding> findGapAndOverlap(
         inLegalSpan = true;
         legalStart = x.v;
       } else if (!requiresCoverage && inLegalSpan) {
-        row.legalSpans.emplace_back(coreXl + legalStart * siteWidth,
-                                    coreXl + x.v * siteWidth);
+        row.legalSpans.push_back({coreXl + legalStart * siteWidth,
+                                  coreXl + x.v * siteWidth});
         inLegalSpan = false;
       }
     }
     if (inLegalSpan) {
-      row.legalSpans.emplace_back(
-          coreXl + legalStart * siteWidth,
-          coreXl + grid->getRowSiteCount().v * siteWidth);
+      row.legalSpans.push_back(
+          {coreXl + legalStart * siteWidth,
+           coreXl + grid->getRowSiteCount().v * siteWidth});
     }
     if (!row.legalSpans.empty() && row.yh > row.yl) {
-      rows.push_back(std::move(row));
+      domains.rows.push_back(std::move(row));
     }
   }
 
   // y-sorted index over the rows so each node binary-searches its overlapped
   // rows instead of scanning all of them (real designs: 1e5..1e6 nodes x 1e3
   // rows made the full scan the dominant precheck cost).
-  std::vector<size_t> order(rows.size());
-  for (size_t i = 0; i < order.size(); ++i) {
-    order[i] = i;
+  domains.order.resize(domains.rows.size());
+  for (size_t i = 0; i < domains.order.size(); ++i) {
+    domains.order[i] = i;
   }
-  std::sort(order.begin(), order.end(), [&rows](size_t a, size_t b) {
-    return rows[a].yl != rows[b].yl ? rows[a].yl < rows[b].yl
-                                    : rows[a].id < rows[b].id;
-  });
-  std::vector<int64_t> sortedYl;
-  sortedYl.reserve(order.size());
-  for (const size_t idx : order) {
-    sortedYl.push_back(rows[idx].yl);
+  const std::vector<PrecheckDomains::Row>& rows = domains.rows;
+  std::sort(domains.order.begin(), domains.order.end(),
+            [&rows](size_t a, size_t b) {
+              return rows[a].yl != rows[b].yl ? rows[a].yl < rows[b].yl
+                                              : rows[a].id < rows[b].id;
+            });
+  domains.sortedYl.reserve(domains.order.size());
+  for (const size_t idx : domains.order) {
+    domains.sortedYl.push_back(rows[idx].yl);
   }
+  return domains;
+}
+
+std::vector<internal::CoverageFinding> findGapAndOverlap(
+    eUNL::PhysDesMgr* desMgr,
+    const Network* network,
+    const PrecheckDomains& domains)
+{
+  std::vector<std::vector<XInterval>> placedSpans(domains.rows.size());
 
   for (const auto& nodePtr : network->getNodes()) {
     if (nodePtr == nullptr) {
@@ -1065,33 +1124,31 @@ std::vector<internal::CoverageFinding> findGapAndOverlap(
     // start at the first row with yl > cellYl and walk back over rows whose
     // span still crosses cellYl (at most one for non-overlapping rows).
     size_t pos = static_cast<size_t>(
-        std::upper_bound(sortedYl.begin(), sortedYl.end(), cellYl)
-        - sortedYl.begin());
-    while (pos > 0 && rows[order[pos - 1]].yh > cellYl) {
+        std::upper_bound(domains.sortedYl.begin(), domains.sortedYl.end(),
+                         cellYl)
+        - domains.sortedYl.begin());
+    while (pos > 0 && domains.rows[domains.order[pos - 1]].yh > cellYl) {
       --pos;
     }
-    for (; pos < order.size() && rows[order[pos]].yl < cellYh; ++pos) {
-      RowData& row = rows[order[pos]];
+    for (; pos < domains.order.size()
+           && domains.rows[domains.order[pos]].yl < cellYh;
+         ++pos) {
+      const size_t rowIdx = domains.order[pos];
+      const PrecheckDomains::Row& row = domains.rows[rowIdx];
       if (cellYl >= row.yh || cellYh <= row.yl) {
         continue;
       }
-      row.spans.emplace_back(cellXl, cellXh);
+      placedSpans[rowIdx].push_back({cellXl, cellXh});
     }
   }
 
   std::vector<internal::PlacementCoverageRow> coverageRows;
-  coverageRows.reserve(rows.size());
-  for (RowData& row : rows) {
+  coverageRows.reserve(domains.rows.size());
+  for (size_t i = 0; i < domains.rows.size(); ++i) {
     internal::PlacementCoverageRow coverageRow;
-    coverageRow.rowId = row.id;
-    coverageRow.legalSpans.reserve(row.legalSpans.size());
-    coverageRow.placedSpans.reserve(row.spans.size());
-    for (const auto& span : row.legalSpans) {
-      coverageRow.legalSpans.push_back({span.first, span.second});
-    }
-    for (const auto& span : row.spans) {
-      coverageRow.placedSpans.push_back({span.first, span.second});
-    }
+    coverageRow.rowId = domains.rows[i].id;
+    coverageRow.legalSpans = domains.rows[i].legalSpans;
+    coverageRow.placedSpans = std::move(placedSpans[i]);
     coverageRows.push_back(std::move(coverageRow));
   }
   return internal::findCoverageFindings(std::move(coverageRows));
@@ -1125,7 +1182,12 @@ class FillerRepairEngine::Impl
       init_diagnostics_.insert(init_diagnostics_.end(),
                                oracle_diagnostics_.begin(),
                                oracle_diagnostics_.end());
+      return false;
     }
+    // The Grid legal domain is immutable within this snapshot (only PLACED
+    // cells move between precheck calls), so walk the pixels once instead of
+    // on every precheck.
+    precheck_domains_ = buildPrecheckDomains(grid_);
     return initialized_;
   }
 
@@ -1149,7 +1211,7 @@ class FillerRepairEngine::Impl
       return result;
     }
     const std::vector<internal::CoverageFinding> findings
-        = findGapAndOverlap(des_mgr_, grid_, network_);
+        = findGapAndOverlap(des_mgr_, network_, precheck_domains_);
     result.isLegal = findings.empty();
     for (const internal::CoverageFinding& finding : findings) {
       const char* status = internal::coverageFindingStatus(finding.kind);
@@ -1320,6 +1382,8 @@ class FillerRepairEngine::Impl
   std::unique_ptr<ProductionView> view_;
   std::vector<ipl::Diagnostic> init_diagnostics_;
   std::vector<ipl::Diagnostic> oracle_diagnostics_;
+  // Grid legal domain cached at init; precheck only refreshes placed spans.
+  PrecheckDomains precheck_domains_;
   bool debug_logging_ = false;
   // True only after a fully successful init(); every public API fails closed
   // until then (a half-built snapshot must never answer queries).

@@ -9,7 +9,7 @@ Production and tests migrate together by copying only
 `src/dpl2/src/fillerRepair/`. Its `test/` subtree contains 33 portable
 GoogleTests built from the final checker's `ImplantLayerCheckerHelper` and a
 standalone CMake. No DEF/LEF reader or destination fixture provider is needed.
-All 81 fake-based planner unit tests and the repository-local UDM-compatible
+All 82 fake-based planner unit tests and the repository-local UDM-compatible
 harness are outside this payload at `src/dpl2/test/local/`.
 No infrastructure/checker source or API change is required.
 
@@ -165,7 +165,7 @@ test-side CMake wiring required.
 
 The CMake below `fillerRepair/test` is a portable final-checker test package,
 not production CMake. It compiles the planner, checker/helper and 33 portable
-cases. The separate local harness retains the 81 planner tests and 64 fake-UDM
+cases. The separate local harness retains the 82 planner tests and 64 fake-UDM
 production-facade cases for repository regression.
 
 Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
@@ -193,9 +193,9 @@ clipping, legal holes, row ordering and deterministic coalescing. Planner double
 the fake-UDM suite live only under `src/dpl2/test/local/`; its 12 newly added
 external instances call the real public `precheck()` facade in opto order.
 
-2026-07-19 split result after expansion: planner 81/81, production-facade
+2026-07-19 split result after expansion: planner 82/82, production-facade
 fake-UDM E2E 64/64 and portable final-checker/precheck E2E 33/33 in both normal
-and ASan builds; full normal CTest 178/178; `-Wall -Wextra -Werror` clean.
+and ASan builds; full normal CTest 179/179; `-Wall -Wextra -Werror` clean.
 
 ## Integration risks
 

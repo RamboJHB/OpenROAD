@@ -90,7 +90,8 @@ FillerRepairResult FillerRepairPlanner::repair(
                " maxSubset=", config_.maxSubsetSize,
                " memberCaps=[", config_.memberCapSize2, ',',
                config_.memberCapSize3, ',', config_.memberCapSize4,
-               "] adaptiveStep=", config_.adaptiveStepFillers));
+               "] adaptiveStep=", config_.adaptiveStepFillers,
+               " maxAdaptiveLevels=", config_.maxAdaptiveLevels));
 
   // Placement coverage is intentionally not checked here. Production opto
   // calls FillerRepairEngine::precheck() before any mutation; keeping that
@@ -247,7 +248,20 @@ FillerRepairResult FillerRepairPlanner::repair(
 
     // A stable blocking set is not a proof that farther fillers cannot form a
     // clean non-monotone multi-swap. Keep expanding until no adjacent filler
-    // can be added (or the normal per-window search limits stop enumeration).
+    // can be added, the level cap fires, or the normal per-window search
+    // limits stop enumeration.
+    if (window.level >= config_.maxAdaptiveLevels) {
+      result.diagnostics.push_back(makeDiag(
+          Severity::Info, "ExpansionCutoff",
+          cat("window ", label, " reached maxAdaptiveLevels=",
+              config_.maxAdaptiveLevels, " -> stop escalation (truncated)")));
+      log_.msg("planner",
+               cat("window ", label, " adaptive level cap ",
+                   config_.maxAdaptiveLevels, " -> truncated"));
+      // Farther windows were never searched, so no-solution is not definitive.
+      lastSearchedDefinitive = false;
+      break;
+    }
     const RepairWindow expanded = expandWindowAdaptive(
         window,
         request.targetPlace,
