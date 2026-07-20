@@ -6,11 +6,11 @@ Updated: 2026-07-20. Branch: `claude/wizardly-carson-secahu`.
 
 The destination already supplies complete infrastructure and checker sources.
 Runtime integration uses `src/dpl2/src/fillerRepair/` plus the infrastructure
-`Network::updateNodes()` refresh seam. Its `test/` subtree contains 34 portable
-GoogleTests built from the final checker's `ImplantLayerCheckerHelper` and a
-standalone CMake. No DEF/LEF reader or destination fixture provider is needed.
-All 82 fake-based planner unit tests and the repository-local UDM-compatible
-harness are outside this payload at `src/dpl2/test/local/`.
+`Network::updateNodes()` refresh seam. Its `test/` subtree contains 116
+portable GoogleTests: 82 database-free planner cases and 34 final-checker/
+precheck E2E cases. No DEF/LEF reader, fake UDM tree or destination fixture
+provider is needed. The repository-local fake-UDM engine harness remains
+outside this payload at `src/dpl2/test/local/`.
 Checker source and DRC behavior are unchanged.
 
 The runtime boundary is one checker-style class that reuses DePlace's
@@ -179,14 +179,13 @@ supplied infrastructure/checker sources.
 
 ## Build and verification
 
-The CMake below `fillerRepair/test` is a portable final-checker test package,
-not the destination's runtime owner. Its executable nevertheless compiles
-the complete runtime engine source list, checker/helper and 34 portable
-cases, which makes real boundary compilation part of the migration gate. The
-separate local harness retains the 82 planner tests and 82 fake-UDM engine
-cases for repository regression.
+The CMake below `fillerRepair/test` is a portable test package, not the
+destination's runtime owner. It builds an 82-case planner executable plus a
+34-case E2E executable that compiles the complete runtime engine source list
+and checker/helper. The separate local harness retains only the 82 fake-UDM
+engine cases.
 
-Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
+Test dependencies: GoogleTest, Boost, TBB, C++17/C++20 and CMake 3.20+. Commands:
 
 ```sh
 src/dpl2/test/local/run_planner_tests.sh
@@ -209,13 +208,14 @@ batch invariance, candidates, third VT, budgets, baseline consistency,
 same-size edits, new-violation avoidance, a two-swap solution and a
 checker-legal three-swap repair when the best residual initially points toward
 a blocked adaptive side. The internal precheck matrix covers gaps, overlaps,
-clipping, legal holes, row ordering and deterministic coalescing. Planner doubles and
-the fake-UDM suite live only under `src/dpl2/test/local/`. Runtime cases cover
+clipping, legal holes, row ordering and deterministic coalescing. Planner
+doubles live under `fillerRepair/test/planner`; only the fake-UDM runtime suite
+lives under `src/dpl2/test/local/`. Runtime cases cover
 the internal repair precheck gate, hard macro and hard/soft blockage semantics,
 side-effect-free invalid replacement requests and snapshot update.
 
-2026-07-20 verification result: planner 82/82, engine fake-UDM E2E 82/82 and
-portable final-checker/precheck E2E 34/34; full normal CTest 198/198 and
+2026-07-20 verification result: portable package 116/116 (planner 82/82 plus
+final-checker/precheck E2E 34/34), engine fake-UDM E2E 82/82; full normal CTest 198/198 and
 `-Wall -Wextra -Werror` clean. ASan has not been rerun after this update. The
 engine cases include three layouts proving that unused-layer persistent
 checker diagnostics remain non-blocking while a used implant layer with a

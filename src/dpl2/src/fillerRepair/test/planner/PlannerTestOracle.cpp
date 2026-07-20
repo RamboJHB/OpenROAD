@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "FakeImplantChecker.h"
+#include "PlannerTestOracle.h"
 
 #include <algorithm>
 
@@ -42,14 +42,14 @@ bool inGuardRegion(const Violation& v, const Region& region)
 
 }  // namespace
 
-OracleResult FakeImplantChecker::checkPlaceWithOverlay(
+OracleResult PlannerTestOracle::checkPlaceWithOverlay(
     const OracleRequest& request)
 {
   ++request_count_;
   return evaluate(request);
 }
 
-std::vector<OracleResult> FakeImplantChecker::checkPlaceWithOverlays(
+std::vector<OracleResult> PlannerTestOracle::checkPlaceWithOverlays(
     const std::vector<OracleRequest>& requests)
 {
   ++batch_count_;
@@ -64,7 +64,7 @@ std::vector<OracleResult> FakeImplantChecker::checkPlaceWithOverlays(
   return results;
 }
 
-MasterId FakeImplantChecker::effectiveMaster(
+MasterId PlannerTestOracle::effectiveMaster(
     const PlacedInstance& inst,
     const OracleRequest& request,
     const std::map<InstanceId, MasterId>& overlay) const
@@ -79,7 +79,7 @@ MasterId FakeImplantChecker::effectiveMaster(
   return inst.masterId;
 }
 
-std::vector<FakeImplantChecker::Run> FakeImplantChecker::buildRuns(
+std::vector<PlannerTestOracle::Run> PlannerTestOracle::buildRuns(
     RowId rowId,
     const OracleRequest& request,
     const std::map<InstanceId, MasterId>& overlay) const
@@ -102,7 +102,7 @@ std::vector<FakeImplantChecker::Run> FakeImplantChecker::buildRuns(
   return runs;
 }
 
-OracleResult FakeImplantChecker::evaluate(const OracleRequest& request) const
+OracleResult PlannerTestOracle::evaluate(const OracleRequest& request) const
 {
   OracleResult result;
   result.requestId = request.requestId;  // echo, always

@@ -103,13 +103,12 @@ cmake --build test/build/e2e
 ctest --test-dir test/build/e2e --output-on-failure
 ```
 
-The test executable consumes the complete `DPL2_FILLER_REPAIR_SOURCES`, so a
+The E2E executable consumes the complete `DPL2_FILLER_REPAIR_SOURCES`, so a
 destination build cannot pass while `FillerRepairEngine.cpp` is incompatible
 with its real UDM/infrastructure/checker headers. Supplying
 `DPL2_RUNTIME_LIBRARIES` reuses the destination's owning targets; when omitted,
 the standalone fallback compiles the sibling infrastructure/checker sources.
 
-The complete repository-local regression copy—including all 82 planner unit
-cases, their doubles, the UDM-compatible test data provider and its runners—is
-outside this directory at `src/dpl2/test/local/`. It is not part of the copied
-payload.
+The 82-case fake-UDM runtime engine suite stays outside this runtime directory
+under `src/dpl2/test/local/`; see that directory's README for local commands
+and dependency details.

@@ -271,13 +271,15 @@ master commit 且实例集合、rows、blockages 不变时调用 `update()` 刷�
   uninstantiated target new master 由 repair 在 request 验证后按需注册并触发
   checker/snapshot 重建。`update()` 刷新现有 Node 的物理状态并重建 engine snapshot,
   但不负责发现新增/删除的 UDM instance。
-- 可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
+- 82 个可移植 planner unit tests 与 UDM-free doubles 位于
+  `test/planner`;不 include local fake UDM tree/provider。
+- 34 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 8-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
-- 82 个 fake-based planner unit cases、82 个 engine cases、test doubles、fake UDM include
+- 82 个 engine cases、fake UDM include
   tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
-  `fillerRepair/test` 只含可对真实 UDM 编译/运行的 E2E 测试。
-- runtime 编译清单唯一定义在 `src/fillerRepair/sources.cmake`
+- runtime 与 portable test 编译清单唯一定义在
+  `src/dpl2/src/fillerRepair/sources.cmake`
   (`DPL2_FILLER_REPAIR_SOURCES`);test harness 与移植目的地共用,
   不允许手抄文件列表。
 
@@ -941,8 +943,8 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 
 ## 10. 测试集
 
-当前 82 个 planner cases 是独立 GoogleTests,全部位于迁移目录外的
-`src/dpl2/test/local/planner`。交付目录中的 34 个 portable cases 集中在
+当前 82 个 planner cases 是独立 GoogleTests,位于交付目录中的
+`fillerRepair/test/planner`。同一目录中的 34 个 portable E2E cases 集中在
 `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`:5 个 final-checker overlay contract
 case + 17 个 `FillerRepairPlanner`→final checker repair/failure case + 12 个
 internal exact-coverage precheck case。fixture 通过
@@ -1039,8 +1041,9 @@ gate 语义:
   `src/dpl2/src/fillerRepair/sources.cmake`。
 - 82 个 planner unit tests、34 个 portable checker/planner/precheck cases 与 82 个
   fake-UDM engine tests 全为 GoogleTest;
-  82 个 fake-based planner tests 完整移至 `src/dpl2/test/local/planner`,
-  `fillerRepair/test` 只保留 helper-built portable E2E;precheck/repair 均 non-mutating;
+  82 个 planner tests 与 UDM-free doubles 已移入 `fillerRepair/test/planner`,
+  和 helper-built portable E2E 一起迁移;fake UDM engine suite 留在 local;
+  precheck/repair 均 non-mutating;
   runtime integration 使用 fillerRepair 与 Network refresh seam,checker 零修改。
   2026-07-20 普通 CTest 198/198;本次更新后 ASan 尚未重跑。
   详见 `src/dpl2/HandOff.md` 与 `src/dpl2/src/fillerRepair/test/TestPlan.md`。

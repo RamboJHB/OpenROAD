@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Fake implant overlay checker for planner unit tests.
+// Synthetic implant overlay oracle for planner unit tests.
 //
 // Purpose: lock the OracleRequest/OracleResult protocol and give the
 // planner a rule-parameterized oracle for unit tests. The rule model is a
@@ -17,7 +17,7 @@
 //
 // The real checker owns the true semantics (P/N bands, PRL, LEF58 etc.);
 // nothing in the planner may depend on the details above -- that is exactly
-// the checker-as-oracle boundary the fake exists to enforce.
+// the checker-as-oracle boundary this test double exists to enforce.
 //
 // Protocol guarantees implemented here and asserted by tests:
 //  - every OracleResult echoes the request's requestId;
@@ -32,11 +32,11 @@
 #include <vector>
 
 #include "fillerRepair/OracleGate.h"
-#include "FakeDesign.h"
+#include "PlannerTestDataSource.h"
 
 namespace dpl2::fillerRepair {
 
-struct FakeImplantRules
+struct PlannerTestRules
 {
   DbCoord mwIntra = 0;  // 0 disables the rule
   DbCoord msIntra = 0;
@@ -44,10 +44,10 @@ struct FakeImplantRules
   DbCoord msInter = 0;
 };
 
-class FakeImplantChecker : public PlannerOracle
+class PlannerTestOracle : public PlannerOracle
 {
  public:
-  FakeImplantChecker(const FakeDesign& design, FakeImplantRules rules)
+  PlannerTestOracle(const PlannerTestDataSource& design, PlannerTestRules rules)
       : design_(design), rules_(rules)
   {
   }
@@ -80,8 +80,8 @@ class FakeImplantChecker : public PlannerOracle
                              const OracleRequest& request,
                              const std::map<InstanceId, MasterId>& overlay) const;
 
-  const FakeDesign& design_;
-  FakeImplantRules rules_;
+  const PlannerTestDataSource& design_;
+  PlannerTestRules rules_;
   int request_count_ = 0;
   int batch_count_ = 0;
 };

@@ -26,11 +26,6 @@ find_package(TBB REQUIRED)
 set(DPL2_SRC "${CMAKE_CURRENT_LIST_DIR}/../src")
 include("${DPL2_SRC}/fillerRepair/sources.cmake")
 
-set(DPL2_LOCAL_PLANNER_TEST_SOURCES
-    "${CMAKE_CURRENT_LIST_DIR}/local/planner/FakeImplantChecker.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/local/planner/FakeUdmCandidateProvider.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/local/planner/planner_cases.cpp")
-
 # This interface target is the only fake/real UDM switch. Runtime sources
 # contain no fake include, compile definition, or conditional code. The fake
 # headers mirror the real eUNL/eLIB/ePHY/eUTL names and signatures and are used
@@ -70,7 +65,7 @@ endfunction()
 add_executable(
   dpl2_filler_repair_planner_test
   ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-  ${DPL2_LOCAL_PLANNER_TEST_SOURCES})
+  ${DPL2_FILLER_REPAIR_PORTABLE_PLANNER_TEST_SOURCES})
 target_include_directories(
   dpl2_filler_repair_planner_test
   PRIVATE "${DPL2_SRC}" "${CMAKE_CURRENT_LIST_DIR}/../include")

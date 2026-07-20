@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "FakeUdmCandidateProvider.h"
+#include "SyntheticMasterCatalog.h"
 
 #include <algorithm>
 #include <utility>
 
 namespace dpl2::fillerRepair {
 
-void parseFakeUdmLayerName(const std::string& name,
+void parseSyntheticLayerName(const std::string& name,
                            int& familyIndex,
                            bool& polarityP)
 {
@@ -35,16 +35,16 @@ void parseFakeUdmLayerName(const std::string& name,
   }
 }
 
-void FakeUdmCandidateProvider::addLayer(LayerId id, const std::string& name)
+void SyntheticMasterCatalog::addLayer(LayerId id, const std::string& name)
 {
   LayerInfo info;
   info.id = id;
   info.name = name;
-  parseFakeUdmLayerName(name, info.familyIndex, info.polarityP);
+  parseSyntheticLayerName(name, info.familyIndex, info.polarityP);
   layers_[id] = info;
 }
 
-const FakeUdmCandidateProvider::LayerInfo* FakeUdmCandidateProvider::layer(
+const SyntheticMasterCatalog::LayerInfo* SyntheticMasterCatalog::layer(
     LayerId id) const
 {
   const auto it = layers_.find(id);
@@ -54,8 +54,8 @@ const FakeUdmCandidateProvider::LayerInfo* FakeUdmCandidateProvider::layer(
 // Derivation mirror of ImplantLayerChecker::buildMasters: width alignment,
 // per-shape layer lookup, single-family requirement, full-width span. The
 // first failed rule is recorded as the checker-style reason.
-MasterDescription FakeUdmCandidateProvider::derive(
-    const FakeUdmMaster& master) const
+MasterDescription SyntheticMasterCatalog::derive(
+    const SyntheticMaster& master) const
 {
   MasterDescription d;
   d.masterId = master.masterId;
@@ -78,8 +78,8 @@ MasterDescription FakeUdmCandidateProvider::derive(
   }
 
   int familyIndex = -1;
-  const FakeUdmShape* bottom = nullptr;
-  for (const FakeUdmShape& shape : master.shapes) {
+  const SyntheticMasterShape* bottom = nullptr;
+  for (const SyntheticMasterShape& shape : master.shapes) {
     const LayerInfo* info = layer(shape.layer);
     if (info == nullptr || info->familyIndex < 0) {
       d.reason = "skipped_missing_rule_parameter";  // unknown implant layer
@@ -111,13 +111,13 @@ MasterDescription FakeUdmCandidateProvider::derive(
   return d;
 }
 
-void FakeUdmCandidateProvider::addMaster(const FakeUdmMaster& master)
+void SyntheticMasterCatalog::addMaster(const SyntheticMaster& master)
 {
   masters_[master.masterId] = master;
   described_[master.masterId] = derive(master);
 }
 
-void FakeUdmCandidateProvider::addBandMaster(MasterId id,
+void SyntheticMasterCatalog::addBandMaster(MasterId id,
                                              const std::string& name,
                                              DbCoord width,
                                              bool isFiller,
@@ -126,7 +126,7 @@ void FakeUdmCandidateProvider::addBandMaster(MasterId id,
   // Find the family's N and P layers (rebuildMasterShapes needs both).
   int familyIndex = -1;
   bool polarityP = false;
-  parseFakeUdmLayerName(family + "_N", familyIndex, polarityP);
+  parseSyntheticLayerName(family + "_N", familyIndex, polarityP);
   LayerId nLayer = -1;
   LayerId pLayer = -1;
   for (const auto& [layerId, info] : layers_) {
@@ -135,7 +135,7 @@ void FakeUdmCandidateProvider::addBandMaster(MasterId id,
     }
   }
 
-  FakeUdmMaster master;
+  SyntheticMaster master;
   master.masterId = id;
   master.name = name;
   master.width = width;
@@ -144,20 +144,20 @@ void FakeUdmCandidateProvider::addBandMaster(MasterId id,
   const DbCoord halfRow = row_height_ / 2;
   // Canonical single-row band pair: bottom band on the N layer, top band on
   // the P layer, both spanning the full width (rebuildMasterShapes).
-  master.shapes.push_back(FakeUdmShape{0, nLayer, 0, 0, width, halfRow});
+  master.shapes.push_back(SyntheticMasterShape{0, nLayer, 0, 0, width, halfRow});
   master.shapes.push_back(
-      FakeUdmShape{1, pLayer, 0, halfRow, width, row_height_});
+      SyntheticMasterShape{1, pLayer, 0, halfRow, width, row_height_});
   addMaster(master);
 }
 
-const MasterDescription* FakeUdmCandidateProvider::describeMaster(
+const MasterDescription* SyntheticMasterCatalog::describeMaster(
     MasterId id) const
 {
   const auto it = described_.find(id);
   return it != described_.end() ? &it->second : nullptr;
 }
 
-std::vector<MasterDescription> FakeUdmCandidateProvider::describeMasters(
+std::vector<MasterDescription> SyntheticMasterCatalog::describeMasters(
     const std::vector<MasterId>& ids) const
 {
   std::vector<MasterDescription> result;
@@ -175,7 +175,7 @@ std::vector<MasterDescription> FakeUdmCandidateProvider::describeMasters(
   return result;
 }
 
-void FakeUdmCandidateProvider::registerInto(FakeDesign& design) const
+void SyntheticMasterCatalog::registerInto(PlannerTestDataSource& design) const
 {
   std::vector<MasterId> fillerIds;
   for (const auto& [id, d] : described_) {
@@ -188,7 +188,7 @@ void FakeUdmCandidateProvider::registerInto(FakeDesign& design) const
   design.setFillerMasterIds(std::move(fillerIds));
 }
 
-void FakeUdmCandidateProvider::addAppendixALibrary()
+void SyntheticMasterCatalog::addAppendixALibrary()
 {
   // Layers first: {VTS, VTL, VTUL} x {N, P} with deterministic ids.
   addLayer(1, "VTS_N");
@@ -206,7 +206,7 @@ void FakeUdmCandidateProvider::addAppendixALibrary()
     for (const auto& [suffix, family] : suffixToFamily) {
       int familyIndex = -1;
       bool polarityP = false;
-      parseFakeUdmLayerName(std::string(family) + "_N", familyIndex,
+      parseSyntheticLayerName(std::string(family) + "_N", familyIndex,
                             polarityP);
       const MasterId id = widthSites * 10 + familyIndex;
       addBandMaster(id,

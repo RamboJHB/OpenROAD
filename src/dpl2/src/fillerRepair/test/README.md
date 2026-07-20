@@ -1,9 +1,14 @@
-# Portable fillerRepair + checker E2E
+# Portable fillerRepair tests
 
-This directory moves with `fillerRepair/`. It contains one self-contained
-GoogleTest source that builds placement, masters, implant layers and rules
-through the final checker's `ImplantLayerCheckerHelper`; it does not read
-DEF/LEF and does not require a destination-specific UDM fixture/provider.
+This directory moves with `fillerRepair/` and contains 116 portable tests:
+82 database-free planner unit tests plus 34 final-checker/precheck E2E tests.
+No source below this directory includes the repository's fake UDM tree or
+depends on its `E2ETestProvider`.
+
+`planner/` owns the in-memory `PlannerDataSource`, synthetic oracle/master
+catalog and all planner, window, ranker, subset-search and OracleGate cases.
+They compile against the destination's real wire types but construct no UDM
+objects.
 
 `FillerRepairCheckerE2ETest.cpp` has 34 cases:
 
@@ -21,9 +26,9 @@ DEF/LEF and does not require a destination-specific UDM fixture/provider.
   and deterministic mixed diagnostics, plus empty placement, unordered input,
   triple overlap and touching legal spans.
 
-The test uses no fake checker, fake placement view or fake UDM data. The small
-`PortablePlannerDataSource` in the source is only the planner projection of the
-same `ImplantInput` owned by `ImplantLayerCheckerHelper`.
+The E2E source uses no fake checker, fake placement view or fake UDM data. The
+small `PortablePlannerDataSource` in the source is only the planner projection
+of the same `ImplantInput` owned by `ImplantLayerCheckerHelper`.
 
 ## Destination CMake
 
@@ -38,11 +43,12 @@ cmake --build build-filler-repair-e2e
 ctest --test-dir build-filler-repair-e2e --output-on-failure
 ```
 
-The executable always compiles `${DPL2_FILLER_REPAIR_SOURCES}`, including the
-public runtime engine. If the destination already has owning dpl2/checker
+The CMake project builds the 82-case planner executable and the 34-case E2E
+executable. The latter always compiles `${DPL2_FILLER_REPAIR_SOURCES}`, including
+the public runtime engine. If the destination already has owning dpl2/checker
 targets, pass them through `DPL2_RUNTIME_LIBRARIES`; otherwise the standalone
 fallback compiles the adjacent supplied sources. The test cannot pass merely
 by compiling the planner while the engine/real-UDM boundary is broken.
 
-All fake/checker-double tests and the repository-local fake-UDM 82-case regression
-remain outside the migration payload under `src/dpl2/test/local/`.
+Only the 82-case runtime engine suite and its fake UDM fixture/provider remain
+outside the migration payload under `src/dpl2/test/local/`.

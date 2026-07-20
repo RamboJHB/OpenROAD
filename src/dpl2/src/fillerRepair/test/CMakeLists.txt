@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 
-project(dpl2_filler_repair_checker_e2e LANGUAGES CXX)
+project(dpl2_filler_repair_tests LANGUAGES CXX)
 
 if(POLICY CMP0167)
   cmake_policy(SET CMP0167 NEW)
@@ -25,6 +25,41 @@ find_package(GTest REQUIRED)
 find_package(Boost REQUIRED)
 find_package(TBB REQUIRED)
 include("${CMAKE_CURRENT_LIST_DIR}/../sources.cmake")
+
+# Database-free planner tests. The test doubles consume the same final wire
+# types as production but do not include a fake UDM fixture or provider.
+add_executable(
+  dpl2_filler_repair_planner_test
+  ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
+  ${DPL2_FILLER_REPAIR_PORTABLE_PLANNER_TEST_SOURCES})
+target_compile_features(dpl2_filler_repair_planner_test PRIVATE cxx_std_17)
+target_compile_options(
+  dpl2_filler_repair_planner_test PRIVATE -Wall -Wextra -Werror)
+target_include_directories(
+  dpl2_filler_repair_planner_test
+  PRIVATE
+    "${DPL2_SOURCE_ROOT}"
+    "${DPL2_DPL2_INCLUDE_ROOT}"
+    ${DPL2_UDM_INCLUDE_DIRS})
+target_include_directories(
+  dpl2_filler_repair_planner_test SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
+target_link_libraries(
+  dpl2_filler_repair_planner_test
+  PRIVATE GTest::gtest_main ${DPL2_UDM_LIBRARIES})
+
+if(DPL2_ENABLE_ASAN)
+  target_compile_options(
+    dpl2_filler_repair_planner_test
+    PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+  target_link_options(
+    dpl2_filler_repair_planner_test
+    PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+endif()
+
+gtest_discover_tests(
+  dpl2_filler_repair_planner_test
+  TEST_PREFIX "planner."
+  DISCOVERY_TIMEOUT 30)
 
 # Prefer the destination's existing runtime targets so its exact infrastructure
 # and checker implementation are linked once. With no target supplied, compile

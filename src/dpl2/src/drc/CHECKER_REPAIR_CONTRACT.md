@@ -136,11 +136,12 @@ All portable final-checker calls/assertions live in
 `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`. They construct dense
 `ImplantInput` directly through `ImplantLayerCheckerHelper` and exercise the
 final checker plus `FillerRepairPlanner`; no destination fixture provider or
-DEF/LEF reader is required. Public `FillerRepairEngine` and real-UDM engine
-coverage remains in the repository-local suite under `src/dpl2/test/local`.
-All test doubles and UDM-compatible test data stay outside the migration
-payload. The runtime engine contains no snapshot builder or test
-conditional. The 2026-07-20 normal build passes 198/198 with
+DEF/LEF reader is required. The 82 database-free planner tests and their
+synthetic doubles live under `fillerRepair/test/planner` and migrate with the
+feature. Runtime engine coverage, UDM-compatible test data and its provider
+remain in the repository-local suite under `src/dpl2/test/local`. The runtime
+engine contains no snapshot builder or test conditional. The portable package
+passes 116/116 and the full 2026-07-20 normal build passes 198/198 with
 `-Wall -Wextra -Werror`; ASan has not been rerun after the update changes.
 
 Future checker API or semantic changes must be recorded here before engine

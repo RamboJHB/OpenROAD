@@ -3,7 +3,7 @@
 
 // In-memory PlannerDataSource for unit tests.
 //
-// A FakeDesign is built fluently:
+// A PlannerTestDataSource is built fluently:
 //   design.setSiteWidth(1)
 //         .addMaster(41, /*w=*/4, /*h=*/1, /*filler=*/true, /*vt=*/1)
 //         .addRow(0, 0, 16)
@@ -27,16 +27,16 @@
 
 namespace dpl2::fillerRepair {
 
-class FakeDesign : public PlannerDataSource
+class PlannerTestDataSource : public PlannerDataSource
 {
  public:
-  FakeDesign& setSiteWidth(DbCoord w)
+  PlannerTestDataSource& setSiteWidth(DbCoord w)
   {
     site_width_ = w;
     return *this;
   }
 
-  FakeDesign& addMaster(MasterId id, DbCoord width, DbCoord height, bool isFiller, VtId vt,
+  PlannerTestDataSource& addMaster(MasterId id, DbCoord width, DbCoord height, bool isFiller, VtId vt,
                         BandPolarity bottomBandPolarity = BandPolarity::N)
   {
     masters_[id] = MasterInfo{id, width, height, isFiller, vt, bottomBandPolarity};
@@ -44,14 +44,14 @@ class FakeDesign : public PlannerDataSource
     return *this;
   }
 
-  FakeDesign& addRow(RowId id, DbCoord xl, DbCoord xh)
+  PlannerTestDataSource& addRow(RowId id, DbCoord xl, DbCoord xh)
   {
     row_spans_[id] = XInterval{xl, xh};
     caches_dirty_ = true;
     return *this;
   }
 
-  FakeDesign& place(InstanceId id, MasterId masterId, RowId rowId, DbCoord x,
+  PlannerTestDataSource& place(InstanceId id, MasterId masterId, RowId rowId, DbCoord x,
                     Orient orient = Orient::R0)
   {
     const auto it = masters_.find(masterId);
@@ -61,14 +61,14 @@ class FakeDesign : public PlannerDataSource
     return *this;
   }
 
-  FakeDesign& remove(InstanceId id)
+  PlannerTestDataSource& remove(InstanceId id)
   {
     instances_.erase(id);
     caches_dirty_ = true;
     return *this;
   }
 
-  FakeDesign& setFillerMasterIds(std::vector<MasterId> ids)
+  PlannerTestDataSource& setFillerMasterIds(std::vector<MasterId> ids)
   {
     configured_fillers_ = std::move(ids);
     have_configured_fillers_ = true;

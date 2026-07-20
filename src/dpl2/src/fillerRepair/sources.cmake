@@ -11,6 +11,9 @@
 #                                          planner + engine/checker boundary
 #   DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE planner + final-checker E2E that
 #                                           uses ImplantLayerCheckerHelper
+#   DPL2_FILLER_REPAIR_PORTABLE_PLANNER_TEST_SOURCES
+#                                          database-free planner unit tests
+#                                          and synthetic test doubles
 #   DPL2_FILLER_REPAIR_PRECHECK_SOURCE      UDM-free coverage sweep shared by
 #                                           runtime and portable tests
 
@@ -34,3 +37,8 @@ set(DPL2_FILLER_REPAIR_SOURCES
 
 set(DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE
     "${CMAKE_CURRENT_LIST_DIR}/test/FillerRepairCheckerE2ETest.cpp")
+
+set(DPL2_FILLER_REPAIR_PORTABLE_PLANNER_TEST_SOURCES
+    "${CMAKE_CURRENT_LIST_DIR}/test/planner/PlannerTestOracle.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/test/planner/SyntheticMasterCatalog.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/test/planner/FillerRepairPlannerTest.cpp")

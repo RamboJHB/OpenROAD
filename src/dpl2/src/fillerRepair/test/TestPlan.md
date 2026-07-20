@@ -1,4 +1,4 @@
-# Test Plan — portable fillerRepair E2E
+# Test Plan — portable fillerRepair tests
 
 Updated: 2026-07-20.
 
@@ -10,7 +10,11 @@ Copy `fillerRepair/` next to the destination's existing `infrastructure/` and
 real UDM include/link configuration. No DEF/LEF fixture or provider source is
 needed.
 
-The 34 portable GoogleTests cover:
+The portable package contains 116 GoogleTests: 82 database-free planner unit
+tests and 34 final-checker/precheck E2E tests. The planner matrix covers Swap,
+candidate filtering, synthetic master metadata, window construction, ranking,
+subset enumeration, OracleGate protocol/error handling, budgets, determinism,
+adaptive expansion and end-to-end planner decisions. The 34 E2E tests cover:
 
 1. final-checker intra-row minimum-width overlay acceptance/rejection;
 2. final-checker inter-row minimum-width overlay acceptance/rejection;
@@ -37,7 +41,7 @@ The 34 portable GoogleTests cover:
     triple coverage, touching legal spans and mixed deterministic findings;
 14. no placement mutation by checker overlay queries or planner repair.
 
-The local planner suite additionally pins `RepairConfig::maxAdaptiveLevels`:
+The portable planner suite also pins `RepairConfig::maxAdaptiveLevels`:
 reaching the cap ends a no-solution search with the TRUNCATED verdict (never
 "definitive") and empty changes
 (`planner.FillerRepairPlanner.engine_adaptive_level_cap_truncates`).
@@ -65,21 +69,21 @@ cmake --build build-e2e-asan
 ctest --test-dir build-e2e-asan --output-on-failure
 ```
 
-Both configurations compile the complete `${DPL2_FILLER_REPAIR_SOURCES}`
-(including `FillerRepairEngine.cpp`) with `-Wall -Wextra -Werror` and C++20,
-then link it into the portable checker executable. `DPL2_RUNTIME_LIBRARIES`
+Both configurations compile the planner tests with C++17 and the complete
+`${DPL2_FILLER_REPAIR_SOURCES}` (including `FillerRepairEngine.cpp`) E2E with
+C++20, all under `-Wall -Wextra -Werror`. `DPL2_RUNTIME_LIBRARIES`
 reuses destination infra/checker targets; omitting it selects the adjacent
 source fallback.
 
 ## Separate local regression
 
-The 82 planner tests, their fake checker/data source, fake UDM headers and the
-82 engine cases are retained under
-`src/dpl2/test/local/`. They do not move with `fillerRepair/` and are not linked
-by the portable E2E target. The planner suite directly validates the internal
+The 82 planner tests and their UDM-free doubles now live under
+`fillerRepair/test/planner/` and move with production. The planner suite directly validates the internal
 `PlannerOracle` protocol, including missing, duplicate, unknown and extra
-`OracleResult` records; every batch-cardinality mismatch fails closed. The
-engine suite exercises repeated public precheck calls and opto-style external
+`OracleResult` records; every batch-cardinality mismatch fails closed.
+
+Only the 82 fake-UDM engine cases, compatibility headers and runtime provider
+remain under `src/dpl2/test/local/`. The engine suite exercises repeated public precheck calls and opto-style external
 gating. Additional three-layout cases verify that `repair()` repeats
 precheck and returns `PrecheckFailed`, that hard macros supply coverage while
 hard blockages remove coverage requirements and soft blockages do not, that

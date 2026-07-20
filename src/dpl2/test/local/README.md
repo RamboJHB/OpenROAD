@@ -1,15 +1,14 @@
 # Repository-local fillerRepair harness
 
 This directory is intentionally not part of the migration payload. It owns the
-complete local regression copy: all 82 planner unit cases and doubles, the
-UDM-compatible include tree, the 82-case `E2ETestProvider` suite
-and both runners.
+UDM-compatible include tree, the 82-case `E2ETestProvider` suite and local
+runner scripts.
 
-The planner suite is self-contained below `local/planner/` and links only the
-runtime planner sources. The historical engine E2E source and
-its fake-UDM provider now both live here. The migration payload instead owns a
-separate helper-built final-checker E2E, so no fake/provider include crosses
-the directory boundary. Nothing below this directory is copied to runtime.
+The portable 82-case planner suite and its UDM-free doubles now live below
+`src/dpl2/src/fillerRepair/test/planner/`; `run_planner_tests.sh` is only a
+convenience entry point. The runtime engine E2E source and its fake-UDM
+provider remain here. No local fake/provider include crosses into the
+migration payload.
 
 ```sh
 src/dpl2/test/local/run_planner_tests.sh
