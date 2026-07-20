@@ -7,7 +7,7 @@
 // FillerRepairEngine::Impl implements this contract over its UDM snapshot.
 // The planner never mutates the design; commit stays with the infrastructure.
 //
-// Thread model: after initialization the engine snapshot is immutable. All
+// Thread model: after initialization the runtime engine snapshot is immutable. All
 // const methods must be safe for CONCURRENT readers (any
 // internal lazy cache must synchronize itself), and returned references stay
 // valid for the view's lifetime. Test implementations may use mutable builders

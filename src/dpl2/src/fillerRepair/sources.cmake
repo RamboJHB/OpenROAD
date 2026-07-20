@@ -8,7 +8,7 @@
 #   DPL2_FILLER_REPAIR_PLANNER_SOURCES     planner algorithm plus the final
 #                                          checker wire types; no database access
 #   DPL2_FILLER_REPAIR_SOURCES             complete destination compile list:
-#                                          planner + engine/checker boundary
+#                                          planner + runtime engine/checker boundary
 #   DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE planner + final-checker E2E that
 #                                           uses ImplantLayerCheckerHelper
 #   DPL2_FILLER_REPAIR_PORTABLE_PLANNER_TEST_SOURCES
@@ -39,6 +39,6 @@ set(DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE
     "${CMAKE_CURRENT_LIST_DIR}/test/FillerRepairCheckerE2ETest.cpp")
 
 set(DPL2_FILLER_REPAIR_PORTABLE_PLANNER_TEST_SOURCES
-    "${CMAKE_CURRENT_LIST_DIR}/test/planner/PlannerTestOracle.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/test/planner/SyntheticMasterCatalog.cpp"
-    "${CMAKE_CURRENT_LIST_DIR}/test/planner/FillerRepairPlannerTest.cpp")
+    "${CMAKE_CURRENT_LIST_DIR}/test/PlannerTestOracle.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/test/SyntheticMasterCatalog.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/test/FillerRepairPlannerTest.cpp")

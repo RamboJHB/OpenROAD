@@ -159,10 +159,10 @@ Do not hand-copy file names -- both runtime and test CMake include the same
 `sources.cmake`. Do not add `fillerRepair/test/*` to a runtime target.
 The migrated E2E uses real Grid/Network/checker code and helper-built data.
 
-Portable E2E wiring in the destination environment:
+Portable test wiring in the destination environment:
 
 ```sh
-# Full runtime engine + planner + final checker/helper against destination:
+# Planner tests plus runtime engine + planner + final checker/helper E2E:
 cmake -S <srcroot>/fillerRepair/test -B build-e2e \
   -DDPL2_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
   -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>' \
@@ -171,9 +171,10 @@ cmake --build build-e2e
 ctest --test-dir build-e2e --output-on-failure
 ```
 
-The standalone target always consumes `${DPL2_FILLER_REPAIR_SOURCES}`, not only
-the planner subset, so it compiles and links `FillerRepairEngine.cpp` against
-the destination headers. `DPL2_RUNTIME_LIBRARIES` should name the existing
+The standalone CMake builds one pure-planner target from the planner source
+list. Its E2E target always consumes `${DPL2_FILLER_REPAIR_SOURCES}`, so it
+compiles and links `FillerRepairEngine.cpp` against the destination headers.
+`DPL2_RUNTIME_LIBRARIES` should name the existing
 dpl2/checker owning targets; if omitted, the fallback compiles the adjacent
 supplied infrastructure/checker sources.
 
@@ -209,7 +210,7 @@ same-size edits, new-violation avoidance, a two-swap solution and a
 checker-legal three-swap repair when the best residual initially points toward
 a blocked adaptive side. The internal precheck matrix covers gaps, overlaps,
 clipping, legal holes, row ordering and deterministic coalescing. Planner
-doubles live under `fillerRepair/test/planner`; only the fake-UDM runtime suite
+doubles are same-level sources under `fillerRepair/test`; only the fake-UDM runtime suite
 lives under `src/dpl2/test/local/`. Runtime cases cover
 the internal repair precheck gate, hard macro and hard/soft blockage semantics,
 side-effect-free invalid replacement requests and snapshot update.
@@ -250,7 +251,7 @@ missing rule makes initialization fail closed.
 - Checker calls are serialized inside one engine because the checker const
   overlay path updates counters. The checker is private and cannot be
   accidentally shared across engines.
-- The engine owns checker diagnostics translation; planner fake/checker types
+- The runtime engine owns checker diagnostics translation; planner test doubles
   must remain outside runtime targets.
 - `Types.h` remains a standalone bottom-level model header. Oracle-only
   `OracleRequest`/`OracleResult`/`OracleStatus` and `PlannerOracle` live in

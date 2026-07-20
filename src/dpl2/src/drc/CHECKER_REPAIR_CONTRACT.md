@@ -137,7 +137,7 @@ All portable final-checker calls/assertions live in
 `ImplantInput` directly through `ImplantLayerCheckerHelper` and exercise the
 final checker plus `FillerRepairPlanner`; no destination fixture provider or
 DEF/LEF reader is required. The 82 database-free planner tests and their
-synthetic doubles live under `fillerRepair/test/planner` and migrate with the
+synthetic doubles are same-level sources under `fillerRepair/test` and migrate with the
 feature. Runtime engine coverage, UDM-compatible test data and its provider
 remain in the repository-local suite under `src/dpl2/test/local`. The runtime
 engine contains no snapshot builder or test conditional. The portable package

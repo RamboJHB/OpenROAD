@@ -107,7 +107,7 @@ class SyntheticMasterCatalog
   // nullptr when the id is not in the catalog.
   const MasterDescription* describeMaster(MasterId id) const;
 
-  // --- engine contract (spec 5.3) -------------------------------------------
+  // --- planner candidate contract (spec 5.3) --------------------------------
   // Same width + height, usable filler masters, current master excluded,
   // ascending master id. Non-filler input / no replacement -> diagnostics,
   // never an error.

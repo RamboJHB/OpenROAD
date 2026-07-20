@@ -5,7 +5,7 @@ UDM-compatible include tree, the 82-case `E2ETestProvider` suite and local
 runner scripts.
 
 The portable 82-case planner suite and its UDM-free doubles now live below
-`src/dpl2/src/fillerRepair/test/planner/`; `run_planner_tests.sh` is only a
+`src/dpl2/src/fillerRepair/test/` as same-level sources; `run_planner_tests.sh` is only a
 convenience entry point. The runtime engine E2E source and its fake-UDM
 provider remain here. No local fake/provider include crosses into the
 migration payload.

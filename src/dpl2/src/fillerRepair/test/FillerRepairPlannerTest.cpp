@@ -208,14 +208,14 @@ void testPlannerDoesNotRunPlacementPrecheck()
   fr::PlannerTestOracle checker(f.design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(f.design, checker, config);
+  fr::internal::FillerRepairPlanner planner(f.design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(f.design, f.anchor);
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
 
-  // The engine's public precheck owns the placement gate. The
-  // pure planner sees an empty implant snapshot and succeeds without ever
+  // FillerRepairEngine::precheck() owns the placement gate. The pure planner
+  // sees an empty implant snapshot and succeeds without ever
   // inspecting placement coverage.
   EXPECT_TRUE(result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
@@ -370,7 +370,7 @@ void testSyntheticCatalogCandidatesContract()
   EXPECT_TRUE(info->isFiller);
 }
 
-// E2E smoke: the engine solves a single-swap case with the appendix-A
+// Planner smoke: the planner solves a single-swap case with the appendix-A
 // catalog driving both the PlannerDataSource master table and the candidates.
 //
 // Vt Type: 0=VTS, 1=VTL, 3=VTUL  |  Widths: {2, 4}
@@ -382,7 +382,7 @@ void testSyntheticCatalogCandidatesContract()
 // and MW on the VTL run [0,4) (len 4). The ONLY single swap clearing all
 // three is 601 -> VTL (master 21): the whole row merges into one VTL run.
 // (602 -> VTS would fix the first two but leaves the VTL[0,4) MW residual.)
-void testEngineSolvesWithSyntheticCatalog()
+void testPlannerSolvesWithSyntheticCatalog()
 {
   fr::PlannerTestDataSource design;
   design.setSiteWidth(1);
@@ -423,9 +423,9 @@ void testEngineSolvesWithSyntheticCatalog()
   fr::PlannerTestOracle checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
   EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 601);
@@ -1122,9 +1122,9 @@ void testGuardRegionTwoCellRing()
   EXPECT_TRUE(window.guardRegion.x.xh >= window.x.xh);
 }
 
-void testEngineNoEditableFillerZeroCalls()
+void testPlannerNoEditableFillerZeroCalls()
 {
-  // A row of std cells only: no filler can enter any window. The engine
+  // A row of std cells only: no filler can enter any window. The planner
   // returns no solution with ZERO checker calls -- because the search finds
   // no editable filler, never via an early abort (V2.1 #6 dropped the
   // ring-based fast-fail; the hint itself was later removed as noise).
@@ -1138,7 +1138,7 @@ void testEngineNoEditableFillerZeroCalls()
   fr::PlannerTestOracle checker(design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
@@ -1146,7 +1146,7 @@ void testEngineNoEditableFillerZeroCalls()
                          fr::ViolationRelation::IntraRow, {0}, {8, 9});
   request.violations = {v};
 
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   EXPECT_EQ(checker.requestCount(), 0);  // no editable filler -> no calls
@@ -1155,7 +1155,7 @@ void testEngineNoEditableFillerZeroCalls()
 class ReentrantChecker : public fr::PlannerOracle
 {
  public:
-  fr::internal::FillerRepairPlanner* engine = nullptr;
+  fr::internal::FillerRepairPlanner* planner = nullptr;
   const fr::FillerRepairRequest* request = nullptr;
   fr::Violation original;
   fr::FillerRepairResult inner;
@@ -1164,9 +1164,9 @@ class ReentrantChecker : public fr::PlannerOracle
   fr::OracleResult checkPlaceWithOverlay(
       const fr::OracleRequest& r) override
   {
-    if (!fired && engine != nullptr && request != nullptr) {
+    if (!fired && planner != nullptr && request != nullptr) {
       fired = true;
-      inner = engine->repair(*request);  // illegal callback (spec 3.3)
+      inner = planner->repair(*request);  // illegal callback (spec 3.3)
     }
     fr::OracleResult result;
     result.requestId = r.requestId;
@@ -1188,10 +1188,10 @@ class ReentrantChecker : public fr::PlannerOracle
   }
 };
 
-void testEngineReentrantRepairRefused()
+void testPlannerReentrantRepairRefused()
 {
   // Spec 3.3: the overlay API is a pure query; a checker calling back into
-  // repair() on the same engine gets a fatal ReentrantRepair result, and
+  // repair() on the same planner gets a fatal ReentrantRepair result, and
   // the outer repair completes normally.
   fr::PlannerTestDataSource design = makeLibrary();
   design.addRow(0, 0, 12)
@@ -1210,11 +1210,11 @@ void testEngineReentrantRepairRefused()
   checker.original = original;
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
-  checker.engine = &engine;
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  checker.planner = &planner;
   checker.request = &request;
 
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
   EXPECT_TRUE(checker.fired);
   EXPECT_TRUE(!checker.inner.hasSolution);
   bool sawReentrant = false;
@@ -1226,17 +1226,17 @@ void testEngineReentrantRepairRefused()
   EXPECT_TRUE(result.hasSolution);  // the outer repair is unaffected
 }
 
-void testEngineEmptySnapshotIsSuccess()
+void testPlannerEmptySnapshotIsSuccess()
 {
   RowFixture f = makeCoveredRow();
   fr::PlannerTestOracle checker(f.design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(f.design, checker, config);
+  fr::internal::FillerRepairPlanner planner(f.design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(f.design, f.anchor);
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   EXPECT_EQ(checker.requestCount(), 0);
@@ -1752,15 +1752,15 @@ void testEnumerationFillerDomainNotCrowdedOut()
   EXPECT_EQ(pairs, 4);
 }
 
-void testEngineSolvesSingleSwap()
+void testPlannerSolvesSingleSwap()
 {
   ScenarioA sc = makeScenarioA();
   fr::PlannerTestOracle checker(sc.design, sc.rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(sc.design, checker, config);
+  fr::internal::FillerRepairPlanner planner(sc.design, checker, config);
 
-  const auto result = engine.repair(sc.request);
+  const auto result = planner.repair(sc.request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
   EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 203);
@@ -1771,8 +1771,8 @@ void testEngineSolvesSingleSwap()
 
   // Determinism: same input -> identical outcome and identical call count.
   fr::PlannerTestOracle checker2(sc.design, sc.rules);
-  fr::internal::FillerRepairPlanner engine2(sc.design, checker2, config);
-  const auto result2 = engine2.repair(sc.request);
+  fr::internal::FillerRepairPlanner planner2(sc.design, checker2, config);
+  const auto result2 = planner2.repair(sc.request);
   EXPECT_TRUE(result2.hasSolution);
   EXPECT_EQ(result2.changes.size(), result.changes.size());
   EXPECT_EQ(fr::fillerRecordInstanceId(result2.changes[0]), fr::fillerRecordInstanceId(result.changes[0]));
@@ -1789,7 +1789,7 @@ void testEngineSolvesSingleSwap()
 // cell type: 1=std cell, 0=filler    |  Format: (vt type, width, cell type)
 // Row 0: (2,4,1) (1,2,0) (1,2,0) (2,4,1) (1,4,0)
 //   ids:   102*    110     111     112      113     (* = anchor std cell)
-void testEngineSolvesPairNonMonotone()
+void testPlannerSolvesPairNonMonotone()
 {
   fr::PlannerTestDataSource design = makeLibrary();
   design.addRow(0, 0, 16)
@@ -1812,9 +1812,9 @@ void testEngineSolvesPairNonMonotone()
   fr::PlannerTestOracle checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 2u);
   EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 110);
@@ -1949,7 +1949,7 @@ ComplexSearchFixture makeComplexSearchFixture()
   return fixture;
 }
 
-void testEngineComplexRankedPairFast()
+void testPlannerComplexRankedPairFast()
 {
   ComplexSearchFixture fixture = makeComplexSearchFixture();
   RequiredChangesChecker checker;
@@ -1961,10 +1961,10 @@ void testEngineComplexRankedPairFast()
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(
+  fr::internal::FillerRepairPlanner planner(
       fixture.design, checker, config);
 
-  const fr::FillerRepairResult result = engine.repair(fixture.request);
+  const fr::FillerRepairResult result = planner.repair(fixture.request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 2u);
   if (result.changes.size() == 2) {
@@ -1974,7 +1974,7 @@ void testEngineComplexRankedPairFast()
     EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[1]), fillerMaster(2, kVt2));
   }
   // The correct fillers are the two highest-ranked direct participants and
-  // VT2 is the anchor-follow first option. Even with many decoys, the engine
+  // VT2 is the anchor-follow first option. Even with many decoys, the planner
   // reaches the first size-2 assignment without approaching the 128-call cap.
   EXPECT_TRUE(checker.requestCount() <= 21);
   EXPECT_TRUE(checker.batchCount() <= 6);
@@ -1986,9 +1986,9 @@ void testEngineComplexRankedPairFast()
   RequiredChangesChecker checkerAgain;
   checkerAgain.originals = fixture.request.violations;
   checkerAgain.required = checker.required;
-  fr::internal::FillerRepairPlanner engineAgain(
+  fr::internal::FillerRepairPlanner plannerAgain(
       fixture.design, checkerAgain, config);
-  const fr::FillerRepairResult again = engineAgain.repair(fixture.request);
+  const fr::FillerRepairResult again = plannerAgain.repair(fixture.request);
   EXPECT_TRUE(again.hasSolution);
   EXPECT_EQ(again.changes.size(), result.changes.size());
   if (again.changes.size() == result.changes.size()) {
@@ -2003,7 +2003,7 @@ void testEngineComplexRankedPairFast()
   EXPECT_EQ(checkerAgain.batchCount(), checker.batchCount());
 }
 
-void testEngineComplexThirdVtStillSucceeds()
+void testPlannerComplexThirdVtStillSucceeds()
 {
   ComplexSearchFixture fixture = makeComplexSearchFixture();
   RequiredChangesChecker checker;
@@ -2017,10 +2017,10 @@ void testEngineComplexThirdVtStillSucceeds()
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(
+  fr::internal::FillerRepairPlanner planner(
       fixture.design, checker, config);
 
-  const fr::FillerRepairResult result = engine.repair(fixture.request);
+  const fr::FillerRepairResult result = planner.repair(fixture.request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 2u);
   if (result.changes.size() == 2) {
@@ -2037,7 +2037,7 @@ void testEngineComplexThirdVtStillSucceeds()
 // acceptance (spec 6.8 rule 5). Far VT3 inter-row MW at x=[2,3) exists in
 // baseline and in every overlay result; the initial snapshot (target-local)
 // contains only the anchor-caused violation.
-void testEngineIgnoresUnrelatedHaloViolation()
+void testPlannerIgnoresUnrelatedHaloViolation()
 {
   fr::PlannerTestDataSource design = makeLibrary();
   design.addRow(0, 0, 16)
@@ -2065,7 +2065,7 @@ void testEngineIgnoresUnrelatedHaloViolation()
   // Target-local initial snapshot derived from the checker (as runtime does,
   // so signatures/layers match the baseline): a narrow guard around the anchor
   // captures only the anchor-caused MW and excludes the far VT3 pre-existing
-  // violation at x=[2,3). That pre-existing MW then appears only in the engine's
+  // violation at x=[2,3). That pre-existing MW then appears only in the planner's
   // wider baseline -- exactly the unrelated-halo case under test.
   fr::PlannerTestOracle snapshotChecker(design, rules);
   auto snapReq = baselineRequest(design, 102, 0);
@@ -2078,9 +2078,9 @@ void testEngineIgnoresUnrelatedHaloViolation()
   fr::PlannerTestOracle checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
   // The pre-existing VT3 MW sits in the baseline of the same guard region;
   // being unrelated to any changed filler it must not veto the fix.
   EXPECT_TRUE(result.hasSolution);
@@ -2091,7 +2091,7 @@ void testEngineIgnoresUnrelatedHaloViolation()
 // mwIntra=100 makes every run violate: no overlay can ever be clean. The
 // window space is tiny -> complete enumeration -> definitive no-solution,
 // and L1 triggers the expansion cutoff (same editable set).
-void testEngineNoSolutionDefinitive()
+void testPlannerNoSolutionDefinitive()
 {
   fr::PlannerTestDataSource design = makeLibrary();
   design.addRow(0, 0, 8)
@@ -2112,9 +2112,9 @@ void testEngineNoSolutionDefinitive()
   fr::PlannerTestOracle checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   bool sawNoClean = false;
@@ -2184,16 +2184,16 @@ class MisbehavingChecker : public fr::PlannerOracle
   fr::PlannerTestOracle& inner_;
 };
 
-void testEngineDetectsProtocolError()
+void testPlannerDetectsProtocolError()
 {
   ScenarioA sc = makeScenarioA();
   fr::PlannerTestOracle inner(sc.design, sc.rules);
   MisbehavingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(sc.design, checker, config);
+  fr::internal::FillerRepairPlanner planner(sc.design, checker, config);
 
-  const auto result = engine.repair(sc.request);
+  const auto result = planner.repair(sc.request);
   EXPECT_TRUE(!result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   bool sawProtocol = false;
@@ -2224,16 +2224,16 @@ class ReversingChecker : public fr::PlannerOracle
   fr::PlannerTestOracle& inner_;
 };
 
-void testEngineOrderIndependentBatches()
+void testPlannerOrderIndependentBatches()
 {
   ScenarioA sc = makeScenarioA();
   fr::PlannerTestOracle inner(sc.design, sc.rules);
   ReversingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(sc.design, checker, config);
+  fr::internal::FillerRepairPlanner planner(sc.design, checker, config);
 
-  const auto result = engine.repair(sc.request);
+  const auto result = planner.repair(sc.request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
   EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 203);
@@ -2294,7 +2294,7 @@ class RecordingChecker : public fr::PlannerOracle
   fr::PlannerOracle& inner_;
 };
 
-void testEngineBatchSizeInvariance()
+void testPlannerBatchSizeInvariance()
 {
   ScenarioA sc = makeScenarioA();
 
@@ -2302,21 +2302,21 @@ void testEngineBatchSizeInvariance()
   fr::RepairConfig one;
   one.batchSize = 1;
   one.verbose = verbose();
-  fr::internal::FillerRepairPlanner engineOne(sc.design, checkerOne, one);
-  const auto resultOne = engineOne.repair(sc.request);
+  fr::internal::FillerRepairPlanner plannerOne(sc.design, checkerOne, one);
+  const auto resultOne = plannerOne.repair(sc.request);
 
   fr::PlannerTestOracle checkerMany(sc.design, sc.rules);
   fr::RepairConfig many;
   many.batchSize = 32;
   many.verbose = verbose();
-  fr::internal::FillerRepairPlanner engineMany(sc.design, checkerMany, many);
-  const auto resultMany = engineMany.repair(sc.request);
+  fr::internal::FillerRepairPlanner plannerMany(sc.design, checkerMany, many);
+  const auto resultMany = plannerMany.repair(sc.request);
 
   EXPECT_TRUE(resultOne.hasSolution == resultMany.hasSolution);
   EXPECT_TRUE(sameChanges(resultOne.changes, resultMany.changes));
 }
 
-void testEngineDeterminismFullTranscript()
+void testPlannerDeterminismFullTranscript()
 {
   ScenarioA sc = makeScenarioA();
   fr::RepairConfig config;
@@ -2324,12 +2324,12 @@ void testEngineDeterminismFullTranscript()
   config.verbose = verbose();
 
   fr::PlannerTestOracle checkerA(sc.design, sc.rules);
-  fr::internal::FillerRepairPlanner engineA(sc.design, checkerA, config);
-  const auto resultA = engineA.repair(sc.request);
+  fr::internal::FillerRepairPlanner plannerA(sc.design, checkerA, config);
+  const auto resultA = plannerA.repair(sc.request);
 
   fr::PlannerTestOracle checkerB(sc.design, sc.rules);
-  fr::internal::FillerRepairPlanner engineB(sc.design, checkerB, config);
-  const auto resultB = engineB.repair(sc.request);
+  fr::internal::FillerRepairPlanner plannerB(sc.design, checkerB, config);
+  const auto resultB = plannerB.repair(sc.request);
 
   EXPECT_TRUE(resultA.hasSolution == resultB.hasSolution);
   EXPECT_TRUE(sameChanges(resultA.changes, resultB.changes));
@@ -2338,7 +2338,7 @@ void testEngineDeterminismFullTranscript()
   EXPECT_EQ(checkerA.batchCount(), checkerB.batchCount());
 }
 
-void testEngineNeverEditsGuardOnly()
+void testPlannerNeverEditsGuardOnly()
 {
   ScenarioA sc = makeScenarioA();
   const auto normalized = fr::normalizeViolations(
@@ -2359,8 +2359,8 @@ void testEngineNeverEditsGuardOnly()
   RecordingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(sc.design, checker, config);
-  const auto result = engine.repair(sc.request);
+  fr::internal::FillerRepairPlanner planner(sc.design, checker, config);
+  const auto result = planner.repair(sc.request);
 
   EXPECT_TRUE(result.hasSolution);
   EXPECT_TRUE(!checker.requests.empty());
@@ -2710,7 +2710,7 @@ void testGatePerViolationRuleDistance()
 }
 
 // A checker for which no overlay is ever clean: it returns the original
-// violation for the baseline AND for every candidate. Lets an engine test
+// violation for the baseline AND for every candidate. Lets an planner test
 // drive the window/definitive control flow without the fake rule model.
 class AlwaysUnsolvedChecker : public fr::PlannerOracle
 {
@@ -2736,7 +2736,7 @@ class AlwaysUnsolvedChecker : public fr::PlannerOracle
   }
 };
 
-void testEngineBudgetCeiling()
+void testPlannerBudgetCeiling()
 {
   // Vt Type: {1,2} | Widths: {2,4} | cell type: 1=std, 0=filler
   // One editable filler has exactly two options: baseline + 2 == budget 3.
@@ -2763,9 +2763,9 @@ void testEngineBudgetCeiling()
   fr::RepairConfig config;
   config.checkerCallBudgetPerWindow = 3;  // baseline + exact two-option space
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
   EXPECT_EQ(checker.requests.size(), 3u);
   bool sawDefinitive = false;
@@ -2816,7 +2816,7 @@ class AdaptiveSolutionChecker : public fr::PlannerOracle
   }
 };
 
-void testEngineAdaptiveSolvesBeyondRing()
+void testPlannerAdaptiveSolvesBeyondRing()
 {
   // Vt Type: {1,2} | Widths: {2,4} | cell type: 1=std, 0=filler
   // The violation ring covers three std cells; L0 starts at filler 142 and
@@ -2843,9 +2843,9 @@ void testEngineAdaptiveSolvesBeyondRing()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
   if (!result.changes.empty()) {
@@ -2860,7 +2860,7 @@ void testEngineAdaptiveSolvesBeyondRing()
   EXPECT_TRUE(sawAdaptiveSolution);
 }
 
-void testEngineAdaptiveL1FindsFarFiller()
+void testPlannerAdaptiveL1FindsFarFiller()
 {
   fr::PlannerTestDataSource design = makeLibrary();
   design.addRow(0, 0, 20)
@@ -2895,9 +2895,9 @@ void testEngineAdaptiveL1FindsFarFiller()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
-  const fr::FillerRepairResult result = engine.repair(request);
+  const fr::FillerRepairResult result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
   EXPECT_EQ(fr::fillerRecordInstanceId(result.changes.front()), 141);
@@ -2914,7 +2914,7 @@ void testEngineAdaptiveL1FindsFarFiller()
 // level cap at 0: the planner must stop after L0 with the TRUNCATED verdict
 // (never "definitive" -- unexpanded windows were not searched) and no
 // partial changes.
-void testEngineAdaptiveLevelCapTruncates()
+void testPlannerAdaptiveLevelCapTruncates()
 {
   fr::PlannerTestDataSource design = makeLibrary();
   design.addRow(0, 0, 20)
@@ -2950,9 +2950,9 @@ void testEngineAdaptiveLevelCapTruncates()
   config.adaptiveStepFillers = 1;
   config.maxAdaptiveLevels = 0;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
-  const fr::FillerRepairResult result = engine.repair(request);
+  const fr::FillerRepairResult result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   bool sawCap = false;
@@ -2969,7 +2969,7 @@ void testEngineAdaptiveLevelCapTruncates()
   EXPECT_TRUE(sawTruncated);
 }
 
-void testEngineAdaptiveContinuesPastUnchangedBlocking()
+void testPlannerAdaptiveContinuesPastUnchangedBlocking()
 {
   fr::PlannerTestDataSource design = makeLibrary();
   design.addRow(0, 0, 20)
@@ -3002,9 +3002,9 @@ void testEngineAdaptiveContinuesPastUnchangedBlocking()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
-  const fr::FillerRepairResult result = engine.repair(request);
+  const fr::FillerRepairResult result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   bool sawUnchangedCutoff = false;
@@ -3028,7 +3028,7 @@ void testEngineAdaptiveContinuesPastUnchangedBlocking()
 // in six more fillers (7 fillers, space 3^7 -> budget-truncated). The failure must read
 // "truncated", not "definitively" -- the old OR-accumulator latched L0's
 // completeness and would have mislabeled it definitive.
-void testEngineDefinitiveReflectsLastWindow()
+void testPlannerDefinitiveReflectsLastWindow()
 {
   fr::PlannerTestDataSource design = makeLibrary();
   design.addRow(0, 0, 18)
@@ -3062,9 +3062,9 @@ void testEngineDefinitiveReflectsLastWindow()
   // L0 (1 filler, space 2) fits; adaptive step (7 fillers) far exceeds 50.
   config.checkerCallBudgetPerWindow = 50;
   config.adaptiveStepFillers = 6;
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
   bool sawTruncated = false;
   bool sawDefinitive = false;
@@ -3530,14 +3530,14 @@ void testEnumerateSize3CapAndProducts()
 // --- User-provided realistic grid ------------------------------------------
 //
 // A 5-row multi-width layout with two VT types (0/1) and four std cells,
-// supplied to exercise the engine at scale. Its own master scheme (VTs {0,1},
+// supplied to exercise the planner at scale. Its own master scheme (VTs {0,1},
 // widths {2,3,4,8}) is kept separate from the {1,2,3}-VT library above.
 //
 // NOTE ON SEMANTICS: the fake checker is a simplified run-based MW/MS model,
 // not the real implant checker. At MW=MS=1 it reports the violations it can
 // see on this static layout (a corner-touch inter-row MS near rows 2-3), not
 // necessarily the ones the author had in mind. That is exactly the
-// checker-as-oracle boundary: the engine repairs whatever the checker
+// checker-as-oracle boundary: the planner repairs whatever the checker
 // reports, and the real checker will drive the intended violations unchanged.
 
 namespace grid {
@@ -3584,11 +3584,11 @@ fr::PlannerTestDataSource build()
 
 }  // namespace grid
 
-// The engine runs end-to-end on the large layout and deterministically
+// The planner runs end-to-end on the large layout and deterministically
 // repairs what the fake checker reports at MW=MS=1: a single inter-row MS
 // near rows 2-3, cleared by one filler swap. Anchored at the width-2 std cell
 // (1011); the window follows the violation footprint to reach the fix.
-void testEngineUserGridMwMs1()
+void testPlannerUserGridMwMs1()
 {
   fr::PlannerTestDataSource design = grid::build();
   fr::PlannerTestRules rules;  // MW=MS=1 on all four rule classes
@@ -3614,15 +3614,15 @@ void testEngineUserGridMwMs1()
   fr::PlannerTestOracle checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner engine(design, checker, config);
+  fr::internal::FillerRepairPlanner planner(design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchor;
   request.violations = snapshot;
-  const auto result = engine.repair(request);
+  const auto result = planner.repair(request);
 
   // Deterministic solution: this layout has several oracle-clean single
-  // swaps; the engine returns the FIRST in the pinned enumeration order.
+  // swaps; the planner returns the FIRST in the pinned enumeration order.
   // Under the V2.1 #9 filler-domain order that is the row2 width-4 vt1
   // filler 2012 -> vt0 (the pre-#9 flat-swap order surfaced 3013 -> vt1,
   // an equally clean alternative). Oracle-verified: residual=0,
@@ -3634,8 +3634,8 @@ void testEngineUserGridMwMs1()
 
   // Same input -> identical result (planner determinism).
   fr::PlannerTestOracle checker2(design, rules);
-  fr::internal::FillerRepairPlanner engine2(design, checker2, config);
-  const auto result2 = engine2.repair(request);
+  fr::internal::FillerRepairPlanner planner2(design, checker2, config);
+  const auto result2 = planner2.repair(request);
   EXPECT_TRUE(result2.hasSolution);
   EXPECT_EQ(result2.changes.size(), 1u);
   EXPECT_EQ(fr::fillerRecordInstanceId(result2.changes[0]), 2012);
@@ -3656,8 +3656,8 @@ void registerPlannerTests()
        testSyntheticCatalogRejectsMalformedMasters},
       {"synthetic_catalog_candidates_contract",
        testSyntheticCatalogCandidatesContract},
-      {"engine_solves_with_synthetic_catalog",
-       testEngineSolvesWithSyntheticCatalog},
+      {"planner_solves_with_synthetic_catalog",
+       testPlannerSolvesWithSyntheticCatalog},
       {"checker_echo_and_order", testCheckerEchoAndOrder},
       {"checker_invalid_isolated", testCheckerInvalidIsolated},
       {"checker_intra_ms_detect_and_clear", testCheckerIntraMsDetectAndClear},
@@ -3677,9 +3677,9 @@ void registerPlannerTests()
       {"window_adaptive_coupled_rows_and_fixed_boundary",
        testWindowAdaptiveCoupledRowsAndFixedBoundary},
       {"guard_region_two_cell_ring", testGuardRegionTwoCellRing},
-      {"engine_no_editable_filler_zero_calls", testEngineNoEditableFillerZeroCalls},
-      {"engine_reentrant_repair_refused", testEngineReentrantRepairRefused},
-      {"engine_empty_snapshot_is_success", testEngineEmptySnapshotIsSuccess},
+      {"planner_no_editable_filler_zero_calls", testPlannerNoEditableFillerZeroCalls},
+      {"planner_reentrant_repair_refused", testPlannerReentrantRepairRefused},
+      {"planner_empty_snapshot_is_success", testPlannerEmptySnapshotIsSuccess},
       {"swap_generator_basic", testSwapGeneratorBasic},
       {"swap_generator_no_usable_master", testSwapGeneratorNoUsableMaster},
       {"swapgen_rejected_candidate_diag", testSwapgenRejectedCandidateDiag},
@@ -3700,38 +3700,38 @@ void registerPlannerTests()
       {"enumeration_order_and_completeness", testEnumerationOrderAndCompleteness},
       {"enumeration_filler_domain_not_crowded_out",
        testEnumerationFillerDomainNotCrowdedOut},
-      {"engine_solves_single_swap", testEngineSolvesSingleSwap},
-      {"engine_solves_pair_non_monotone", testEngineSolvesPairNonMonotone},
-      {"engine_complex_ranked_pair_fast", testEngineComplexRankedPairFast},
-      {"engine_complex_third_vt_still_succeeds",
-       testEngineComplexThirdVtStillSucceeds},
-      {"engine_ignores_unrelated_halo_violation",
-       testEngineIgnoresUnrelatedHaloViolation},
-      {"engine_no_solution_definitive", testEngineNoSolutionDefinitive},
+      {"planner_solves_single_swap", testPlannerSolvesSingleSwap},
+      {"planner_solves_pair_non_monotone", testPlannerSolvesPairNonMonotone},
+      {"planner_complex_ranked_pair_fast", testPlannerComplexRankedPairFast},
+      {"planner_complex_third_vt_still_succeeds",
+       testPlannerComplexThirdVtStillSucceeds},
+      {"planner_ignores_unrelated_halo_violation",
+       testPlannerIgnoresUnrelatedHaloViolation},
+      {"planner_no_solution_definitive", testPlannerNoSolutionDefinitive},
       {"gate_cache_single_evaluation", testGateCacheSingleEvaluation},
-      {"engine_detects_protocol_error", testEngineDetectsProtocolError},
-      {"engine_order_independent_batches", testEngineOrderIndependentBatches},
-      {"engine_batch_size_invariance", testEngineBatchSizeInvariance},
-      {"engine_determinism_full_transcript",
-       testEngineDeterminismFullTranscript},
-      {"engine_never_edits_guard_only", testEngineNeverEditsGuardOnly},
+      {"planner_detects_protocol_error", testPlannerDetectsProtocolError},
+      {"planner_order_independent_batches", testPlannerOrderIndependentBatches},
+      {"planner_batch_size_invariance", testPlannerBatchSizeInvariance},
+      {"planner_determinism_full_transcript",
+       testPlannerDeterminismFullTranscript},
+      {"planner_never_edits_guard_only", testPlannerNeverEditsGuardOnly},
       {"gate_delta_classification_branches", testGateDeltaClassificationBranches},
       {"gate_rejects_unexplained_illegal", testGateRejectsUnexplainedIllegal},
       {"gate_baseline_mismatch_aborts_search", testGateBaselineMismatchAbortsSearch},
       {"gate_multiset_new_violation_not_absorbed",
        testGateMultisetNewViolationNotAbsorbed},
       {"gate_per_violation_rule_distance", testGatePerViolationRuleDistance},
-      {"engine_definitive_reflects_last_window",
-       testEngineDefinitiveReflectsLastWindow},
-      {"engine_budget_ceiling", testEngineBudgetCeiling},
-      {"engine_adaptive_solves_beyond_ring",
-       testEngineAdaptiveSolvesBeyondRing},
-      {"engine_adaptive_l1_finds_far_filler",
-       testEngineAdaptiveL1FindsFarFiller},
-      {"engine_adaptive_level_cap_truncates",
-       testEngineAdaptiveLevelCapTruncates},
-      {"engine_adaptive_continues_past_unchanged_blocking",
-       testEngineAdaptiveContinuesPastUnchangedBlocking},
+      {"planner_definitive_reflects_last_window",
+       testPlannerDefinitiveReflectsLastWindow},
+      {"planner_budget_ceiling", testPlannerBudgetCeiling},
+      {"planner_adaptive_solves_beyond_ring",
+       testPlannerAdaptiveSolvesBeyondRing},
+      {"planner_adaptive_l1_finds_far_filler",
+       testPlannerAdaptiveL1FindsFarFiller},
+      {"planner_adaptive_level_cap_truncates",
+       testPlannerAdaptiveLevelCapTruncates},
+      {"planner_adaptive_continues_past_unchanged_blocking",
+       testPlannerAdaptiveContinuesPastUnchangedBlocking},
       {"gate_baseline_unexpected_inwindow_aborts",
        testGateBaselineUnexpectedInWindowAborts},
       {"gate_baseline_halo_extra_allowed", testGateBaselineHaloExtraAllowed},
@@ -3750,7 +3750,7 @@ void registerPlannerTests()
       {"enumerate_complete_budget_boundary", testEnumerateCompleteBudgetBoundary},
       {"enumerate_overflow_clamp", testEnumerateOverflowClamp},
       {"enumerate_size3_cap_and_products", testEnumerateSize3CapAndProducts},
-      {"engine_user_grid_mw_ms_1", testEngineUserGridMwMs1},
+      {"planner_user_grid_mw_ms_1", testPlannerUserGridMwMs1},
   };
 
   for (const Test& test : tests) {

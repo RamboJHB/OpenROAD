@@ -18,14 +18,14 @@ repair 在局部窗口内生成 **swap move**
 成批交给 checker overlay API 验证**,用同一 `guardRegion` 下的 baseline-delta clean 作为
 唯一 accept 标准。找到 clean 解返回 `ipl::FillerChanges`,由 opto/infrastructure
 commit;修不了则返回 diagnostics。`precheck()` 与 `repair()` 都不修改 DB,且
-修复成功 commit 后可通过 `update()` 刷新同一实例集合的 engine snapshot。
+修复成功 commit 后可通过 `update()` 刷新同一实例集合的 runtime engine snapshot。
 
 ---
 
 ## 0. V2.1 修订记录
 
 V2 定稿并完成最初的 planner 实现后,拿到真实 checker 源码,做了一次 reviewer
-复审。以下 12 项修订都在 **repair engine 范围内**
+复审。以下 12 项修订都在 **filler repair feature 范围内**
 (checker 实现不属本 feature 责任);优先级排序为 **OracleGate 正确性 > 窗口简化
 > 搜索域建模**。
 
@@ -47,7 +47,7 @@ V2 定稿并完成最初的 planner 实现后,拿到真实 checker 源码,做了
 落地分三批(实施顺序,详见 `src/dpl2/HandOff.md`):
 **批 1 正确性** #1/#2/#3/#4/#5/#10 —— 都是小改动、现有 harness + ScriptedChecker
 可造回归;**批 2 简化** #6/#7/#8/#11 —— 减代码,改动集中在窗口相关 case;
-**批 3 建模** #9/#12 —— #9 动 Ranker/SubsetSearcher 接口,#12 随 engine 对接。
+**批 3 建模** #9/#12 —— #9 动 Ranker/SubsetSearcher 接口,#12 随 runtime engine 对接。
 
 保留不采纳原文的一处:#4 的原始处方(对 related pre-existing 也否决)会让那条
 连 baseline 都有的违例在每个 candidate 里都出现、导致 repair 恒失败;正确修法是把
@@ -65,14 +65,15 @@ V2 定稿并完成最初的 planner 实现后,拿到真实 checker 源码,做了
 3. 该 cell 周围的 filler 仍保留旧 implant type,在 cell/filler 或 filler/filler 边界上
    产生 implant 层 DRC 违例。
 4. checker 对 changed cell 做 target-local 检查,把完整 violation snapshot 交给
-   filler repair engine。
-5. repair engine 尽力修复 snapshot 中的所有 violation,返回 `RepairOutcome`;
+   runtime `FillerRepairEngine`。
+5. runtime engine 调用 pure planner 搜索 snapshot 中所有 violation 的修复,
+   返回 `RepairOutcome`;
    solution wire 是 final checker 的 `ipl::FillerChanges`。
-6. opto/infrastructure 负责 commit。repair engine 全程不改 DB。
+6. opto/infrastructure 负责 commit。runtime engine 与 planner 全程不改 DB。
 
 DRC 规则两类:**MW(min-width)与 MS(min-spacing)**,各分 intra-row / inter-row。
 MS 按 P 区 / N 区(band polarity)分别检查;MW 的完整语义由 checker 负责,repair
-engine 不依赖其细节(见 §3.1 职责边界)。示例工艺下 MW/MS 的 rule 尺度约为 1 个
+planner 不依赖其细节(见 §3.1 职责边界)。示例工艺下 MW/MS 的 rule 尺度约为 1 个
 site,因此单次修复问题天然**很局部、很小**——这是 V2 搜索策略选型的关键前提。
 VT/implant type 有多种(示例 2 种,实际 3 种);算法不依赖具体数目。
 
@@ -101,7 +102,7 @@ checker result 中 clean。
 
 **`targetPlace` 是 std-cell anchor,不是 repair window**。它指向被 opto 改动的
 std cell 的 candidate placement(instanceId/masterId/rowId/x/orientation),供 checker
-重建局部 check context。repair 的"窗口"由 repair engine 自己生成(§6.3),每个
+重建局部 check context。repair 的"窗口"由 pure planner 生成(§6.3),每个
 checker request 额外携带由窗口外扩得到的 `guardRegion`。
 
 **opto 单 cell 内环调用**决定了:一次 repair 的所有 violation 都在同一个 anchor
@@ -153,21 +154,23 @@ opto 改动次数,所以"好排序让首批候选命中"比"搜索策略高级"�
 - **checker RD**:只做 non-mutating overlay DRC verify。输入一批
   `OracleRequest`(每个是一个 atomic overlay 方案),输出对应的真实 violation
   snapshot。checker 是唯一的 DRC oracle——MW/MS/P/N/PRL 的全部规则细节封装在
-  checker 内,repair engine 对其免疫。
+  checker 内,pure planner 不依赖这些规则细节。
 - **infrastructure RD**:只做 filler 替换候选查询(第一版 per-instance,演进为
   per-span tiling 查询,§5.3)。commit 由 infrastructure 执行,不在 repair 内。
-- **filler repair engine**:提供独立 gap/overlap precheck,并在 repair 路径做
-  violation 归一化、开窗、move 生成、
-  排序、子集搜索、baseline-delta 判定、结果与 diagnostics。实现为 deterministic
-  内部搜索保持 deterministic **pure planner**;engine 直接封装真实
-  DB/checker。planner unit tests 使用迁移目录外的 test doubles;交付的 final E2E
-  只允许真实 UDM 数据。
+- **runtime engine (`FillerRepairEngine`)**:借用 Grid/Network,负责公开
+  precheck、请求校验、checker adapter/private snapshot、update 与 runtime
+  diagnostics;它不实现搜索算法,也不修改 DB。
+- **pure planner (`internal::FillerRepairPlanner`)**:负责 violation 归一化、开窗、
+  swap 生成、排序、子集搜索、baseline-delta 判定及搜索结果。它只依赖
+  `PlannerDataSource`/`PlannerOracle`,保持 deterministic 且不接触 UDM 生命周期。
+  planner unit tests 与其 UDM-free doubles 均随 `fillerRepair/test` 迁移;
+  portable E2E 使用 final checker/helper 验证 runtime 边界。
 
 第一版代码位置:`src/dpl2/src/fillerRepair/`。
 
 ### 3.2 五层管线
 
-repair engine 内部是五层管线,每层单独可测、单独可替换:
+pure planner 内部是五层管线,每层单独可测、单独可替换:
 
 ```text
 ┌─ 窗口控制外环(L0 → adaptive-L1,预算尽/近边界则渐进扩窗,§6.3)──┐
@@ -237,19 +240,19 @@ runtime 签名只使用 final checker 的 `ipl::CheckResult`、`ipl::Diagnostic`
 `ipl::FillerChanges`。`init()` 成功前,
 `precheck()`/`repair()` 一律 fail-closed。
 
-checker overlay API 与 engine API 都不修改 UDM/placement。target master 的首次
+checker overlay API 与 runtime engine API 都不修改 UDM/placement。target master 的首次
 注册只扩展既有 Network 的 in-memory master registry,不修改 DB。repair 拒绝同实例重入;
-checker 调用在 engine `Impl` 内串行化。一个 engine 私有拥有一套
+checker 调用在 runtime engine `Impl` 内串行化。一个 runtime engine 私有拥有一套
 checker/planner snapshot、借用一套 Grid/Network,对应一个 design revision。位置/
 master commit 且实例集合、rows、blockages 不变时调用 `update()` 刷新 existing Nodes
 并原子替换 private snapshot;实例增删或 Grid topology 变化时先由 infrastructure
-重建 Grid/Network。`update()` 返回 false 后 engine 保持 fail-closed,必须成功 init
+重建 Grid/Network。`update()` 返回 false 后 runtime engine 保持 fail-closed,必须成功 init
 或 update 后才能继续查询。
 
 ### 3.4 Infrastructure alignment (2026-07-18)
 
 - 移植目的地已经提供 final checker;runtime integration 包含
-  `src/dpl2/src/fillerRepair/` 与 infrastructure `Network::updateNodes()`。engine 借用 supplied Grid/Network、私有
+  `src/dpl2/src/fillerRepair/` 与 infrastructure `Network::updateNodes()`。runtime engine 借用 supplied Grid/Network、私有
   持有 checker/planner snapshot;本项目不修改其 DRC 算法,也不要求其提供本仓库的 CMake。
 - `FillerRepairEngine(Grid*, Network*)` 是唯一 runtime repair 边界;通常直接传
   `DePlace::getGrid()` / `getNetwork()`。
@@ -269,14 +272,14 @@ master commit 且实例集合、rows、blockages 不变时调用 `update()` 刷�
   `LeafCellID` / `LibCellID` 是 runtime `FillerCellRecord` handle。
 - placed masters 来自既有 Network;configured filler masters 在 init 时注册;
   uninstantiated target new master 由 repair 在 request 验证后按需注册并触发
-  checker/snapshot 重建。`update()` 刷新现有 Node 的物理状态并重建 engine snapshot,
+  checker/snapshot 重建。`update()` 刷新现有 Node 的物理状态并重建 runtime engine snapshot,
   但不负责发现新增/删除的 UDM instance。
 - 82 个可移植 planner unit tests 与 UDM-free doubles 位于
-  `test/planner`;不 include local fake UDM tree/provider。
+  `test/` 根目录并与 E2E test 同级;不 include local fake UDM tree/provider。
 - 34 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 8-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
-- 82 个 engine cases、fake UDM include
+- 82 个 runtime engine cases、fake UDM include
   tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
 - runtime 与 portable test 编译清单唯一定义在
   `src/dpl2/src/fillerRepair/sources.cmake`
@@ -400,7 +403,7 @@ result、checker batch 和 `RepairOutcome` 全程复用同一个 `FillerCellReco
 #### 5.2.1 checker 实际交付形态(终版契约,2026-07-18)
 
 checker 已交付真实 overlay 实现,UDM extraction 内联。**对接以实物为准**,
-上面的接口只描述 engine 内部抽象。终版 checker 对每个 batch 自算空 overlay
+上面的接口只描述 runtime engine 内部的 planner-oracle adapter 抽象。终版 checker 对每个 batch 自算空 overlay
 baseline,再返回每个候选的 **blocking violation list**。
 
 ```cpp
@@ -432,13 +435,13 @@ struct CheckResult {                  // 没有 status 枚举
 终版契约要点:
 
 - **blocking**:checker 先用同一 target/guard 计算空-overlay `oldViolations`,
-  再保留触及 target 或不被 old baseline 包含的候选 violation。engine 仍保留
-  自己的 baseline-delta gate;original snapshot、baseline 与 candidates 必须都
-  经同一 engine/checker 路径,保证分类一致。
+  再保留触及 target 或不被 old baseline 包含的候选 violation。planner 的
+  `OracleGate` 仍保留 baseline-delta gate;original snapshot、baseline 与 candidates
+  必须都经同一 runtime engine/checker 路径,保证分类一致。
 - **requestId/status 取消**:关联按顺序(结果数==输入数、序一致);
   invalid 候选以 diagnostics 表达(dup/非 filler/尺寸不符等),逐候选隔离。
-  engine private boundary 按 index 合成 planner id/status。
-- **batch 形态**:单 target/guard + N 变更列表,与 engine 每窗口用法一致。
+  runtime engine private boundary 按 index 合成 planner id/status。
+- **batch 形态**:单 target/guard + N 变更列表,与 planner 每窗口的 batch 用法一致。
 - `Violation` 带 `rowIds` 与 hash;`Relationship` 只有 IntraRow/InterRow。
 - checker ID 空间 = `Node::getId()` / `Master::getId()`;physical wire =
   `LeafCellID` / `LibCellID`。
@@ -450,7 +453,7 @@ struct CheckResult {                  // 没有 status 枚举
 需要一次版本化升级。"在 overlay context 里删除/实例化 filler"拆成两半,归属
 不同:
 
-- **语义半 = repair engine 做**:把一个 span rewrite 翻译成"删哪些 instance、
+- **语义半 = planner 做**:把一个 span rewrite 翻译成"删哪些 instance、
   在哪些 x 放哪些 master"。tiling 规划知识(库宽度、切法、每段位置)全在
   planner,①生成器本来就要算出精确位置;让 checker 解释 tiling 意图
   会把规划知识泄漏进 oracle。
@@ -487,14 +490,14 @@ id 分配流程等契约细节仍依赖未定稿的设计,现在拍板是投机�
   `guardRegion` 只扩大 checking/diagnostics 范围,**不允许** repair 修改 guard-only
   区域内的 filler。
 - `CheckResult` 按输入顺序关联;结果数不等于候选数即 protocol error。
-  engine private boundary 按 index 合成 planner request ID/status。
+  runtime engine private boundary 按 index 合成 planner request ID/status。
 - 单个 invalid candidate 只影响自己的 `CheckResult`,并以 diagnostics 表达。
 - planner 内部结果仍做双向自洽校验;fatal/request diagnostics 使该候选不可用。
 - checker 不需要维护 violation 历史,也不做 original/residual/new/spillover 分类;
   分类由 repair 侧用同一 `guardRegion` 的 baseline/overlay delta 完成(§6.8)。
 - `checkPlaceWithOverlay[s]` 是**纯查询**(const、不 mutate DB),禁止在内部
-  触发 repair——repair 只由 opto 从 engine 进入,避免 oracle callback
-  重入 engine(依赖拓扑见 §3.3)。
+  触发 repair——repair 只由 opto 从 runtime engine 进入,避免 oracle callback
+  重入 runtime engine(依赖拓扑见 §3.3)。
 
 ### 5.3 Infrastructure 候选 API
 
@@ -563,14 +566,17 @@ constructor 直接借用 dpl2/DePlace 已初始化的 Grid/Network;`init()` 验�
 PhysDesMgr/fillerSetting/active UDM design 一致,注册 configured filler masters,
 然后构造 final checker 和 runtime snapshot。调用方不提供 hierarchy leaf list,
 也不构造 repair-specific infrastructure/checker。`repair()` 遇到 Network 尚未包含的
-`newMaster` 时先按需注册并重建 private checker/snapshot。同一 engine 拒绝第二次 init;
-design commit 后构造新 engine。
+`newMaster` 时,先验证 target/type/width/height,通过后才按需注册并重建 private
+checker/snapshot;失败请求不扩展 master registry。实例集合不变的 placement/master
+commit 后,先同步 infrastructure/Grid,再调用 `update()` 刷新 runtime engine;
+新增/删除 instance 或 row/blockage 改变时必须先重建 Grid/Network,而不是复用旧
+snapshot。
 
 final checker 的 persistent init diagnostics 在接受 oracle 前分类：
 `skipped_phys_status`，以及 Network 中所有 master 都未使用的 implant layer 的
 `missing_rule_parameter`/`skipped_missing_rule_parameter` 是非阻断提示；其余 init
 diagnostics（包括实际使用层缺规则、shape/band/placement 结构问题）使 `init()`
-fail-closed。初始化成功后，engine 才从每个 overlay result 的前缀中移除这一整段已批准
+fail-closed。初始化成功后，runtime engine 才从每个 overlay result 的前缀中移除这一整段已批准
 persistent diagnostics，request-specific diagnostics 不移除。
 
 `precheck()` 的 contract:
@@ -586,7 +592,7 @@ persistent diagnostics，request-specific diagnostics 不移除。
 implant DRC 使用空 `FillerChanges`;无 violation 返回 success + empty changes,
 有 violation 才进入内部 planner。有解返回 `ipl::FillerChanges`,无解返回失败;
 commit 始终属于 opto/infrastructure。runtime diagnostics 和 wire types沿用
-final checker,内部 planner request/status 不能越过 engine boundary。
+final checker,内部 planner request/status 不能越过 runtime engine boundary。
 
 ---
 
@@ -719,8 +725,8 @@ opto 一次只改一个 cell,本次 snapshot 的所有 violation 都在同一 an
 
 1. 对窗口内每个 editable filler 调 `getUsableMasterCandidates`;为空则该 filler
    不生成 swap,diagnostics 记 `NoUsableMaster`(正常结果,不是 error)。
-2. 对每个 candidate master 生成一个 `Swap`(§4.1),master 到 VT 的映射由 DB
-   engine private snapshot 提供,供排序使用;通不过构造校验的候选记 diagnostics 后跳过
+2. 对每个 candidate master 生成一个 `Swap`(§4.1),master 到 VT 的映射由
+   runtime engine 的 private planner snapshot 提供,供排序使用;通不过构造校验的候选记 diagnostics 后跳过
    (defense in depth)。
 3. 绝不为 std cell、macro、guard-only filler、non-editable filler 生成 swap。
 4. 输出定序:窗口 editable 顺序(row, x),同 filler 内按 master id 升序。
@@ -944,14 +950,14 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 ## 10. 测试集
 
 当前 82 个 planner cases 是独立 GoogleTests,位于交付目录中的
-`fillerRepair/test/planner`。同一目录中的 34 个 portable E2E cases 集中在
+`fillerRepair/test/`,并与 34 个 portable E2E cases 同级;E2E cases 集中在
 `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`:5 个 final-checker overlay contract
 case + 17 个 `FillerRepairPlanner`→final checker repair/failure case + 12 个
 internal exact-coverage precheck case。fixture 通过
 `ImplantLayerCheckerHelper` 构造 8 行 × 200 sites 的 Grid/Network/checker input;
 不读 DEF/LEF,不需要 `E2ETestProvider` 或 real-UDM design builder。
 
-82 个 engine fake-UDM cases、provider 与完整 local fake regression
+82 个 runtime engine fake-UDM cases、provider 与完整 local fake regression
 copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
 
 前置与协议:
@@ -964,7 +970,7 @@ copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
   segment 间 whitespace 排除、placed span clipping、多 row 排序、空/零宽 span、
   empty placement、unordered input、triple coverage、touching legal spans 与
   gap+overlap 确定性顺序。
-- external public engine API 在 3 种 layout 上覆盖 repeated precheck、opto gate、
+- external public runtime engine API 在 3 种 layout 上覆盖 repeated precheck、opto gate、
   repair internal precheck、hard macro、hard/soft blockage、invalid replacement
   无 registry 副作用与 update refresh。portable checker 另覆盖 changed neighbor
   位于 guard 外仍能报告 target violation。
@@ -973,7 +979,7 @@ copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
 - 非 filler instance 出现在 `FillerCellRecord` 中,判 invalid request。
 - (future)rewrite 不变量(span 精确覆盖完整 instance、宽度和相等)单测,
   随第二步 rewrite 一起引入,本阶段无此代码。
-- planner 内部抽象仍校验 requestId/status;engine private boundary 以 checker 结果顺序合成
+- planner 内部抽象仍校验 requestId/status;runtime engine private boundary 以 checker 结果顺序合成
   requestId/status。checker result 数与 candidate 数不相等判 protocol error。
 - batch 中单个 invalid overlay 不影响其他 result,以 diagnostics 表达。
 - canonical 相同 overlay 只调一次 checker(cache 命中)。
@@ -1040,9 +1046,9 @@ gate 语义:
   编译清单唯一定义在
   `src/dpl2/src/fillerRepair/sources.cmake`。
 - 82 个 planner unit tests、34 个 portable checker/planner/precheck cases 与 82 个
-  fake-UDM engine tests 全为 GoogleTest;
-  82 个 planner tests 与 UDM-free doubles 已移入 `fillerRepair/test/planner`,
-  和 helper-built portable E2E 一起迁移;fake UDM engine suite 留在 local;
+  fake-UDM runtime engine tests 全为 GoogleTest;
+  82 个 planner tests 与 UDM-free doubles 已移入 `fillerRepair/test/` 根目录,
+  和 helper-built portable E2E 一起迁移;fake UDM runtime engine suite 留在 local;
   precheck/repair 均 non-mutating;
   runtime integration 使用 fillerRepair 与 Network refresh seam,checker 零修改。
   2026-07-20 普通 CTest 198/198;本次更新后 ASan 尚未重跑。
@@ -1067,9 +1073,9 @@ gate 语义:
 
 保留不变的 V1 决策:checker-as-oracle(不复刻 DRC)、只在 checker 结果上 accept、
 baseline-delta gate 与 guard halo 语义、two-cell guardRegion、canonical cache、batch
-协议(planner 内部 requestId/status 由 engine private boundary 合成)、pure planner、
+协议(planner 内部 requestId/status 由 runtime engine private boundary 合成)、pure planner、
 失败不返回 partial、diagnostics 要求。终版 checker 现按 candidate 顺序关联结果,
-engine private boundary 合成 planner 内部 requestId/status;placement gate 是独立
+runtime engine private boundary 合成 planner 内部 requestId/status;placement gate 是独立
 public precheck,不进入 repair pipeline。
 
 ---
@@ -1089,7 +1095,7 @@ F_FILL2_63S6T9R_1   F_FILL2_63S6T9L_1   F_FILL2_63S6T9UL_1
 VT 后缀含义(按业界常规命名推断,待 library 团队确认):R = RVT(regular,
 标准阈值)、L = LVT(low-VT,低阈值,更快/更漏电)、UL = ULVT(ultra-low-VT,
 超低阈值)。三者即本 feature 的三种 implant type;与 checker header 中
-`Family` 的映射由 engine private snapshot 从 master 的 implant 层导出(参见
+`Family` 的映射由 runtime engine private snapshot 从 master 的 implant 层导出(参见
 final checker 的 layer-family 解析路径),不依赖 master 名字符串解析,
 本附录命名仅供人读。
 

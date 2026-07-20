@@ -13,7 +13,7 @@ The V2.1 swap-only planner and real-UDM runtime E2E package are complete.
 | Area | State |
 |---|---|
 | Planner | internal `FillerRepairPlanner`; adaptive-L1, filler domains, per-band ranking/filtering, deterministic `FillerCellRecord` output and opt-in `[fr][stage]` transcript complete |
-| Unit tests | 82/82 database-free GoogleTests under `fillerRepair/test/planner`; portable with production |
+| Unit tests | 82/82 database-free GoogleTests as same-level sources under `fillerRepair/test`; portable with production |
 | Infrastructure | existing runtime Grid/Network are borrowed; `Network::updateNodes()` refreshes an unchanged instance set; engine registers configured filler masters at init and validates target replacements before lazy registration |
 | Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
 | Runtime API | one `FillerRepairEngine` = precheck + update + private snapshot/oracle + repair; init/update failures are fail-closed |

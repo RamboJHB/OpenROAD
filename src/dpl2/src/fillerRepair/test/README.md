@@ -5,9 +5,10 @@ This directory moves with `fillerRepair/` and contains 116 portable tests:
 No source below this directory includes the repository's fake UDM tree or
 depends on its `E2ETestProvider`.
 
-`planner/` owns the in-memory `PlannerDataSource`, synthetic oracle/master
-catalog and all planner, window, ranker, subset-search and OracleGate cases.
-They compile against the destination's real wire types but construct no UDM
+The same-level `FillerRepairPlannerTest.cpp`, `PlannerTestDataSource.h`,
+`PlannerTestOracle.*` and `SyntheticMasterCatalog.*` sources own all planner,
+window, ranker, subset-search and OracleGate cases. They compile against the
+destination's real wire types but construct no UDM
 objects.
 
 `FillerRepairCheckerE2ETest.cpp` has 34 cases:

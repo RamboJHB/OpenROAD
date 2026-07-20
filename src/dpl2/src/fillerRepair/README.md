@@ -48,9 +48,10 @@ This changes only the in-memory master registry, not UDM placement.
 | `PlannerDataSource.h/.cpp` | small planner-only data contract and candidate filter; implemented privately by `FillerRepairEngine::Impl` |
 | `Types.h` | deliberately standalone leaf: planner IDs, geometry/model types and exact final-checker wire helpers |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
-| `sources.cmake` | source-of-truth lists for planner, runtime and portable E2E |
+| `sources.cmake` | source-of-truth lists for planner, runtime and portable tests |
+| `test/FillerRepairPlannerTest.cpp` and same-level doubles | 82 portable database-free planner unit tests |
 | `test/FillerRepairCheckerE2ETest.cpp` | 34 portable real-checker, planner-to-checker and internal precheck cases |
-| `test/CMakeLists.txt` | standalone destination E2E plus complete runtime-engine compile/link gate |
+| `test/CMakeLists.txt` | standalone planner and E2E targets plus complete runtime-engine compile/link gate |
 
 ## Debug transcript
 
@@ -81,9 +82,12 @@ runtime result is owned by `FillerRepairEngine.h`. The sole infrastructure-
 sensitive `Network::addMaster()` call is centralized in the engine's private
 master-registration seam.
 
-## Portable final-checker verification
+## Portable verification
 
-The migrated tests construct checker input directly with the final checker's
+The 82 database-free planner tests and their same-level synthetic doubles
+exercise every pure search stage without constructing UDM objects.
+
+The 34 E2E tests construct checker input directly with the final checker's
 `ImplantLayerCheckerHelper`. They do not parse DEF/LEF and do not need a
 destination-specific UDM provider. The 34 cases comprise five direct checker
 overlay contracts, 17 planner-to-final-checker repairs/failures and 12

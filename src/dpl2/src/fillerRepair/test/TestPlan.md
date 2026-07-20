@@ -44,7 +44,7 @@ adaptive expansion and end-to-end planner decisions. The 34 E2E tests cover:
 The portable planner suite also pins `RepairConfig::maxAdaptiveLevels`:
 reaching the cap ends a no-solution search with the TRUNCATED verdict (never
 "definitive") and empty changes
-(`planner.FillerRepairPlanner.engine_adaptive_level_cap_truncates`).
+(`planner.FillerRepairPlanner.planner_adaptive_level_cap_truncates`).
 
 Each dense fixture has eight rows and 200 sites per row. Each direct overlay
 test evaluates at least three candidates: clean repair, unresolved violation,
@@ -77,8 +77,8 @@ source fallback.
 
 ## Separate local regression
 
-The 82 planner tests and their UDM-free doubles now live under
-`fillerRepair/test/planner/` and move with production. The planner suite directly validates the internal
+The 82 planner tests and their UDM-free doubles are same-level sources under
+`fillerRepair/test/` and move with production. The planner suite directly validates the internal
 `PlannerOracle` protocol, including missing, duplicate, unknown and extra
 `OracleResult` records; every batch-cardinality mismatch fails closed.
 

@@ -117,7 +117,7 @@ class OracleGate
   // original that lies inside the guard, and must not carry an unexpected
   // in-window violation that was not in the input snapshot. A false return is
   // fatal for the window -- either a checker error or a stale/inconsistent
-  // snapshot, both of which the engine must not silently treat as "repaired".
+  // snapshot, both of which the planner must not silently treat as "repaired".
   bool runBaseline(const RepairWindow& window, int& budget);
 
   struct SearchResult
