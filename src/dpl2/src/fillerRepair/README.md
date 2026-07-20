@@ -2,25 +2,26 @@
 
 Updated: 2026-07-20.
 
-`FillerRepairEngine` is the only runtime entry. It borrows the initialized
-Grid/Network already owned by DePlace and privately owns its final checker and
-immutable planner snapshot, then exposes a placement-only precheck, update and
-pre-commit filler repair. It never mutates UDM. The destination supplies the
-existing checker; infrastructure also provides the `Network::updateNodes()`
-refresh seam used after placement/master commits.
+`ImplantLayerChecker` is the caller-facing entry. It owns one
+`FillerRepairEngine`, which borrows the initialized Grid/Network already owned
+by DePlace and privately owns its oracle/planner snapshot. Neither layer
+mutates UDM. Infrastructure also provides the `Network::updateNodes()` refresh
+seam used after placement/master commits.
 
 ```cpp
-FillerRepairEngine engine(deplace->getGrid(), deplace->getNetwork());
-engine.setDebugLogging(true);  // optional [fr][stage] transcript
-engine.init(deplace->getDesMgr(), fillerSetting);
+ImplantLayerChecker checker(deplace->getGrid(), deplace->getNetwork());
+checker.setFillerRepairDebugLogging(true);  // optional [fr][stage] transcript
+checker.initFillerRepair(deplace->getDesMgr(), fillerSetting);
 
-ipl::CheckResult placement = engine.precheck();  // opto calls before mutation
-RepairOutcome outcome = engine.repair(targetCell, newMaster);
-// After a same-instance-set commit and infrastructure/Grid synchronization:
-engine.update(deplace->getDesMgr(), fillerSetting);
+ipl::CheckResult placement = checker.precheckFillerRepair();
+bool legal = checker.check(node, x, y, orient);
+if (legal) {
+  commitTargetAndFillers(checker.getFillerChanges());
+}
+checker.updateFillerRepair(deplace->getDesMgr(), fillerSetting);
 ```
 
-Precheck reports only `Gap` and `Overlap` inside coverage-required legal Grid
+`precheckFillerRepair()` reports only `Gap` and `Overlap` inside coverage-required legal Grid
 segments. A segment is a maximal run of valid pixels not reserved by
 halo/padding, so blockage cuts, fragmented-row holes and legal reserved
 whitespace are ignored. Warning diagnostics explain the location;
@@ -28,20 +29,22 @@ whitespace are ignored. Warning diagnostics explain the location;
 target/master/candidates/IDs/implant DRC. Repair repeats precheck internally;
 failure returns `PrecheckFailed`, no solution and no changes.
 
-Repair overlays `newMaster` and first asks the final checker with empty filler
+`check()` forwards its exact `ipl::CheckRequest` to the engine. Repair overlays
+the requested target master and first asks the private oracle with empty filler
 changes. A clean snapshot succeeds with empty changes; otherwise the internal
 planner searches same-position/same-size filler swaps. Commit remains with
 opto/infrastructure. Configured filler masters are registered in the existing
-Network during init. Repair validates the target, type and dimensions before an
-uninstantiated target `newMaster` is registered lazily, followed by a private
-checker/snapshot rebuild; rejected requests do not extend the master registry.
+Network during init. On the checker path, the request master already belongs
+to Network; repair validates target/type/dimensions and rebuilds its private
+oracle if DePlace registered that master after init. The direct UDM-handle
+overload retains lazy registration for focused engine tests.
 This changes only the in-memory master registry, not UDM placement.
 
 ## Main files
 
 | Path | Purpose |
 |---|---|
-| `FillerRepairEngine.h/.cpp` | only external API; its `Impl` owns final checker, planner snapshot/oracle, precheck, update and repair |
+| `FillerRepairEngine.h/.cpp` | checker-owned implementation; its `Impl` owns the oracle, planner snapshot, precheck, update and repair |
 | `PlacementPrecheck.h/.cpp` | UDM-free gap/overlap coverage sweep used by the public precheck API and portable boundary tests |
 | `FillerRepairPlanner.h/.cpp` | internal deterministic search pipeline and debug transcript |
 | `OracleGate.h/.cpp` | owns `PlannerOracle` plus `OracleRequest/Result/Status`, batching, cache and baseline-delta gate |
@@ -55,8 +58,9 @@ This changes only the in-memory master registry, not UDM placement.
 
 ## Debug transcript
 
-Debug output is disabled by default. Runtime callers may call
-`engine.setDebugLogging(true)` before or after `init()`; planner tests use
+Debug output is disabled by default. Callers may call
+`checker.setFillerRepairDebugLogging(true)` before or after initialization;
+planner tests use
 `FR_VERBOSE=1` on the unit-test executable. The deterministic transcript is printed as
 `[fr][stage]` lines and records the request/configuration, normalized
 violations, L0/adaptive-L1 windows, emitted swaps, ranked filler domains,
@@ -113,6 +117,6 @@ with its real UDM/infrastructure/checker headers. Supplying
 `DPL2_RUNTIME_LIBRARIES` reuses the destination's owning targets; when omitted,
 the standalone fallback compiles the sibling infrastructure/checker sources.
 
-The 82-case fake-UDM runtime engine suite stays outside this runtime directory
+The 91-case fake-UDM checker/engine suite stays outside this directory
 under `src/dpl2/test/local/`; see that directory's README for local commands
 and dependency details.

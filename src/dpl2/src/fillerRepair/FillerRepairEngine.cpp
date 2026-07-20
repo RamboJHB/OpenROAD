@@ -39,6 +39,7 @@ class FillerRepairEngine::Impl final : private PlannerDataSource,
             const fillerSetting& fillerSettings);
   void setDebugLogging(bool enabled);
   ipl::CheckResult precheck() const;
+  RepairOutcome repair(const ipl::CheckRequest& request);
   RepairOutcome repair(eUNL::LeafCellID targetCell,
                        const eLIB::PhysLibCell& newMaster);
 
@@ -83,6 +84,10 @@ class FillerRepairEngine::Impl final : private PlannerDataSource,
   Violation toPlannerViolation(const ipl::Violation& violation,
                                InstanceId targetInstance) const;
   Region snapshotGuard(const TargetPlace& target) const;
+  RepairOutcome repairImpl(
+      std::optional<ipl::CheckRequest> checkerRequest,
+      std::optional<eUNL::LeafCellID> targetCell,
+      const eLIB::PhysLibCell* newMaster);
 
   // Grows `table` so `id` is a valid index (ids can exceed the presized
   // container counts only if the Network id spaces are not dense).
@@ -934,8 +939,22 @@ Region FillerRepairEngine::Impl::snapshotGuard(const TargetPlace& target) const
 }
 
 RepairOutcome FillerRepairEngine::Impl::repair(
+    const ipl::CheckRequest& request)
+{
+  return repairImpl(request, std::nullopt, nullptr);
+}
+
+RepairOutcome FillerRepairEngine::Impl::repair(
     eUNL::LeafCellID targetCell,
     const eLIB::PhysLibCell& newMaster)
+{
+  return repairImpl(std::nullopt, targetCell, &newMaster);
+}
+
+RepairOutcome FillerRepairEngine::Impl::repairImpl(
+    std::optional<ipl::CheckRequest> checkerRequest,
+    std::optional<eUNL::LeafCellID> targetCell,
+    const eLIB::PhysLibCell* newMaster)
 {
   RepairOutcome result;
   const auto addDiagnostic = [&result](Severity severity,
@@ -984,17 +1003,53 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
-  // 1) Resolve and validate the target before mutating the shared Network
-  // master registry.
-  const int targetId = network_->getNodeId(targetCell);
+  // 1) Resolve the checker request (preferred) or the direct UDM request to
+  // one immutable engine-snapshot target before touching the shared Network
+  // master registry. The checker path deliberately does not reread candidate
+  // placement from the live Node: DePlace may already have changed that Node
+  // while the UDM commit is still pending.
+  int targetId = -1;
+  if (checkerRequest.has_value()) {
+    targetId = checkerRequest->instanceId;
+  } else if (targetCell.has_value()) {
+    targetId = network_->getNodeId(*targetCell);
+  }
   const PlacedInstance* inst =
       targetId >= 0 ? instance(static_cast<InstanceId>(targetId)) : nullptr;
   if (inst == nullptr) {
     addDiagnostic(Severity::Fatal,
                   "UnknownTarget",
-                  cat("leaf cell ",
-                      static_cast<int>(targetCell.getIndexValue()),
-                      " is not a placed node in this engine snapshot"));
+                  "target is not a placed node in this engine snapshot");
+    return result;
+  }
+  if (checkerRequest.has_value()) {
+    if (static_cast<InstanceId>(checkerRequest->instanceId) != inst->id
+        || checkerRequest->masterId < 0 || checkerRequest->rowId < 0
+        || checkerRequest->colId < 0
+        || !supportedOrientation(checkerRequest->orientation)) {
+      addDiagnostic(Severity::Fatal,
+                    "InvalidCheckRequest",
+                    "checker supplied an invalid target placement request");
+      return result;
+    }
+    if (static_cast<size_t>(inst->id) >= udm_refs_.size()
+        || !udm_refs_[inst->id].has_value()) {
+      addDiagnostic(Severity::Fatal,
+                    "TargetMappingMissing",
+                    "target has no physical cell mapping in the snapshot");
+      return result;
+    }
+    targetCell = udm_refs_[inst->id]->cellId;
+    const Master* requestedMaster = network_->getMaster(
+        static_cast<int>(checkerRequest->masterId));
+    newMaster = requestedMaster != nullptr
+                    ? requestedMaster->getPhysLibCell()
+                    : nullptr;
+  }
+  if (!targetCell.has_value() || newMaster == nullptr) {
+    addDiagnostic(Severity::Fatal,
+                  "TargetMasterUnknown",
+                  "target replacement master is absent from Network");
     return result;
   }
   const MasterInfo* oldMaster = masterInfo(inst->masterId);
@@ -1007,14 +1062,14 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   const Node* targetNode = network_->getNode(targetId);
   if (targetNode == nullptr || !targetNode->isStdCell() || inst->isFiller
       || oldMaster->isFiller
-      || !isStandardCellMaster(newMaster)) {
+      || !isStandardCellMaster(*newMaster)) {
     addDiagnostic(Severity::Fatal,
                   "TargetNotStdCell",
                   "target and replacement master must both be standard cells");
     return result;
   }
-  const DbCoord replacementWidth = newMaster.getWidth().getStorage();
-  const DbCoord replacementHeight = grid_->gridHeight(newMaster).v;
+  const DbCoord replacementWidth = newMaster->getWidth().getStorage();
+  const DbCoord replacementHeight = grid_->gridHeight(*newMaster).v;
   if (oldMaster->width != replacementWidth
       || oldMaster->height != replacementHeight) {
     addDiagnostic(Severity::Fatal,
@@ -1031,8 +1086,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   // DePlace may not have imported an uninstantiated target replacement yet.
   // Register it only after request validation, then rebuild the checker and
   // planner snapshot so all id tables share the expanded Network universe.
-  if (network_->getMaster(newMaster.getLibCellId()) == nullptr) {
-    const bool registered = ensureMasterRegistered(newMaster);
+  if (network_->getMaster(newMaster->getLibCellId()) == nullptr) {
+    const bool registered = ensureMasterRegistered(*newMaster);
     const bool rebuilt = registered && rebuildOracle();
     if (!rebuilt) {
       initialized_ = false;
@@ -1044,10 +1099,24 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     }
   }
 
-  const int newMasterId = network_->getMasterId(newMaster.getLibCellId());
-  const MasterInfo* replacement =
-      newMasterId >= 0 ? masterInfo(static_cast<MasterId>(newMasterId))
-                       : nullptr;
+  const int newMasterId = network_->getMasterId(newMaster->getLibCellId());
+  // The checker entry may receive a master that DePlace registered after the
+  // engine snapshot was built. Rebuild the private oracle exactly once so the
+  // new Network master id is understood by both checker and planner.
+  if (newMasterId >= 0
+      && masterInfo(static_cast<MasterId>(newMasterId)) == nullptr
+      && !rebuildOracle()) {
+    initialized_ = false;
+    result.diagnostics = oracle_diagnostics_;
+    addDiagnostic(Severity::Fatal,
+                  "TargetMasterRegistrationFailed",
+                  "target master could not be added to the repair oracle");
+    return result;
+  }
+  const MasterInfo* replacement = newMasterId >= 0
+                                      ? masterInfo(static_cast<MasterId>(
+                                            newMasterId))
+                                      : nullptr;
   if (replacement == nullptr || replacement->isFiller
       || replacement->width != replacementWidth
       || replacement->height != replacementHeight) {
@@ -1061,9 +1130,19 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   TargetPlace target;
   target.instanceId = targetInstanceId;
   target.masterId = static_cast<MasterId>(newMasterId);
-  target.rowId = targetRowId;
-  target.x = targetX;
-  target.orientation = targetOrientation;
+  target.rowId = checkerRequest.has_value()
+                     ? static_cast<RowId>(checkerRequest->rowId)
+                     : targetRowId;
+  target.x = checkerRequest.has_value()
+                 ? static_cast<DbCoord>(checkerRequest->colId) * site_width_
+                 : targetX;
+  target.orientation = checkerRequest.has_value()
+                           ? toPlannerOrient(checkerRequest->orientation)
+                           : targetOrientation;
+
+  const bool samePlacement = target.rowId == targetRowId
+                             && target.x == targetX
+                             && target.orientation == targetOrientation;
 
   // 2) Initial snapshot: the new target place with ZERO filler changes.
   // Snapshot and every later engine baseline/candidate go through this same
@@ -1093,6 +1172,13 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                   "the new target place is already legal; no filler changes");
     return result;
   }
+  if (!samePlacement) {
+    addDiagnostic(Severity::Warning,
+                  "UnsupportedTargetMove",
+                  "filler repair supports same-position target master swaps "
+                  "only");
+    return result;
+  }
 
   // 3) Pure search over this object's data-source and oracle interfaces.
   FillerRepairRequest request;
@@ -1104,6 +1190,11 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   result.hasSolution = planned.hasSolution;
   for (const Diagnostic& diagnostic : planned.diagnostics) {
     result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
+  }
+  if (!planned.hasSolution) {
+    // Keep the public boundary atomic even if an internal search path ever
+    // reports exploratory records together with failure.
+    return result;
   }
 
   // The planner request, checker request and public result all use this same
@@ -1528,6 +1619,11 @@ RepairOutcome FillerRepairEngine::repair(eUNL::LeafCellID targetCell,
                                          const eLIB::PhysLibCell& newMaster)
 {
   return impl_->repair(targetCell, newMaster);
+}
+
+RepairOutcome FillerRepairEngine::repair(const ipl::CheckRequest& request)
+{
+  return impl_->repair(request);
 }
 
 }  // namespace fillerRepair

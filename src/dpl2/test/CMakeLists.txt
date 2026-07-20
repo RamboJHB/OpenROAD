@@ -95,6 +95,7 @@ set(DPL2_CHECKER_HELPER_SOURCES
     "${DPL2_SRC}/infrastructure/Object.cpp"
     "${DPL2_SRC}/infrastructure/network.cpp"
     "${DPL2_SRC}/infrastructure/Padding.cpp"
+    "${DPL2_SRC}/infrastructure/fillerSetting.cpp"
     "${DPL2_SRC}/drc/ImplantLayerChecker.cpp"
     "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp")
 
@@ -135,8 +136,7 @@ if(DPL2_TEST_USE_FAKE_UDM)
   add_executable(
     dpl2_filler_repair_checker_e2e
     ${DPL2_CHECKER_HELPER_SOURCES}
-    ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-    ${DPL2_FILLER_REPAIR_PRECHECK_SOURCE}
+    ${DPL2_FILLER_REPAIR_SOURCES}
     ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
   target_link_libraries(
     dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main)

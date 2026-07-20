@@ -62,6 +62,13 @@ class FillerRepairEngine
 
   // Pre-commit implant overlay query. An internal precheck blocks repair and
   // returns warning diagnostics when placement coverage is not legal.
+  // This is the checker-facing entry: the candidate pose/master are consumed
+  // from the exact CheckRequest built by ImplantLayerChecker::check().
+  RepairOutcome repair(const ipl::CheckRequest& request);
+
+  // Direct entry retained for focused engine tests and callers that already
+  // have UDM handles. Normal placement checking enters through
+  // ImplantLayerChecker::check().
   RepairOutcome repair(eUNL::LeafCellID targetCell,
                        const eLIB::PhysLibCell& newMaster);
 

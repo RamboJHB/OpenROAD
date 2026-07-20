@@ -1,5 +1,8 @@
 #include "drc/ImplantLayerChecker.h"
 
+#include "fillerRepair/FillerRepairEngine.h"
+#include "infrastructure/fillerSetting.h"
+
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -216,6 +219,60 @@ ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network)
 
 ImplantLayerChecker::~ImplantLayerChecker()
 {
+}
+
+bool ImplantLayerChecker::initFillerRepair(
+    PhysDesMgr* desMgr,
+    const fillerSetting& fillerSettings)
+{
+    if (fillerRepairEngine_ != nullptr) {
+        return false;
+    }
+    auto engine = std::make_unique<fillerRepair::FillerRepairEngine>(
+        grid_, network_);
+    engine->setDebugLogging(fillerRepairDebugLogging_);
+    const bool initialized = engine->init(desMgr, fillerSettings);
+    fillerRepairEngine_ = std::move(engine);
+    return initialized;
+}
+
+void ImplantLayerChecker::setFillerRepairDebugLogging(bool enabled)
+{
+    fillerRepairDebugLogging_ = enabled;
+    if (fillerRepairEngine_ != nullptr) {
+        fillerRepairEngine_->setDebugLogging(enabled);
+    }
+}
+
+bool ImplantLayerChecker::updateFillerRepair(
+    PhysDesMgr* desMgr,
+    const fillerSetting& fillerSettings)
+{
+    if (fillerRepairEngine_ == nullptr) {
+        return false;
+    }
+    fillerChanges_.clear();
+    fillerRepairDiagnostics_.clear();
+    if (!fillerRepairEngine_->update(desMgr, fillerSettings)) {
+        return false;
+    }
+    // Network::updateNodes() changed the shared committed snapshot. Refresh
+    // this wrapper checker as well as the engine's private oracle so direct
+    // checker APIs and check() continue to describe the same revision.
+    return init(desMgr);
+}
+
+CheckResult ImplantLayerChecker::precheckFillerRepair() const
+{
+    if (fillerRepairEngine_ == nullptr) {
+        CheckResult result;
+        result.isLegal = false;
+        result.diagnostics.push_back(
+            {"precheck_not_initialized",
+             "warning: filler repair is not initialized"});
+        return result;
+    }
+    return fillerRepairEngine_->precheck();
 }
 
 // Validate and index implant layers, groups, and normalized rules. Rule ordering
@@ -874,6 +931,8 @@ bool ImplantLayerChecker::check(const Node* node,
                                 const PhysOrientation& orient) const
 {
     (void) y;
+    fillerChanges_.clear();
+    fillerRepairDiagnostics_.clear();
     if (!node || !network_ || !grid_) {
         return false;
     }
@@ -884,12 +943,23 @@ bool ImplantLayerChecker::check(const Node* node,
     request.colId = x.v;
     request.orientation = orient;
 
-    bool isLegal = checkPlace(request).isLegal;
-    if (!isLegal) {
-        //!!! todo: call filler repairer here
-        // const auto& [isLegal, fillerChanges] = repair.check(request)
+    if (fillerRepairEngine_ == nullptr) {
+        return checkPlace(request).isLegal;
     }
-    return isLegal;
+
+    // Do not pre-screen with this checker's committed cache. DePlace may have
+    // already changed the live Node master for the candidate, while this
+    // checker still represents the pre-commit revision. The engine consumes
+    // the explicit request and its private immutable snapshot, and its first
+    // empty-filler overlay is the single legality decision for this path.
+    const fillerRepair::RepairOutcome outcome
+        = fillerRepairEngine_->repair(request);
+    fillerRepairDiagnostics_ = outcome.diagnostics;
+    if (!outcome.hasSolution) {
+        return false;
+    }
+    fillerChanges_ = outcome.changes;
+    return true;
 }
 
 // Check one candidate placement against the committed merged-shape indexes.

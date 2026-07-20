@@ -27,7 +27,7 @@ find_package(TBB REQUIRED)
 include("${CMAKE_CURRENT_LIST_DIR}/../sources.cmake")
 
 # Database-free planner tests. The test doubles consume the same final wire
-# types as production but do not include a fake UDM fixture or provider.
+# types as the checker but do not include a fake UDM fixture or provider.
 add_executable(
   dpl2_filler_repair_planner_test
   ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}

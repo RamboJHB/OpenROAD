@@ -17,6 +17,25 @@ One `FillerChanges` is one atomic candidate. Results correlate by input order;
 result count must equal candidate count. The checker wire has no request ID or
 status enum.
 
+## 2026-07-20 checker entry wiring
+
+The reserved block in `ImplantLayerChecker::check()` now invokes the owned
+`FillerRepairEngine` with the exact `ipl::CheckRequest` built by that method.
+This is wiring only; no rule, shape, scan or blocking-violation algorithm was
+changed.
+
+The caller constructs one checker and calls `initFillerRepair()`. Before a
+target mutation it calls `precheckFillerRepair()`. After `check()` returns true,
+`getFillerChanges()` contains either the complete atomic repair or an empty
+list when no repair was needed. Every `check()` clears the previous changes
+and diagnostics first, so a failed check cannot expose a partial or stale
+repair. The caller must read/commit the result before the next check.
+
+`updateFillerRepair()` refreshes Network and both checker snapshots: the
+engine's private oracle and the caller-facing checker. The engine retains a
+direct UDM-handle overload for focused regression tests, but normal placement
+checking enters only through `ImplantLayerChecker::check()`.
+
 For each batch the checker computes the empty-overlay baseline, evaluates each
 candidate, and retains violations touching the target or not contained by the
 baseline. `isLegal` is true only when that blocking list and request/overlay
@@ -85,19 +104,20 @@ PhysDesMgr, Grid, Network and one engine must describe one design revision.
 Network must contain every placed/fixed physical instance that can intersect
 the core, including hard macros. Placement blockages remain Grid state and are
 not Network Nodes. The engine borrows the initialized Grid/Network, registers all
-`getFillerMasters()` candidates, then constructs the checker. If repair first
-sees an uninstantiated target master, it validates target/type/dimensions before
-registering that master in Network and rebuilding its private checker/snapshot.
-Rejected requests leave the master registry unchanged.
+`getFillerMasters()` candidates, then constructs the checker. The checker path
+uses a request master already present in Network and rebuilds its private
+snapshot if that master was added after init. The direct UDM-handle test
+overload may validate and register an uninstantiated master. Rejected requests
+leave the master registry unchanged.
 
 After a same-instance-set placement/master commit, `update()` refreshes every
 existing Network Node from PhysDesMgr and atomically replaces the engine's
 private checker/planner/precheck snapshot. New/deleted instances or changes to
 rows/blockages require the infrastructure owner to rebuild Grid/Network first.
 
-The engine serializes its own checker calls because the current const overlay
-path updates internal counters. The checker is engine-owned, so cross-engine
-checker aliasing is no longer possible through the runtime API.
+The engine serializes its private oracle calls because the current const
+overlay path updates internal counters. Calls on the caller-facing checker and
+reads of its last result must remain sequential.
 
 ## Repair acceptance
 
@@ -141,8 +161,8 @@ synthetic doubles are same-level sources under `fillerRepair/test` and migrate w
 feature. Runtime engine coverage, UDM-compatible test data and its provider
 remain in the repository-local suite under `src/dpl2/test/local`. The runtime
 engine contains no snapshot builder or test conditional. The portable package
-passes 116/116 and the full 2026-07-20 normal build passes 198/198 with
-`-Wall -Wextra -Werror`; ASan has not been rerun after the update changes.
+passes 116/116; the full 2026-07-20 normal and ASan builds both pass 207/207,
+with `-Wall -Wextra -Werror` clean.
 
 Future checker API or semantic changes must be recorded here before engine
 changes are merged.

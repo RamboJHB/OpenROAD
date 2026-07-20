@@ -77,13 +77,13 @@ source fallback.
 
 ## Separate local regression
 
-The 82 planner tests and their UDM-free doubles are same-level sources under
-`fillerRepair/test/` and move with production. The planner suite directly validates the internal
+The 82 planner tests and their database-free doubles are same-level sources under
+`fillerRepair/test/` and move with the feature. The planner suite directly validates the internal
 `PlannerOracle` protocol, including missing, duplicate, unknown and extra
 `OracleResult` records; every batch-cardinality mismatch fails closed.
 
-Only the 82 fake-UDM engine cases, compatibility headers and runtime provider
-remain under `src/dpl2/test/local/`. The engine suite exercises repeated public precheck calls and opto-style external
+Only the 91 fake-UDM checker/engine cases, compatibility headers and runtime provider
+remain under `src/dpl2/test/local/`. The suite exercises repeated public precheck calls and opto-style external
 gating. Additional three-layout cases verify that `repair()` repeats
 precheck and returns `PrecheckFailed`, that hard macros supply coverage while
 hard blockages remove coverage requirements and soft blockages do not, that
@@ -93,3 +93,15 @@ failed update invalidates the private snapshot and leaves queries fail-closed.
 Three additional instances verify that a missing rule on a layer used by Network
 masters makes `init()` fail closed; the existing three persistent-diagnostic
 repair instances prove that missing rules on unused layers remain non-blocking.
+Nine checker-entry instances (three layouts × three behaviors) prove that
+`ImplantLayerChecker::check()` calls the engine with the exact request, exposes
+a complete repair, returns empty changes for a clean candidate, and returns
+false with no partial/stale changes when precheck blocks. All three preserve
+the UDM physical snapshot.
+
+The whole test set is not UDM-independent: these 91 cases intentionally cover
+Session/PhysDesMgr extraction, physical handles, filler-master lookup, Network
+registration and refresh. Therefore the single test-only UDM-compatible
+provider and its CMake include switch remain necessary. No fake header,
+compile definition or conditional exists in runtime sources or the migration
+payload.

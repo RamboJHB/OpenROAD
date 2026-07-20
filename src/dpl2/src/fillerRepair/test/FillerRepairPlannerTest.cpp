@@ -2,7 +2,7 @@
 // Copyright (c) 2026, The OpenROAD Authors
 
 // Portable unit tests for the database-free fillerRepair planner. The
-// in-memory data source, oracle and master catalog use production planner
+// in-memory data source, oracle and master catalog use the real planner
 // interfaces and final-checker wire types without a fake UDM object model.
 // Each case is an independent GoogleTest so failures remain filterable.
 

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Historical repository-local engine regression. Fixture
+// Repository-local checker/engine regression. Fixture
 // construction uses the adjacent fake-UDM provider; this suite is deliberately
 // outside the migration payload.
 
@@ -13,6 +13,7 @@
 
 #include <gtest/gtest.h>
 
+#include "drc/ImplantLayerChecker.h"
 #include "infrastructure/Grid.h"
 #include "infrastructure/fillerSetting.h"
 #include "infrastructure/network.h"
@@ -139,6 +140,60 @@ class EngineHarness
   std::unique_ptr<dpl2::fillerSetting> filler_setting_;
   std::unique_ptr<dpl2::fillerRepair::FillerRepairEngine> engine_;
   bool engine_ready_ = false;
+};
+
+class CheckerHarness
+{
+ public:
+  explicit CheckerHarness(const frt::DesignSetup& setup)
+      : objects_(setup)
+  {
+    if (!objects_.hasDesign() || !objects_.hasInfrastructure()) {
+      return;
+    }
+    filler_setting_ = std::make_unique<dpl2::fillerSetting>(
+        objects_.design().design());
+    filler_setting_->addFillerCell(kDefaultFillers);
+    checker_ = std::make_unique<dpl2::ipl::ImplantLayerChecker>(
+        objects_.infrastructure().grid(),
+        objects_.infrastructure().network());
+    checker_ready_ = checker_->initFillerRepair(
+        objects_.design().desMgr(), *filler_setting_);
+  }
+
+  bool checkerReady() const { return checker_ready_; }
+  frt::E2ETestDesign& design() { return objects_.design(); }
+  dpl2::ipl::ImplantLayerChecker& checker() { return *checker_; }
+
+  bool setTargetMaster(frt::MasterRole role)
+  {
+    dpl2::Grid* grid = objects_.infrastructure().grid();
+    dpl2::Network* network = objects_.infrastructure().network();
+    const eLIB::PhysLibCell& master = design().master(role);
+    dpl2::Node* target = network->getNode(
+        design().cell(frt::CellRole::Target));
+    return target != nullptr && network->addMaster(master, grid) != nullptr
+           && network->updateNode(target, design().desMgr(), master);
+  }
+
+  bool checkTarget()
+  {
+    dpl2::Grid* grid = objects_.infrastructure().grid();
+    dpl2::Network* network = objects_.infrastructure().network();
+    dpl2::Node* target = network->getNode(
+        design().cell(frt::CellRole::Target));
+    return target != nullptr
+           && checker_->check(target,
+                              grid->gridX(target),
+                              grid->gridSnapDownY(target),
+                              target->getOrient());
+  }
+
+ private:
+  ProviderObjects objects_;
+  std::unique_ptr<dpl2::fillerSetting> filler_setting_;
+  std::unique_ptr<dpl2::ipl::ImplantLayerChecker> checker_;
+  bool checker_ready_ = false;
 };
 
 class FillerRepairEngineE2E
@@ -379,6 +434,68 @@ TEST_P(FillerRepairEngineE2E, ViolatingTargetOverlayFindsFillerSwap)
       || change.cell_id_
              == harness.design().cell(frt::CellRole::TargetRightFiller));
   EXPECT_GE(harness.network().getMasterId(targetMaster.getLibCellId()), 0);
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       CheckerEntryReturnsRepairChangesWithoutMutation)
+{
+  CheckerHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.checkerReady());
+  const auto before = harness.design().snapshot();
+  ASSERT_TRUE(harness.setTargetMaster(frt::MasterRole::TargetNew));
+
+  ASSERT_TRUE(harness.checkTarget());
+  const auto& changes = harness.checker().getFillerChanges();
+  ASSERT_EQ(changes.size(), 1U);
+  EXPECT_EQ(changes.front().op_, dpl2::OpType::Replace);
+  EXPECT_EQ(changes.front().new_lib_cell_,
+            harness.design().master(frt::MasterRole::RepairFiller)
+                .getLibCellId());
+  EXPECT_EQ(harness.design().snapshot(), before);
+
+  // A later failed check must clear the previously accepted overlay before
+  // returning; callers can never observe stale changes from the first check.
+  harness.design().moveCell(
+      frt::CellRole::Row0TailFiller,
+      harness.design().rowOriginX(0) + frt::kRowSites,
+      0);
+  const auto beforeFailedCheck = harness.design().snapshot();
+  EXPECT_FALSE(harness.checkTarget());
+  EXPECT_TRUE(harness.checker().getFillerChanges().empty());
+  EXPECT_EQ(harness.design().snapshot(), beforeFailedCheck);
+}
+
+TEST_P(FillerRepairEngineE2E, CheckerEntryCleanCandidateHasNoChanges)
+{
+  CheckerHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.checkerReady());
+  const auto before = harness.design().snapshot();
+  ASSERT_TRUE(harness.setTargetMaster(frt::MasterRole::TargetOld));
+
+  EXPECT_TRUE(harness.checkTarget());
+  EXPECT_TRUE(harness.checker().getFillerChanges().empty());
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       CheckerEntryPrecheckFailureReturnsNoPartialChanges)
+{
+  CheckerHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.checkerReady());
+  harness.design().moveCell(
+      frt::CellRole::Row0TailFiller,
+      harness.design().rowOriginX(0) + frt::kRowSites,
+      0);
+  const auto before = harness.design().snapshot();
+  ASSERT_TRUE(harness.setTargetMaster(frt::MasterRole::TargetNew));
+
+  EXPECT_FALSE(harness.checkTarget());
+  EXPECT_TRUE(harness.checker().getFillerChanges().empty());
+  EXPECT_TRUE(hasDiagnostic(
+      harness.checker().getFillerRepairDiagnostics(), "Gap"));
+  EXPECT_TRUE(hasDiagnostic(
+      harness.checker().getFillerRepairDiagnostics(), "PrecheckFailed"));
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 

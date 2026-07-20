@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -50,8 +51,12 @@ using eUTL::PhysOrientationE;
 using eUTL::PhysOrientation;
 
 namespace dpl2 {
+class fillerSetting;
 class Network;
 class Master;
+namespace fillerRepair {
+class FillerRepairEngine;
+}
 
 // replace holders for filler masters with new master ids
 enum class OpType : uint8_t {
@@ -263,7 +268,26 @@ class ImplantLayerChecker final : public DRCChecker
   ImplantLayerChecker(Grid* grid, Network* network);
   ~ImplantLayerChecker();
 
+  // Enable the optional filler-repair path owned by this checker. Callers
+  // construct only ImplantLayerChecker; its check() method invokes the engine
+  // when implant legality needs a filler overlay repair.
+  bool initFillerRepair(PhysDesMgr* desMgr,
+                        const fillerSetting& fillerSettings);
+  bool updateFillerRepair(PhysDesMgr* desMgr,
+                          const fillerSetting& fillerSettings);
+  CheckResult precheckFillerRepair() const;
+  void setFillerRepairDebugLogging(bool enabled);
+
   bool check(const Node* cell, GridX x, GridY y, const PhysOrientation& orient) const override;
+
+  // Cleared at the start of every check(). A successful check with no repair
+  // returns an empty list; a successful repaired check returns the exact
+  // atomic overlay that opto/infrastructure must commit with its target edit.
+  const FillerChanges& getFillerChanges() const { return fillerChanges_; }
+  const DiagVec& getFillerRepairDiagnostics() const
+  {
+    return fillerRepairDiagnostics_;
+  }
 
   CheckResult checkPlace(const CheckRequest& request) const;
   CheckResult checkDirect(const CheckRequest& request) const;
@@ -547,6 +571,11 @@ class ImplantLayerChecker final : public DRCChecker
   mutable int nextCandShapeId_ = -1;  // Temporary candidate shape ids.
 
   std::map<eLIB::TechLayerRelativeID, LayerId> techLayerToCheckerId_;
+
+  std::unique_ptr<fillerRepair::FillerRepairEngine> fillerRepairEngine_;
+  bool fillerRepairDebugLogging_ = false;
+  mutable FillerChanges fillerChanges_;
+  mutable DiagVec fillerRepairDiagnostics_;
 };
 
 }  // namespace ipl
