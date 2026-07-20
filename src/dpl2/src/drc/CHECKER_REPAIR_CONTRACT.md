@@ -1,6 +1,6 @@
 # ImplantLayerChecker ↔ fillerRepair contract
 
-Updated: 2026-07-20.
+Updated: 2026-07-21.
 
 ## Final checker API
 
@@ -83,6 +83,23 @@ passes that record unchanged to `checkPlaceWithOverlays()` and returns the
 accepted records unchanged to opto. This pins all three boundaries to
 `new_lib_cell_` and prevents mapping drift between checked and returned data.
 
+## 2026-07-21 checker metadata refactor
+
+The checker metadata model now uses accessor-based `Layer` and `Rule` classes.
+`ImplantLayer`, namespace-level `Family` and namespace-level `Polarity` are
+gone; their replacements are `Layer`, `Layer::Vt` and `Layer::Polar`.
+`Layer` also carries the originating `TechLayerRelativeID`. `CheckerRect`
+remains the checker-internal DBU rectangle, and `ViolationType` is available
+for checker-side classification. The violation/result wire consumed by the
+planner is unchanged.
+
+fillerRepair now joins physical implant shapes to checker layers with
+`Layer::getTechLayerId()` and reads VT/polarity through accessors. It no longer
+reconstructs that join from layer names. Portable checker fixtures construct
+the new classes and all local checker/engine cases exercise the new boundary.
+This is a data-model alignment only; no DRC rule evaluation, scan behavior or
+planner algorithm changed.
+
 ## Row/column frames
 
 The checker internally uses TWO frames: `init(desMgr)` and the track pattern
@@ -161,7 +178,7 @@ synthetic doubles are same-level sources under `fillerRepair/test` and migrate w
 feature. Runtime engine coverage, UDM-compatible test data and its provider
 remain in the repository-local suite under `src/dpl2/test/local`. The runtime
 engine contains no snapshot builder or test conditional. The portable package
-passes 116/116; the full 2026-07-20 normal and ASan builds both pass 207/207,
+passes 116/116; the full 2026-07-21 normal and ASan builds both pass 207/207,
 with `-Wall -Wextra -Werror` clean.
 
 Future checker API or semantic changes must be recorded here before engine

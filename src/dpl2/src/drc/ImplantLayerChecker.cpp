@@ -170,7 +170,7 @@ std::vector<SlotRef> TrackPattern::adjacentSlots(RowId rowId,
     return slots;
 }
 //
-std::optional<Polarity> TrackPattern::activeInterRowKind(RowId rowA,
+std::optional<Layer::Polar> TrackPattern::activeInterRowKind(RowId rowA,
     RowId rowB) const
 {
     const RowId low = std::min(rowA, rowB);
@@ -278,55 +278,57 @@ CheckResult ImplantLayerChecker::precheckFillerRepair() const
 // Validate and index implant layers, groups, and normalized rules. Rule ordering
 // is prepared here so containment handling can reason about specificity.
 bool ImplantLayerChecker::buildRules(
-    const std::vector<ImplantLayer>& layers,
+    const std::vector<Layer>& layers,
     const LayerGroupMap& groups,
     const std::vector<Rule>& rules)
 {
     bool ok = true;
-    for (const ImplantLayer& layer : layers) {
-        ruleIndex_.layers[layer.id] = layer;
+    for (const Layer& layer : layers) {
+        ruleIndex_.layers[layer.getId()] = layer;
     }
     ruleIndex_.groups = groups;
 
     for (Rule rule : rules) {
         // Keep unsupported rules visible to callers, but do not let them
         // participate in violation generation.
-        if (ruleIndex_.layers.find(rule.primaryLayer) == ruleIndex_.layers.end()) {
+        const LayerId primaryLayer = rule.getPrimaryLayer();
+        const std::optional<LayerId> secondaryLayer = rule.getSecondaryLayer();
+        const std::optional<std::string> checkGroup = rule.getCheckGroup();
+        if (ruleIndex_.layers.find(primaryLayer) == ruleIndex_.layers.end()) {
             diagnostics_.push_back({"skipped_missing_rule_parameter",
-                makeMessage("unknown primary layer for rule ", rule.ruleId)});
+                makeMessage("unknown primary layer for rule ", rule.getRuleId())});
             ok = false;
             continue;
         }
-        if (rule.secondaryLayer &&
-            ruleIndex_.layers.find(*rule.secondaryLayer) == ruleIndex_.layers.end())
-        {
+        if (secondaryLayer
+            && ruleIndex_.layers.find(*secondaryLayer)
+                   == ruleIndex_.layers.end()) {
             diagnostics_.push_back({"skipped_missing_rule_parameter",
-                makeMessage("unknown secondary layer for rule ", rule.ruleId)});
+                makeMessage("unknown secondary layer for rule ", rule.getRuleId())});
             ok = false;
             continue;
         }
-        if (!rule.unsupportedClauses.empty()) {
+        if (!rule.getUnsupportedClauses().empty()) {
             diagnostics_.push_back({"skipped_unsupported_rule_clause",
-                makeMessage("unsupported LEF58 clause in rule ", rule.ruleId)});
+                makeMessage("unsupported LEF58 clause in rule ", rule.getRuleId())});
         }
-        if (rule.checkGroup) {
+        if (checkGroup) {
             const auto groupIt =
-                ruleIndex_.groups.find(*rule.checkGroup);
+                ruleIndex_.groups.find(*checkGroup);
             if (groupIt == ruleIndex_.groups.end()) {
                 diagnostics_.push_back({"skipped_missing_rule_parameter",
-                    "unknown implant group " + *rule.checkGroup});
-            } else if (groupIds_.find(*rule.checkGroup) ==
-                       groupIds_.end()) {
+                    "unknown implant group " + *checkGroup});
+            } else if (groupIds_.find(*checkGroup) == groupIds_.end()) {
                 const GroupId groupId =
                     static_cast<GroupId>(groupIds_.size() + 1);
-                groupIds_[*rule.checkGroup] = groupId;
+                groupIds_[*checkGroup] = groupId;
                 groupLayers_[groupId] = groupIt->second;
                 for (LayerId layer : groupIt->second) {
                     layerGroups_[layer].push_back(groupId);
                 }
             }
         }
-        ruleIndex_.ruleById[rule.ruleId] = rule;
+        ruleIndex_.ruleById[rule.getRuleId()] = rule;
     }
     ruleIndex_.rules.clear();
     for (const auto& [ruleId, rule] : ruleIndex_.ruleById) {
@@ -337,10 +339,10 @@ bool ImplantLayerChecker::buildRules(
     std::sort(ruleIndex_.rules.begin(),
               ruleIndex_.rules.end(),
               [](const Rule& left, const Rule& right) {
-                  if (left.specificityRank != right.specificityRank) {
-                      return left.specificityRank < right.specificityRank;
+                  if (left.getSpecificityRank() != right.getSpecificityRank()) {
+                      return left.getSpecificityRank() < right.getSpecificityRank();
                   }
-                  return left.ruleId < right.ruleId;
+                  return left.getRuleId() < right.getRuleId();
             });
     return ok;
 }
@@ -355,8 +357,8 @@ bool ImplantLayerChecker::buildMstIntervals()
     // them as context.
     const bool keepInternal =
         std::any_of(ruleIndex_.rules.begin(), ruleIndex_.rules.end(),
-                    [](const Rule& rule) { return rule.checkGroup.has_value()
-                    || !rule.intersectLayers.empty(); });
+                    [](const Rule& rule) { return rule.getCheckGroup().has_value()
+                    || !rule.getIntersectLayers().empty(); });
 
     for (auto& item : masterItems_) {
         const Dbu width = item.width;
@@ -989,8 +991,8 @@ CheckResult ImplantLayerChecker::checkPlace(const CheckRequest& request) const
     const bool needsCandidateTargets =
         !sameCommittedPose ||
         std::any_of(ruleIndex_.rules.begin(), ruleIndex_.rules.end(),
-                    [](const Rule& rule) { return isSpacingRule(rule.source)
-                    || (isWidthRule(rule.source) && rule.zeroPrl); });
+                    [](const Rule& rule) { return isSpacingRule(rule.getSource())
+                    || (isWidthRule(rule.getSource()) && rule.getZeroPrl()); });
     std::vector<MergedShape> candidateTargets;
     const std::vector<MergedShape> committedTargets =
         sameCommittedPose ? committedTargetShapes(request.instanceId)
@@ -1026,7 +1028,7 @@ CheckResult ImplantLayerChecker::checkPlace(const CheckRequest& request) const
     std::vector<RuleOutcome> outcomes;
     for (const Rule& rule : ruleIndex_.rules) {
         const CheckMode ruleMode =
-            sameCommittedPose && isWidthRule(rule.source) && !rule.zeroPrl
+            sameCommittedPose && isWidthRule(rule.getSource()) && !rule.getZeroPrl()
                 ? CheckMode::Committed
                 : CheckMode::Candidate;
         const auto& targets = ruleMode == CheckMode::Committed
@@ -1276,16 +1278,16 @@ auto ImplantLayerChecker::evalRule(const Rule& rule,
     const -> std::vector<RuleOutcome>
 {
     std::vector<RuleOutcome> outcomes;
-    if (!rule.unsupportedClauses.empty()) {
+    if (!rule.getUnsupportedClauses().empty()) {
         RuleOutcome outcome;
-        outcome.ruleId = rule.ruleId;
+        outcome.ruleId = rule.getRuleId();
         outcome.status = OutcomeStatus::Skipped;
         outcomes.push_back(outcome);
         return outcomes;
     }
 
     for (const MergedShape& target : targetShapes) {
-        if (target.layer != rule.primaryLayer) {
+        if (target.layer != rule.getPrimaryLayer()) {
             continue;
         }
         std::vector<Relationship> relationships = {Relationship::IntraRow,
@@ -1295,7 +1297,7 @@ auto ImplantLayerChecker::evalRule(const Rule& rule,
                 continue;
             }
             MergedShape checkTarget = target;
-            if (isWidthRule(rule.source) &&
+            if (isWidthRule(rule.getSource()) &&
                 relationship == Relationship::InterRow) {
                 for (const MergedShape& sameRowNeighbor :
                      findNeighbors(target,
@@ -1320,16 +1322,16 @@ auto ImplantLayerChecker::evalRule(const Rule& rule,
             // A width rule can fail even without a same-row neighbor. Inter-row
             // width is only meaningful when an adjacent row contributes a
             // merged neighbor shape, so the fallback is limited to intra-row.
-            if (isWidthRule(rule.source) && neighbors.empty()
+            if (isWidthRule(rule.getSource()) && neighbors.empty()
                 && relationship == Relationship::IntraRow) {
-                if (!isWidthRule(rule.source)) {
+                if (!isWidthRule(rule.getSource())) {
                     continue;
                 }
                 RuleOutcome outcome;
-                outcome.ruleId = rule.ruleId;
-                outcome.context = {rule.source,
-                                   rule.primaryLayer,
-                                   rule.secondaryLayer,
+                outcome.ruleId = rule.getRuleId();
+                outcome.context = {rule.getSource(),
+                                   rule.getPrimaryLayer(),
+                                   rule.getSecondaryLayer(),
                                    relationship,
                                    checkTarget.mergedShapeId,
                                    std::nullopt,
@@ -1338,8 +1340,8 @@ auto ImplantLayerChecker::evalRule(const Rule& rule,
                                    checkTarget.x,
                                    checkTarget.x};
                 outcome.measuredValue = checkTarget.x.xh - checkTarget.x.xl;
-                outcome.requiredValue = rule.minValue;
-                outcome.status = outcome.measuredValue < rule.minValue
+                outcome.requiredValue = rule.getMinValue();
+                outcome.status = outcome.measuredValue < rule.getMinValue()
                                      ? OutcomeStatus::Violated
                                      : OutcomeStatus::Satisfied;
                 outcomes.push_back(outcome);
@@ -1347,10 +1349,10 @@ auto ImplantLayerChecker::evalRule(const Rule& rule,
             }
             for (const MergedShape& neighbor : neighbors) {
                 RuleOutcome outcome;
-                outcome.ruleId = rule.ruleId;
-                outcome.context = {rule.source,
-                                   rule.primaryLayer,
-                                   rule.secondaryLayer,
+                outcome.ruleId = rule.getRuleId();
+                outcome.context = {rule.getSource(),
+                                   rule.getPrimaryLayer(),
+                                   rule.getSecondaryLayer(),
                                    relationship,
                                    checkTarget.mergedShapeId,
                                    neighbor.mergedShapeId,
@@ -1358,64 +1360,64 @@ auto ImplantLayerChecker::evalRule(const Rule& rule,
                                    checkTarget.bandSlot,
                                    unite(checkTarget.x, neighbor.x),
                                    checkTarget.x};
-                outcome.requiredValue = rule.minValue;
+                outcome.requiredValue = rule.getMinValue();
 
                 const Dbu projected = prl(checkTarget.x, neighbor.x);
                 // LEF58 predicates are filters on applicability. They produce
                 // NotApplicable outcomes so containment and diagnostics can
                 // still see that the rule was considered.
-                if (rule.exceptAbutted && projected == 0) {
+                if (rule.getExceptAbutted() && projected == 0) {
                     outcome.status = OutcomeStatus::NotApplicable;
                                        outcomes.push_back(outcome);
                     continue;
                 }
-                if (rule.exceptCornerTouch && relationship ==
+                if (rule.getExceptCornerTouch() && relationship ==
                     Relationship::InterRow &&
                     projected == 0) {
                     outcome.status = OutcomeStatus::NotApplicable;
                     outcomes.push_back(outcome);
                     continue;
                 }
-                if (rule.length && rowHeight_ / 2 >= *rule.length) {
+                if (rule.getLength() && rowHeight_ / 2 >= *rule.getLength()) {
                     outcome.status = OutcomeStatus::NotApplicable;
                     outcomes.push_back(outcome);
                     continue;
                 }
-                if (!rule.intersectLayers.empty() &&
+                if (!rule.getIntersectLayers().empty() &&
                     !hasIntersectCoverage(rule, checkTarget, neighbor)) {
                     outcome.status = OutcomeStatus::NotApplicable;
                     outcomes.push_back(outcome);
                     continue;
                 }
-                if (rule.prl) {
+                if (rule.getPrl()) {
                     const bool lef58VerticalSpacing =
-                        rule.source == RuleSource::Lef58Spacing &&
+                        rule.getSource() == RuleSource::Lef58Spacing &&
                         relationship == Relationship::InterRow;
                     const bool lef58HorizontalSpacing =
-                        rule.source == RuleSource::Lef58Spacing &&
+                        rule.getSource() == RuleSource::Lef58Spacing &&
                         relationship == Relationship::IntraRow;
-                    if (!lef58HorizontalSpacing && *rule.prl >= 0 &&
-                        projected <= *rule.prl) {
+                    if (!lef58HorizontalSpacing && *rule.getPrl() >= 0 &&
+                        projected <= *rule.getPrl()) {
                         outcome.status = OutcomeStatus::NotApplicable;
                         outcomes.push_back(outcome);
                         continue;
                     }
-                    if (lef58VerticalSpacing && *rule.prl < 0 &&
-                        spacing(checkTarget.x, neighbor.x) >= -*rule.prl) {
+                    if (lef58VerticalSpacing && *rule.getPrl() < 0 &&
+                        spacing(checkTarget.x, neighbor.x) >= -*rule.getPrl()) {
                         outcome.status = OutcomeStatus::NotApplicable;
                         outcomes.push_back(outcome);
                         continue;
                     }
                     if (!lef58HorizontalSpacing && !lef58VerticalSpacing &&
-                        *rule.prl < 0 &&
-                        spacing(target.x, neighbor.x) > -*rule.prl) {
+                        *rule.getPrl() < 0 &&
+                        spacing(target.x, neighbor.x) > -*rule.getPrl()) {
                         outcome.status = OutcomeStatus::NotApplicable;
                         outcomes.push_back(outcome);
                         continue;
                     }
                 }
 
-                if (isWidthRule(rule.source)) {
+                if (isWidthRule(rule.getSource())) {
                     XInterval effective = checkTarget.x;
                     // Same-row abutment measures the unioned run. Adjacent-row
                     // width measures only the common x-overlap at the row
@@ -1431,7 +1433,7 @@ auto ImplantLayerChecker::evalRule(const Rule& rule,
                         effective = unite(checkTarget.x, neighbor.x);
                     }
                     outcome.context.xWindow = effective;
-                    if (rule.checkGroup &&
+                    if (rule.getCheckGroup() &&
                         !groupFails(rule,
                                     checkTarget,
                                     neighbor,
@@ -1443,7 +1445,7 @@ auto ImplantLayerChecker::evalRule(const Rule& rule,
                         continue;
                     }
                     outcome.measuredValue = effective.xh - effective.xl;
-                    outcome.status = outcome.measuredValue < rule.minValue
+                    outcome.status = outcome.measuredValue < rule.getMinValue()
                                          ? OutcomeStatus::Violated
                                          : OutcomeStatus::Satisfied;
                 } else {
@@ -1454,11 +1456,11 @@ auto ImplantLayerChecker::evalRule(const Rule& rule,
                         continue;
                     }
                     outcome.measuredValue =
-                        rule.source == RuleSource::Lef58Spacing &&
+                        rule.getSource() == RuleSource::Lef58Spacing &&
                                 relationship == Relationship::InterRow
                             ? ADJACENT_ROW_VERTICAL_SPACING
                             : spacing(checkTarget.x, neighbor.x);
-                    outcome.status = outcome.measuredValue < rule.minValue
+                    outcome.status = outcome.measuredValue < rule.getMinValue()
                                          ? OutcomeStatus::Violated
                                          : OutcomeStatus::Satisfied;
                 }
@@ -1481,7 +1483,7 @@ ImplantLayerChecker::findNeighbors(
     const Dbu radius = queryRadius(rule);
     const XInterval queryWindow{target.x.xl - radius, target.x.xh + radius};
     std::vector<LayerId> layers;
-    layers.push_back(rule.secondaryLayer.value_or(rule.primaryLayer));
+    layers.push_back(rule.getSecondaryLayer().value_or(rule.getPrimaryLayer()));
 
     std::vector<SlotRef> slots;
     if (relationship == Relationship::IntraRow) {
@@ -1497,7 +1499,7 @@ ImplantLayerChecker::findNeighbors(
         const auto layerIt = ruleIndex_.layers.find(target.layer);
         bool polarityOk = !(active
             && layerIt != ruleIndex_.layers.end()
-            && layerIt->second.polarity != *active);
+            && layerIt->second.getPolar() != *active);
         if (!polarityOk) {
             return neighbors;
         }
@@ -1517,7 +1519,7 @@ ImplantLayerChecker::findNeighbors(
     }
 
     const bool returnSameRowRuns =
-        isWidthRule(rule.source) && relationship == Relationship::InterRow;
+        isWidthRule(rule.getSource()) && relationship == Relationship::InterRow;
 
     for (SlotRef slot : slots) {
         for (LayerId layer : layers) {
@@ -1583,7 +1585,7 @@ ImplantLayerChecker::findNeighbors(
                         }
                         if (relationship == Relationship::IntraRow &&
                             !touchesOrOverlaps(target.x, candidateShape.x) &&
-                            isWidthRule(rule.source)) {
+                            isWidthRule(rule.getSource())) {
                             continue;
                         }
                         bucketNeighbors.push_back(candidateShape);
@@ -1602,7 +1604,7 @@ ImplantLayerChecker::findNeighbors(
                     }
                     if (relationship == Relationship::IntraRow &&
                         !touchesOrOverlaps(target.x, shape.x) &&
-                        isWidthRule(rule.source)) {
+                        isWidthRule(rule.getSource())) {
                         continue;
                     }
                     bucketNeighbors.push_back(shape);
@@ -1678,7 +1680,7 @@ ImplantLayerChecker::makeViolations(const RuleOutcomeVec& outcomes) const
         }
         const auto broadRuleIt = ruleIndex_.ruleById.find(broad.ruleId);
         if (broadRuleIt == ruleIndex_.ruleById.end() ||
-            !broadRuleIt->second.containmentGroup) {
+            !broadRuleIt->second.getContainmentGroup()) {
             continue;
         }
         for (const RuleOutcome& specific : outcomes) {
@@ -1690,13 +1692,15 @@ ImplantLayerChecker::makeViolations(const RuleOutcomeVec& outcomes) const
                 continue;
             }
             const Rule& specificRule = specificRuleIt->second;
-            if (specificRule.containmentGroup !=
-                broadRuleIt->second.containmentGroup) {
+            if (specificRule.getContainmentGroup() !=
+                broadRuleIt->second.getContainmentGroup()) {
                 continue;
             }
-            if (std::find(specificRule.containedByRuleIds.begin(),
-                          specificRule.containedByRuleIds.end(),
-                          broad.ruleId) == specificRule.containedByRuleIds.end()) {
+            const std::vector<int> containedByRuleIds
+                = specificRule.getContainedByRuleIds();
+            if (std::find(containedByRuleIds.begin(),
+                          containedByRuleIds.end(),
+                          broad.ruleId) == containedByRuleIds.end()) {
                 continue;
             }
             if (isContainedContext(specific.context, broad.context)) {
@@ -1719,7 +1723,7 @@ ImplantLayerChecker::makeViolations(const RuleOutcomeVec& outcomes) const
         }
         Violation violation;
         violation.ruleId = outcome.ruleId;
-        violation.ruleSource = ruleIt->second.source;
+        violation.ruleSource = ruleIt->second.getSource();
         violation.primaryLayer = outcome.context.primaryLayer;
         violation.secondaryLayer = outcome.context.secondaryLayer;
         violation.measuredValue = outcome.measuredValue;
@@ -1760,7 +1764,7 @@ ImplantLayerChecker::makeViolations(const RuleOutcomeVec& outcomes) const
         // Look up layer name
         auto layerIt = ruleIndex_.layers.find(outcome.context.primaryLayer);
         if (layerIt != ruleIndex_.layers.end()) {
-            violation.layerName = layerIt->second.name;
+            violation.layerName = layerIt->second.getName();
         }
         finishViolation(violation);
         violations.push_back(violation);
@@ -2015,17 +2019,17 @@ std::vector<ImplantLayerChecker::ScanOutcome>
 ImplantLayerChecker::scanRule(const Rule& rule, const ScanShapeVec& shapes) const
 {
     std::vector<ScanOutcome> outcomes;
-    if (!rule.unsupportedClauses.empty()) {
+    if (!rule.getUnsupportedClauses().empty()) {
         ScanOutcome outcome;
-        outcome.ruleId = rule.ruleId;
-        outcome.ruleSource = rule.source;
+        outcome.ruleId = rule.getRuleId();
+        outcome.ruleSource = rule.getSource();
         outcome.status = OutcomeStatus::Skipped;
         outcomes.push_back(outcome);
         return outcomes;
     }
 
     for (const ScanShape& target : shapes) {
-        if (!target.containsCandidate || target.layer != rule.primaryLayer) {
+        if (!target.containsCandidate || target.layer != rule.getPrimaryLayer()) {
             continue;
         }
         for (Relationship relationship : {Relationship::IntraRow,
@@ -2035,7 +2039,7 @@ ImplantLayerChecker::scanRule(const Rule& rule, const ScanShapeVec& shapes) cons
             }
 
             ScanShape checkTarget = target;
-            if (isWidthRule(rule.source) &&
+            if (isWidthRule(rule.getSource()) &&
                 relationship == Relationship::InterRow) {
                 for (const ScanShape& sameRowNeighbor :
                      scanNeighbors(target,
@@ -2059,20 +2063,20 @@ ImplantLayerChecker::scanRule(const Rule& rule, const ScanShapeVec& shapes) cons
 
             const std::vector<ScanShape> neighbors =
                 scanNeighbors(checkTarget, rule, relationship, shapes);
-            if (isWidthRule(rule.source) && neighbors.empty() &&
+            if (isWidthRule(rule.getSource()) && neighbors.empty() &&
                 relationship == Relationship::IntraRow) {
                 ScanOutcome outcome;
-                outcome.ruleId = rule.ruleId;
-                outcome.ruleSource = rule.source;
-                outcome.primaryLayer = rule.primaryLayer;
-                outcome.secondaryLayer = rule.secondaryLayer;
+                outcome.ruleId = rule.getRuleId();
+                outcome.ruleSource = rule.getSource();
+                outcome.primaryLayer = rule.getPrimaryLayer();
+                outcome.secondaryLayer = rule.getSecondaryLayer();
                 outcome.relationship = relationship;
                 outcome.targetShapeId = checkTarget.shapeId;
                 outcome.xWindow = xOf(checkTarget.bbox);
                 outcome.measuredValue =
                     checkTarget.bbox.xh - checkTarget.bbox.xl;
-                outcome.requiredValue = rule.minValue;
-                outcome.status = outcome.measuredValue < rule.minValue
+                outcome.requiredValue = rule.getMinValue();
+                outcome.status = outcome.measuredValue < rule.getMinValue()
                                      ? OutcomeStatus::Violated
                                      : OutcomeStatus::Satisfied;
                 outcome.instanceIds = checkTarget.ownerInstanceIds;
@@ -2084,16 +2088,16 @@ ImplantLayerChecker::scanRule(const Rule& rule, const ScanShapeVec& shapes) cons
 
             for (const ScanShape& neighbor : neighbors) {
                 ScanOutcome outcome;
-                outcome.ruleId = rule.ruleId;
-                outcome.ruleSource = rule.source;
-                outcome.primaryLayer = rule.primaryLayer;
-                outcome.secondaryLayer = rule.secondaryLayer;
+                outcome.ruleId = rule.getRuleId();
+                outcome.ruleSource = rule.getSource();
+                outcome.primaryLayer = rule.getPrimaryLayer();
+                outcome.secondaryLayer = rule.getSecondaryLayer();
                 outcome.relationship = relationship;
                 outcome.targetShapeId = checkTarget.shapeId;
                 outcome.neighborShapeId = neighbor.shapeId;
                 outcome.xWindow =
                     unite(xOf(checkTarget.bbox), xOf(neighbor.bbox));
-                outcome.requiredValue = rule.minValue;
+                outcome.requiredValue = rule.getMinValue();
                 outcome.instanceIds = checkTarget.ownerInstanceIds;
                 outcome.shapeIds = checkTarget.ownerShapeIds;
                 outcome.rowIds = {checkTarget.rowId};
@@ -2107,24 +2111,24 @@ ImplantLayerChecker::scanRule(const Rule& rule, const ScanShapeVec& shapes) cons
 
                 const Dbu projected =
                     prl(xOf(checkTarget.bbox), xOf(neighbor.bbox));
-                if (rule.exceptAbutted && projected == 0) {
+                if (rule.getExceptAbutted() && projected == 0) {
                     outcome.status = OutcomeStatus::NotApplicable;
                     outcomes.push_back(outcome);
                     continue;
                 }
-                if (rule.exceptCornerTouch &&
+                if (rule.getExceptCornerTouch() &&
                     relationship == Relationship::InterRow &&
                     projected == 0) {
                     outcome.status = OutcomeStatus::NotApplicable;
                     outcomes.push_back(outcome);
                     continue;
                 }
-                if (rule.length && rowHeight_ / 2 >= *rule.length) {
+                if (rule.getLength() && rowHeight_ / 2 >= *rule.getLength()) {
                     outcome.status = OutcomeStatus::NotApplicable;
                     outcomes.push_back(outcome);
                     continue;
                 }
-                if (!rule.intersectLayers.empty() &&
+                if (!rule.getIntersectLayers().empty() &&
                     !scanIntersectCoverage(rule,
                                            checkTarget,
                                            neighbor,
@@ -2133,37 +2137,37 @@ ImplantLayerChecker::scanRule(const Rule& rule, const ScanShapeVec& shapes) cons
                     outcomes.push_back(outcome);
                     continue;
                 }
-                if (rule.prl) {
+                if (rule.getPrl()) {
                     const bool lef58VerticalSpacing =
-                        rule.source == RuleSource::Lef58Spacing &&
+                        rule.getSource() == RuleSource::Lef58Spacing &&
                         relationship == Relationship::InterRow;
                     const bool lef58HorizontalSpacing =
-                        rule.source == RuleSource::Lef58Spacing &&
+                        rule.getSource() == RuleSource::Lef58Spacing &&
                         relationship == Relationship::IntraRow;
-                    if (!lef58HorizontalSpacing && *rule.prl >= 0 &&
-                        projected <= *rule.prl) {
+                    if (!lef58HorizontalSpacing && *rule.getPrl() >= 0 &&
+                        projected <= *rule.getPrl()) {
                         outcome.status = OutcomeStatus::NotApplicable;
                         outcomes.push_back(outcome);
                         continue;
                     }
-                    if (lef58VerticalSpacing && *rule.prl < 0 &&
+                    if (lef58VerticalSpacing && *rule.getPrl() < 0 &&
                         spacing(xOf(checkTarget.bbox), xOf(neighbor.bbox)) >=
-                            -*rule.prl) {
+                            -*rule.getPrl()) {
                         outcome.status = OutcomeStatus::NotApplicable;
                         outcomes.push_back(outcome);
                         continue;
                     }
                     if (!lef58HorizontalSpacing && !lef58VerticalSpacing &&
-                        *rule.prl < 0 &&
+                        *rule.getPrl() < 0 &&
                         spacing(xOf(target.bbox), xOf(neighbor.bbox)) >
-                            -*rule.prl) {
+                            -*rule.getPrl()) {
                         outcome.status = OutcomeStatus::NotApplicable;
                         outcomes.push_back(outcome);
                         continue;
                     }
                 }
 
-                if (isWidthRule(rule.source)) {
+                if (isWidthRule(rule.getSource())) {
                     XInterval effective = xOf(checkTarget.bbox);
                     if (relationship == Relationship::InterRow) {
                         if (!overlaps(xOf(checkTarget.bbox),
@@ -2180,7 +2184,7 @@ ImplantLayerChecker::scanRule(const Rule& rule, const ScanShapeVec& shapes) cons
                                           xOf(neighbor.bbox));
                     }
                     outcome.xWindow = effective;
-                    if (rule.checkGroup &&
+                    if (rule.getCheckGroup() &&
                         !scanGroupFails(rule,
                                         checkTarget,
                                         neighbor,
@@ -2192,7 +2196,7 @@ ImplantLayerChecker::scanRule(const Rule& rule, const ScanShapeVec& shapes) cons
                         continue;
                     }
                     outcome.measuredValue = effective.xh - effective.xl;
-                    outcome.status = outcome.measuredValue < rule.minValue
+                    outcome.status = outcome.measuredValue < rule.getMinValue()
                                          ? OutcomeStatus::Violated
                                          : OutcomeStatus::Satisfied;
                 } else {
@@ -2204,12 +2208,12 @@ ImplantLayerChecker::scanRule(const Rule& rule, const ScanShapeVec& shapes) cons
                         continue;
                     }
                     outcome.measuredValue =
-                        rule.source == RuleSource::Lef58Spacing &&
+                        rule.getSource() == RuleSource::Lef58Spacing &&
                                 relationship == Relationship::InterRow
                             ? ADJACENT_ROW_VERTICAL_SPACING
                             : spacing(xOf(checkTarget.bbox),
                                       xOf(neighbor.bbox));
-                    outcome.status = outcome.measuredValue < rule.minValue
+                    outcome.status = outcome.measuredValue < rule.getMinValue()
                                          ? OutcomeStatus::Violated
                                          : OutcomeStatus::Satisfied;
                 }
@@ -2228,7 +2232,7 @@ ImplantLayerChecker::scanNeighbors(const ScanShape& target,
     const Dbu radius = queryRadius(rule);
     const XInterval queryWindow{target.bbox.xl - radius,
                                 target.bbox.xh + radius};
-    const LayerId queryLayer = rule.secondaryLayer.value_or(rule.primaryLayer);
+    const LayerId queryLayer = rule.getSecondaryLayer().value_or(rule.getPrimaryLayer());
 
     std::vector<SlotRef> slots;
         if (relationship == Relationship::IntraRow) {
@@ -2241,7 +2245,7 @@ ImplantLayerChecker::scanNeighbors(const ScanShape& target,
             tracks_.activeInterRowKind(target.rowId, neighborRow);
         const auto layerIt = ruleIndex_.layers.find(target.layer);
         if (active && layerIt != ruleIndex_.layers.end() &&
-            layerIt->second.polarity != *active) {
+            layerIt->second.getPolar() != *active) {
             return neighbors;
         }
         slots = tracks_.adjacentSlots(target.rowId, target.bandSlot);
@@ -2260,7 +2264,7 @@ ImplantLayerChecker::scanNeighbors(const ScanShape& target,
     }
 
     const bool returnSameRowRuns =
-        isWidthRule(rule.source) && relationship == Relationship::InterRow;
+        isWidthRule(rule.getSource()) && relationship == Relationship::InterRow;
 
     for (const ScanShape& shape : shapes) {
         if (shape.shapeId == target.shapeId) {
@@ -2285,7 +2289,7 @@ ImplantLayerChecker::scanNeighbors(const ScanShape& target,
             continue;
         }
         if (relationship == Relationship::IntraRow &&
-            isWidthRule(rule.source) &&
+            isWidthRule(rule.getSource()) &&
             !touchesOrOverlaps(xOf(target.bbox), xOf(shape.bbox))) {
             continue;
         }
@@ -2357,7 +2361,7 @@ ImplantLayerChecker::scanViolations(const ScanOutcomeVec& outcomes) const
         }
         const auto broadRuleIt = ruleIndex_.ruleById.find(broad.ruleId);
         if (broadRuleIt == ruleIndex_.ruleById.end() ||
-            !broadRuleIt->second.containmentGroup) {
+            !broadRuleIt->second.getContainmentGroup()) {
             continue;
         }
         for (const ScanOutcome& specific : outcomes) {
@@ -2370,14 +2374,15 @@ ImplantLayerChecker::scanViolations(const ScanOutcomeVec& outcomes) const
                 continue;
             }
             const Rule& specificRule = specificRuleIt->second;
-            if (specificRule.containmentGroup !=
-                broadRuleIt->second.containmentGroup) {
+            if (specificRule.getContainmentGroup() !=
+                broadRuleIt->second.getContainmentGroup()) {
                 continue;
             }
-            if (std::find(specificRule.containedByRuleIds.begin(),
-                          specificRule.containedByRuleIds.end(),
-                          broad.ruleId) ==
-                specificRule.containedByRuleIds.end()) {
+            const std::vector<int> containedByRuleIds
+                = specificRule.getContainedByRuleIds();
+            if (std::find(containedByRuleIds.begin(),
+                          containedByRuleIds.end(),
+                          broad.ruleId) == containedByRuleIds.end()) {
                 continue;
             }
             if (scanContained(specific, broad)) {
@@ -2410,7 +2415,7 @@ ImplantLayerChecker::scanViolations(const ScanOutcomeVec& outcomes) const
         // Look up layer name
         auto layerIt = ruleIndex_.layers.find(outcome.primaryLayer);
         if (layerIt != ruleIndex_.layers.end()) {
-            violation.layerName = layerIt->second.name;
+            violation.layerName = layerIt->second.getName();
         }
         violation.rowIds = outcome.rowIds;
         finishViolation(violation);
@@ -2664,7 +2669,7 @@ bool ImplantLayerChecker::slotPolarityOk(
     const auto actualLayerIt = ruleIndex_.layers.find(interval.layer);
     return expectedLayerIt != ruleIndex_.layers.end() &&
            actualLayerIt != ruleIndex_.layers.end() &&
-           expectedLayerIt->second.polarity == actualLayerIt->second.polarity;
+           expectedLayerIt->second.getPolar() == actualLayerIt->second.getPolar();
 }
 
 bool ImplantLayerChecker::isFillerInstance(
@@ -2846,7 +2851,7 @@ bool ImplantLayerChecker::scanSlotPolarityOk(const ScanRect& rect) const
     const auto actualLayerIt = ruleIndex_.layers.find(rect.layer);
     return expectedLayerIt != ruleIndex_.layers.end() &&
            actualLayerIt != ruleIndex_.layers.end() &&
-           expectedLayerIt->second.polarity == actualLayerIt->second.polarity;
+           expectedLayerIt->second.getPolar() == actualLayerIt->second.getPolar();
 }
 
 // Decide whether a satisfied specific-rule outcome covers the same physical
@@ -2897,7 +2902,7 @@ bool ImplantLayerChecker::hasIntersectCoverage(
     // shapes to be fully covered by each listed layer in the same row band.
     const XInterval gap{std::min(target.x.xh, neighbor.x.xh),
                         std::max(target.x.xl, neighbor.x.xl)};
-    for (LayerId layer : rule.intersectLayers) {
+    for (LayerId layer : rule.getIntersectLayers()) {
         const BucketKey key{target.rowId, target.bandSlot, layer};
         const auto found = shapeIndex_.find(key);
         if (found == shapeIndex_.end()) {
@@ -2923,7 +2928,7 @@ bool ImplantLayerChecker::scanIntersectCoverage(const Rule& rule,
 {
     const XInterval gap{std::min(target.bbox.xh, neighbor.bbox.xh),
                         std::max(target.bbox.xl, neighbor.bbox.xl)};
-    for (LayerId layer : rule.intersectLayers) {
+    for (LayerId layer : rule.getIntersectLayers()) {
         bool covered = false;
         for (const ScanShape& shape : shapes) {
             if (shape.rowId == target.rowId &&
@@ -2948,10 +2953,10 @@ bool ImplantLayerChecker::groupFails(const Rule& rule,
     Relationship relationship, const XInterval& xWindow,
     const std::set<InstanceId>& excludedInstances) const
 {
-    if (!rule.checkGroup) {
+    if (!rule.getCheckGroup()) {
         return true;
     }
-    const auto groupIt = groupIds_.find(*rule.checkGroup);
+    const auto groupIt = groupIds_.find(*rule.getCheckGroup());
     if (groupIt == groupIds_.end()) {
         return false;
     }
@@ -3033,7 +3038,7 @@ bool ImplantLayerChecker::groupFails(const Rule& rule,
             maxWidth = std::max(maxWidth, shape.x.xh - shape.x.xl);
         }
     }
-    return maxWidth < rule.minValue;
+    return maxWidth < rule.getMinValue();
 }
 
 bool ImplantLayerChecker::scanGroupFails(const Rule& rule,
@@ -3041,10 +3046,10 @@ bool ImplantLayerChecker::scanGroupFails(const Rule& rule,
     Relationship relationship, const XInterval& xWindow,
     const ScanShapeVec& shapes) const
 {
-    if (!rule.checkGroup) {
+    if (!rule.getCheckGroup()) {
         return true;
     }
-    const auto layersIt = ruleIndex_.groups.find(*rule.checkGroup);
+    const auto layersIt = ruleIndex_.groups.find(*rule.getCheckGroup());
     if (layersIt == ruleIndex_.groups.end()) {
         return false;
     }
@@ -3103,7 +3108,7 @@ bool ImplantLayerChecker::scanGroupFails(const Rule& rule,
             maxWidth = std::max(maxWidth, shape.x.xh - shape.x.xl);
         }
     }
-    return maxWidth < rule.minValue;
+    return maxWidth < rule.getMinValue();
 }
 
 // Map rule direction and ZEROPRL semantics to intra-row or inter-row checks.
@@ -3112,18 +3117,18 @@ bool ImplantLayerChecker::ruleAppliesTo(const Rule& rule,
 {
     // LEF58 spacing directions describe the spacing direction: horizontal is
     // same-row x spacing, and vertical is adjacent-row spacing gated by x PRL.
-    if (rule.source == RuleSource::Lef58Spacing) {
-        if (rule.direction == RuleDirection::Vertical) {
+    if (rule.getSource() == RuleSource::Lef58Spacing) {
+        if (rule.getDirection() == RuleDirection::Vertical) {
             return relationship == Relationship::InterRow;
         }
         return relationship == Relationship::IntraRow;
     }
-    if (rule.direction == RuleDirection::Horizontal) {
+    if (rule.getDirection() == RuleDirection::Horizontal) {
         return relationship == Relationship::IntraRow ||
-               (isSpacingRule(rule.source) &&
+               (isSpacingRule(rule.getSource()) &&
                 relationship == Relationship::InterRow);
     }
-    if (rule.direction == RuleDirection::Vertical || rule.zeroPrl) {
+    if (rule.getDirection() == RuleDirection::Vertical || rule.getZeroPrl()) {
         return relationship == Relationship::InterRow;
     }
     return relationship == Relationship::IntraRow ||
@@ -3133,12 +3138,12 @@ bool ImplantLayerChecker::ruleAppliesTo(const Rule& rule,
 // Compute the x search radius needed to find all possible neighbors for a rule.
 Dbu ImplantLayerChecker::queryRadius(const Rule& rule) const
 {
-    Dbu radius = rule.minValue;
-    if (rule.prl) {
-        radius = std::max(radius, static_cast<Dbu>(std::llabs(*rule.prl)));
+    Dbu radius = rule.getMinValue();
+    if (rule.getPrl()) {
+        radius = std::max(radius, static_cast<Dbu>(std::llabs(*rule.getPrl())));
     }
-    if (rule.length) {
-        radius = std::max(radius, *rule.length);
+    if (rule.getLength()) {
+        radius = std::max(radius, *rule.getLength());
     }
     return radius;
 }
@@ -3178,13 +3183,13 @@ std::string Violation::toString(Dbu siteWidth) const
     return ss.str();
 }
 
-// Parse layer name to extract family and polarity
+// Parse layer name to extract VT and polarity.
 // Expected format: "<FAMILY>_<POLARITY>" e.g. "VTUL_N", "VTL_P", "VTH_N"
 void ImplantLayerChecker::parseLayerName(const std::string& name,
-    Family& family, Polarity& polarity)
+    Layer::Vt& vt, Layer::Polar& polar)
 {
-    family = Family::Unknown;
-    polarity = Polarity::N;
+    vt = Layer::Vt::Unknown;
+    polar = Layer::Polar::N;
 
     auto pos = name.rfind('_');
     if (pos == std::string::npos) {
@@ -3194,18 +3199,19 @@ void ImplantLayerChecker::parseLayerName(const std::string& name,
     std::string famStr = name.substr(0, pos);
     std::string polStr = name.substr(pos + 1);
 
-    polarity = ((polStr == "P" || polStr == "p") ? Polarity::P : Polarity::N);
+    polar = ((polStr == "P" || polStr == "p") ? Layer::Polar::P
+                                                : Layer::Polar::N);
 
     if (famStr == "VTS" || famStr == "vts") {
-        family = Family::VTS;
+        vt = Layer::Vt::S;
     } else if (famStr == "VTL" || famStr == "vtl") {
-        family = Family::VTL;
+        vt = Layer::Vt::L;
     } else if (famStr == "VTH" || famStr == "vth") {
-        family = Family::VTH;
+        vt = Layer::Vt::H;
     } else if (famStr == "VTUL" || famStr == "vtul") {
-        family = Family::VTUL;
+        vt = Layer::Vt::UL;
     } else {
-        family = Family::Unknown;
+        vt = Layer::Vt::Unknown;
     }
 }
 
@@ -3220,10 +3226,10 @@ void ImplantLayerChecker::buildTrackPattern()
 {
     std::vector<LayerId> nLayers, pLayers;
     for (const auto& layer : layers_) {
-        if (layer.polarity == Polarity::N) {
-            nLayers.push_back(layer.id);
+        if (layer.getPolar() == Layer::Polar::N) {
+            nLayers.push_back(layer.getId());
         } else {
-            pLayers.push_back(layer.id);
+            pLayers.push_back(layer.getId());
         }
     }
 
@@ -3246,7 +3252,7 @@ void ImplantLayerChecker::buildTrackPattern()
 
         if (r + 1 < static_cast<RowId>(rows_.size())) {
             pattern.activeKindByBoundary[{r, r + 1}] =
-                isEven ? Polarity::N : Polarity::P;
+                isEven ? Layer::Polar::N : Layer::Polar::P;
         }
     }
 }
@@ -3277,17 +3283,17 @@ void ImplantLayerChecker::rebuildMasterShapes()
         int numRows = static_cast<int>((item.height + fullRow - 1) / fullRow);
         if (numRows < 1) numRows = 1;
 
-        // Determine the family from raw shapes (all should be the same family)
-        Family family = Family::Unknown;
+        // Determine the VT from raw shapes (all should have the same VT).
+        Layer::Vt vt = Layer::Vt::Unknown;
         for (const auto& rs : item.rawShapes) {
             auto layerIt = std::find_if(layers_.begin(), layers_.end(),
-                [&](const ImplantLayer& l) { return l.id == rs.layer; });
+                [&](const Layer& layer) { return layer.getId() == rs.layer; });
             if (layerIt != layers_.end()) {
-                family = layerIt->family;
+                vt = layerIt->getVt();
                 break;
             }
         }
-        if (family == Family::Unknown) {
+        if (vt == Layer::Vt::Unknown) {
             diagnostics_.push_back({"skipped_rebuild_unknown_family",
                 "skipped_rebuild_unknown_family: master " +
                 std::to_string(item.masterId)});
@@ -3297,26 +3303,31 @@ void ImplantLayerChecker::rebuildMasterShapes()
 
         // Determine the base band polarity from the bottommost raw shape
         Dbu minY = std::numeric_limits<Dbu>::max();
-        Polarity bottomPolarity = Polarity::N;
+        Layer::Polar bottomPolarity = Layer::Polar::N;
         for (const auto& rs : item.rawShapes) {
             Dbu yl = rs.rect._yl.getStorage();
             if (yl < minY) {
                 minY = yl;
                 auto layerIt = std::find_if(layers_.begin(), layers_.end(),
-                    [&](const ImplantLayer& l) { return l.id == rs.layer; });
+                    [&](const Layer& layer) {
+                        return layer.getId() == rs.layer;
+                    });
                 if (layerIt != layers_.end()) {
-                    bottomPolarity = layerIt->polarity;
+                    bottomPolarity = layerIt->getPolar();
                 }
             }
         }
 
-        // Find N and P layer IDs for this family
+        // Find N and P layer IDs for this VT.
         LayerId familyNLayer = -1;
         LayerId familyPLayer = -1;
-        for (const auto& l : layers_) {
-            if (l.family == family) {
-                if (l.polarity == Polarity::N) familyNLayer = l.id;
-                else familyPLayer = l.id;
+        for (const Layer& layer : layers_) {
+            if (layer.getVt() == vt) {
+                if (layer.getPolar() == Layer::Polar::N) {
+                    familyNLayer = layer.getId();
+                } else {
+                    familyPLayer = layer.getId();
+                }
             }
         }
         if (familyNLayer < 0 || familyPLayer < 0) {
@@ -3332,14 +3343,17 @@ void ImplantLayerChecker::rebuildMasterShapes()
         item.shapes.clear();
         ShapeId shapeId = 0;
         for (int row = 0; row < numRows; ++row) {
-            Polarity bottomBandPol, topBandPol;
+            Layer::Polar bottomBandPol;
+            Layer::Polar topBandPol;
             if (row % 2 == 0) {
                 bottomBandPol = bottomPolarity;
-                topBandPol = (bottomPolarity == Polarity::N) ?
-                    Polarity::P : Polarity::N;
+                topBandPol = (bottomPolarity == Layer::Polar::N)
+                                 ? Layer::Polar::P
+                                 : Layer::Polar::N;
             } else {
-                bottomBandPol = (bottomPolarity == Polarity::N) ?
-                    Polarity::P : Polarity::N;
+                bottomBandPol = (bottomPolarity == Layer::Polar::N)
+                                    ? Layer::Polar::P
+                                    : Layer::Polar::N;
                 topBandPol = bottomPolarity;
             }
 
@@ -3347,7 +3361,7 @@ void ImplantLayerChecker::rebuildMasterShapes()
             {
                 MasterShape ms;
                 ms.shapeId = shapeId++;
-                ms.layer = (bottomBandPol == Polarity::N) ?
+                ms.layer = (bottomBandPol == Layer::Polar::N) ?
                     familyNLayer : familyPLayer;
                 Dbu yBase = static_cast<Dbu>(row) * fullRow;
                 ms.rect = eUTL::Rect(
@@ -3362,7 +3376,7 @@ void ImplantLayerChecker::rebuildMasterShapes()
             {
                 MasterShape ms;
                 ms.shapeId = shapeId++;
-                ms.layer = (topBandPol == Polarity::N) ?
+                ms.layer = (topBandPol == Layer::Polar::N) ?
                     familyNLayer : familyPLayer;
                 Dbu yBase = static_cast<Dbu>(row) * fullRow + halfRow;
                 ms.rect = eUTL::Rect(
@@ -3486,11 +3500,12 @@ bool ImplantLayerChecker::init(PhysDesMgr* desMgr)
         if (!layer.isImplant()) {
             continue;
         }
-        ImplantLayer il;
-        il.id = nextLayerId;
-        il.name = layer.getName();
-        parseLayerName(il.name, il.family, il.polarity);
-        techLayerToCheckerId_[layer.getId().getLocalId()] = nextLayerId;
+        Layer::Vt vt;
+        Layer::Polar polar;
+        parseLayerName(layer.getName(), vt, polar);
+        Layer il(nextLayerId, layer.getName(), vt, polar);
+        il.setTechLayerId(layer.getId().getLocalId());
+        techLayerToCheckerId_[il.getTechLayerId()] = nextLayerId;
         layers_.push_back(il);
         nextLayerId++;
     }
@@ -3498,41 +3513,36 @@ bool ImplantLayerChecker::init(PhysDesMgr* desMgr)
     // Step 2: Extract simple rules from implant layers
     int nextRuleId = 0;
     for (const auto& il : layers_) {
-        eLIB::TechLayerRelativeID relId(0);
-        for (const auto& [techRel, checkerId] : techLayerToCheckerId_) {
-            if (checkerId == il.id) { relId = techRel; break; }
-        }
+        const eLIB::TechLayerRelativeID relId = il.getTechLayerId();
         const eLIB::TechLayer& techLayer = tech.getTechLayer(relId);
         bool hasWidth = false, hasSpacing = false;
         Dbu implantWidthVal = techLayer.getWidth().getStorage();
         if (implantWidthVal > 0) {
-            Rule wRule;
-            wRule.ruleId = nextRuleId++;
-            wRule.source = RuleSource::Width;
-            wRule.primaryLayer = il.id;
-            wRule.minValue = implantWidthVal;
+            Rule wRule(nextRuleId++,
+                       RuleSource::Width,
+                       il.getId(),
+                       implantWidthVal);
             rules_.push_back(wRule);
             hasWidth = true;
         } else {
             diagnostics_.push_back({"missing_rule_parameter", "layer "
-                + il.name + " has no WIDTH value"});
+                + il.getName() + " has no WIDTH value"});
         }
         Dbu minSpacingVal = techLayer.getMinSpacing().getStorage();
         if (minSpacingVal > 0) {
-            Rule sRule;
-            sRule.ruleId = nextRuleId++;
-            sRule.source = RuleSource::Spacing;
-            sRule.primaryLayer = il.id;
-            sRule.minValue = minSpacingVal;
+            Rule sRule(nextRuleId++,
+                       RuleSource::Spacing,
+                       il.getId(),
+                       minSpacingVal);
             rules_.push_back(sRule);
             hasSpacing = true;
         } else {
             diagnostics_.push_back({"missing_rule_parameter", "layer "
-                + il.name + " has no SPACING value via MinSpacing"});
+                + il.getName() + " has no SPACING value via MinSpacing"});
         }
         if (!hasWidth && !hasSpacing) {
             diagnostics_.push_back({"skipped_missing_rule_parameter",
-                "skipped_missing_rule_parameter: layer " + il.name
+                "skipped_missing_rule_parameter: layer " + il.getName()
                 + " has no WIDTH or SPACING rule"});
         }
     }
@@ -3675,32 +3685,33 @@ void ImplantLayerChecker::printStats(std::ostream& os) const
 
     os << "Implant Layers: " << layers_.size() << "\n";
     for (const auto& il : layers_) {
-        os << "  LayerId=" << il.id
-           << " name=\"" << il.name << "\""
-           << " family=";
-        switch (il.family) {
-            case Family::VTS:  os << "VTS"; break;
-            case Family::VTL:  os << "VTL"; break;
-            case Family::VTH:  os << "VTH"; break;
-            case Family::VTUL: os << "VTUL"; break;
+        os << "  LayerId=" << il.getId()
+           << " name=\"" << il.getName() << "\""
+           << " vt=";
+        switch (il.getVt()) {
+            case Layer::Vt::S:  os << "VTS"; break;
+            case Layer::Vt::L:  os << "VTL"; break;
+            case Layer::Vt::H:  os << "VTH"; break;
+            case Layer::Vt::UL: os << "VTUL"; break;
             default:           os << "Unknown"; break;
         }
-        os << " polarity=" << (il.polarity == Polarity::N ? "N" : "P") << "\n";
+        os << " polarity="
+           << (il.getPolar() == Layer::Polar::N ? "N" : "P") << "\n";
     }
 
     os << "Rules: " << rules_.size() << "\n";
     for (const auto& rule : rules_) {
-        os << "  RuleId=" << rule.ruleId << " source=";
-        switch (rule.source) {
+        os << "  RuleId=" << rule.getRuleId() << " source=";
+        switch (rule.getSource()) {
             case RuleSource::Width:       os << "WIDTH"; break;
             case RuleSource::Spacing:     os << "SPACING"; break;
             case RuleSource::Lef58Width:  os << "LEF58_WIDTH"; break;
             case RuleSource::Lef58Spacing: os << "LEF58_SPACING"; break;
             case RuleSource::Count:       os << "COUNT"; break;
         }
-        os << " primaryLayer=" << rule.primaryLayer
-           << " minValue=" << rule.minValue;
-        if (rule.secondaryLayer) os << " secondaryLayer=" << *rule.secondaryLayer;
+        os << " primaryLayer=" << rule.getPrimaryLayer()
+           << " minValue=" << rule.getMinValue();
+        if (rule.getSecondaryLayer()) os << " secondaryLayer=" << *rule.getSecondaryLayer();
         os << "\n";
     }
 
@@ -3784,7 +3795,7 @@ void ImplantLayerChecker::printStats(std::ostream& os) const
     for (const auto& [key, pol] : tracks_.activeKindByBoundary) {
         auto [rowA, rowB] = key;
         os << "  Boundary Row(" << rowA << "," << rowB
-           << ") -> " << (pol == Polarity::N ? "N" : "P") << "\n";
+           << ") -> " << (pol == Layer::Polar::N ? "N" : "P") << "\n";
     }
 
     os << "========================================\n";

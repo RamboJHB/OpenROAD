@@ -1,7 +1,7 @@
 # 功能规格 — Filler VT Overlay 修复 V2.1(checker-guided,本阶段 swap-only)
 
 状态:**V2.1 定稿**。分支:`claude/wizardly-carson-secahu`。基线:`2023-base`。
-最后更新 2026-07-20。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
+最后更新 2026-07-21。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
 checker 源码。
 
 V2.1 相对 V2 是一次 reviewer 驱动的修订,聚焦三处高价值改动:**OracleGate 正确性、
@@ -541,8 +541,8 @@ runtime engine 的候选 universe 必须由
 
 **band polarity layout 约束(2026-07-15 落地)**:候选还必须与当前 master 的
 **R0 系 bottom-band polarity** 一致(`MasterInfo.bottomBandPolarity`,来源 =
-checker `rebuildMasterShapes` 的锚定规则:最底 shape 所在 layer 的 polarity;
-band 沿行向上 N/P 交替;family 每 master 唯一,checker
+checker `rebuildMasterShapes` 的锚定规则:最底 shape 所在 `Layer::Polar`;
+band 沿行向上 N/P 交替;`Layer::Vt` 每 master 唯一,checker
 `master_implant_family_mismatch` 保证)。理由:swap 保持位置**和 orientation**,
 layout 相反的候选会把每个 band 落到相反 track 上,checker 必然以 polarity
 mismatch 拒绝——提供它只烧 checker call。合法性终判仍在 checker(oracle 不变)。
@@ -1040,7 +1040,7 @@ gate 语义:
 
 ## 11. 实现状态
 
-全部功能已实现并验证(2026-07-20):
+全部功能已实现并验证(2026-07-21):
 
 - pure planner 完整落地:`Swap`/cache key、violation 归一化 + signature、
   L0 + adaptive-L1 window + guardRegion、swap 生成器、Ranker(5 特征,
@@ -1060,7 +1060,7 @@ gate 语义:
   precheck/repair 均 non-mutating;
   runtime integration 使用 checker `check()` 预留点、fillerRepair 与 Network
   refresh seam;checker DRC 算法未修改。
-  2026-07-20 普通与 ASan CTest 均为 207/207,且 `-Wall -Wextra -Werror` 通过。
+  2026-07-21 普通与 ASan CTest 均为 207/207,且 `-Wall -Wextra -Werror` 通过。
   详见 `src/dpl2/HandOff.md` 与 `src/dpl2/src/fillerRepair/test/TestPlan.md`。
 
 ---
@@ -1104,8 +1104,8 @@ F_FILL2_63S6T9R_1   F_FILL2_63S6T9L_1   F_FILL2_63S6T9UL_1
 VT 后缀含义(按业界常规命名推断,待 library 团队确认):R = RVT(regular,
 标准阈值)、L = LVT(low-VT,低阈值,更快/更漏电)、UL = ULVT(ultra-low-VT,
 超低阈值)。三者即本 feature 的三种 implant type;与 checker header 中
-`Family` 的映射由 runtime engine private snapshot 从 master 的 implant 层导出(参见
-final checker 的 layer-family 解析路径),不依赖 master 名字符串解析,
+`Layer::Vt` 的映射由 runtime engine private snapshot 从 master 的 implant 层导出;
+shape 与 checker layer 通过 `Layer::TechLayerId` 关联,不依赖 master 或 layer 名字符串解析,
 本附录命名仅供人读。
 
 对算法的推论(备注性质,算法不 hard-code 这张表,一切以

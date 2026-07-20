@@ -1,6 +1,6 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-07-20.
+Updated: 2026-07-21.
 
 `ImplantLayerChecker` is the caller-facing entry. It owns one
 `FillerRepairEngine`, which borrows the initialized Grid/Network already owned
@@ -39,6 +39,13 @@ to Network; repair validates target/type/dimensions and rebuilds its private
 oracle if DePlace registered that master after init. The direct UDM-handle
 overload retains lazy registration for focused engine tests.
 This changes only the in-memory master registry, not UDM placement.
+
+Implant metadata is read from the checker's accessor-based `Layer` model.
+The engine matches each physical implant shape using
+`Layer::getTechLayerId()`, then reads `Layer::Vt` and `Layer::Polar`; it does
+not retain an `ImplantLayer` mirror or join metadata by layer name. Persistent
+init diagnostics remain textual, so their unused-layer filter still compares
+the checker-provided layer name embedded in the diagnostic message.
 
 ## Main files
 

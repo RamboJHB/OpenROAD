@@ -1,6 +1,6 @@
 # AGENTS.md — dpl2 filler repair project memory
 
-Updated: 2026-07-20. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-21. Branch: `claude/wizardly-carson-secahu`.
 
 Read `docs/filler_vt_overlay_repair_spec.md`, `src/dpl2/HandOff.md`,
 `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md` and the fillerRepair/test READMEs
@@ -15,7 +15,7 @@ The V2.1 swap-only planner and real-UDM runtime E2E package are complete.
 | Planner | internal `FillerRepairPlanner`; adaptive-L1, filler domains, per-band ranking/filtering, deterministic `FillerCellRecord` output and opt-in `[fr][stage]` transcript complete |
 | Unit tests | 82/82 database-free GoogleTests as same-level sources under `fillerRepair/test`; portable with the feature |
 | Infrastructure | existing runtime Grid/Network are borrowed; `Network::updateNodes()` refreshes an unchanged instance set; engine registers configured filler masters and rebuilds for request masters added after init |
-| Checker | final blocking contract, Node/Master IDs and FillerCellRecord wire |
+| Checker | final blocking contract, accessor-based `Layer`/`Rule`, Node/Master IDs and FillerCellRecord wire |
 | Runtime API | caller owns one `ImplantLayerChecker`; it owns the engine, calls it from `check()`, and exposes precheck/update plus the last `FillerChanges` |
 | Portable tests | 116 GoogleTests: 82 planner cases plus 34 final-checker/planner/precheck E2E cases; no destination fixture provider |
 | Local regression | 91 fake-UDM checker/engine cases; repository CTest total 207 |
@@ -28,6 +28,9 @@ The V2.1 swap-only planner and real-UDM runtime E2E package are complete.
    `FillerCellRecord`, supplied by real UDM or the test-only fake UDM.
 2. This stage supports same-position/same-size filler swaps only.
 3. `ImplantLayerChecker` is the only DRC oracle.
+   Checker metadata is owned by its `Layer`/`Rule` classes; fillerRepair reads
+   `Layer::Vt`, `Layer::Polar` and `TechLayerRelativeID` through accessors and
+   does not copy those classes.
 4. `ImplantLayerChecker::check()` is the placement-call boundary and invokes
    its owned `FillerRepairEngine` with the exact `ipl::CheckRequest`.
 5. Opto calls `ImplantLayerChecker::precheckFillerRepair()` before mutation; it checks gap/overlap only

@@ -57,7 +57,7 @@ struct XInterval
 using VtId = int32_t;
 inline constexpr VtId kUnknownVt = -1;
 
-// Implant band polarity (checker: ipl::Polarity, from the LAST '_' suffix of
+// Implant band polarity (checker: ipl::Layer::Polar, from the LAST '_' suffix of
 // the implant layer name via parseLayerName). Each row is two half-row bands
 // with alternating polarity; a master's VT FAMILY is uniform across its bands
 // by checker construction (buildMasters: master_implant_family_mismatch), so

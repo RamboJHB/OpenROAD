@@ -167,12 +167,7 @@ MasterInput master(MasterId masterId,
 
 Rule rule(int ruleId, RuleSource source, LayerId layer)
 {
-  Rule rule;
-  rule.ruleId = ruleId;
-  rule.source = source;
-  rule.primaryLayer = layer;
-  rule.minValue = MIN_RULE;
-  return rule;
+  return Rule(ruleId, source, layer, MIN_RULE);
 }
 
 TrackPattern tracks()
@@ -183,7 +178,7 @@ TrackPattern tracks()
     tracks.layerBySlot[{rowId, BandSlot::Top}] = F1_LAYER;
   }
   for (RowId rowId = 0; rowId + 1 < ROW_COUNT; ++rowId) {
-    tracks.activeKindByBoundary[{rowId, rowId + 1}] = Polarity::N;
+    tracks.activeKindByBoundary[{rowId, rowId + 1}] = Layer::Polar::N;
   }
   return tracks;
 }
@@ -334,9 +329,9 @@ std::vector<PlacedInst> densePlaced()
 ImplantInput input()
 {
   ImplantInput input;
-  input.layers = {ImplantLayer{F1_LAYER, "F1", Family::VTL, Polarity::N},
-                  ImplantLayer{F2_LAYER, "F2", Family::VTH, Polarity::N},
-                  ImplantLayer{F3_LAYER, "F3", Family::VTUL, Polarity::N}};
+  input.layers = {Layer{F1_LAYER, "F1", Layer::Vt::L, Layer::Polar::N},
+                  Layer{F2_LAYER, "F2", Layer::Vt::H, Layer::Polar::N},
+                  Layer{F3_LAYER, "F3", Layer::Vt::UL, Layer::Polar::N}};
   input.rules = {rule(F1_WIDTH_RULE, RuleSource::Width, F1_LAYER),
                  rule(102, RuleSource::Width, F2_LAYER),
                  rule(103, RuleSource::Width, F3_LAYER),
@@ -454,6 +449,23 @@ PhysOrientation toCheckerOrient(fr::Orient orientation)
   return PhysOrientationE::R0;
 }
 
+fr::VtId toPlannerVt(Layer::Vt vt)
+{
+  switch (vt) {
+    case Layer::Vt::S:
+      return 0;
+    case Layer::Vt::L:
+      return 1;
+    case Layer::Vt::H:
+      return 2;
+    case Layer::Vt::UL:
+      return 3;
+    case Layer::Vt::Unknown:
+      break;
+  }
+  return fr::kUnknownVt;
+}
+
 // Portable test view built from the same ImplantInput consumed by the final
 // checker's official test helper.  It deliberately implements only the pure
 // planner boundary: no UDM session, DEF/LEF reader, or database mutation is
@@ -466,9 +478,9 @@ class PortablePlannerDataSource final : public fr::PlannerDataSource
       std::optional<std::vector<fr::MasterId>> configuredFillers = std::nullopt)
       : site_width_(input.siteWidth)
   {
-    std::map<LayerId, ImplantLayer> layers;
-    for (const ImplantLayer& layer : input.layers) {
-      layers[layer.id] = layer;
+    std::map<LayerId, Layer> layers;
+    for (const Layer& layer : input.layers) {
+      layers[layer.getId()] = layer;
     }
     for (size_t index = 0; index < input.masters.size(); ++index) {
       const MasterItem& master = input.masters[index];
@@ -481,8 +493,8 @@ class PortablePlannerDataSource final : public fr::PlannerDataSource
       if (!master.shapes.empty()) {
         const auto layer = layers.find(master.shapes.front().layer);
         if (layer != layers.end()) {
-          info.vt = static_cast<fr::VtId>(layer->second.family);
-          info.bottomBandPolarity = layer->second.polarity == Polarity::P
+          info.vt = toPlannerVt(layer->second.getVt());
+          info.bottomBandPolarity = layer->second.getPolar() == Layer::Polar::P
                                         ? fr::BandPolarity::P
                                         : fr::BandPolarity::N;
         }
@@ -758,8 +770,8 @@ ImplantInput multiSwapWidthInput(int requiredFillers)
 {
   ImplantInput result = input();
   for (Rule& candidate : result.rules) {
-    if (candidate.ruleId == F1_WIDTH_RULE) {
-      candidate.minValue = (requiredFillers + 1) * SITE_WIDTH;
+    if (candidate.getRuleId() == F1_WIDTH_RULE) {
+      candidate.setMinValue((requiredFillers + 1) * SITE_WIDTH);
     }
   }
   for (RowId rowId = 0; rowId <= 1; ++rowId) {

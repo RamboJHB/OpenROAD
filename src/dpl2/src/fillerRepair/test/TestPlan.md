@@ -1,6 +1,6 @@
 # Test Plan — portable fillerRepair tests
 
-Updated: 2026-07-20.
+Updated: 2026-07-21.
 
 ## Migration gate
 
@@ -40,6 +40,11 @@ adaptive expansion and end-to-end planner decisions. The 34 E2E tests cover:
     clipping, multi-row order, empty spans, empty placement, unordered input,
     triple coverage, touching legal spans and mixed deterministic findings;
 14. no placement mutation by checker overlay queries or planner repair.
+
+The checker fixtures use the accessor-based `Layer`/`Rule` model. The local
+checker/engine matrix additionally exercises engine metadata extraction through
+`Layer::TechLayerId`, so compilation cannot fall back to the removed
+`ImplantLayer` fields or metadata joins by layer name.
 
 The portable planner suite also pins `RepairConfig::maxAdaptiveLevels`:
 reaching the cap ends a no-solution search with the TRUNCATED verdict (never

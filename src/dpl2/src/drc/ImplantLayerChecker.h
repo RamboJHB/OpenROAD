@@ -14,6 +14,7 @@
 #include <timlib/libCell.hh>
 #include <unl/unlObjTypes.hh>
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -90,12 +91,11 @@ using ColId = int32_t;
 using GroupId = int32_t;
 
 enum class BandSlot {Bottom, Top};
-enum class Polarity {N, P};
-enum class Family {VTS, VTL, VTH, VTUL, Unknown};
 enum class RuleSource {Width, Spacing, Lef58Width, Lef58Spacing, Count};
 enum class RuleDirection {Any, Horizontal, Vertical};
 enum class Relationship {IntraRow, InterRow, Count};
 enum class OutcomeStatus {Satisfied, Violated, NotApplicable, Skipped};
+enum class ViolationType {AllStdCell, AllFiller, Mixed};
 
 constexpr std::array<const char*, (unsigned)Relationship::Count>
     kRelationshipNames{"intra_row", "inter_row"};
@@ -110,36 +110,91 @@ struct XInterval
   Dbu xh = 0;
 };
 
-// Use eUTL::Rect (included via using eUTL::Rect above) rather than defining
-// our own to avoid name conflicts with the UDM Rect type.
-
-struct ImplantLayer
+// Local rect type with Dbu coordinates for checker-internal use.
+// Avoids incompatibilities with eUTL::Rect (whose members are UvDist).
+struct CheckerRect
 {
-  LayerId id = 0;
-  std::string name;
-  Family family = Family::Unknown;
-  Polarity polarity = Polarity::N;
+  Dbu xl = 0;
+  Dbu yl = 0;
+  Dbu xh = 0;
+  Dbu yh = 0;
 };
 
-struct Rule
+class Layer
 {
-  int ruleId = 0;
-  RuleSource source = RuleSource::Width;
-  LayerId primaryLayer = 0;
-  std::optional<LayerId> secondaryLayer;
-  Dbu minValue = 0;
-  RuleDirection direction = RuleDirection::Any;
-  std::optional<Dbu> prl;
-  bool zeroPrl = false;
-  bool exceptAbutted = false;
-  bool exceptCornerTouch = false;
-  std::optional<Dbu> length;
-  std::optional<std::string> checkGroup;
-  std::vector<LayerId> intersectLayers;
-  std::vector<std::string> unsupportedClauses;
-  std::optional<int> containmentGroup;
-  std::vector<int> containedByRuleIds;
-  int specificityRank = 0;
+ public:
+  enum class Vt {S, L, H, UL, Unknown};
+  enum class Polar {N, P};
+
+  Layer() = default;
+  Layer(LayerId id, const std::string& name, Vt vt, Polar polar)
+      : id_(id), name_(name), vt_(vt), polar_(polar)
+  {
+  }
+
+  ADD_SETTER_GETTER_PP(int, Id, id_);
+  ADD_SETTER_GETTER_PP(eLIB::TechLayerRelativeID, TechLayerId, tlId_);
+  ADD_SETTER_GETTER_PP(std::string, Name, name_);
+  ADD_SETTER_GETTER_PP(Vt, Vt, vt_);
+  ADD_SETTER_GETTER_PP(Polar, Polar, polar_);
+
+ private:
+  LayerId id_ = 0;
+  eLIB::TechLayerRelativeID tlId_;
+  std::string name_;
+  Vt vt_ = Vt::Unknown;
+  Polar polar_ = Polar::N;
+};
+
+class Rule
+{
+ public:
+  Rule() = default;
+  Rule(int id, RuleSource rs, LayerId l1, Dbu v)
+      : ruleId_(id), source_(rs), primaryLayer_(l1), minValue_(v)
+  {
+  }
+
+  ADD_SETTER_GETTER_PP(int, RuleId, ruleId_);
+  ADD_SETTER_GETTER_PP(RuleSource, Source, source_);
+  ADD_SETTER_GETTER_PP(LayerId, PrimaryLayer, primaryLayer_);
+  ADD_SETTER_GETTER_PP(std::optional<LayerId>, SecondaryLayer, secondaryLayer_);
+  ADD_SETTER_GETTER_PP(Dbu, MinValue, minValue_);
+  ADD_SETTER_GETTER_PP(RuleDirection, Direction, direction_);
+  ADD_SETTER_GETTER_PP(std::optional<Dbu>, Prl, prl_);
+  ADD_SETTER_GETTER_PP(bool, ZeroPrl, zeroPrl_);
+  ADD_SETTER_GETTER_PP(bool, ExceptAbutted, exceptAbutted_);
+  ADD_SETTER_GETTER_PP(bool, ExceptCornerTouch, exceptCornerTouch_);
+  ADD_SETTER_GETTER_PP(std::optional<Dbu>, Length, length_);
+  ADD_SETTER_GETTER_PP(std::optional<std::string>, CheckGroup, checkGroup_);
+  ADD_SETTER_GETTER_PP(std::vector<LayerId>, IntersectLayers, intersectLayers_);
+  ADD_SETTER_GETTER_PP(std::vector<std::string>,
+                       UnsupportedClauses,
+                       unsupportedClauses_);
+  ADD_SETTER_GETTER_PP(std::optional<int>, ContainmentGroup, containmentGroup_);
+  ADD_SETTER_GETTER_PP(std::vector<int>,
+                       ContainedByRuleIds,
+                       containedByRuleIds_);
+  ADD_SETTER_GETTER_PP(int, SpecificityRank, specificityRank_);
+
+ private:
+  int ruleId_ = 0;
+  RuleSource source_ = RuleSource::Width;
+  LayerId primaryLayer_ = 0;
+  std::optional<LayerId> secondaryLayer_;
+  Dbu minValue_ = 0;
+  RuleDirection direction_ = RuleDirection::Any;
+  std::optional<Dbu> prl_;
+  bool zeroPrl_ = false;
+  bool exceptAbutted_ = false;
+  bool exceptCornerTouch_ = false;
+  std::optional<Dbu> length_;
+  std::optional<std::string> checkGroup_;
+  std::vector<LayerId> intersectLayers_;
+  std::vector<std::string> unsupportedClauses_;
+  std::optional<int> containmentGroup_;
+  std::vector<int> containedByRuleIds_;
+  int specificityRank_ = 0;
 };
 
 struct MasterShape
@@ -183,21 +238,12 @@ struct SlotRef
 struct TrackPattern
 {
   std::map<std::pair<RowId, BandSlot>, LayerId> layerBySlot;
-  std::map<std::pair<RowId, RowId>, Polarity> activeKindByBoundary;
+  std::map<std::pair<RowId, RowId>, Layer::Polar> activeKindByBoundary;
 
   std::optional<LayerId> layerForSlot(RowId rowId, BandSlot bandSlot) const;
   std::vector<SlotRef> adjacentSlots(RowId rowId, BandSlot bandSlot) const;
-  std::optional<Polarity> activeInterRowKind(RowId rowA, RowId rowB) const;
-};
-
-// Local rect type with Dbu coordinates for checker-internal use.
-// Avoids incompatibilities with eUTL::Rect (whose members are UvDist).
-struct CheckerRect
-{
-  Dbu xl = 0;
-  Dbu yl = 0;
-  Dbu xh = 0;
-  Dbu yh = 0;
+  std::optional<Layer::Polar> activeInterRowKind(RowId rowA,
+                                                 RowId rowB) const;
 };
 
 struct Violation
@@ -296,7 +342,7 @@ class ImplantLayerChecker final : public DRCChecker
   void printStats(std::ostream& os) const;
   Dbu siteWidth() const {return siteWidth_;}
   const std::vector<std::unique_ptr<Node>>& getNodes() const;
-  const std::vector<ImplantLayer>& getLayers() const {return layers_;}
+  const std::vector<Layer>& getLayers() const {return layers_;}
   
   UpdateResult commitPlace(const CommitRequest& request);
   const std::vector<Diagnostic>& getDiags() const {return diagnostics_;}
@@ -329,7 +375,7 @@ class ImplantLayerChecker final : public DRCChecker
 
   struct RuleIndex
   {
-    std::unordered_map<LayerId, ImplantLayer> layers;
+    std::unordered_map<LayerId, Layer> layers;
     std::vector<Rule> rules;
     std::unordered_map<int, Rule> ruleById;
     std::unordered_map<std::string, std::vector<LayerId>> groups;
@@ -451,7 +497,9 @@ class ImplantLayerChecker final : public DRCChecker
   using RuleOutcomeVec = std::vector<RuleOutcome>;
 
   //Helper methods for 
-  static void parseLayerName(const std::string& name, Family& family, Polarity& polarity); // could be used in Repair engine 
+  static void parseLayerName(const std::string& name,
+                             Layer::Vt& vt,
+                             Layer::Polar& polar);
   LayerId findLayerId(eLIB::TechLayerRelativeID relId) const;
   void buildTrackPattern();
   void rebuildMasterShapes();
@@ -461,7 +509,9 @@ class ImplantLayerChecker final : public DRCChecker
   void buildMasters();
 
   // Shared initialization and geometry normalization.
-  bool buildRules(const std::vector<ImplantLayer>& layers, const LayerGroupMap& groups, const std::vector<Rule>& rules);
+  bool buildRules(const std::vector<Layer>& layers,
+                  const LayerGroupMap& groups,
+                  const std::vector<Rule>& rules);
   bool buildMstIntervals();
   bool buildPlacedInst(const Node* node, RowId rowId, Dbu x);
 
@@ -534,7 +584,7 @@ class ImplantLayerChecker final : public DRCChecker
                      Relationship relationship) const;
   Dbu queryRadius(const Rule& rule) const;
 
-  std::vector<ImplantLayer> layers_;
+  std::vector<Layer> layers_;
   std::vector<Rule> rules_;
   LayerGroupMap groups_;
   std::vector<RowId> rows_;

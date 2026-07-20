@@ -1,6 +1,6 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-07-20. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-21. Branch: `claude/wizardly-carson-secahu`.
 
 ## Result
 
@@ -116,7 +116,7 @@ default and does not affect search behavior.
 | hard macros | Network Nodes; placed/fixed footprint supplies coverage |
 | hard/soft blockages and padding | Grid; hard is invalid, soft remains valid, padding is reserved |
 | filler allow-list | `fillerSetting::getFillerMasters()` |
-| VT family/band polarity | `PhysLibCell` implant shapes + checker layers |
+| VT/band polarity | `PhysLibCell` implant shapes + checker `Layer::Vt/Polar` |
 | implant legality | final `ImplantLayerChecker` |
 | commit | opto/infrastructure |
 
@@ -141,6 +141,9 @@ Integration files:
    engine initialization/update/precheck, the `check()` call, and last-result
    accessors. This fills the destination checker's existing TODO and does not
    alter its DRC rule/scan algorithms.
+   The branch also follows the destination checker's accessor-based
+   `Layer`/`Rule` metadata model; there is no `ImplantLayer` compatibility
+   struct to copy.
 3. Preserve the branch's `Network::updateNodes(const PhysDesMgr*, const Grid*)`
    declaration/implementation. It refreshes existing Node state without
    changing Node/Master IDs. The destination infrastructure remains responsible
@@ -226,7 +229,7 @@ lives under `src/dpl2/test/local/`. Runtime cases cover
 the internal repair precheck gate, hard macro and hard/soft blockage semantics,
 side-effect-free invalid replacement requests and snapshot update.
 
-2026-07-20 verification result: portable package 116/116 (planner 82/82 plus
+2026-07-21 verification result: portable package 116/116 (planner 82/82 plus
 final-checker/precheck E2E 34/34), checker/engine fake-UDM E2E 91/91; full normal CTest 207/207 and
 full ASan CTest 207/207; `-Wall -Wextra -Werror` is clean. On Apple with an
 unsanitized Homebrew GoogleTest, ASan discovery and CTest use
@@ -272,6 +275,9 @@ required. Runtime sources contain no fake include or conditional.
   describes only the most recent completed `check()`.
 - The runtime engine owns checker diagnostics translation; planner test doubles
   must remain outside runtime targets.
+- Engine metadata extraction requires the checker to populate
+  `Layer::TechLayerId`; it joins `PhysLibCell` shapes to checker layers by
+  `TechLayerRelativeID`, not by a repeated layer-name lookup.
 - `Types.h` remains a standalone bottom-level model header. Oracle-only
   `OracleRequest`/`OracleResult`/`OracleStatus` and `PlannerOracle` live in
   `OracleGate.h`; the public `RepairOutcome` remains in `FillerRepairEngine.h`.

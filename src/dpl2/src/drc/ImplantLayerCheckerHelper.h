@@ -27,7 +27,7 @@ struct PlacedInst
 
 struct ImplantInput
 {
-    std::vector<ImplantLayer> layers;
+    std::vector<Layer> layers;
     std::vector<Rule> rules;
     std::unordered_map<std::string, std::vector<LayerId>> groups;
     std::vector<MasterItem> masters;
@@ -55,7 +55,7 @@ private:
     // Preserve input data needed by initChecker
     std::vector<MasterItem> inputMasters_;
     TrackPattern inputTracks_;
-    std::vector<ImplantLayer> inputLayers_;
+    std::vector<Layer> inputLayers_;
     std::unordered_map<std::string, std::vector<LayerId>> inputGroups_;
     std::vector<Rule> inputRules_;
     Dbu inputSiteWidth_ = 0;

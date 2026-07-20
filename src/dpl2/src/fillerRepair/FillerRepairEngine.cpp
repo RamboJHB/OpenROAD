@@ -191,6 +191,18 @@ ViolationKind toKind(ipl::RuleSource source)
              : ViolationKind::MinSpacing;
 }
 
+VtId toPlannerVt(ipl::Layer::Vt vt)
+{
+  switch (vt) {
+    case ipl::Layer::Vt::S: return 0;
+    case ipl::Layer::Vt::L: return 1;
+    case ipl::Layer::Vt::H: return 2;
+    case ipl::Layer::Vt::UL: return 3;
+    case ipl::Layer::Vt::Unknown: break;
+  }
+  return kUnknownVt;
+}
+
 // Final checker: Relationship is exactly {IntraRow, InterRow}.
 ViolationRelation toRelation(ipl::Relationship relationship)
 {
@@ -339,14 +351,13 @@ void FillerRepairEngine::Impl::buildPlannerData()
 
   // --- implant metadata: VT family / band polarity per master, derived from
   // the master's implant shapes exactly like the checker (layer identity via
-  // tech layer NAME matched against checker->getLayers(), band anchored at
-  // the bottommost implant rect -- the rebuildMasterShapes rule).
+  // the checker's TechLayerRelativeID, band anchored at the bottommost
+  // implant rect -- the rebuildMasterShapes rule).
   const eLIB::TechLib& tech = desMgr->getTopTech();
   const auto implantLayerOf =
-      [&](eLIB::TechLayerRelativeID relId) -> const ipl::ImplantLayer* {
-    const std::string name = tech.getTechLayer(relId).getName();
-    for (const ipl::ImplantLayer& layer : checker->getLayers()) {
-      if (layer.name == name) {
+      [&](eLIB::TechLayerRelativeID relId) -> const ipl::Layer* {
+    for (const ipl::Layer& layer : checker->getLayers()) {
+      if (layer.getTechLayerId() == relId) {
         return &layer;
       }
     }
@@ -378,7 +389,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
     for (const auto& obs : cell->getObstruction()) {
       const auto& shapes = obs.getShapes(eUTL::PhysOrientationE::R0);
       for (const auto& [layerRelId, shapeVec] : shapes) {
-        const ipl::ImplantLayer* layer = implantLayerOf(layerRelId);
+        const ipl::Layer* layer = implantLayerOf(layerRelId);
         if (layer == nullptr) {
           continue;
         }
@@ -387,14 +398,15 @@ void FillerRepairEngine::Impl::buildPlannerData()
             continue;
           }
           if (info.vt == kUnknownVt
-              && layer->family != ipl::Family::Unknown) {
-            info.vt = static_cast<VtId>(layer->family);
+              && layer->getVt() != ipl::Layer::Vt::Unknown) {
+            info.vt = toPlannerVt(layer->getVt());
           }
           const DbCoord yl = techShape.getRect().getYL().getStorage();
           if (!haveBottom || yl < bottomYl) {
             haveBottom = true;
             bottomYl = yl;
-            info.bottomBandPolarity = layer->polarity == ipl::Polarity::P
+            info.bottomBandPolarity
+                = layer->getPolar() == ipl::Layer::Polar::P
                                           ? BandPolarity::P
                                           : BandPolarity::N;
           }
@@ -649,10 +661,10 @@ bool FillerRepairEngine::Impl::isNonBlockingCheckerInitDiagnostic(
     }
   }
 
-  for (const ipl::ImplantLayer& layer : checker_->getLayers()) {
-    const std::string marker = cat("layer ", layer.name, " ");
+  for (const ipl::Layer& layer : checker_->getLayers()) {
+    const std::string marker = cat("layer ", layer.getName(), " ");
     if (diagnostic.message.find(marker) != std::string::npos) {
-      return usedLayerNames.count(layer.name) == 0;
+      return usedLayerNames.count(layer.getName()) == 0;
     }
   }
   return false;
