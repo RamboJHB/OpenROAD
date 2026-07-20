@@ -10,30 +10,32 @@ Copy `fillerRepair/` next to the destination's existing `infrastructure/` and
 real UDM include/link configuration. No DEF/LEF fixture or provider source is
 needed.
 
-The 33 portable GoogleTests cover:
+The 34 portable GoogleTests cover:
 
 1. final-checker intra-row minimum-width overlay acceptance/rejection;
 2. final-checker inter-row minimum-width overlay acceptance/rejection;
 3. final-checker intra-row minimum-spacing overlay acceptance/rejection;
 4. final-checker inter-row minimum-spacing overlay acceptance/rejection;
-5. planner repair of each of those four violation classes using the real
+5. target-related rule detection when the changed neighbor is outside the
+   guard, proving the checker uses its complete snapshot/rule reach;
+6. planner repair of each of those four violation classes using the real
    checker as the oracle, plus an already-clean empty repair;
-6. deterministic repeated repair and invariant results across checker batch
+7. deterministic repeated repair and invariant results across checker batch
    sizes, including batch size one;
-7. empty candidate universes, third-VT-only reachability and exhausted checker
+8. empty candidate universes, third-VT-only reachability and exhausted checker
    budgets, all with no partial changes returned;
-8. baseline-delta rejection for fabricated and duplicate original violations,
+9. baseline-delta rejection for fabricated and duplicate original violations,
    and rejection of candidates that create a known new guard violation;
-9. returned filler records preserve instance geometry/master size;
-10. a minimum-width repair that requires two atomic swaps;
-11. a checker-legal three-swap repair whose best residual initially selects a
+10. returned filler records preserve instance geometry/master size;
+11. a minimum-width repair that requires two atomic swaps;
+12. a checker-legal three-swap repair whose best residual initially selects a
     blocked adaptive side; the planner must try the opposite side, return all
     three atomic changes and pass final-checker verification;
-12. the extracted exact-coverage sweep behind `precheck()`: clean coverage,
+13. the extracted exact-coverage sweep behind `precheck()`: clean coverage,
     leading/middle/trailing gaps, coalesced overlaps, excluded legal holes,
     clipping, multi-row order, empty spans, empty placement, unordered input,
     triple coverage, touching legal spans and mixed deterministic findings;
-13. no placement mutation by checker overlay queries or planner repair.
+14. no placement mutation by checker overlay queries or planner repair.
 
 The local planner suite additionally pins `RepairConfig::maxAdaptiveLevels`:
 reaching the cap ends a no-solution search with the TRUNCATED verdict (never
@@ -72,16 +74,18 @@ source fallback.
 ## Separate local regression
 
 The 82 planner tests, their fake checker/data source, fake UDM headers and the
-67 engine cases are retained under
+82 engine cases are retained under
 `src/dpl2/test/local/`. They do not move with `fillerRepair/` and are not linked
 by the portable E2E target. The planner suite directly validates the internal
 `PlannerOracle` protocol, including missing, duplicate, unknown and extra
-`OracleResult` records; every batch-cardinality mismatch fails closed. Twelve
-of those 67 instances exercise the public
-`FillerRepairEngine::precheck()` boundary in opto-style external call order:
-stable repeated calls, hard blocking without mutation, simultaneous gap plus
-overlap diagnostics, and proof that `repair()` does not invoke precheck
-implicitly. The same four behaviors run across all three local layouts. Three
-additional instances verify that a missing rule on a layer used by Network
+`OracleResult` records; every batch-cardinality mismatch fails closed. The
+engine suite exercises repeated public precheck calls and opto-style external
+gating. Additional three-layout cases verify that `repair()` repeats
+precheck and returns `PrecheckFailed`, that hard macros supply coverage while
+hard blockages remove coverage requirements and soft blockages do not, that
+invalid target/size requests do not register replacement masters, and that
+`update()` refreshes an existing Node master mapping/checker snapshot while a
+failed update invalidates the private snapshot and leaves queries fail-closed.
+Three additional instances verify that a missing rule on a layer used by Network
 masters makes `init()` fail closed; the existing three persistent-diagnostic
 repair instances prove that missing rules on unused layers remain non-blocking.

@@ -1079,6 +1079,41 @@ TEST(ImplantCheckerOverlayTest, DenseCaseIntraRowSpacing)
   expectOldUnrelatedFiltered(results[0]);
 }
 
+TEST(ImplantCheckerOverlayTest,
+     TargetViolationIsDetectedWhenChangedNeighborIsOutsideGuard)
+{
+  const ImplantInput in = input();
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(in);
+  ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
+  helper.initChecker(checker);
+  ASSERT_TRUE(checker.getDiags().empty());
+
+  const CheckRequest target = request(INTRA_SPACING_ROW, INTRA_SPACING_COL);
+  const Dbu targetX = INTRA_SPACING_COL * SITE_WIDTH;
+  const Dbu targetY = INTRA_SPACING_ROW * ROW_HEIGHT;
+  const Rect targetOnlyGuard = makeRect(
+      targetX, targetY, targetX + SITE_WIDTH, targetY + ROW_HEIGHT);
+  const FillerChanges unchangedOutsideGuard{
+      FillerCellRecord{OpType::Replace,
+                       leafCellId(INTRA_SPACING_ROW, 52),
+                       UvDist(0),
+                       UvDist(0),
+                       LibCellID(),
+                       libCellId(F2_FILL_MASTER)}};
+  const std::vector<CheckResult> results = checker.checkPlaceWithOverlays(
+      target, targetOnlyGuard, {unchangedOutsideGuard});
+
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_FALSE(results.front().isLegal);
+  EXPECT_TRUE(hasViolation(results.front(),
+                           F1_SPACING_RULE,
+                           Relationship::IntraRow,
+                           {target.instanceId,
+                            instId(INTRA_SPACING_ROW,
+                                   INTRA_SPACING_COL + 3)}));
+}
+
 TEST(ImplantCheckerOverlayTest, DenseCaseInterRowSpacing)
 {
   const CheckRequest target

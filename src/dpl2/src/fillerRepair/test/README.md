@@ -5,9 +5,10 @@ GoogleTest source that builds placement, masters, implant layers and rules
 through the final checker's `ImplantLayerCheckerHelper`; it does not read
 DEF/LEF and does not require a destination-specific UDM fixture/provider.
 
-`FillerRepairCheckerE2ETest.cpp` has 33 cases:
+`FillerRepairCheckerE2ETest.cpp` has 34 cases:
 
-- four final-checker overlay contract cases (intra/inter-row WIDTH/SPACING);
+- five final-checker overlay contract cases: intra/inter-row WIDTH/SPACING
+  plus target-related detection when a changed neighbor is outside the guard;
 - 17 end-to-end cases that pass checker snapshots to
   `internal::FillerRepairPlanner`, apply its returned overlay to the final
   checker, and cover clean/repair/failure, deterministic batching, candidate
@@ -43,5 +44,5 @@ targets, pass them through `DPL2_RUNTIME_LIBRARIES`; otherwise the standalone
 fallback compiles the adjacent supplied sources. The test cannot pass merely
 by compiling the planner while the engine/real-UDM boundary is broken.
 
-All fake/checker-double tests and the repository-local fake-UDM 67-case regression
+All fake/checker-double tests and the repository-local fake-UDM 82-case regression
 remain outside the migration payload under `src/dpl2/test/local/`.

@@ -1,7 +1,7 @@
 # 功能规格 — Filler VT Overlay 修复 V2.1(checker-guided,本阶段 swap-only)
 
 状态:**V2.1 定稿**。分支:`claude/wizardly-carson-secahu`。基线:`2023-base`。
-最后更新 2026-07-19。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
+最后更新 2026-07-20。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
 checker 源码。
 
 V2.1 相对 V2 是一次 reviewer 驱动的修订,聚焦三处高价值改动:**OracleGate 正确性、
@@ -11,19 +11,21 @@ V2.1 相对 V2 是一次 reviewer 驱动的修订,聚焦三处高价值改动:**
 
 **一句话**:opto 在任何 cell mutation 前主动调用 `FillerRepairEngine::precheck()`;
 该接口只扫描 placement gap/overlap,失败时以 `isLegal=false` 明确阻断 opto。
-之后 opto/ECO 对一个 std cell 提议 VT/type overlay;repair 在局部窗口内生成 **swap move**
+`repair()` 在入口重复同一 precheck,失败时返回 warning 和空 changes,作为调用方
+漏调或并发变化的安全门。之后 opto/ECO 对一个 std cell 提议 VT/type overlay;
+repair 在局部窗口内生成 **swap move**
 (同位置同尺寸换 filler master),按启发式排序后**枚举 move 子集并
 成批交给 checker overlay API 验证**,用同一 `guardRegion` 下的 baseline-delta clean 作为
 唯一 accept 标准。找到 clean 解返回 `ipl::FillerChanges`,由 opto/infrastructure
 commit;修不了则返回 diagnostics。`precheck()` 与 `repair()` 都不修改 DB,且
-`repair()` 不隐式调用 placement precheck。
+修复成功 commit 后可通过 `update()` 刷新同一实例集合的 engine snapshot。
 
 ---
 
 ## 0. V2.1 修订记录
 
-V2 定稿并完成 planner 实现(TODO 1–11,35 个确定性测试)后,拿到真实 checker
-源码,做了一次 reviewer 复审。以下 12 项修订都在 **repair engine 范围内**
+V2 定稿并完成最初的 planner 实现后,拿到真实 checker 源码,做了一次 reviewer
+复审。以下 12 项修订都在 **repair engine 范围内**
 (checker 实现不属本 feature 责任);优先级排序为 **OracleGate 正确性 > 窗口简化
 > 搜索域建模**。
 
@@ -40,7 +42,7 @@ V2 定稿并完成 planner 实现(TODO 1–11,35 个确定性测试)后,拿到�
 | 8 | 简化 | L1 一次扩到 fixed/core 边界可吞整条 filler run,`3^k>预算` 立即退化为截断枚举 | 改渐进扩窗:每步向 blocking 侧扩 K≈2 个 filler,尽量维持完备枚举 | §6.3 |
 | 11 | 简化 | final full-overlay check 用相同 cacheKey,必然 cache 命中,零验证增益 | 删除该步;clean 一经 §6.8 判定即返回 | §6.4、§6.9 |
 | 9 | 建模 | 成员上限作用在扁平 swap 列表上,高排名 filler 占满前缀,关键 filler / 第三 VT 可能整体出局 | 先 rank filler、每 filler 保留全部 master domain,再枚举 per-filler 赋值;上限按 filler 数 | §6.6、§6.7 |
-| 12 | 建模 | placement gate 与 repair 混在一起,调用责任不清 | 独立公开 `precheck()`:只检查 gap/overlap;opto 在 mutation 前调用并根据 `isLegal` 阻断;repair 不再运行该 gate | §5.4、§6.1 |
+| 12 | 建模 | placement gate 与 repair 混在一起,调用责任不清 | 独立公开 `precheck()`:只检查 gap/overlap;opto 在 mutation 前调用并根据 `isLegal` 阻断;repair 入口重复该 gate 作为 fail-closed safety net | §5.4、§6.1 |
 
 落地分三批(实施顺序,详见 `src/dpl2/HandOff.md`):
 **批 1 正确性** #1/#2/#3/#4/#5/#10 —— 都是小改动、现有 harness + ScriptedChecker
@@ -58,7 +60,7 @@ V2 定稿并完成 planner 实现(TODO 1–11,35 个确定性测试)后,拿到�
 
 ### 1.1 问题链路与调用流程
 
-1. opto 在任何 cell mutation 前调用 `precheck()`;gap/overlap 时停止后续操作。
+1. opto 在任何 cell mutation 前调用 `precheck()`;repair 入口也会重复检查;gap/overlap 时停止后续操作。
 2. opto/ECO **一次提议一个 std cell** 的 VT/type overlay(master 替换,位置不变)。
 3. 该 cell 周围的 filler 仍保留旧 implant type,在 cell/filler 或 filler/filler 边界上
    产生 implant 层 DRC 违例。
@@ -128,7 +130,7 @@ opto 改动次数,所以"好排序让首批候选命中"比"搜索策略高级"�
 
 ### 2.3 假设
 
-- opto 在 mutation 前调用公开 precheck;`isLegal=false` 时不得继续(§6.1)。
+- opto 在 mutation 前调用公开 precheck;repair 也强制执行;`isLegal=false` 时不得继续(§6.1)。
 - 初始 snapshot 中的 violation 全部视为本次待修对象;不考虑"邻域内存在改动前遗留
   violation"的场景(如未来需要"顺手修历史违例",在 score 中加次级最大化项即可,
   是纯增量,不影响本 spec 结构)。
@@ -207,7 +209,10 @@ opto: engine.precheck()                      [mutation 前;只查 gap/overlap]
   isLegal=false → opto 阻断
   isLegal=true  → opto 可继续 proposed target overlay
 
-opto: engine.repair(targetCell, newMaster)   [pre-commit,不调 precheck]
+opto: engine.repair(targetCell, newMaster)   [pre-commit]
+  → internal precheck
+     → isLegal=false: Warning(PrecheckFailed) + empty changes
+  → validate target/type/size
   → final checker: target overlay + empty filler changes
   → 无 violation: success + empty FillerChanges
   → 有 violation: internal::FillerRepairPlanner
@@ -217,9 +222,11 @@ opto: engine.repair(targetCell, newMaster)   [pre-commit,不调 precheck]
 opto/infrastructure: commit
 ```
 
-若 `newMaster` 尚未实例化、因而不在现有 Network 中,`repair()` 先以幂等
-`Network::addMaster()` 注册它,再重建 private checker/planner snapshot;调用方无需在 init 时
-预告 target master。snapshot/oracle 全部在 `FillerRepairEngine::Impl` 内。
+若 `newMaster` 尚未实例化、因而不在现有 Network 中,`repair()` 先解析 target 并
+验证 std-cell/type/width/height,通过后才以幂等 `Network::addMaster()` 注册它,
+再重建 private checker/planner snapshot;失败请求不会扩展 master registry。调用方
+无需在 init 时预告 target master。snapshot/oracle 全部在
+`FillerRepairEngine::Impl` 内。
 planner-only `OracleRequest`/`OracleStatus`/`requestId`
 abstraction 位于 `OracleGate.h`,只供 `internal::FillerRepairPlanner` 与 unit-test
 fake 使用；其 change payload 与 public result 都直接使用 final checker 的
@@ -233,12 +240,16 @@ runtime 签名只使用 final checker 的 `ipl::CheckResult`、`ipl::Diagnostic`
 checker overlay API 与 engine API 都不修改 UDM/placement。target master 的首次
 注册只扩展既有 Network 的 in-memory master registry,不修改 DB。repair 拒绝同实例重入;
 checker 调用在 engine `Impl` 内串行化。一个 engine 私有拥有一套
-checker/planner snapshot、借用一套 Grid/Network,对应一个 design revision;commit 后重新构造并 init。
+checker/planner snapshot、借用一套 Grid/Network,对应一个 design revision。位置/
+master commit 且实例集合、rows、blockages 不变时调用 `update()` 刷新 existing Nodes
+并原子替换 private snapshot;实例增删或 Grid topology 变化时先由 infrastructure
+重建 Grid/Network。`update()` 返回 false 后 engine 保持 fail-closed,必须成功 init
+或 update 后才能继续查询。
 
 ### 3.4 Infrastructure alignment (2026-07-18)
 
-- 移植目的地已经提供完整 infrastructure 与 final checker;runtime delivery
-  **只复制 `src/dpl2/src/fillerRepair/`**。engine 借用 supplied Grid/Network、私有
+- 移植目的地已经提供 final checker;runtime integration 包含
+  `src/dpl2/src/fillerRepair/` 与 infrastructure `Network::updateNodes()`。engine 借用 supplied Grid/Network、私有
   持有 checker/planner snapshot;本项目不修改其 DRC 算法,也不要求其提供本仓库的 CMake。
 - `FillerRepairEngine(Grid*, Network*)` 是唯一 runtime repair 边界;通常直接传
   `DePlace::getGrid()` / `getNetwork()`。
@@ -248,18 +259,22 @@ checker/planner snapshot、借用一套 Grid/Network,对应一个 design revisio
 - `precheck()` 以 supplied `Grid` 的合法 site segments 为 coverage domain,再从
   `PhysDesMgr` placement 与 `Network` cell universe 扫描 gap/overlap。Grid 中
   `Pixel::is_valid && padding_reserved_by == nullptr` 的最大连续区间才要求覆盖;
-  hard blockage、fragmented-row hole、halo/padding 与其他合法空白不算 Gap。
+  hard blockage、fragmented-row hole、halo/padding 与其他合法空白不算 Gap;
+  soft blockage 保持 Grid 原有的可放置语义。std cell、filler 与 hard macro 必须
+  作为 Network Node 导入并提供 coverage;placement blockage 属于 Grid,不作为 Node。
   它不检查 target、master size、candidate、ID mapping 或 implant DRC。
 - candidate universe 只来自 `fillerSetting::getFillerMasters()`;repair 内部过滤
   同宽同高、异 VT、filler-only 与相同 bottom-band polarity layout。
 - checker/planner instance/master ID 固定为 `Node::getId()` / `Master::getId()`;
   `LeafCellID` / `LibCellID` 是 runtime `FillerCellRecord` handle。
 - placed masters 来自既有 Network;configured filler masters 在 init 时注册;
-  uninstantiated target new master 由 repair 首次按需注册并触发 checker/snapshot 重建。
+  uninstantiated target new master 由 repair 在 request 验证后按需注册并触发
+  checker/snapshot 重建。`update()` 刷新现有 Node 的物理状态并重建 engine snapshot,
+  但不负责发现新增/删除的 UDM instance。
 - 可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 8-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
-- 82 个 fake-based planner unit cases、test doubles、fake UDM include
+- 82 个 fake-based planner unit cases、82 个 engine cases、test doubles、fake UDM include
   tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
   `fillerRepair/test` 只含可对真实 UDM 编译/运行的 E2E 测试。
 - runtime 编译清单唯一定义在 `src/fillerRepair/sources.cmake`
@@ -565,7 +580,7 @@ persistent diagnostics，request-specific diagnostics 不移除。
   implant DRC;
 - 不修改数据库。opto 负责在任何 cell mutation 前主动调用并解释返回值。
 
-`repair()` 不调用 `precheck()`。它以 `newMaster` 作为 target overlay,第一次
+`repair()` 在解析 target 或注册 replacement master 前先调用 `precheck()`。通过后以 `newMaster` 作为 target overlay,第一次
 implant DRC 使用空 `FillerChanges`;无 violation 返回 success + empty changes,
 有 violation 才进入内部 planner。有解返回 `ipl::FillerChanges`,无解返回失败;
 commit 始终属于 opto/infrastructure。runtime diagnostics 和 wire types沿用
@@ -590,11 +605,10 @@ infrastructure 标记为不可放置的合法空白被排除,而不是按完整 
 
 precheck 不解析 target/new master,不枚举 candidate,不检查 Node/Master ID mapping,
 不调用 ImplantLayerChecker,也不把 off-grid/越界/其他 placement legality 单独分类。
-它是 non-mutating query。fillerRepair 只提供接口;调用时机和阻断流程属于 opto。
-
-`repair()` 内没有隐式 precheck,即使调用方违反顺序也不会重复 placement 扫描。
-这是有意的职责分离,不是 repair 放宽 acceptance;正确 runtime flow 必须先由 opto
-执行公开 gate。
+它是 non-mutating query。opto 应在 mutation 前主动调用以尽早阻断;`repair()`
+重复同一检查作为最终 safety gate。失败时 `RepairOutcome.hasSolution=false`,changes
+为空,保留 `Gap`/`Overlap` diagnostics 并追加 warning `PrecheckFailed`,不会进入
+target master 注册、checker 或 planner。
 
 ### 6.2 violation 归一化与 signature
 
@@ -843,7 +857,8 @@ deltaClean(true 绝对优先) > checkerError=false > checkerIllegal=false
   语义(V2.1 修订 #10)**:仅当**最后一个实际搜索过的窗口**完成了完备枚举(未被
   size 上限或预算截断)才可标注"window space exhausted definitively";任一较早窗口
   曾完备不足以据此断言。
-- placement precheck 的失败不属于 repair result;opto 在进入 repair 前已经阻断。
+- placement precheck 失败既可由 opto 提前阻断,也会由 repair 返回 warning
+  `PrecheckFailed`;两条路径都不产生 changes。
 
 ---
 
@@ -927,14 +942,14 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 ## 10. 测试集
 
 当前 82 个 planner cases 是独立 GoogleTests,全部位于迁移目录外的
-`src/dpl2/test/local/planner`。交付目录中的 33 个 portable cases 集中在
-`fillerRepair/test/FillerRepairCheckerE2ETest.cpp`:4 个 final-checker overlay contract
+`src/dpl2/test/local/planner`。交付目录中的 34 个 portable cases 集中在
+`fillerRepair/test/FillerRepairCheckerE2ETest.cpp`:5 个 final-checker overlay contract
 case + 17 个 `FillerRepairPlanner`→final checker repair/failure case + 12 个
 internal exact-coverage precheck case。fixture 通过
 `ImplantLayerCheckerHelper` 构造 8 行 × 200 sites 的 Grid/Network/checker input;
 不读 DEF/LEF,不需要 `E2ETestProvider` 或 real-UDM design builder。
 
-67 个 engine fake-UDM cases、provider 与完整 local fake regression
+82 个 engine fake-UDM cases、provider 与完整 local fake regression
 copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
 
 前置与协议:
@@ -947,9 +962,10 @@ copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
   segment 间 whitespace 排除、placed span clipping、多 row 排序、空/零宽 span、
   empty placement、unordered input、triple coverage、touching legal spans 与
   gap+overlap 确定性顺序。
-- external public engine API 在 3 种 layout 上各覆盖 repeated precheck 稳定性、opto
-  hard gate 不 mutation、同次 gap+overlap diagnostics 与 repair 不隐式调用
-  precheck,共 12 个新增 runtime-style instances。
+- external public engine API 在 3 种 layout 上覆盖 repeated precheck、opto gate、
+  repair internal precheck、hard macro、hard/soft blockage、invalid replacement
+  无 registry 副作用与 update refresh。portable checker 另覆盖 changed neighbor
+  位于 guard 外仍能报告 target violation。
 - 验证 precheck 与 repair 前后 UDM physical records 完全相同。
 - guard-only filler 出现在 `fillerChanges` 中,判 invalid request。
 - 非 filler instance 出现在 `FillerCellRecord` 中,判 invalid request。
@@ -1017,17 +1033,17 @@ gate 语义:
   last-window definitive 语义。
 - runtime `FillerRepairEngine` 借用 supplied Grid/Network,私有拥有
   final checker/snapshot;configured filler init-time 注册、target master repair-time
-  lazy 注册;
+  validate-then-lazy 注册;repair internal precheck 与原子 snapshot update;
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译清单唯一定义在
-  `src/fillerRepair/sources.cmake`。
-- 82 个 planner unit tests、33 个 portable checker/planner/precheck cases 与 67 个
+  `src/dpl2/src/fillerRepair/sources.cmake`。
+- 82 个 planner unit tests、34 个 portable checker/planner/precheck cases 与 82 个
   fake-UDM engine tests 全为 GoogleTest;
   82 个 fake-based planner tests 完整移至 `src/dpl2/test/local/planner`,
   `fillerRepair/test` 只保留 helper-built portable E2E;precheck/repair 均 non-mutating;
-  runtime 交付只含 fillerRepair,
-  supplied infrastructure/checker 零修改。普通版和 ASan 全绿。
-  详见 `src/dpl2/HandOff.md` 与 `src/fillerRepair/test/TestPlan.md`。
+  runtime integration 使用 fillerRepair 与 Network refresh seam,checker 零修改。
+  2026-07-20 普通 CTest 198/198;本次更新后 ASan 尚未重跑。
+  详见 `src/dpl2/HandOff.md` 与 `src/dpl2/src/fillerRepair/test/TestPlan.md`。
 
 ---
 

@@ -1,8 +1,8 @@
 # Repository-local fillerRepair harness
 
 This directory is intentionally not part of the migration payload. It owns the
-complete local regression copy: all 81 planner unit cases and doubles, the
-UDM-compatible include tree, the 67-case `E2ETestProvider` suite
+complete local regression copy: all 82 planner unit cases and doubles, the
+UDM-compatible include tree, the 82-case `E2ETestProvider` suite
 and both runners.
 
 The planner suite is self-contained below `local/planner/` and links only the

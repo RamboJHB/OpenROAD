@@ -54,7 +54,8 @@ enum class MasterRole
   TargetOld,
   TargetNew,
   RepairFiller,
-  ExtraUninstantiatedFiller
+  ExtraUninstantiatedFiller,
+  MismatchedTarget
 };
 
 struct DesignSetup
@@ -66,6 +67,8 @@ struct DesignSetup
   int64_t padRowOriginX = 0;
   std::array<int64_t, kStandardRows> rowOriginX{0, 0, 0, 0, 0};
   bool row0TailHardBlockage = false;
+  bool row0TailSoftBlockage = false;
+  bool row0ThirdHardMacro = false;
   int row0TailHaloWidth = 0;
 };
 
@@ -85,6 +88,7 @@ class E2ETestDesign
   virtual size_t standardRowCount() const = 0;
 
   virtual void moveCell(CellRole role, int64_t x, int64_t y) = 0;
+  virtual void replaceCellMaster(CellRole role, MasterRole master) = 0;
   virtual PhysicalSnapshot snapshot() const = 0;
   virtual void activate() = 0;
 };

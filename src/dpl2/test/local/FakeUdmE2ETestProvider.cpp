@@ -72,6 +72,7 @@ int masterIndex(MasterRole role)
     case MasterRole::TargetNew: return 2;
     case MasterRole::RepairFiller: return 4;
     case MasterRole::ExtraUninstantiatedFiller: return 6;
+    case MasterRole::MismatchedTarget: return 8;
   }
   return -1;
 }
@@ -104,6 +105,17 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
   fake_udm::DesignDb::addShape(extra, 2, 0, kRowHeight / 2);
   fake_udm::DesignDb::addShape(extra, 3, kRowHeight / 2, kRowHeight);
 
+  eLIB::PhysLibCell& hardMacro
+      = db.addMaster("HM6", 7, 6, kRowHeight, false);
+  hardMacro.type_ = eLIB::PhysMacroType(eLIB::PhysMacroType::TypeE::BLOCK);
+  fake_udm::DesignDb::addShape(hardMacro, 0, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(hardMacro, 1, kRowHeight / 2, kRowHeight);
+
+  eLIB::PhysLibCell& mismatched
+      = db.addMaster("TX5", 8, 5, kRowHeight, false);
+  fake_udm::DesignDb::addShape(mismatched, 2, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(mismatched, 3, kRowHeight / 2, kRowHeight);
+
   int rowIndexOffset = 0;
   if (setup.padRowFirst) {
     db.desMgr().addRow(setup.padRowOriginX,
@@ -133,15 +145,23 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
     const int64_t rowX = setup.rowOriginX[0];
     db.desMgr().addBlockage(rowX + 18, 0, rowX + 20, kRowHeight);
   }
+  if (setup.row0TailSoftBlockage) {
+    const int64_t rowX = setup.rowOriginX[0];
+    db.desMgr().addBlockage(
+        rowX + 18, 0, rowX + 20, kRowHeight, true);
+  }
 
   for (const Placement& placement : kPlacements) {
     const int rowIndex = placement.row + rowIndexOffset;
     const eUTL::PhysOrientation orient = rowIndex % 2 == 0
                                              ? eUTL::PhysOrientationE::MX
                                              : eUTL::PhysOrientationE::R0;
+    const int libIndex = setup.row0ThirdHardMacro && placement.cellIndex == 102
+                             ? 7
+                             : placement.libIndex;
     db.desMgr().addCell(
         eUNL::LeafCellID(0, placement.cellIndex),
-        &db.design.lib_acc_.getPhysLibCell(placement.libIndex),
+        &db.design.lib_acc_.getPhysLibCell(libIndex),
         setup.rowOriginX[static_cast<size_t>(placement.row)] + placement.x,
         placement.row * kRowHeight,
         orient);
@@ -178,6 +198,12 @@ class FakeDesignFixture final : public E2ETestDesign
     eUNL::PhysCellData& data = db_.desMgr().cells_[cell(role)];
     data.origin
         = eUTL::Point2D(eUTL::UvDist(x), eUTL::UvDist(y));
+  }
+
+  void replaceCellMaster(CellRole role, MasterRole master) override
+  {
+    db_.desMgr().cells_[cell(role)].master
+        = &db_.design.lib_acc_.getPhysLibCell(masterIndex(master));
   }
 
   PhysicalSnapshot snapshot() const override

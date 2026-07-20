@@ -4,10 +4,10 @@ Updated: 2026-07-20.
 
 `FillerRepairEngine` is the only runtime entry. It borrows the initialized
 Grid/Network already owned by DePlace and privately owns its final checker and
-immutable planner snapshot, then exposes a placement-only precheck plus pre-commit filler
-repair. It never mutates UDM. The destination supplies the existing
-infrastructure/checker source types; only this directory is migrated and none
-of those supplied sources is patched.
+immutable planner snapshot, then exposes a placement-only precheck, update and
+pre-commit filler repair. It never mutates UDM. The destination supplies the
+existing checker; infrastructure also provides the `Network::updateNodes()`
+refresh seam used after placement/master commits.
 
 ```cpp
 FillerRepairEngine engine(deplace->getGrid(), deplace->getNetwork());
@@ -16,6 +16,8 @@ engine.init(deplace->getDesMgr(), fillerSetting);
 
 ipl::CheckResult placement = engine.precheck();  // opto calls before mutation
 RepairOutcome outcome = engine.repair(targetCell, newMaster);
+// After a same-instance-set commit and infrastructure/Grid synchronization:
+engine.update(deplace->getDesMgr(), fillerSetting);
 ```
 
 Precheck reports only `Gap` and `Overlap` inside coverage-required legal Grid
@@ -23,21 +25,23 @@ segments. A segment is a maximal run of valid pixels not reserved by
 halo/padding, so blockage cuts, fragmented-row holes and legal reserved
 whitespace are ignored. Warning diagnostics explain the location;
 `isLegal=false` is the hard opto-blocking value. It does not inspect
-target/master/candidates/IDs/implant DRC. Repair never calls precheck.
+target/master/candidates/IDs/implant DRC. Repair repeats precheck internally;
+failure returns `PrecheckFailed`, no solution and no changes.
 
 Repair overlays `newMaster` and first asks the final checker with empty filler
 changes. A clean snapshot succeeds with empty changes; otherwise the internal
 planner searches same-position/same-size filler swaps. Commit remains with
 opto/infrastructure. Configured filler masters are registered in the existing
-Network during init. An uninstantiated target `newMaster` is registered lazily
-by repair, followed by a private checker/snapshot rebuild; this changes only the
-in-memory master registry, not UDM placement.
+Network during init. Repair validates the target, type and dimensions before an
+uninstantiated target `newMaster` is registered lazily, followed by a private
+checker/snapshot rebuild; rejected requests do not extend the master registry.
+This changes only the in-memory master registry, not UDM placement.
 
 ## Main files
 
 | Path | Purpose |
 |---|---|
-| `FillerRepairEngine.h/.cpp` | only external API; its `Impl` owns final checker, planner snapshot/oracle, precheck and repair |
+| `FillerRepairEngine.h/.cpp` | only external API; its `Impl` owns final checker, planner snapshot/oracle, precheck, update and repair |
 | `PlacementPrecheck.h/.cpp` | UDM-free gap/overlap coverage sweep used by the public precheck API and portable boundary tests |
 | `FillerRepairPlanner.h/.cpp` | internal deterministic search pipeline and debug transcript |
 | `OracleGate.h/.cpp` | owns `PlannerOracle` plus `OracleRequest/Result/Status`, batching, cache and baseline-delta gate |
@@ -45,7 +49,7 @@ in-memory master registry, not UDM placement.
 | `Types.h` | deliberately standalone leaf: planner IDs, geometry/model types and exact final-checker wire helpers |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
 | `sources.cmake` | source-of-truth lists for planner, runtime and portable E2E |
-| `test/FillerRepairCheckerE2ETest.cpp` | 33 portable real-checker, planner-to-checker and internal precheck cases |
+| `test/FillerRepairCheckerE2ETest.cpp` | 34 portable real-checker, planner-to-checker and internal precheck cases |
 | `test/CMakeLists.txt` | standalone destination E2E plus complete runtime-engine compile/link gate |
 
 ## Debug transcript
@@ -64,7 +68,9 @@ final-checker `ipl::FillerChanges`/`FillerCellRecord` wire. Destination builds c
 `DPL2_FILLER_REPAIR_SOURCES` from `sources.cmake` -- never a
 hand-copied file list. Migration steps live in `src/dpl2/HandOff.md`.
 The engine consumes only borrowed Grid/Network pointers and the idempotent
-`Network::addMaster(PhysLibCell, Grid)` registration API; there is no
+`Network::addMaster(PhysLibCell, Grid)` registration API plus
+`Network::updateNodes(PhysDesMgr, Grid)` refresh API. A failed update leaves
+the engine fail-closed until a later successful init/update; there is no
 repair-specific importer.
 
 `Types.h` is intentionally not merged into Engine, Planner or OracleGate.
@@ -79,9 +85,10 @@ master-registration seam.
 
 The migrated tests construct checker input directly with the final checker's
 `ImplantLayerCheckerHelper`. They do not parse DEF/LEF and do not need a
-destination-specific UDM provider. The 33 cases comprise four direct checker
+destination-specific UDM provider. The 34 cases comprise five direct checker
 overlay contracts, 17 planner-to-final-checker repairs/failures and 12
-boundary cases for the exact coverage sweep behind `precheck()`. The checker
+boundary cases for the exact coverage sweep behind `precheck()`. One direct
+case pins detection when a changed neighbor lies outside the guard. The checker
 fixtures contain eight dense rows and exercise intra/inter-row width/spacing,
 candidate and budget boundaries, baseline-delta protection, deterministic
 batching, multi-swap minimum width, adaptive-direction fallback for a

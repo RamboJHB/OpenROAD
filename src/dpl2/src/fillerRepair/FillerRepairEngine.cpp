@@ -172,6 +172,12 @@ bool isFillerMaster(const eLIB::PhysLibCell& cell)
   return cell.getType().isCoreFiller() || cell.getType().isPadFiller();
 }
 
+bool isStandardCellMaster(const eLIB::PhysLibCell& cell)
+{
+  return cell.getType().isCore() && !cell.getType().isBlock()
+         && !isFillerMaster(cell);
+}
+
 ViolationKind toKind(ipl::RuleSource source)
 {
   return (source == ipl::RuleSource::Width
@@ -959,9 +965,72 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
+  const ipl::CheckResult placement = precheck();
+  if (!placement.isLegal) {
+    result.diagnostics = placement.diagnostics;
+    addDiagnostic(Severity::Warning,
+                  "PrecheckFailed",
+                  "placement precheck failed; filler repair was skipped");
+    return result;
+  }
+
+  if (!isReady()) {
+    for (const Diagnostic& diagnostic : setup_diagnostics_) {
+      result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
+    }
+    addDiagnostic(Severity::Fatal,
+                  "EngineNotReady",
+                  "infrastructure snapshot failed validation; repair refused");
+    return result;
+  }
+
+  // 1) Resolve and validate the target before mutating the shared Network
+  // master registry.
+  const int targetId = network_->getNodeId(targetCell);
+  const PlacedInstance* inst =
+      targetId >= 0 ? instance(static_cast<InstanceId>(targetId)) : nullptr;
+  if (inst == nullptr) {
+    addDiagnostic(Severity::Fatal,
+                  "UnknownTarget",
+                  cat("leaf cell ",
+                      static_cast<int>(targetCell.getIndexValue()),
+                      " is not a placed node in this engine snapshot"));
+    return result;
+  }
+  const MasterInfo* oldMaster = masterInfo(inst->masterId);
+  if (oldMaster == nullptr) {
+    addDiagnostic(Severity::Fatal,
+                  "TargetMasterUnknown",
+                  "the target's current master is absent from the snapshot");
+    return result;
+  }
+  const Node* targetNode = network_->getNode(targetId);
+  if (targetNode == nullptr || !targetNode->isStdCell() || inst->isFiller
+      || oldMaster->isFiller
+      || !isStandardCellMaster(newMaster)) {
+    addDiagnostic(Severity::Fatal,
+                  "TargetNotStdCell",
+                  "target and replacement master must both be standard cells");
+    return result;
+  }
+  const DbCoord replacementWidth = newMaster.getWidth().getStorage();
+  const DbCoord replacementHeight = grid_->gridHeight(newMaster).v;
+  if (oldMaster->width != replacementWidth
+      || oldMaster->height != replacementHeight) {
+    addDiagnostic(Severity::Fatal,
+                  "TargetSizeMismatch",
+                  "target VT replacement must preserve width and height");
+    return result;
+  }
+
+  const InstanceId targetInstanceId = inst->id;
+  const RowId targetRowId = inst->rowId;
+  const DbCoord targetX = inst->x;
+  const Orient targetOrientation = inst->orientation;
+
   // DePlace may not have imported an uninstantiated target replacement yet.
-  // Register it once, then rebuild this engine's checker and planner snapshot
-  // so every id table shares the expanded Network universe.
+  // Register it only after request validation, then rebuild the checker and
+  // planner snapshot so all id tables share the expanded Network universe.
   if (network_->getMaster(newMaster.getLibCellId()) == nullptr) {
     const bool registered = ensureMasterRegistered(newMaster);
     const bool rebuilt = registered && rebuildOracle();
@@ -975,66 +1044,26 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     }
   }
 
-  if (!isReady()) {
-    for (const Diagnostic& diagnostic : setup_diagnostics_) {
-      result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
-    }
-    addDiagnostic(Severity::Fatal,
-                  "EngineNotReady",
-                  "infrastructure snapshot failed validation; repair refused");
-    return result;
-  }
-
-  // 1) Resolve the target into the shared id space. Placement gap/overlap is
-  // intentionally not checked here; opto owns precheck() sequencing.
-  const int targetId = network_->getNodeId(targetCell);
-  const PlacedInstance* inst =
-      targetId >= 0 ? instance(static_cast<InstanceId>(targetId)) : nullptr;
-  if (inst == nullptr) {
-    addDiagnostic(Severity::Fatal,
-                  "UnknownTarget",
-                  cat("leaf cell ",
-                      static_cast<int>(targetCell.getIndexValue()),
-                      " is not a placed node in this engine snapshot"));
-    return result;
-  }
   const int newMasterId = network_->getMasterId(newMaster.getLibCellId());
   const MasterInfo* replacement =
       newMasterId >= 0 ? masterInfo(static_cast<MasterId>(newMasterId))
                        : nullptr;
-  if (replacement == nullptr) {
+  if (replacement == nullptr || replacement->isFiller
+      || replacement->width != replacementWidth
+      || replacement->height != replacementHeight) {
     addDiagnostic(Severity::Fatal,
                   "TargetMasterUnknown",
-                  "the target's new master is not in the Network master table");
-    return result;
-  }
-  const MasterInfo* oldMaster = masterInfo(inst->masterId);
-  if (oldMaster == nullptr) {
-    addDiagnostic(Severity::Fatal,
-                  "TargetMasterUnknown",
-                  "the target's current master is absent from the snapshot");
-    return result;
-  }
-  if (inst->isFiller || oldMaster->isFiller || replacement->isFiller) {
-    addDiagnostic(Severity::Fatal,
-                  "TargetNotStdCell",
-                  "target and replacement master must both be standard cells");
-    return result;
-  }
-  if (oldMaster->width != replacement->width
-      || oldMaster->height != replacement->height) {
-    addDiagnostic(Severity::Fatal,
-                  "TargetSizeMismatch",
-                  "target VT replacement must preserve width and height");
+                  "the validated target master is absent from the rebuilt "
+                  "snapshot");
     return result;
   }
 
   TargetPlace target;
-  target.instanceId = inst->id;
+  target.instanceId = targetInstanceId;
   target.masterId = static_cast<MasterId>(newMasterId);
-  target.rowId = inst->rowId;
-  target.x = inst->x;
-  target.orientation = inst->orientation;
+  target.rowId = targetRowId;
+  target.x = targetX;
+  target.orientation = targetOrientation;
 
   // 2) Initial snapshot: the new target place with ZERO filler changes.
   // Snapshot and every later engine baseline/candidate go through this same
@@ -1455,7 +1484,9 @@ bool FillerRepairEngine::Impl::rebuildOracle()
 }
 
 FillerRepairEngine::FillerRepairEngine(Grid* grid, Network* network)
-    : impl_(std::make_unique<Impl>(grid, network))
+    : grid_(grid),
+      network_(network),
+      impl_(std::make_unique<Impl>(grid, network))
 {
 }
 
@@ -1463,6 +1494,7 @@ FillerRepairEngine::~FillerRepairEngine() = default;
 
 void FillerRepairEngine::setDebugLogging(bool enabled)
 {
+  debug_logging_ = enabled;
   impl_->setDebugLogging(enabled);
 }
 
@@ -1470,6 +1502,21 @@ bool FillerRepairEngine::init(eUNL::PhysDesMgr* desMgr,
                               const fillerSetting& fillerSettings)
 {
   return impl_->init(desMgr, fillerSettings);
+}
+
+bool FillerRepairEngine::update(eUNL::PhysDesMgr* desMgr,
+                                const fillerSetting& fillerSettings)
+{
+  auto replacement = std::make_unique<Impl>(grid_, network_);
+  replacement->setDebugLogging(debug_logging_);
+  if (network_ == nullptr || !network_->updateNodes(desMgr, grid_)) {
+    impl_ = std::move(replacement);
+    return false;
+  }
+
+  const bool initialized = replacement->init(desMgr, fillerSettings);
+  impl_ = std::move(replacement);
+  return initialized;
 }
 
 ipl::CheckResult FillerRepairEngine::precheck() const

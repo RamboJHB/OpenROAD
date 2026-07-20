@@ -5,13 +5,13 @@ Updated: 2026-07-20. Branch: `claude/wizardly-carson-secahu`.
 ## Result
 
 The destination already supplies complete infrastructure and checker sources.
-Runtime and tests migrate together by copying only
-`src/dpl2/src/fillerRepair/`. Its `test/` subtree contains 33 portable
+Runtime integration uses `src/dpl2/src/fillerRepair/` plus the infrastructure
+`Network::updateNodes()` refresh seam. Its `test/` subtree contains 34 portable
 GoogleTests built from the final checker's `ImplantLayerCheckerHelper` and a
 standalone CMake. No DEF/LEF reader or destination fixture provider is needed.
 All 82 fake-based planner unit tests and the repository-local UDM-compatible
 harness are outside this payload at `src/dpl2/test/local/`.
-No infrastructure/checker source or API change is required.
+Checker source and DRC behavior are unchanged.
 
 The runtime boundary is one checker-style class that reuses DePlace's
 already initialized infrastructure:
@@ -22,13 +22,15 @@ void setDebugLogging(bool enabled);  // optional, disabled by default
 bool init(PhysDesMgr* desMgr,
           const fillerSetting& fillerSetting);
 ipl::CheckResult precheck() const;
+bool update(PhysDesMgr* desMgr,
+            const fillerSetting& fillerSetting);
 RepairOutcome repair(LeafCellID targetCell, const PhysLibCell& newMaster);
 ```
 
 The engine borrows Grid/Network and its `Impl` privately owns the final checker,
 immutable planner snapshot and oracle calls. It does not import hierarchy cells or repaint a
 second Grid. The pure search pipeline is
-`internal::FillerRepairPlanner`. `init()` is one-shot and must succeed before
+`internal::FillerRepairPlanner`. Initial `init()` must succeed before
 use: until it does, `precheck()` and `repair()` fail closed
 (`precheck_not_initialized` / `engine_not_initialized`).
 
@@ -43,9 +45,14 @@ use: until it does, `precheck()` and `repair()` fail closed
 3. If `precheck().isLegal == false`, stop. `Gap`/`Overlap` diagnostics are
    warnings for logging, but the bool is a hard blocking contract.
 4. Call `repair(targetCell, newMaster)` while the DB still contains the old
-   target master. `newMaster` is an overlay.
+   target master. `newMaster` is an overlay. `repair()` repeats the same
+   precheck internally and returns `PrecheckFailed` plus empty changes if the
+   caller skipped or raced the external gate.
 5. If repair succeeds, opto/infrastructure commits the returned
    `ipl::FillerChanges` together with its own target mutation.
+6. After a position/master commit that keeps the same instance set and Grid
+   topology, call `update()` before the next query. Rebuild Grid/Network first
+   when rows, blockages or the instance set changed.
 
 fillerRepair provides the gate; it does not modify opto and does not commit.
 `precheck()` and `repair()` are both non-mutating.
@@ -56,8 +63,10 @@ Precheck checks only placement gaps and overlaps inside coverage-required
 legal row segments. The supplied Grid is the domain authority: maximal runs
 whose pixels satisfy `is_valid && padding_reserved_by == nullptr` are checked
 exactly once. Hard blockages, fragmented-row holes, halo/padding reservations
-and other non-placeable legal whitespace are outside that domain and are not
-reported as gaps. Cell coverage still comes from `PhysDesMgr` physical cells
+and other non-placeable legal whitespace are outside that domain. Soft
+blockages remain placeable under the existing Grid policy. Standard cells,
+fillers and hard macros are Network Nodes; their intersections with legal rows
+count as coverage. Cell coverage comes from `PhysDesMgr` physical cells
 and the Network cell universe. Precheck does not check:
 
 - target or proposed master;
@@ -69,13 +78,14 @@ and the Network cell universe. Precheck does not check:
 
 `isLegal=true` means no gap/overlap in those legal segments. `isLegal=false`
 means at least one
-`Gap`/`Overlap` diagnostic and opto must block. `repair()` deliberately does
-not call precheck again.
+`Gap`/`Overlap` diagnostic and both opto and `repair()` must block.
 
 ## Repair semantics
 
 If the target new master is not yet represented in Network (for example it is
-uninstantiated), repair registers it with `Network::addMaster()` and rebuilds
+uninstantiated), repair first resolves the target and validates standard-cell
+type and equal dimensions. Only then does it register the master with
+`Network::addMaster()` and rebuild
 its private checker/snapshot. The first implant query then overlays the target new
 master with an empty filler change list. No violation returns success with
 empty changes. Violations enter
@@ -96,6 +106,8 @@ default and does not affect search behavior.
 | rows and physical placement | `PhysDesMgr` |
 | precheck coverage-required legal segments | supplied Grid valid, unreserved pixels |
 | cell/master topology and checker IDs | runtime Network |
+| hard macros | Network Nodes; placed/fixed footprint supplies coverage |
+| hard/soft blockages and padding | Grid; hard is invalid, soft remains valid, padding is reserved |
 | filler allow-list | `fillerSetting::getFillerMasters()` |
 | VT family/band polarity | `PhysLibCell` implant shapes + checker layers |
 | implant legality | final `ImplantLayerChecker` |
@@ -105,18 +117,22 @@ Placed masters come from the existing Network. Engine init idempotently
 registers configured candidate masters before constructing its private checker.
 Repair idempotently registers an uninstantiated target-new master and rebuilds
 that checker/snapshot before querying it. These registry updates do not mutate UDM
-placement.
+placement. Network must contain every placed/fixed physical instance that can
+intersect the core, including hard macros; placement blockages are represented
+by Grid and are not Network Nodes.
 
 ## Migration to the destination environment
 
-What to copy (one directory, nothing else):
+Integration files:
 
 1. `src/dpl2/src/fillerRepair/` -> next to the destination's existing
    `infrastructure/` and `drc/` directories (the runtime sources include
-   `infrastructure/...` and `drc/ImplantLayerChecker.h` relative to that
-   common source root). This directory contains the complete runtime
-   delivery plus its portable final-checker `test/` package. It contains no local test double
-   or UDM-compatible test-data implementation.
+   `infrastructure/...` and `drc/ImplantLayerChecker.h` relative to that common
+   source root).
+2. Preserve the branch's `Network::updateNodes(const PhysDesMgr*, const Grid*)`
+   declaration/implementation. It refreshes existing Node state without
+   changing Node/Master IDs. The destination infrastructure remains responsible
+   for initially importing the complete instance universe.
 
 Runtime wiring (their CMake, 2 lines):
 
@@ -136,7 +152,7 @@ only modifications that may be needed on their side:
 
 The reused-infrastructure boundary requires the APIs already present in this
 branch: `DePlace::getGrid()`, `getNetwork()`, `getDesMgr()` and idempotent
-`Network::addMaster(const PhysLibCell&, const Grid*)`. No RepairInfrastructure,
+`Network::addMaster(...)`/`updateNodes(...)`. No RepairInfrastructure,
 leaf traversal or placement importer is copied into runtime.
 
 Do not hand-copy file names -- both runtime and test CMake include the same
@@ -165,9 +181,9 @@ supplied infrastructure/checker sources.
 
 The CMake below `fillerRepair/test` is a portable final-checker test package,
 not the destination's runtime owner. Its executable nevertheless compiles
-the complete runtime engine source list, checker/helper and 33 portable
+the complete runtime engine source list, checker/helper and 34 portable
 cases, which makes real boundary compilation part of the migration gate. The
-separate local harness retains the 82 planner tests and 67 fake-UDM engine
+separate local harness retains the 82 planner tests and 82 fake-UDM engine
 cases for repository regression.
 
 Test dependencies: GoogleTest, Boost, TBB, C++20 and CMake 3.20+. Commands:
@@ -183,32 +199,41 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-The migration payload has four direct checker overlay cases, 17
+The migration payload has five direct checker overlay cases, 17
 planner-to-final-checker cases and 12 internal exact-coverage precheck
 cases. Each dense checker fixture contains eight rows and 200 sites. The
-planner matrix covers all four rule classes, clean/empty repair, determinism,
+fifth checker case proves that a target violation is still detected when the
+changed neighbor lies outside the guard.
+The planner matrix covers all four rule classes, clean/empty repair, determinism,
 batch invariance, candidates, third VT, budgets, baseline consistency,
 same-size edits, new-violation avoidance, a two-swap solution and a
 checker-legal three-swap repair when the best residual initially points toward
 a blocked adaptive side. The internal precheck matrix covers gaps, overlaps,
 clipping, legal holes, row ordering and deterministic coalescing. Planner doubles and
-the fake-UDM suite live only under `src/dpl2/test/local/`; its 12 newly added
-external instances call the real public `precheck()` API in opto order.
+the fake-UDM suite live only under `src/dpl2/test/local/`. Runtime cases cover
+the internal repair precheck gate, hard macro and hard/soft blockage semantics,
+side-effect-free invalid replacement requests and snapshot update.
 
-2026-07-20 verification result: planner 82/82, engine
-fake-UDM E2E 67/67 and portable final-checker/precheck E2E 33/33 in both normal
-and ASan builds; full normal and ASan CTest 182/182;
-`-Wall -Wextra -Werror` clean. The
+2026-07-20 verification result: planner 82/82, engine fake-UDM E2E 82/82 and
+portable final-checker/precheck E2E 34/34; full normal CTest 198/198 and
+`-Wall -Wextra -Werror` clean. ASan has not been rerun after this update. The
 engine cases include three layouts proving that unused-layer persistent
 checker diagnostics remain non-blocking while a used implant layer with a
 missing rule makes initialization fail closed.
 
 ## Integration risks
 
-- Opto must honor the explicit precheck ordering; repair has no fallback gate.
-- Grid/Network/PhysDesMgr must already describe the same revision and must
-  outlive the borrowing engine. Init is one-shot; construct a new engine after
-  commit.
+- Opto should call the public precheck before mutation for early rejection;
+  repair also enforces it internally and returns `PrecheckFailed` on illegal
+  coverage.
+- Grid/Network/PhysDesMgr must describe the same revision and outlive the
+  borrowing engine. `update()` refreshes existing Node state and atomically
+  replaces the private snapshot. A failed update invalidates that snapshot and
+  leaves queries fail-closed. New/deleted instances or row/blockage changes
+  require infrastructure rebuild first.
+- Network completeness is an infrastructure contract: every placed/fixed
+  physical instance, including hard macros, must be a Node. Hard blockages
+  belong to Grid, not Network.
 - Supported design envelope (validated per node at init, Fatal otherwise):
   no pad row before a standard row, y-sorted row iteration, one shared row
   origin X equal to the core left edge, single contiguous span per row,
@@ -232,8 +257,9 @@ missing rule makes initialization fail closed.
   `OracleGate.h`; the public `RepairOutcome` remains in `FillerRepairEngine.h`.
   This avoids a second wire format and keeps Engine/Planner/Oracle dependencies
   one-way.
-- `repair()` may idempotently add a previously uninstantiated target master to
-  Network and rebuild its private checker/snapshot; it still never mutates UDM.
+- After target/type/size validation, `repair()` may idempotently add a
+  previously uninstantiated target master to Network and rebuild its private
+  checker/snapshot; rejected requests leave that registry unchanged.
 - Adaptive growth is still heuristic: it follows the best residual first and
   falls back to the opposite side only when that primary side adds nothing.
   Long irrelevant contiguous filler runs may therefore require several

@@ -59,6 +59,11 @@ class Network
                   const PhysDesMgr* desMgr,
                   const PhysLibCell& physLibCell);
 
+  // Refresh every existing Node from the current physical design while
+  // preserving Node/Master ids. The infrastructure owner must rebuild the
+  // Network instead when the physical instance set changes.
+  bool updateNodes(const PhysDesMgr* desMgr, const Grid* grid);
+
   void setCore(const Rect& core) { core_ = core; }
   const Rect& getCore() const { return core_; }
   Master* getMaster(LibCellID db_master);

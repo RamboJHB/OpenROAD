@@ -368,4 +368,39 @@ bool Network::updateNode(Node* ndi,
   return true;
 }
 
+bool Network::updateNodes(const PhysDesMgr* desMgr, const Grid* grid)
+{
+  if (desMgr == nullptr || grid == nullptr) {
+    return false;
+  }
+
+  std::vector<std::pair<Node*, const PhysLibCell*>> updates;
+  updates.reserve(nodes_.size());
+  for (const auto& nodePtr : nodes_) {
+    Node* node = nodePtr.get();
+    if (node == nullptr) {
+      return false;
+    }
+    const PhysCell cell = desMgr->getPhysCell(node->getDbInst());
+    if (!cell.isValid()) {
+      return false;
+    }
+    updates.emplace_back(node, &cell.getPhysMaster());
+  }
+
+  // Register every replacement master before changing any Node mapping.
+  for (const auto& [node, master] : updates) {
+    (void) node;
+    if (master == nullptr || addMaster(*master, grid) == nullptr) {
+      return false;
+    }
+  }
+  for (const auto& [node, master] : updates) {
+    if (!updateNode(node, desMgr, *master)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace dpl2

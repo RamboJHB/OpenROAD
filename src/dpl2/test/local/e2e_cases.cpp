@@ -124,6 +124,15 @@ class EngineHarness
   frt::E2ETestDesign& design() { return objects_.design(); }
   dpl2::fillerRepair::FillerRepairEngine& engine() { return *engine_; }
   dpl2::Network& network() { return *objects_.infrastructure().network(); }
+  bool update()
+  {
+    return update(design().desMgr());
+  }
+  bool update(eUNL::PhysDesMgr* desMgr)
+  {
+    engine_ready_ = engine_->update(desMgr, *filler_setting_);
+    return engine_ready_;
+  }
 
  private:
   ProviderObjects objects_;
@@ -195,6 +204,45 @@ TEST_P(FillerRepairEngineE2E, GapInsideHardBlockageIsIgnored)
   EXPECT_TRUE(result.isLegal);
   EXPECT_TRUE(result.diagnostics.empty());
   EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E, GapInsideSoftBlockageStillFails)
+{
+  frt::DesignSetup setup = GetParam().setup;
+  setup.row0TailSoftBlockage = true;
+  EngineHarness harness(setup);
+  ASSERT_TRUE(harness.engineReady());
+  harness.design().moveCell(
+      frt::CellRole::Row0TailFiller,
+      harness.design().rowOriginX(0) + frt::kRowSites,
+      0);
+  const auto result = harness.engine().precheck();
+  EXPECT_FALSE(result.isLegal);
+  EXPECT_TRUE(hasDiagnostic(result.diagnostics, "Gap"));
+}
+
+TEST_P(FillerRepairEngineE2E, HardMacroIsImportedAndCoversLegalSites)
+{
+  frt::DesignSetup setup = GetParam().setup;
+  setup.row0ThirdHardMacro = true;
+  EngineHarness harness(setup);
+  ASSERT_TRUE(harness.engineReady());
+  const auto macroId = harness.design().cell(frt::CellRole::Row0ThirdCell);
+  const dpl2::Node* macro = harness.network().getNode(macroId);
+  ASSERT_NE(macro, nullptr);
+  EXPECT_TRUE(macro->isBlock());
+  const auto result = harness.engine().precheck();
+  EXPECT_TRUE(result.isLegal);
+  EXPECT_TRUE(result.diagnostics.empty());
+
+  const auto& replacement
+      = harness.design().master(frt::MasterRole::TargetNew);
+  EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
+  const auto outcome = harness.engine().repair(macroId, replacement);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(outcome.changes.empty());
+  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "TargetNotStdCell"));
+  EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
 }
 
 TEST_P(FillerRepairEngineE2E, GapInsideInstanceHaloIsIgnored)
@@ -277,7 +325,7 @@ TEST_P(FillerRepairEngineE2E, ExternalPrecheckReportsGapAndOverlapTogether)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairEngineE2E, RepairDoesNotImplicitlyCallExternalPrecheck)
+TEST_P(FillerRepairEngineE2E, RepairPrecheckFailureWarnsAndBlocks)
 {
   EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
@@ -288,7 +336,10 @@ TEST_P(FillerRepairEngineE2E, RepairDoesNotImplicitlyCallExternalPrecheck)
   const auto outcome = harness.engine().repair(
       harness.design().cell(frt::CellRole::Target),
       harness.design().master(frt::MasterRole::TargetNew));
-  EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "Gap"));
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(outcome.changes.empty());
+  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "Gap"));
+  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "PrecheckFailed"));
   EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "Overlap"));
   EXPECT_EQ(harness.design().snapshot(), before);
 }
@@ -329,6 +380,67 @@ TEST_P(FillerRepairEngineE2E, ViolatingTargetOverlayFindsFillerSwap)
              == harness.design().cell(frt::CellRole::TargetRightFiller));
   EXPECT_GE(harness.network().getMasterId(targetMaster.getLibCellId()), 0);
   EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       UnknownTargetDoesNotRegisterReplacementMaster)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  const auto& replacement
+      = harness.design().master(frt::MasterRole::TargetNew);
+  EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
+  const auto outcome
+      = harness.engine().repair(eUNL::LeafCellID(0, 9999), replacement);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(outcome.changes.empty());
+  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "UnknownTarget"));
+  EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       SizeMismatchDoesNotRegisterReplacementMaster)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  const auto& replacement
+      = harness.design().master(frt::MasterRole::MismatchedTarget);
+  EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::Target), replacement);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(outcome.changes.empty());
+  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "TargetSizeMismatch"));
+  EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
+}
+
+TEST_P(FillerRepairEngineE2E, UpdateRefreshesExistingNodeMasterMapping)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  const auto targetId = harness.design().cell(frt::CellRole::Target);
+  const auto& replacement
+      = harness.design().master(frt::MasterRole::TargetNew);
+  EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
+  harness.design().replaceCellMaster(frt::CellRole::Target,
+                                     frt::MasterRole::TargetNew);
+  ASSERT_TRUE(harness.update());
+  const dpl2::Node* target = harness.network().getNode(targetId);
+  ASSERT_NE(target, nullptr);
+  ASSERT_NE(target->getMaster(), nullptr);
+  EXPECT_EQ(target->getMaster()->getDbMaster(), replacement.getLibCellId());
+  EXPECT_TRUE(harness.engine().precheck().isLegal);
+
+  EXPECT_FALSE(harness.update(nullptr));
+  const auto failedPrecheck = harness.engine().precheck();
+  EXPECT_FALSE(failedPrecheck.isLegal);
+  EXPECT_TRUE(
+      hasDiagnostic(failedPrecheck.diagnostics, "precheck_not_initialized"));
+  const auto failedRepair = harness.engine().repair(targetId, replacement);
+  EXPECT_FALSE(failedRepair.hasSolution);
+  EXPECT_TRUE(failedRepair.changes.empty());
+  EXPECT_TRUE(
+      hasDiagnostic(failedRepair.diagnostics, "engine_not_initialized"));
 }
 
 TEST_P(FillerRepairEngineE2E,

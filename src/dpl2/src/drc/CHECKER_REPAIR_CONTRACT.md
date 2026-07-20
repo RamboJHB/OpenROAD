@@ -82,11 +82,18 @@ outside that envelope fails loudly instead of being checked in mixed frames.
 ## Shared-state requirements
 
 PhysDesMgr, Grid, Network and one engine must describe one design revision.
-The engine borrows the initialized Grid/Network, registers all
+Network must contain every placed/fixed physical instance that can intersect
+the core, including hard macros. Placement blockages remain Grid state and are
+not Network Nodes. The engine borrows the initialized Grid/Network, registers all
 `getFillerMasters()` candidates, then constructs the checker. If repair first
-sees an uninstantiated target master, it registers that master in Network and
-rebuilds its private checker/snapshot before issuing the overlay query. Construct a
-new engine after commit.
+sees an uninstantiated target master, it validates target/type/dimensions before
+registering that master in Network and rebuilding its private checker/snapshot.
+Rejected requests leave the master registry unchanged.
+
+After a same-instance-set placement/master commit, `update()` refreshes every
+existing Network Node from PhysDesMgr and atomically replaces the engine's
+private checker/planner/precheck snapshot. New/deleted instances or changes to
+rows/blockages require the infrastructure owner to rebuild Grid/Network first.
 
 The engine serializes its own checker calls because the current const overlay
 path updates internal counters. The checker is engine-owned, so cross-engine
@@ -108,6 +115,21 @@ No DRC rule or scan behavior changed. Warning-clean integration required only:
 - remove an unused local column calculation;
 - handle the sentinel `RuleSource::Count` in diagnostic printing.
 
+## Checker RD request (implementation held)
+
+fillerRepair currently classifies persistent checker initialization diagnostics
+using status/message content. An unrecognized diagnostic is treated as blocking,
+which makes `FillerRepairEngine::init()` or `update()` fail closed; it does not
+reject Grid, Network or the surrounding OpenROAD initialization.
+
+Checker RD should expose a structured initialization disposition, for example a
+severity/category field or an `isReady()` plus per-diagnostic blocking flag. It
+must distinguish structural failures from approved persistent warnings such as
+unsupported physical status and missing rules on implant layers unused by all
+Network masters. Until RD supplies and approves that API, checker code and DRC
+behavior remain unchanged and the existing fail-closed translation stays in the
+engine.
+
 ## Verified test boundary
 
 All portable final-checker calls/assertions live in
@@ -118,7 +140,8 @@ DEF/LEF reader is required. Public `FillerRepairEngine` and real-UDM engine
 coverage remains in the repository-local suite under `src/dpl2/test/local`.
 All test doubles and UDM-compatible test data stay outside the migration
 payload. The runtime engine contains no snapshot builder or test
-conditional. Normal and ASan local builds pass with `-Wall -Wextra -Werror`.
+conditional. The 2026-07-20 normal build passes 198/198 with
+`-Wall -Wextra -Werror`; ASan has not been rerun after the update changes.
 
 Future checker API or semantic changes must be recorded here before engine
 changes are merged.
