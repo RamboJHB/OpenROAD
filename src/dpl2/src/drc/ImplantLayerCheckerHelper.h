@@ -32,7 +32,9 @@ struct ImplantInput
     std::unordered_map<std::string, std::vector<LayerId>> groups;
     std::vector<MasterItem> masters;
     std::vector<PlacedInst> placedInsts;
-    std::vector<RowId> rows;
+    // Number of standard rows; the helper builds rows 0..rowCounts-1 with
+    // y = rowId * rowHeight (previously an explicit 0..N-1 id list).
+    int rowCounts = 0;
     TrackPattern tracks;
     Dbu rowHeight = 0;
     Dbu siteWidth = 0;

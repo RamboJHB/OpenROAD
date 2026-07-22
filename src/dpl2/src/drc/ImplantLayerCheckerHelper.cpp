@@ -28,7 +28,7 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
     // As friend of Grid, populate its private row data directly.
     const DbuX siteWidth(input.siteWidth);
     const DbuY rowHeight(input.rowHeight);
-    const GridY rowCount(static_cast<int>(input.rows.size()));
+    const GridY rowCount(input.rowCounts);
     // Compute site count from max site width
     ColId maxColId = 0;
     for (const PlacedInst& pi : input.placedInsts) {
@@ -46,7 +46,7 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
     grid_->row_y_dbu_to_index_.clear();
     grid_->row_index_to_y_dbu_.resize(static_cast<size_t>(rowCount.v));
     grid_->row_index_to_pixel_height_.resize(static_cast<size_t>(rowCount.v));
-    for (RowId rowId : input.rows) {
+    for (RowId rowId = 0; rowId < input.rowCounts; ++rowId) {
         const DbuY yBase(static_cast<int>(rowId) * input.rowHeight);
         grid_->row_y_dbu_to_index_[yBase] = GridY(static_cast<int>(rowId));
         grid_->row_index_to_y_dbu_[static_cast<size_t>(rowId)] = yBase;

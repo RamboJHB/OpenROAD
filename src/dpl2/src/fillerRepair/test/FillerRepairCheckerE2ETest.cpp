@@ -345,9 +345,7 @@ ImplantInput input()
                    master(F2_FILL_MASTER, 9, F2_LAYER, true),
                    master(F3_FILL_MASTER, 11, F3_LAYER, true)};
   input.placedInsts = densePlaced();
-  for (RowId rowId = 0; rowId < ROW_COUNT; ++rowId) {
-    input.rows.push_back(rowId);
-  }
+  input.rowCounts = ROW_COUNT;
   input.tracks = tracks();
   input.rowHeight = ROW_HEIGHT;
   input.siteWidth = SITE_WIDTH;
@@ -507,7 +505,7 @@ class PortablePlannerDataSource final : public fr::PlannerDataSource
       filler_master_ids_ = std::move(*configuredFillers);
     }
 
-    for (RowId rowId : input.rows) {
+    for (RowId rowId = 0; rowId < input.rowCounts; ++rowId) {
       rows_.push_back(static_cast<fr::RowId>(rowId));
       row_spans_[static_cast<fr::RowId>(rowId)]
           = fr::XInterval{0, SITE_COUNT * input.siteWidth};
