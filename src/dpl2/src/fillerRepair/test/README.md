@@ -1,7 +1,7 @@
 # Portable fillerRepair tests
 
-This directory moves with `fillerRepair/` and contains 116 portable tests:
-82 database-free planner unit tests plus 34 final-checker/precheck E2E tests.
+This directory moves with `fillerRepair/` and contains 153 portable tests:
+82 database-free planner unit tests plus 71 final-checker/precheck E2E tests.
 No source below this directory includes the repository's fake UDM tree or
 depends on its `E2ETestProvider`.
 
@@ -11,11 +11,12 @@ window, ranker, subset-search and OracleGate cases. They compile against the
 destination's real wire types but construct no UDM
 objects.
 
-`FillerRepairCheckerE2ETest.cpp` has 34 cases:
+`FillerRepairCheckerE2ETest.cpp` has 71 cases:
 
-- five final-checker overlay contract cases: intra/inter-row WIDTH/SPACING
-  plus target-related detection when a changed neighbor is outside the guard;
-- 17 end-to-end cases that pass checker snapshots to
+- 26 final-checker fixture/overlay cases: intra/inter-row WIDTH/SPACING at
+  five target-local filler:std-cell ratios, local-ratio invariants, plus
+  target-related detection when a changed neighbor is outside the guard;
+- 33 end-to-end cases that pass checker snapshots to
   `internal::FillerRepairPlanner`, apply its returned overlay to the final
   checker, and cover clean/repair/failure, deterministic batching, candidate
   and budget boundaries, third-VT reachability, baseline consistency,
@@ -30,6 +31,10 @@ objects.
 The E2E source uses no fake checker, fake placement view or fake UDM data. The
 small `PortablePlannerDataSource` in the source is only the planner projection
 of the same `ImplantInput` owned by `ImplantLayerCheckerHelper`.
+Every width/spacing path runs at exact target-local-window ratios of 50:50,
+30:70, 20:80, 10:90 and 5:95 while preserving implant geometry and the
+minimum required editable/bridge fillers. Design implications are recorded in
+`docs/filler_repair_dense_placement_analysis.md`.
 
 ## Destination CMake
 
@@ -44,7 +49,7 @@ cmake --build build-filler-repair-e2e
 ctest --test-dir build-filler-repair-e2e --output-on-failure
 ```
 
-The CMake project builds the 82-case planner executable and the 34-case E2E
+The CMake project builds the 82-case planner executable and the 71-case E2E
 executable. The latter always compiles `${DPL2_FILLER_REPAIR_SOURCES}`, including
 the public runtime engine. If the destination already has owning dpl2/checker
 targets, pass them through `DPL2_RUNTIME_LIBRARIES`; otherwise the standalone

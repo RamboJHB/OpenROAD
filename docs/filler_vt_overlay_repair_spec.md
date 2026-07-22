@@ -1,7 +1,7 @@
 # 功能规格 — Filler VT Overlay 修复 V2.1(checker-guided,本阶段 swap-only)
 
 状态:**V2.1 定稿**。分支:`claude/wizardly-carson-secahu`。基线:`2023-base`。
-最后更新 2026-07-21。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
+最后更新 2026-07-22。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
 checker 源码。
 
 V2.1 相对 V2 是一次 reviewer 驱动的修订,聚焦三处高价值改动:**OracleGate 正确性、
@@ -282,7 +282,7 @@ master commit 且实例集合、rows、blockages 不变时调用 checker 的
   但不负责发现新增/删除的 UDM instance。
 - 82 个可移植 planner unit tests 与 database-free doubles 位于
   `test/` 根目录并与 E2E test 同级;不 include local fake UDM tree/provider。
-- 34 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
+- 71 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 8-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
 - 91 个 checker/engine cases、fake UDM include
@@ -958,12 +958,17 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 ## 10. 测试集
 
 当前 82 个 planner cases 是独立 GoogleTests,位于交付目录中的
-`fillerRepair/test/`,并与 34 个 portable E2E cases 同级;E2E cases 集中在
-`fillerRepair/test/FillerRepairCheckerE2ETest.cpp`:5 个 final-checker overlay contract
-case + 17 个 `FillerRepairPlanner`→final checker repair/failure case + 12 个
+`fillerRepair/test/`,并与 71 个 portable E2E cases 同级;E2E cases 集中在
+`fillerRepair/test/FillerRepairCheckerE2ETest.cpp`:26 个 final-checker fixture/overlay
+case + 33 个 `FillerRepairPlanner`→final checker repair/failure case + 12 个
 internal exact-coverage precheck case。fixture 通过
 `ImplantLayerCheckerHelper` 构造 8 行 × 200 sites 的 Grid/Network/checker input;
 不读 DEF/LEF,不需要 `E2ETestProvider` 或 real-UDM design builder。
+四类 width/spacing checker 与 repair path 都在 target 左右 20 columns、有效
+`target row +/-1` 的局部窗口内运行 50:50、30:70、20:80、10:90、5:95 精确
+filler:std-cell 比例。dense placement 风险、快速失败与 span-rewrite 演进提议见
+`docs/filler_repair_dense_placement_analysis.md`;它是 future design note,不改变本阶段
+swap-only normative contract。
 
 91 个 checker/engine fake-UDM cases、provider 与完整 local fake regression
 copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
@@ -1053,7 +1058,7 @@ gate 语义:
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译清单唯一定义在
   `src/dpl2/src/fillerRepair/sources.cmake`。
-- 82 个 planner unit tests、34 个 portable checker/planner/precheck cases 与 91 个
+- 82 个 planner unit tests、71 个 portable checker/planner/precheck cases 与 91 个
   fake-UDM checker/engine tests 全为 GoogleTest;
   82 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
   和 helper-built portable E2E 一起迁移;fake UDM checker/engine suite 留在 local;

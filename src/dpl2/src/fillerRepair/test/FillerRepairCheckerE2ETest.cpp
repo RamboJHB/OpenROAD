@@ -5,8 +5,10 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "drc/ImplantLayerChecker.h"
@@ -80,14 +82,16 @@ struct DensityCase
 };
 
 constexpr DensityCase FILLER_50_STD_50{50, 50, "Filler50Std50"};
+constexpr DensityCase FILLER_30_STD_70{30, 70, "Filler30Std70"};
 constexpr DensityCase FILLER_20_STD_80{20, 80, "Filler20Std80"};
 constexpr DensityCase FILLER_10_STD_90{10, 90, "Filler10Std90"};
+constexpr DensityCase FILLER_5_STD_95{5, 95, "Filler5Std95"};
 
 const char* denseOverlaySchematic();
 
 std::string densityTrace(const DensityCase& density)
 {
-  return std::string("Density: filler:stdCell=")
+  return std::string("Target-local density: filler:stdCell=")
          + std::to_string(density.fillerPercent) + ':'
          + std::to_string(density.stdCellPercent) + " (" + density.name
          + ")\n" + denseOverlaySchematic();
@@ -102,7 +106,9 @@ const char* denseOverlaySchematic()
         * marks the filler changed by the tested candidate.
         Each row is 200 sites wide and 100% occupied.
         Only repair windows are shown.
-        Filler identity outside these locked windows follows the test ratio.
+        Each density window is 20 columns across target row +/-1 (clamped).
+        Filler identity inside every density window follows the test ratio;
+        implant geometry and the required editable fillers stay unchanged.
 
 Background implant geometry (filler/std identity is density-dependent):
 Sites:    ... [ 1F1 ][ aF1 ][ 2F2 ][ bF2 ][ 3F3 ][ cF3 ] ...
@@ -210,7 +216,6 @@ struct SiteSpec
 {
   MasterId masterId = C1_MASTER;
   bool isFiller = false;
-  bool densityLocked = false;
 };
 
 size_t siteIndex(RowId rowId, ColId colId)
@@ -224,7 +229,7 @@ void setSite(std::vector<SiteSpec>& sites,
              MasterId masterId,
              bool isFiller)
 {
-  sites[siteIndex(rowId, colId)] = SiteSpec{masterId, isFiller, true};
+  sites[siteIndex(rowId, colId)] = SiteSpec{masterId, isFiller};
 }
 
 void setCell(std::vector<SiteSpec>& sites,
@@ -257,37 +262,173 @@ void setFillerIdentity(SiteSpec& site, bool isFiller)
   site.isFiller = isFiller;
 }
 
-void applyDensity(std::vector<SiteSpec>& sites, const DensityCase& density)
+using SiteCoord = std::pair<RowId, ColId>;
+
+struct LocalDensityWindow
+{
+  const char* name;
+  RowId rowLo;
+  RowId rowHi;
+  ColId colLo;
+  ColId colHi;
+  std::vector<SiteCoord> requiredFillers;
+  std::vector<SiteCoord> requiredStdCells;
+};
+
+const std::array<LocalDensityWindow, 4>& localDensityWindows()
+{
+  static const std::array<LocalDensityWindow, 4> windows{
+      LocalDensityWindow{"IntraRowWidth",
+                         0,
+                         1,
+                         2,
+                         22,
+                         {{INTRA_WIDTH_ROW, 11}},
+                         {{0, 8},
+                          {0, 9},
+                          {0, 10},
+                          {0, 12},
+                          {0, 13},
+                          {1, 8},
+                          {1, 9},
+                          {1, 10},
+                          {1, 11},
+                          {1, 12},
+                          {1, 13}}},
+      LocalDensityWindow{
+          "InterRowWidth",
+          0,
+          2,
+          22,
+          42,
+          {{INTER_WIDTH_NEIGHBOR_ROW, 31}},
+          {{0, 30},
+           {0, 31},
+           {1, 30},
+           {1, 31},
+           {2, 30}}},
+      LocalDensityWindow{
+          "IntraRowSpacing",
+          2,
+          4,
+          42,
+          62,
+          {{INTRA_SPACING_ROW, 51}, {INTRA_SPACING_ROW, 52}},
+          {{2, 48},
+           {2, 49},
+           {2, 50},
+           {2, 51},
+           {2, 52},
+           {2, 53},
+           {2, 54},
+           {2, 55},
+           {2, 56},
+           {3, 48},
+           {3, 49},
+           {3, 50},
+           {3, 53},
+           {3, 54},
+           {3, 55},
+           {3, 56},
+           {4, 48},
+           {4, 49},
+           {4, 50},
+           {4, 51},
+           {4, 52},
+           {4, 53},
+           {4, 54},
+           {4, 55},
+           {4, 56}}},
+      LocalDensityWindow{
+          "InterRowSpacing",
+          3,
+          5,
+          62,
+          82,
+          {{INTER_SPACING_NEIGHBOR_ROW, 72}},
+          {{3, 70},
+           {3, 71},
+           {3, 72},
+           {3, 73},
+           {3, 74},
+           {3, 75},
+           {4, 70},
+           {4, 71},
+           {4, 72},
+           {4, 73},
+           {4, 74},
+           {4, 75},
+           {5, 70},
+           {5, 71},
+           {5, 73},
+           {5, 74},
+           {5, 75}}}};
+  return windows;
+}
+
+bool containsSite(const std::vector<SiteCoord>& sites,
+                  RowId rowId,
+                  ColId colId)
+{
+  return std::find(sites.begin(), sites.end(), SiteCoord{rowId, colId})
+         != sites.end();
+}
+
+void applyDensityToWindow(std::vector<SiteSpec>& sites,
+                          const LocalDensityWindow& window,
+                          const DensityCase& density)
 {
   const size_t ratioTotal
       = static_cast<size_t>(density.fillerPercent + density.stdCellPercent);
+  const size_t siteCount
+      = static_cast<size_t>(window.rowHi - window.rowLo + 1)
+        * static_cast<size_t>(window.colHi - window.colLo);
   const size_t scaledFillerCount
-      = sites.size() * static_cast<size_t>(density.fillerPercent);
+      = siteCount * static_cast<size_t>(density.fillerPercent);
   if (ratioTotal == 0 || scaledFillerCount % ratioTotal != 0) {
-    throw std::logic_error("density ratio does not divide the fixture size");
+    throw std::logic_error("density ratio does not divide the local window");
   }
   const size_t desiredFillerCount = scaledFillerCount / ratioTotal;
-  size_t lockedFillerCount = 0;
-  std::vector<size_t> unlocked;
-  for (size_t index = 0; index < sites.size(); ++index) {
-    if (sites[index].densityLocked) {
-      lockedFillerCount += sites[index].isFiller ? 1 : 0;
-    } else {
-      unlocked.push_back(index);
-    }
-  }
-  if (lockedFillerCount > desiredFillerCount
-      || desiredFillerCount - lockedFillerCount > unlocked.size()) {
-    throw std::logic_error("locked repair sites cannot satisfy density ratio");
+  if (window.requiredFillers.size() > desiredFillerCount) {
+    throw std::logic_error("required repair fillers exceed local density");
   }
 
-  const size_t unlockedFillers = desiredFillerCount - lockedFillerCount;
-  for (size_t rank = 0; rank < unlocked.size(); ++rank) {
+  std::vector<size_t> available;
+  for (RowId rowId = window.rowLo; rowId <= window.rowHi; ++rowId) {
+    for (ColId colId = window.colLo; colId < window.colHi; ++colId) {
+      SiteSpec& site = sites[siteIndex(rowId, colId)];
+      setFillerIdentity(site, false);
+      if (!containsSite(window.requiredFillers, rowId, colId)
+          && !containsSite(window.requiredStdCells, rowId, colId)) {
+        available.push_back(siteIndex(rowId, colId));
+      }
+    }
+  }
+  for (const SiteCoord& site : window.requiredFillers) {
+    setFillerIdentity(sites[siteIndex(site.first, site.second)], true);
+  }
+
+  const size_t additionalFillers
+      = desiredFillerCount - window.requiredFillers.size();
+  if (additionalFillers > available.size()) {
+    throw std::logic_error("local window cannot satisfy density ratio");
+  }
+  for (size_t rank = 0; rank < available.size(); ++rank) {
     // Bresenham-style distribution: exact count without clustering the
-    // sparse fillers at one end of the design.
-    const size_t before = rank * unlockedFillers / unlocked.size();
-    const size_t after = (rank + 1) * unlockedFillers / unlocked.size();
-    setFillerIdentity(sites[unlocked[rank]], after != before);
+    // sparse fillers at one end of the target-local window.
+    const size_t before = rank * additionalFillers / available.size();
+    const size_t after = (rank + 1) * additionalFillers / available.size();
+    if (after != before) {
+      setFillerIdentity(sites[available[rank]], true);
+    }
+  }
+}
+
+void applyLocalDensities(std::vector<SiteSpec>& sites,
+                         const DensityCase& density)
+{
+  for (const LocalDensityWindow& window : localDensityWindows()) {
+    applyDensityToWindow(sites, window, density);
   }
 }
 
@@ -300,8 +441,7 @@ std::vector<PlacedInst> densePlaced(const DensityCase& density)
       const bool isFiller = colId % 2 == 1;
       sites[siteIndex(rowId, colId)] = SiteSpec{
           isFiller ? fillerMaster(layerIndex) : cellMaster(layerIndex),
-          isFiller,
-          false};
+          isFiller};
     }
   }
 
@@ -383,7 +523,7 @@ std::vector<PlacedInst> densePlaced(const DensityCase& density)
   setCell(sites, OLD_UNRELATED_ROW, 190, C1_MASTER);
   setFiller(sites, OLD_UNRELATED_ROW, 191, F2_FILL_MASTER);
 
-  applyDensity(sites, density);
+  applyLocalDensities(sites, density);
 
   std::vector<PlacedInst> placed;
   placed.reserve(static_cast<size_t>(ROW_COUNT * SITE_COUNT));
@@ -831,6 +971,15 @@ bool hasPlannerDiagnostic(const fr::FillerRepairResult& result,
                      });
 }
 
+std::string plannerDiagnostics(const fr::FillerRepairResult& result)
+{
+  std::ostringstream stream;
+  for (const fr::Diagnostic& diagnostic : result.diagnostics) {
+    stream << '\n' << diagnostic.code << ": " << diagnostic.message;
+  }
+  return stream.str();
+}
+
 bool sameChanges(const dpl2::ipl::FillerChanges& left,
                  const dpl2::ipl::FillerChanges& right)
 {
@@ -993,7 +1142,7 @@ void expectPlannerRepairsWithFinalChecker(RowId rowId,
   fr::internal::FillerRepairPlanner planner(view, oracle);
   const fr::FillerRepairResult repaired
       = planner.repair(fr::FillerRepairRequest{target, baseline.violations});
-  ASSERT_TRUE(repaired.hasSolution);
+  ASSERT_TRUE(repaired.hasSolution) << plannerDiagnostics(repaired);
   ASSERT_FALSE(repaired.changes.empty());
 
   fr::OracleRequest verifyRequest{1, target, snapshot, repaired.changes};
@@ -1029,16 +1178,33 @@ std::string densityCaseName(
   return info.param.name;
 }
 
-TEST_P(ImplantCheckerOverlayDensityTest, UsesRequestedFillerToStdCellRatio)
+TEST_P(ImplantCheckerOverlayDensityTest,
+       UsesRequestedFillerToStdCellRatioInEveryRepairWindow)
 {
   const DensityCase density = GetParam();
   const ImplantInput in = input(density);
-  const size_t fillerCount = static_cast<size_t>(std::count_if(
-      in.placedInsts.begin(), in.placedInsts.end(),
-      [](const PlacedInst& placed) { return placed.isFiller; }));
-  const size_t stdCellCount = in.placedInsts.size() - fillerCount;
-  EXPECT_EQ(fillerCount * static_cast<size_t>(density.stdCellPercent),
-            stdCellCount * static_cast<size_t>(density.fillerPercent));
+  for (const LocalDensityWindow& window : localDensityWindows()) {
+    SCOPED_TRACE(window.name);
+    size_t fillerCount = 0;
+    size_t stdCellCount = 0;
+    for (RowId rowId = window.rowLo; rowId <= window.rowHi; ++rowId) {
+      for (ColId colId = window.colLo; colId < window.colHi; ++colId) {
+        if (in.placedInsts[siteIndex(rowId, colId)].isFiller) {
+          ++fillerCount;
+        } else {
+          ++stdCellCount;
+        }
+      }
+    }
+    EXPECT_EQ(fillerCount * static_cast<size_t>(density.stdCellPercent),
+              stdCellCount * static_cast<size_t>(density.fillerPercent));
+    for (const SiteCoord& site : window.requiredFillers) {
+      EXPECT_TRUE(in.placedInsts[siteIndex(site.first, site.second)].isFiller);
+    }
+    for (const SiteCoord& site : window.requiredStdCells) {
+      EXPECT_FALSE(in.placedInsts[siteIndex(site.first, site.second)].isFiller);
+    }
+  }
   for (const PlacedInst& placed : in.placedInsts) {
     ASSERT_GE(placed.masterId, 0);
     ASSERT_LT(static_cast<size_t>(placed.masterId), in.masters.size());
@@ -1342,13 +1508,21 @@ TEST_P(FillerRepairCheckerDensityE2ETest, RepairsInterRowSpacing)
 INSTANTIATE_TEST_SUITE_P(
     FillerStdRatios,
     ImplantCheckerOverlayDensityTest,
-    ::testing::Values(FILLER_50_STD_50, FILLER_20_STD_80, FILLER_10_STD_90),
+    ::testing::Values(FILLER_50_STD_50,
+                      FILLER_30_STD_70,
+                      FILLER_20_STD_80,
+                      FILLER_10_STD_90,
+                      FILLER_5_STD_95),
     densityCaseName);
 
 INSTANTIATE_TEST_SUITE_P(
     FillerStdRatios,
     FillerRepairCheckerDensityE2ETest,
-    ::testing::Values(FILLER_50_STD_50, FILLER_20_STD_80, FILLER_10_STD_90),
+    ::testing::Values(FILLER_50_STD_50,
+                      FILLER_30_STD_70,
+                      FILLER_20_STD_80,
+                      FILLER_10_STD_90,
+                      FILLER_5_STD_95),
     densityCaseName);
 
 TEST(FillerRepairCheckerE2ETest, CleanSnapshotReturnsEmptyRepair)
@@ -1393,7 +1567,7 @@ TEST(FillerRepairCheckerE2ETest, BatchSizeOneStillFindsSameRepair)
   config.batchSize = 1;
   const fr::FillerRepairResult result = fixture.repair(
       INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL, baseline.violations, config);
-  ASSERT_TRUE(result.hasSolution);
+  ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
   ASSERT_FALSE(result.changes.empty());
   const fr::OracleResult verified
       = fixture.verify(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL, result.changes);
@@ -1517,7 +1691,7 @@ TEST(FillerRepairCheckerE2ETest, ReturnedChangesTouchOnlySameSizeFillers)
       = fixture.baseline(INTRA_SPACING_ROW, INTRA_SPACING_COL);
   const fr::FillerRepairResult result = fixture.repair(
       INTRA_SPACING_ROW, INTRA_SPACING_COL, baseline.violations);
-  ASSERT_TRUE(result.hasSolution);
+  ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
   ASSERT_FALSE(result.changes.empty());
   for (const dpl2::FillerCellRecord& change : result.changes) {
     const fr::PlacedInstance* instance

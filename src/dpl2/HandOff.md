@@ -1,18 +1,25 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-07-21. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-22. Branch: `claude/wizardly-carson-secahu`.
 
 ## Result
 
 The destination already supplies complete infrastructure and checker sources.
 Runtime integration uses `src/dpl2/src/fillerRepair/`, the infrastructure
 `Network::updateNodes()` refresh seam, and the small wiring now placed in
-`ImplantLayerChecker::check()`. Its `test/` subtree contains 116
-portable GoogleTests: 82 database-free planner cases and 34 final-checker/
+`ImplantLayerChecker::check()`. Its `test/` subtree contains 153
+portable GoogleTests: 82 database-free planner cases and 71 final-checker/
 precheck E2E cases. No DEF/LEF reader, fake UDM tree or destination fixture
 provider is needed. The repository-local fake-UDM checker/engine harness remains
 outside this payload at `src/dpl2/test/local/`.
 Checker DRC rules and scan behavior are unchanged.
+
+The portable E2E matrix now controls filler density inside each target-local
+repair neighborhood, not only across the whole synthetic design. All four
+width/spacing classes run at 50:50, 30:70, 20:80, 10:90 and 5:95. See
+`docs/filler_repair_dense_placement_analysis.md` for the observed limitation,
+fast no-solution proposal and future filler-span rewrite boundary. That note is
+future design guidance; production remains V2.1 swap-only.
 
 The caller boundary is the existing checker. It owns the engine, so opto does
 not construct a second repair object:
@@ -197,7 +204,7 @@ supplied infrastructure/checker sources.
 
 The CMake below `fillerRepair/test` is a portable test package, not the
 destination's runtime owner. It builds an 82-case planner executable plus a
-53-case E2E executable that compiles the complete checker/engine source list.
+71-case E2E executable that compiles the complete checker/engine source list.
 The separate local harness retains the 91 fake-UDM checker/engine cases.
 
 Test dependencies: GoogleTest, Boost, TBB, C++17/C++20 and CMake 3.20+. Commands:
@@ -213,11 +220,12 @@ cmake --build src/dpl2/test/build-cmake -j2
 ctest --test-dir src/dpl2/test/build-cmake --output-on-failure
 ```
 
-The migration payload has 16 direct checker overlay cases, 25
+The migration payload has 26 final-checker fixture/overlay cases, 33
 planner-to-final-checker cases and 12 internal exact-coverage precheck
 cases. Each dense checker fixture contains eight rows and 200 sites. The four
-rule classes and their planner repairs run at exact filler:standard-cell
-ratios 50:50, 20:80 and 10:90 while preserving the same implant geometry.
+rule classes and their planner repairs run at exact target-local-window
+filler:standard-cell ratios 50:50, 30:70, 20:80, 10:90 and 5:95 while
+preserving the same implant geometry.
 The non-parameterized guard case proves that a target violation is still
 detected when the changed neighbor lies outside the guard.
 The planner matrix covers all four rule classes, clean/empty repair, determinism,
@@ -231,9 +239,9 @@ lives under `src/dpl2/test/local/`. Runtime cases cover
 the internal repair precheck gate, hard macro and hard/soft blockage semantics,
 side-effect-free invalid replacement requests and snapshot update.
 
-2026-07-22 normal verification result: portable package 135/135 (planner 82/82
-plus final-checker/precheck E2E 53/53), checker/engine fake-UDM E2E 91/91, and
-full normal CTest 226/226. The last full ASan and `-Wall -Wextra -Werror`
+2026-07-22 normal verification result: portable package 153/153 (planner 82/82
+plus final-checker/precheck E2E 71/71), checker/engine fake-UDM E2E 91/91, and
+full normal CTest 244/244. The last full ASan and `-Wall -Wextra -Werror`
 verification predates the density expansion and must be rerun before updating
 those claims. On Apple with an
 unsanitized Homebrew GoogleTest, ASan discovery and CTest use

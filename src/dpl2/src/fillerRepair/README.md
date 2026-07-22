@@ -1,6 +1,6 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-07-21.
+Updated: 2026-07-22.
 
 `ImplantLayerChecker` is the caller-facing entry. It owns one
 `FillerRepairEngine`, which borrows the initialized Grid/Network already owned
@@ -60,7 +60,7 @@ the checker-provided layer name embedded in the diagnostic message.
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
 | `sources.cmake` | source-of-truth lists for planner, runtime and portable tests |
 | `test/FillerRepairPlannerTest.cpp` and same-level doubles | 82 portable database-free planner unit tests |
-| `test/FillerRepairCheckerE2ETest.cpp` | 34 portable real-checker, planner-to-checker and internal precheck cases |
+| `test/FillerRepairCheckerE2ETest.cpp` | 71 portable real-checker, planner-to-checker and internal precheck cases |
 | `test/CMakeLists.txt` | standalone planner and E2E targets plus complete runtime-engine compile/link gate |
 
 ## Debug transcript
@@ -98,16 +98,21 @@ master-registration seam.
 The 82 database-free planner tests and their same-level synthetic doubles
 exercise every pure search stage without constructing UDM objects.
 
-The 34 E2E tests construct checker input directly with the final checker's
+The 71 E2E tests construct checker input directly with the final checker's
 `ImplantLayerCheckerHelper`. They do not parse DEF/LEF and do not need a
-destination-specific UDM provider. The 34 cases comprise five direct checker
-overlay contracts, 17 planner-to-final-checker repairs/failures and 12
+destination-specific UDM provider. The 71 cases comprise 26 final-checker
+fixture/overlay cases, 33 planner-to-final-checker repairs/failures and 12
 boundary cases for the exact coverage sweep behind `precheck()`. One direct
 case pins detection when a changed neighbor lies outside the guard. The checker
 fixtures contain eight dense rows and exercise intra/inter-row width/spacing,
 candidate and budget boundaries, baseline-delta protection, deterministic
 batching, multi-swap minimum width, adaptive-direction fallback for a
 checker-legal three-swap repair and atomic no-partial failure semantics.
+Every width/spacing checker and repair path runs with exact target-local
+filler:std-cell ratios of 50:50, 30:70, 20:80, 10:90 and 5:95. Required
+editable/bridge fillers remain present in each DRC core. The local
+window definition, dense-placement risks and future fast-failure/span-rewrite
+proposal are documented in `docs/filler_repair_dense_placement_analysis.md`.
 
 ```sh
 cmake -S test -B test/build/e2e \
