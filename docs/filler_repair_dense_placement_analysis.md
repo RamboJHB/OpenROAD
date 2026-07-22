@@ -44,19 +44,28 @@ planner-to-checker case 的代表时间如下：
 全局 filler 数量。新的 local-window matrix 才能观察局部比例变化。
 
 新的 target-local matrix 在四类 DRC x 五档比例上全部通过。对应 planner repair
-的单项 CTest 时间如下：
+的单项 CTest 时间如下（2026-07-22，window/ranker 扫描收窄之后，见 §5）：
 
 | Case | 50:50 | 30:70 | 20:80 | 10:90 | 5:95 |
 |---|---:|---:|---:|---:|---:|
-| intra-row width | 0.70 s | 0.69 s | 0.70 s | 0.70 s | 0.89 s |
-| inter-row width | 1.13 s | 1.14 s | 0.78 s | 0.81 s | 0.70 s |
-| intra-row spacing | 0.86 s | 0.87 s | 0.87 s | 0.86 s | 0.87 s |
-| inter-row spacing | 1.49 s | 1.21 s | 1.21 s | 0.77 s | 0.73 s |
+| intra-row width | 0.50 s | 0.49 s | 0.49 s | 0.50 s | 0.49 s |
+| inter-row width | 0.87 s | 0.90 s | 0.59 s | 0.58 s | 0.51 s |
+| intra-row spacing | 0.65 s | 0.67 s | 0.65 s | 0.67 s | 0.66 s |
+| inter-row spacing | 1.09 s | 0.99 s | 0.99 s | 0.55 s | 0.55 s |
 
-71 个 portable checker/precheck E2E 全部通过；包含 planner、local checker/engine
-regression 的完整 normal CTest 为 244/244，实际 59.49 秒。这里没有明显的
-低 filler 比例性能退化，但 fixture 有意保留了每类 DRC 的最小 editable/bridge
-support，因此不能外推到局部完全没有 support 的真实 case。
+71 个 portable checker/precheck E2E 全部通过；包含 planner(82)、local
+checker/engine regression(94)与 portable checker density(71)的完整 normal
+CTest 为 **247/247**（`-j4` 实际 11.7 秒，串行约 45 秒；ASan 同样 247/247），
+`-Wall -Wextra -Werror` 干净。
+
+**关于计时的诚实说明**：这些 fixture 的行很短（每个窗口约 40–60 个 site），
+单项时间由 checker DRC 路径与 per-test 进程启动主导，**不是** window 构造。因此
+window/ranker 扫描收窄（§5）在这些数上看不出明显加速——它是一个 O(行长) →
+O(log n + 窗口内 filler) 的**渐进复杂度**改进，收益出现在每行上千 instance 的真实
+100% occupancy 设计上，而不是 60-site fixture 上；本轮用 247/247 保持全绿来证明
+“选出的 filler 完全一致”（行为不变）。这里没有明显的低 filler 比例性能退化，但
+fixture 有意保留了每类 DRC 的最小 editable/bridge support，因此不能外推到局部
+完全没有 support 的真实 case。
 
 fixture 验证过程还得到一个直接反例：intra-row spacing 中若把 anchor-adjacent
 bridge filler 改成 std cell，同时保留后面的 gap filler，planner 返回
@@ -173,7 +182,7 @@ Span rewrite 需要版本化 checker wire：
 
 | 模块 | 处理方式 |
 |---|---|
-| `FillerRepairEngine` / `PlannerDataSource` | 保留 snapshot、ID、precheck、candidate 入口和 non-mutating contract |
+| `FillerRepairEngine` / `PlannerDataSource` | 保留 snapshot、ID、precheck、candidate 入口和 non-mutating contract；`instance()`/`masterInfo()` 已是 O(1) dense-table，`instancesInRow()` 返回缓存 bucket |
 | `Signature` | 保留 violation normalization、signature 和 relatedness 基础 |
 | `Window` | 改为 influence-bound window；不能只沿 contiguous filler run 扩展 |
 | `Swap` | 保留为 Tier 1 generator |
@@ -182,6 +191,27 @@ Span rewrite 需要版本化 checker wire：
 | `OracleGate` | 完整复用 baseline-delta、batch、cache、protocol gate 和 no-partial 语义 |
 | cache key | swap 继续用 `(instanceId,newMasterId)`；rewrite 升级为 canonical primitive ops |
 | diagnostics/log | 保留，并增加 closure、action tier、proof/truncation 原因 |
+
+### 5.1 已落地的 sparse-filler 扫描收窄（2026-07-22）
+
+前提：site 铺满、filler 通常只占 10–30%，所以一行有上千个 instance 而只有少数
+是 target 邻域的可编辑 filler。窗口/排序阶段原本用**全行线性扫描**去找这些少数
+filler，在稀疏场景下是纯浪费。本轮把热点扫描全部收窄为 x 区间二分（利用 planner
+路径上 `instancesInRow` 按 x 排序且不重叠的不变量），成本从 O(行长) 降到
+O(log n + 窗口内 filler)：
+
+- 两个共享原语 `firstRightEdgeAfter` / `firstStartAtOrAfter` 提到
+  `PlannerDataSource.h`（inline），供 `Window` 与 `Ranker` 复用；
+- `Window`：`instancesInRing`、`buildWindow` 的 bridge 检测、`finalizeWindow` 的
+  editable 收集（改为直接查成员再按 `(row,x,id)` 排序）、`expandWindowAdaptive`
+  的左右 frontier 扩展，均不再扫全行；
+- `Ranker`：`neighborMajorityVt`（每个待排序 filler 都会调用一次）只看紧邻/交叠
+  邻居，收窄为对 inst.span 的二分，取代对 anchor 行与 ±1 行的整行扫描。
+
+这是**行为不变**的复杂度改进：选出的 filler 与投票结果完全一致，因此不改搜索
+语义、不动 engine 调用方式与任何接口数据结构，靠 247/247 全绿（normal + ASan）
+验证等价。**故意保留** adaptive expansion——它正是够到远处、非连续 filler 的机制，
+恰是稀疏场景所需（§3.2 的功能边界仍待 §4.1 influence closure 才根本解决）。
 
 ## 6. 建议实施顺序
 

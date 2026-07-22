@@ -24,31 +24,48 @@ VtId neighborMajorityVt(const PlannerDataSource& view, const PlacedInstance& ins
   const XInterval span = instanceSpan(view, inst);
   std::map<VtId, int> votes;
 
+  // Only the immediate x-neighbors matter, so binary-search to inst's span
+  // instead of scanning the whole (packed) row for every ranked filler.
   // Defensive: an instance with a missing master must not crash the vote
   // (upstream validation makes it unreachable in runtime, but the ranker
   // must not rely on two layers above it).
-  for (const PlacedInstance& other : view.instancesInRow(inst.rowId)) {
-    if (other.id == inst.id) {
-      continue;
-    }
-    const MasterInfo* master = view.masterInfo(other.masterId);
-    if (master == nullptr) {
-      continue;
-    }
-    const XInterval otherSpan = instanceSpan(view, other);
-    if (otherSpan.xh == span.xl || otherSpan.xl == span.xh) {
-      votes[master->vt] += 2;
-    }
-  }
-  for (const RowId rowId : {inst.rowId - 1, inst.rowId + 1}) {
-    for (const PlacedInstance& other : view.instancesInRow(rowId)) {
+
+  // Same-row x-adjacent neighbors (touching an edge) each cast two band votes.
+  // A toucher does not overlap span (it meets an edge), so it sits just
+  // outside the overlap range -- widen by one instance on each side.
+  {
+    const std::vector<PlacedInstance>& all = view.instancesInRow(inst.rowId);
+    const int lo = firstRightEdgeAfter(view, all, span.xl);
+    const int hi = firstStartAtOrAfter(all, span.xh);
+    const int from = std::max(0, lo - 1);
+    const int to = std::min(static_cast<int>(all.size()), hi + 1);
+    for (int i = from; i < to; ++i) {
+      const PlacedInstance& other = all[i];
+      if (other.id == inst.id) {
+        continue;
+      }
       const MasterInfo* master = view.masterInfo(other.masterId);
       if (master == nullptr) {
         continue;
       }
-      if (instanceSpan(view, other).overlaps(span)) {
-        votes[master->vt] += 1;
+      const XInterval otherSpan = instanceSpan(view, other);
+      if (otherSpan.xh == span.xl || otherSpan.xl == span.xh) {
+        votes[master->vt] += 2;
       }
+    }
+  }
+  // Rows +-1 neighbors that overlap span each cast one band vote. The overlap
+  // range is exactly [firstRightEdgeAfter(xl), firstStartAtOrAfter(xh)).
+  for (const RowId rowId : {inst.rowId - 1, inst.rowId + 1}) {
+    const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
+    const int lo = firstRightEdgeAfter(view, all, span.xl);
+    const int hi = firstStartAtOrAfter(all, span.xh);
+    for (int i = lo; i < hi; ++i) {
+      const MasterInfo* master = view.masterInfo(all[i].masterId);
+      if (master == nullptr) {
+        continue;
+      }
+      votes[master->vt] += 1;
     }
   }
 

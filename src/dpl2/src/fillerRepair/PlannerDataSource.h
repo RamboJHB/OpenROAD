@@ -97,4 +97,45 @@ inline XInterval instanceSpan(const PlannerDataSource& view, const PlacedInstanc
   return XInterval{inst.x, inst.x + width};
 }
 
+// `instancesInRow` is x-sorted and, on the planner path (which only runs after
+// a clean gap/overlap snapshot), non-overlapping -- so each instance's right
+// edge is non-decreasing. That lets a window scan binary-search to the
+// relevant x-range instead of walking the whole row, which is decisive on
+// 100%-utilization designs where a row holds thousands of instances but only a
+// sparse minority are editable fillers near the target.
+
+// First index whose right edge lies strictly right of `bound` (the first
+// instance not entirely to the left of it).
+inline int firstRightEdgeAfter(const PlannerDataSource& view,
+                               const std::vector<PlacedInstance>& all,
+                               DbCoord bound)
+{
+  int lo = 0;
+  for (int hi = static_cast<int>(all.size()); lo < hi;) {
+    const int mid = lo + (hi - lo) / 2;
+    if (instanceSpan(view, all[mid]).xh > bound) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return lo;
+}
+
+// First index whose left edge is at or right of `bound`.
+inline int firstStartAtOrAfter(const std::vector<PlacedInstance>& all,
+                               DbCoord bound)
+{
+  int lo = 0;
+  for (int hi = static_cast<int>(all.size()); lo < hi;) {
+    const int mid = lo + (hi - lo) / 2;
+    if (all[mid].x >= bound) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return lo;
+}
+
 }  // namespace dpl2::fillerRepair

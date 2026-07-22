@@ -11,46 +11,6 @@ namespace dpl2::fillerRepair {
 
 namespace {
 
-// instancesInRow is x-sorted and, on the planner path (which only runs after a
-// clean gap/overlap snapshot), non-overlapping -- so each instance's right edge
-// is non-decreasing. That lets every window scan binary-search to the relevant
-// x-range instead of walking the whole row, which matters on 100%-utilization
-// designs where a row holds thousands of instances but only a sparse minority
-// are editable fillers near the target.
-
-// First index whose right edge lies strictly right of `bound` (i.e. the first
-// instance not entirely to the left of it).
-int firstRightEdgeAfter(const PlannerDataSource& view,
-                        const std::vector<PlacedInstance>& all,
-                        DbCoord bound)
-{
-  int lo = 0;
-  for (int hi = static_cast<int>(all.size()); lo < hi;) {
-    const int mid = lo + (hi - lo) / 2;
-    if (instanceSpan(view, all[mid]).xh > bound) {
-      hi = mid;
-    } else {
-      lo = mid + 1;
-    }
-  }
-  return lo;
-}
-
-// First index whose left edge is at or right of `bound`.
-int firstStartAtOrAfter(const std::vector<PlacedInstance>& all, DbCoord bound)
-{
-  int lo = 0;
-  for (int hi = static_cast<int>(all.size()); lo < hi;) {
-    const int mid = lo + (hi - lo) / 2;
-    if (all[mid].x >= bound) {
-      hi = mid;
-    } else {
-      lo = mid + 1;
-    }
-  }
-  return lo;
-}
-
 // Instances of one row overlapping `x`, plus up to `ring` whole instances
 // beyond each side. This is the shared "cell ring" primitive for guard
 // regions and the unfixable fast check. The instances overlapping x are the
