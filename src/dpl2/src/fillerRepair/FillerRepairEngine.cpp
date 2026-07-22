@@ -39,6 +39,12 @@ class FillerRepairEngine::Impl final : private PlannerDataSource,
             const fillerSetting& fillerSettings);
   void setDebugLogging(bool enabled);
   ipl::CheckResult precheck() const;
+  // Gap/overlap coverage restricted to a target's influence rows. repair()
+  // uses this instead of the whole-design precheck(): a coverage defect
+  // outside the rows the repair can touch cannot affect (or be affected by)
+  // the local implant fix, and scanning only those rows is O(influence cells)
+  // rather than O(all placed cells) on every checker-driven repair.
+  ipl::CheckResult localPrecheck(const Region& influence) const;
   RepairOutcome repair(const ipl::CheckRequest& request);
   RepairOutcome repair(eUNL::LeafCellID targetCell,
                        const eLIB::PhysLibCell& newMaster);
@@ -1000,15 +1006,6 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
     return result;
   }
 
-  const ipl::CheckResult placement = precheck();
-  if (!placement.isLegal) {
-    result.diagnostics = placement.diagnostics;
-    addDiagnostic(Severity::Warning,
-                  "PrecheckFailed",
-                  "placement precheck failed; filler repair was skipped");
-    return result;
-  }
-
   if (!isReady()) {
     for (const Diagnostic& diagnostic : setup_diagnostics_) {
       result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
@@ -1171,6 +1168,22 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
            cat("snapshot: target inst=", target.instanceId, " newMaster=",
                target.masterId, " guard=",
                show(snapshotRequest.guardRegion)));
+
+  // Influence-local placement gate. opto owns the whole-design precheck()
+  // before mutation; here we only refuse to repair on top of a gap/overlap
+  // inside the rows this repair can touch. A defect outside the influence
+  // rows is irrelevant to the local implant fix.
+  const ipl::CheckResult placement =
+      localPrecheck(snapshotRequest.guardRegion);
+  if (!placement.isLegal) {
+    result.diagnostics = placement.diagnostics;
+    addDiagnostic(Severity::Warning,
+                  "PrecheckFailed",
+                  "placement precheck failed in the target influence rows; "
+                  "filler repair was skipped");
+    return result;
+  }
+
   const OracleResult snapshot = checkPlaceWithOverlay(snapshotRequest);
   if (snapshot.status != OracleStatus::Checked) {
     for (const Diagnostic& diagnostic : snapshot.diagnostics) {
@@ -1460,6 +1473,75 @@ ipl::CheckResult FillerRepairEngine::Impl::precheck() const
          cat("warning: placement ", status, " row=", finding.rowId,
              " x=[", finding.span.xl, ",", finding.span.xh,
              ") -> opto must block mutation")});
+  }
+  return result;
+}
+
+ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
+    const Region& influence) const
+{
+  ipl::CheckResult result;
+  result.isLegal = true;
+  if (!initialized_ || precheck_domains_ == nullptr) {
+    result.isLegal = false;
+    result.diagnostics.push_back(
+        {"precheck_not_initialized",
+         "warning: init() must succeed before placement precheck"});
+    return result;
+  }
+
+  // Legal spans (absolute DBU) come from the cached Grid domain, but placed
+  // spans are read LIVE from PhysDesMgr -- like the whole-design precheck() --
+  // so a placement change made after init/update is still detected. The
+  // by-row snapshot only provides which nodes to inspect for the influence
+  // rows (O(influence cells) rather than every placed node); a node whose live
+  // origin has left the row is skipped so it cannot be miscounted here.
+  std::vector<internal::PlacementCoverageRow> coverageRows;
+  for (const PrecheckDomains::Row& domainRow : precheck_domains_->rows) {
+    if (domainRow.id < influence.rowLo || domainRow.id > influence.rowHi) {
+      continue;
+    }
+    internal::PlacementCoverageRow coverageRow;
+    coverageRow.rowId = domainRow.id;
+    coverageRow.legalSpans = domainRow.legalSpans;
+    for (const PlacedInstance& inst : instancesInRow(domainRow.id)) {
+      if (static_cast<size_t>(inst.id) >= udm_refs_.size()
+          || !udm_refs_[inst.id].has_value()) {
+        continue;
+      }
+      const eUNL::PhysCell cell =
+          des_mgr_->getPhysCell(udm_refs_[inst.id]->cellId);
+      if (!cell.isValid()) {
+        continue;
+      }
+      const eUNL::PhysObjStatus status = cell.getStatus();
+      if (status != eUNL::PhysObjStatus::PLACED
+          && status != eUNL::PhysObjStatus::LOC_FIXED) {
+        continue;
+      }
+      const eUTL::Point2D origin = cell.getOrigin();
+      const int64_t cellYl = origin.getY().getStorage();
+      if (cellYl < domainRow.yl || cellYl >= domainRow.yh) {
+        continue;  // node moved out of this row since the snapshot
+      }
+      const int64_t cellXl = origin.getX().getStorage();
+      const int64_t cellXh =
+          cellXl + cell.getPhysMaster().getWidth().getStorage();
+      coverageRow.placedSpans.push_back({cellXl, cellXh});
+    }
+    coverageRows.push_back(std::move(coverageRow));
+  }
+
+  const std::vector<internal::CoverageFinding> findings
+      = internal::findCoverageFindings(std::move(coverageRows));
+  result.isLegal = findings.empty();
+  for (const internal::CoverageFinding& finding : findings) {
+    const char* status = internal::coverageFindingStatus(finding.kind);
+    result.diagnostics.push_back(
+        {status,
+         cat("warning: placement ", status, " row=", finding.rowId,
+             " x=[", finding.span.xl, ",", finding.span.xh,
+             ") -> filler repair blocked in target influence rows")});
   }
   return result;
 }

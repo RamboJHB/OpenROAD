@@ -56,8 +56,10 @@ use: until it does, precheck and repair fail closed
    warnings for logging, but the bool is a hard blocking contract.
 4. Call the existing `check(node, x, y, orient)`. It builds one
    `ipl::CheckRequest` and passes that exact request to the owned engine.
-   Repair repeats the same precheck internally and fails with empty changes if
-   the caller skipped or raced the external gate.
+   Repair repeats the coverage check internally, but narrowed to the target's
+   influence rows, and fails with empty changes if a gap/overlap lies in those
+   rows. A defect outside the influence rows is left to the global
+   `precheckFillerRepair()` gate and does not block the local repair.
 5. If `check()` returns true, opto/infrastructure reads
    `getFillerChanges()` and commits that list together with its target
    mutation. The list is valid until the next `check()`; every new check clears
@@ -258,8 +260,11 @@ required. Runtime sources contain no fake include or conditional.
 ## Integration risks
 
 - Opto should call the checker precheck before mutation for early rejection;
-  repair also enforces it internally and returns `PrecheckFailed` on illegal
-  coverage.
+  repair also enforces it internally -- narrowed to the target's influence
+  rows -- and returns `PrecheckFailed` on illegal coverage there. A coverage
+  defect elsewhere is only caught by the global precheck. After any placement
+  mutation, call `updateFillerRepair()` before the next repair so the private
+  snapshot is consistent (a stale Node otherwise fails the frame gate).
 - Grid/Network/PhysDesMgr must describe the same revision and outlive the
   borrowing engine. `update()` refreshes existing Node state and atomically
   replaces the private snapshot. A failed update invalidates that snapshot and

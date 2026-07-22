@@ -165,6 +165,13 @@ class CheckerHarness
   frt::E2ETestDesign& design() { return objects_.design(); }
   dpl2::ipl::ImplantLayerChecker& checker() { return *checker_; }
 
+  // Refresh Network/engine snapshots after a placement mutation (the caller
+  // contract before any subsequent check on a changed design).
+  bool update()
+  {
+    return checker_->updateFillerRepair(design().desMgr(), *filler_setting_);
+  }
+
   bool setTargetMaster(frt::MasterRole role)
   {
     dpl2::Grid* grid = objects_.infrastructure().grid();
@@ -384,9 +391,13 @@ TEST_P(FillerRepairEngineE2E, RepairPrecheckFailureWarnsAndBlocks)
 {
   EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
-  harness.design().moveCell(frt::CellRole::Row0TailFiller,
-                            harness.design().rowOriginX(0) + frt::kRowSites,
-                            0);
+  // The gap must fall inside the target's influence rows (target is in row 2;
+  // repair narrows its internal precheck to the guard rows around it). Row 1
+  // is a coupled guard row, so a gap there still blocks the repair.
+  harness.design().moveCell(frt::CellRole::Row1TailFiller,
+                            harness.design().rowOriginX(1) + frt::kRowSites,
+                            frt::kRowHeight);
+  ASSERT_TRUE(harness.update());  // caller refreshes the snapshot after a move
   const frt::PhysicalSnapshot before = harness.design().snapshot();
   const auto outcome = harness.engine().repair(
       harness.design().cell(frt::CellRole::Target),
@@ -396,6 +407,32 @@ TEST_P(FillerRepairEngineE2E, RepairPrecheckFailureWarnsAndBlocks)
   EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "Gap"));
   EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "PrecheckFailed"));
   EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "Overlap"));
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E, RepairIgnoresGapOutsideInfluenceRows)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  // A gap in row 0 is outside the target's influence rows (guard rows 1..3 for
+  // a target in row 2). The narrowed internal precheck must not block the
+  // repair, which still finds its local filler swap. The whole-design
+  // precheck() remains available to opto for the global gate.
+  harness.design().moveCell(frt::CellRole::Row0TailFiller,
+                            harness.design().rowOriginX(0) + frt::kRowSites,
+                            0);
+  ASSERT_TRUE(harness.update());  // caller refreshes the snapshot after a move
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  ASSERT_FALSE(harness.engine().precheck().isLegal);  // global gate still sees it
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::Target),
+      harness.design().master(frt::MasterRole::TargetNew));
+  EXPECT_TRUE(outcome.hasSolution);
+  EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "PrecheckFailed"));
+  ASSERT_EQ(outcome.changes.size(), 1U);
+  EXPECT_EQ(outcome.changes.front().new_lib_cell_,
+            harness.design().master(frt::MasterRole::RepairFiller)
+                .getLibCellId());
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
@@ -456,10 +493,12 @@ TEST_P(FillerRepairEngineE2E,
 
   // A later failed check must clear the previously accepted overlay before
   // returning; callers can never observe stale changes from the first check.
+  // The defect must fall in the target's influence rows (row 1 couples to the
+  // row-2 target) for the narrowed internal precheck to block.
   harness.design().moveCell(
-      frt::CellRole::Row0TailFiller,
-      harness.design().rowOriginX(0) + frt::kRowSites,
-      0);
+      frt::CellRole::Row1TailFiller,
+      harness.design().rowOriginX(1) + frt::kRowSites,
+      frt::kRowHeight);
   const auto beforeFailedCheck = harness.design().snapshot();
   EXPECT_FALSE(harness.checkTarget());
   EXPECT_TRUE(harness.checker().getFillerChanges().empty());
@@ -483,10 +522,13 @@ TEST_P(FillerRepairEngineE2E,
 {
   CheckerHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.checkerReady());
+  // Gap inside the target's influence rows (row 1 couples to the row-2 target)
+  // so the narrowed internal precheck blocks the checker-entry repair.
   harness.design().moveCell(
-      frt::CellRole::Row0TailFiller,
-      harness.design().rowOriginX(0) + frt::kRowSites,
-      0);
+      frt::CellRole::Row1TailFiller,
+      harness.design().rowOriginX(1) + frt::kRowSites,
+      frt::kRowHeight);
+  ASSERT_TRUE(harness.update());  // caller refreshes the snapshot after a move
   const auto before = harness.design().snapshot();
   ASSERT_TRUE(harness.setTargetMaster(frt::MasterRole::TargetNew));
 

@@ -136,7 +136,12 @@ Tier 2 应按 span 建模，不引入通用 Move。一个 rewrite 必须满足 r
 
 按以下顺序执行，只有带完备证明的路径才能声明不可修复：
 
-1. precheck 失败：返回 `PrecheckFailed`，不进入搜索；
+1. precheck 失败：返回 `PrecheckFailed`，不进入搜索。已落地：`repair()`
+   内置的 precheck 已收窄为 target influence rows（repair 可编辑 filler 的
+   guard rows）上的局部覆盖检查，placed span 从 PhysDesMgr 按 influence-row
+   node 实时读取，为 O(influence cells)；influence rows 之外的 gap/overlap
+   不影响该局部 implant 修复、也不再阻塞它，而 public `precheckFillerRepair()`
+   仍是整设计的全局 gate；
 2. influence closure 内无 editable filler：swap tier 返回
    `UnrepairableBySwap`；若不存在可重铺 filler span，则返回
    `NeedsPlacementRepair`；

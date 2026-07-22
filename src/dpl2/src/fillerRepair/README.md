@@ -26,8 +26,13 @@ segments. A segment is a maximal run of valid pixels not reserved by
 halo/padding, so blockage cuts, fragmented-row holes and legal reserved
 whitespace are ignored. Warning diagnostics explain the location;
 `isLegal=false` is the hard opto-blocking value. It does not inspect
-target/master/candidates/IDs/implant DRC. Repair repeats precheck internally;
-failure returns `PrecheckFailed`, no solution and no changes.
+target/master/candidates/IDs/implant DRC. Repair repeats the coverage check
+internally, but narrowed to the target's influence rows (the guard rows the
+repair can touch): a gap/overlap outside those rows cannot affect the local
+implant fix and does not block it, and the check is O(influence cells) rather
+than O(all placed cells). A defect inside the influence rows returns
+`PrecheckFailed`, no solution and no changes. The whole-design
+`precheckFillerRepair()` remains the caller's global gate.
 
 `check()` forwards its exact `ipl::CheckRequest` to the engine. Repair overlays
 the requested target master and first asks the private oracle with empty filler

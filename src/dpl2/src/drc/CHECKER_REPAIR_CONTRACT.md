@@ -136,6 +136,19 @@ The engine serializes its private oracle calls because the current const
 overlay path updates internal counters. Calls on the caller-facing checker and
 reads of its last result must remain sequential.
 
+## Internal precheck scope
+
+The public `precheckFillerRepair()` is a whole-design gap/overlap gate for
+opto. Inside `repair()`, the same coverage sweep is narrowed to the target's
+influence rows (the guard rows the repair can edit fillers in). Legal spans
+come from the cached Grid domain; placed spans are read live from PhysDesMgr
+for only the influence-row nodes, so the check is O(influence cells) and still
+reflects a post-init placement change. A gap/overlap outside the influence
+rows cannot affect the local implant fix and does not block it; a defect
+inside them returns `PrecheckFailed` with empty changes. After a placement
+mutation the caller must `updateFillerRepair()` before the next repair, or a
+stale Network Node fails the frame gate when the private snapshot rebuilds.
+
 ## Repair acceptance
 
 The checker returns blocking findings; the engine still applies its
