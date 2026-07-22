@@ -13,6 +13,15 @@ namespace {
 // Instances of one row overlapping `x`, plus up to `ring` whole instances
 // beyond each side. This is the shared "cell ring" primitive for guard
 // regions and the unfixable fast check.
+//
+// instancesInRow is x-sorted and, on the planner path (which only runs after a
+// clean gap/overlap snapshot), non-overlapping -- so each instance's right
+// edge is non-decreasing and the instances overlapping x are the contiguous
+// index range [lo, hi): lo = first whose right edge exceeds x.xl, hi = first
+// that starts at/after x.xh. Two binary searches replace what was a full-row
+// linear scan (dominant on long rows / sparse-filler designs). When nothing
+// overlaps, lo == hi at the gap and the +/- ring extension yields exactly the
+// nearest instances on each side, matching the previous behavior.
 std::vector<PlacedInstance> instancesInRing(const PlannerDataSource& view,
                                             RowId rowId,
                                             const XInterval& x,
@@ -20,40 +29,33 @@ std::vector<PlacedInstance> instancesInRing(const PlannerDataSource& view,
 {
   const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
   std::vector<PlacedInstance> result;
-
-  // Index range overlapping x.
-  int first = -1;
-  int last = -1;
-  for (int i = 0; i < static_cast<int>(all.size()); ++i) {
-    if (instanceSpan(view, all[i]).overlaps(x)) {
-      if (first < 0) {
-        first = i;
-      }
-      last = i;
-    }
-  }
-  if (first < 0) {
-    // Nothing overlaps: the ring is the up-to-`ring` nearest instances on
-    // each side of x.
-    int before = -1;
-    for (int i = 0; i < static_cast<int>(all.size()); ++i) {
-      if (instanceSpan(view, all[i]).xh <= x.xl) {
-        before = i;
-      }
-    }
-    for (int i = std::max(0, before - ring + 1); i <= before; ++i) {
-      result.push_back(all[i]);
-    }
-    for (int i = before + 1;
-         i < static_cast<int>(all.size()) && i <= before + ring;
-         ++i) {
-      result.push_back(all[i]);
-    }
+  const int n = static_cast<int>(all.size());
+  if (n == 0) {
     return result;
   }
-  for (int i = std::max(0, first - ring);
-       i <= std::min(static_cast<int>(all.size()) - 1, last + ring);
-       ++i) {
+
+  int lo = 0;
+  for (int hiBound = n; lo < hiBound;) {
+    const int mid = lo + (hiBound - lo) / 2;
+    if (instanceSpan(view, all[mid]).xh > x.xl) {
+      hiBound = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  int hi = 0;
+  for (int hiBound = n; hi < hiBound;) {
+    const int mid = hi + (hiBound - hi) / 2;
+    if (all[mid].x >= x.xh) {
+      hiBound = mid;
+    } else {
+      hi = mid + 1;
+    }
+  }
+
+  const int from = std::max(0, lo - ring);
+  const int to = std::min(n, hi + ring);
+  for (int i = from; i < to; ++i) {
     result.push_back(all[i]);
   }
   return result;
