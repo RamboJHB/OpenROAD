@@ -5,23 +5,59 @@
 
 #include <algorithm>
 #include <set>
+#include <tuple>
 
 namespace dpl2::fillerRepair {
 
 namespace {
 
+// instancesInRow is x-sorted and, on the planner path (which only runs after a
+// clean gap/overlap snapshot), non-overlapping -- so each instance's right edge
+// is non-decreasing. That lets every window scan binary-search to the relevant
+// x-range instead of walking the whole row, which matters on 100%-utilization
+// designs where a row holds thousands of instances but only a sparse minority
+// are editable fillers near the target.
+
+// First index whose right edge lies strictly right of `bound` (i.e. the first
+// instance not entirely to the left of it).
+int firstRightEdgeAfter(const PlannerDataSource& view,
+                        const std::vector<PlacedInstance>& all,
+                        DbCoord bound)
+{
+  int lo = 0;
+  for (int hi = static_cast<int>(all.size()); lo < hi;) {
+    const int mid = lo + (hi - lo) / 2;
+    if (instanceSpan(view, all[mid]).xh > bound) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return lo;
+}
+
+// First index whose left edge is at or right of `bound`.
+int firstStartAtOrAfter(const std::vector<PlacedInstance>& all, DbCoord bound)
+{
+  int lo = 0;
+  for (int hi = static_cast<int>(all.size()); lo < hi;) {
+    const int mid = lo + (hi - lo) / 2;
+    if (all[mid].x >= bound) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return lo;
+}
+
 // Instances of one row overlapping `x`, plus up to `ring` whole instances
 // beyond each side. This is the shared "cell ring" primitive for guard
-// regions and the unfixable fast check.
-//
-// instancesInRow is x-sorted and, on the planner path (which only runs after a
-// clean gap/overlap snapshot), non-overlapping -- so each instance's right
-// edge is non-decreasing and the instances overlapping x are the contiguous
-// index range [lo, hi): lo = first whose right edge exceeds x.xl, hi = first
-// that starts at/after x.xh. Two binary searches replace what was a full-row
-// linear scan (dominant on long rows / sparse-filler designs). When nothing
-// overlaps, lo == hi at the gap and the +/- ring extension yields exactly the
-// nearest instances on each side, matching the previous behavior.
+// regions and the unfixable fast check. The instances overlapping x are the
+// contiguous index range [lo, hi): lo = first whose right edge exceeds x.xl,
+// hi = first that starts at/after x.xh. When nothing overlaps, lo == hi at the
+// gap and the +/- ring extension yields exactly the nearest instances on each
+// side, matching the previous full-row-scan behavior.
 std::vector<PlacedInstance> instancesInRing(const PlannerDataSource& view,
                                             RowId rowId,
                                             const XInterval& x,
@@ -34,25 +70,8 @@ std::vector<PlacedInstance> instancesInRing(const PlannerDataSource& view,
     return result;
   }
 
-  int lo = 0;
-  for (int hiBound = n; lo < hiBound;) {
-    const int mid = lo + (hiBound - lo) / 2;
-    if (instanceSpan(view, all[mid]).xh > x.xl) {
-      hiBound = mid;
-    } else {
-      lo = mid + 1;
-    }
-  }
-  int hi = 0;
-  for (int hiBound = n; hi < hiBound;) {
-    const int mid = hi + (hiBound - hi) / 2;
-    if (all[mid].x >= x.xh) {
-      hiBound = mid;
-    } else {
-      hi = mid + 1;
-    }
-  }
-
+  const int lo = firstRightEdgeAfter(view, all, x.xl);
+  const int hi = firstStartAtOrAfter(all, x.xh);
   const int from = std::max(0, lo - ring);
   const int to = std::min(n, hi + ring);
   for (int i = from; i < to; ++i) {
@@ -84,12 +103,23 @@ RepairWindow finalizeWindow(int level,
   window.level = level;
   window.rows.assign(rowSet.begin(), rowSet.end());
   window.x = x;
-  for (const RowId rowId : window.rows) {
-    for (const PlacedInstance& inst : view.instancesInRow(rowId)) {
-      if (editable.count(inst.id) > 0) {
-        window.editableFillers.push_back(inst.id);
-      }
+  // editableFillers is the move-generation universe, ordered by (row, x, id).
+  // Look the members up directly rather than scanning whole rows for them: on a
+  // packed row the editable set is a sparse minority of the instances present.
+  std::vector<const PlacedInstance*> editableInsts;
+  editableInsts.reserve(editable.size());
+  for (const InstanceId id : editable) {
+    if (const PlacedInstance* inst = view.instance(id)) {
+      editableInsts.push_back(inst);
     }
+  }
+  std::sort(editableInsts.begin(), editableInsts.end(),
+            [](const PlacedInstance* a, const PlacedInstance* b) {
+              return std::tie(a->rowId, a->x, a->id)
+                     < std::tie(b->rowId, b->x, b->id);
+            });
+  for (const PlacedInstance* inst : editableInsts) {
+    window.editableFillers.push_back(inst->id);
   }
   window.bridgeFillers.assign(bridge.begin(), bridge.end());
 
@@ -172,7 +202,15 @@ RepairWindow buildWindow(int level,
   const XInterval bridgeSpan{anchorSpan.xl - ruleDistance,
                              anchorSpan.xh + ruleDistance};
   for (const RowId rowId : clampRows(view, anchor.rowId - 1, anchor.rowId + 1)) {
-    for (const PlacedInstance& inst : view.instancesInRow(rowId)) {
+    // Only instances overlapping bridgeSpan can qualify: the row==anchor
+    // touch cases (span touches an anchor edge) and the coupled-row overlap
+    // case both lie inside [anchorSpan +/- ruleDistance]. Binary-search that
+    // band instead of walking the whole row.
+    const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
+    const int lo = firstRightEdgeAfter(view, all, bridgeSpan.xl);
+    const int hi = firstStartAtOrAfter(all, bridgeSpan.xh);
+    for (int i = lo; i < hi; ++i) {
+      const PlacedInstance& inst = all[i];
       if (!inst.isFiller) {
         continue;
       }
@@ -276,7 +314,9 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
 
       if (addLeft) {
         int added = 0;
-        for (int i = static_cast<int>(all.size()) - 1;
+        // Walk left from the instance just left of the frontier (everything at
+        // or right of it has span.xh > leftFrontier and was skipped before).
+        for (int i = firstRightEdgeAfter(view, all, leftFrontier) - 1;
              i >= 0 && added < step;
              --i) {
           const XInterval span = instanceSpan(view, all[i]);
@@ -295,18 +335,19 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
       }
       if (addRight) {
         int added = 0;
-        for (const PlacedInstance& inst : all) {
-          if (added >= step) {
-            break;
-          }
-          const XInterval span = instanceSpan(view, inst);
-          if (span.xl < rightFrontier || editable.count(inst.id) > 0) {
+        // Walk right from the first instance at or right of the frontier
+        // (everything before it has span.xl < rightFrontier and was skipped).
+        for (int i = firstStartAtOrAfter(all, rightFrontier);
+             i < static_cast<int>(all.size()) && added < step;
+             ++i) {
+          const XInterval span = instanceSpan(view, all[i]);
+          if (span.xl < rightFrontier || editable.count(all[i].id) > 0) {
             continue;
           }
-          if (!inst.isFiller || span.xl > rightFrontier) {
+          if (!all[i].isFiller || span.xl > rightFrontier) {
             break;
           }
-          editable.insert(inst.id);
+          editable.insert(all[i].id);
           rightFrontier = span.xh;
           x.xh = std::max(x.xh, span.xh);
           ++added;
