@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -71,6 +72,27 @@ constexpr ColId NEW_INTER_SPACING_COL = 160;
 constexpr RowId OLD_UNRELATED_ROW = 7;
 constexpr ColId OLD_UNRELATED_COL = 190;
 
+struct DensityCase
+{
+  int fillerPercent;
+  int stdCellPercent;
+  const char* name;
+};
+
+constexpr DensityCase FILLER_50_STD_50{50, 50, "Filler50Std50"};
+constexpr DensityCase FILLER_20_STD_80{20, 80, "Filler20Std80"};
+constexpr DensityCase FILLER_10_STD_90{10, 90, "Filler10Std90"};
+
+const char* denseOverlaySchematic();
+
+std::string densityTrace(const DensityCase& density)
+{
+  return std::string("Density: filler:stdCell=")
+         + std::to_string(density.fillerPercent) + ':'
+         + std::to_string(density.stdCellPercent) + " (" + density.name
+         + ")\n" + denseOverlaySchematic();
+}
+
 const char* denseOverlaySchematic()
 {
   return R"(Schematic: dense_overlay_8x200
@@ -80,8 +102,9 @@ const char* denseOverlaySchematic()
         * marks the filler changed by the tested candidate.
         Each row is 200 sites wide and 100% occupied.
         Only repair windows are shown.
+        Filler identity outside these locked windows follows the test ratio.
 
-Background all rows:
+Background implant geometry (filler/std identity is density-dependent):
 Sites:    ... [ 1F1 ][ aF1 ][ 2F2 ][ bF2 ][ 3F3 ][ cF3 ] ...
 
 Intra-row width target, row0 sites 8..13:
@@ -187,6 +210,7 @@ struct SiteSpec
 {
   MasterId masterId = C1_MASTER;
   bool isFiller = false;
+  bool densityLocked = false;
 };
 
 size_t siteIndex(RowId rowId, ColId colId)
@@ -200,7 +224,7 @@ void setSite(std::vector<SiteSpec>& sites,
              MasterId masterId,
              bool isFiller)
 {
-  sites[siteIndex(rowId, colId)] = SiteSpec{masterId, isFiller};
+  sites[siteIndex(rowId, colId)] = SiteSpec{masterId, isFiller, true};
 }
 
 void setCell(std::vector<SiteSpec>& sites,
@@ -219,7 +243,55 @@ void setFiller(std::vector<SiteSpec>& sites,
   setSite(sites, rowId, colId, masterId, true);
 }
 
-std::vector<PlacedInst> densePlaced()
+int masterLayerIndex(MasterId masterId)
+{
+  return masterId >= F1_FILL_MASTER ? masterId - F1_FILL_MASTER
+                                    : masterId - C1_MASTER;
+}
+
+void setFillerIdentity(SiteSpec& site, bool isFiller)
+{
+  const int layerIndex = masterLayerIndex(site.masterId);
+  site.masterId
+      = isFiller ? fillerMaster(layerIndex) : cellMaster(layerIndex);
+  site.isFiller = isFiller;
+}
+
+void applyDensity(std::vector<SiteSpec>& sites, const DensityCase& density)
+{
+  const size_t ratioTotal
+      = static_cast<size_t>(density.fillerPercent + density.stdCellPercent);
+  const size_t scaledFillerCount
+      = sites.size() * static_cast<size_t>(density.fillerPercent);
+  if (ratioTotal == 0 || scaledFillerCount % ratioTotal != 0) {
+    throw std::logic_error("density ratio does not divide the fixture size");
+  }
+  const size_t desiredFillerCount = scaledFillerCount / ratioTotal;
+  size_t lockedFillerCount = 0;
+  std::vector<size_t> unlocked;
+  for (size_t index = 0; index < sites.size(); ++index) {
+    if (sites[index].densityLocked) {
+      lockedFillerCount += sites[index].isFiller ? 1 : 0;
+    } else {
+      unlocked.push_back(index);
+    }
+  }
+  if (lockedFillerCount > desiredFillerCount
+      || desiredFillerCount - lockedFillerCount > unlocked.size()) {
+    throw std::logic_error("locked repair sites cannot satisfy density ratio");
+  }
+
+  const size_t unlockedFillers = desiredFillerCount - lockedFillerCount;
+  for (size_t rank = 0; rank < unlocked.size(); ++rank) {
+    // Bresenham-style distribution: exact count without clustering the
+    // sparse fillers at one end of the design.
+    const size_t before = rank * unlockedFillers / unlocked.size();
+    const size_t after = (rank + 1) * unlockedFillers / unlocked.size();
+    setFillerIdentity(sites[unlocked[rank]], after != before);
+  }
+}
+
+std::vector<PlacedInst> densePlaced(const DensityCase& density)
 {
   std::vector<SiteSpec> sites(static_cast<size_t>(ROW_COUNT * SITE_COUNT));
   for (RowId rowId = 0; rowId < ROW_COUNT; ++rowId) {
@@ -228,7 +300,8 @@ std::vector<PlacedInst> densePlaced()
       const bool isFiller = colId % 2 == 1;
       sites[siteIndex(rowId, colId)] = SiteSpec{
           isFiller ? fillerMaster(layerIndex) : cellMaster(layerIndex),
-          isFiller};
+          isFiller,
+          false};
     }
   }
 
@@ -310,6 +383,8 @@ std::vector<PlacedInst> densePlaced()
   setCell(sites, OLD_UNRELATED_ROW, 190, C1_MASTER);
   setFiller(sites, OLD_UNRELATED_ROW, 191, F2_FILL_MASTER);
 
+  applyDensity(sites, density);
+
   std::vector<PlacedInst> placed;
   placed.reserve(static_cast<size_t>(ROW_COUNT * SITE_COUNT));
   for (RowId rowId = 0; rowId < ROW_COUNT; ++rowId) {
@@ -326,7 +401,7 @@ std::vector<PlacedInst> densePlaced()
   return placed;
 }
 
-ImplantInput input()
+ImplantInput input(const DensityCase& density = FILLER_50_STD_50)
 {
   ImplantInput input;
   input.layers = {Layer{F1_LAYER, "F1", Layer::Vt::L, Layer::Polar::N},
@@ -344,7 +419,7 @@ ImplantInput input()
                    master(F1_FILL_MASTER, 7, F1_LAYER, true),
                    master(F2_FILL_MASTER, 9, F2_LAYER, true),
                    master(F3_FILL_MASTER, 11, F3_LAYER, true)};
-  input.placedInsts = densePlaced();
+  input.placedInsts = densePlaced(density);
   input.rowCounts = ROW_COUNT;
   input.tracks = tracks();
   input.rowHeight = ROW_HEIGHT;
@@ -407,10 +482,11 @@ LibCellID libCellId(MasterId masterId)
 }
 
 std::vector<CheckResult> check(const CheckRequest& request,
-                               std::vector<FillerChanges> changes)
+                               std::vector<FillerChanges> changes,
+                               const DensityCase& density)
 {
-  SCOPED_TRACE(denseOverlaySchematic());
-  const ImplantInput in = input();
+  SCOPED_TRACE(densityTrace(density));
+  const ImplantInput in = input(density);
   ImplantLayerCheckerHelper helper;
   helper.initialize(in);
   ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
@@ -890,10 +966,12 @@ class PlannerCheckerFixture
   std::unique_ptr<PortableCheckerOracle> oracle_;
 };
 
-void expectPlannerRepairsWithFinalChecker(RowId rowId, ColId colId)
+void expectPlannerRepairsWithFinalChecker(RowId rowId,
+                                          ColId colId,
+                                          const DensityCase& density)
 {
-  SCOPED_TRACE(denseOverlaySchematic());
-  const ImplantInput immutableInput = input();
+  SCOPED_TRACE(densityTrace(density));
+  const ImplantInput immutableInput = input(density);
   const std::vector<PlacedInst> before = immutableInput.placedInsts;
   ImplantLayerCheckerHelper helper;
   helper.initialize(immutableInput);
@@ -935,7 +1013,40 @@ void expectPlannerRepairsWithFinalChecker(RowId rowId, ColId colId)
   }
 }
 
-TEST(ImplantCheckerOverlayTest, DenseCaseIntraRowWidth)
+class ImplantCheckerOverlayDensityTest
+    : public ::testing::TestWithParam<DensityCase>
+{
+};
+
+class FillerRepairCheckerDensityE2ETest
+    : public ::testing::TestWithParam<DensityCase>
+{
+};
+
+std::string densityCaseName(
+    const ::testing::TestParamInfo<DensityCase>& info)
+{
+  return info.param.name;
+}
+
+TEST_P(ImplantCheckerOverlayDensityTest, UsesRequestedFillerToStdCellRatio)
+{
+  const DensityCase density = GetParam();
+  const ImplantInput in = input(density);
+  const size_t fillerCount = static_cast<size_t>(std::count_if(
+      in.placedInsts.begin(), in.placedInsts.end(),
+      [](const PlacedInst& placed) { return placed.isFiller; }));
+  const size_t stdCellCount = in.placedInsts.size() - fillerCount;
+  EXPECT_EQ(fillerCount * static_cast<size_t>(density.stdCellPercent),
+            stdCellCount * static_cast<size_t>(density.fillerPercent));
+  for (const PlacedInst& placed : in.placedInsts) {
+    ASSERT_GE(placed.masterId, 0);
+    ASSERT_LT(static_cast<size_t>(placed.masterId), in.masters.size());
+    EXPECT_EQ(placed.isFiller, in.masters[placed.masterId].isFiller);
+  }
+}
+
+TEST_P(ImplantCheckerOverlayDensityTest, IntraRowWidth)
 {
   const CheckRequest target = request(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   const std::vector<CheckResult> results
@@ -963,7 +1074,8 @@ TEST(ImplantCheckerOverlayTest, DenseCaseIntraRowWidth)
                                  UvDist(0),
                                  UvDist(0),
                                  LibCellID(),
-                                 libCellId(F2_FILL_MASTER)}}});
+                                 libCellId(F2_FILL_MASTER)}}},
+              GetParam());
 
   ASSERT_EQ(results.size(), 3u);
   EXPECT_TRUE(results[0].isLegal);
@@ -983,7 +1095,7 @@ TEST(ImplantCheckerOverlayTest, DenseCaseIntraRowWidth)
   expectOldUnrelatedFiltered(results[0]);
 }
 
-TEST(ImplantCheckerOverlayTest, DenseCaseInterRowWidth)
+TEST_P(ImplantCheckerOverlayDensityTest, InterRowWidth)
 {
   const CheckRequest target = request(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL);
   const InstanceId neighbor = instId(INTER_WIDTH_NEIGHBOR_ROW, INTER_WIDTH_COL);
@@ -1013,7 +1125,8 @@ TEST(ImplantCheckerOverlayTest, DenseCaseInterRowWidth)
                     UvDist(0),
                     UvDist(0),
                     LibCellID(),
-                    libCellId(F1_FILL_MASTER)}}});
+                    libCellId(F1_FILL_MASTER)}}},
+              GetParam());
 
   ASSERT_EQ(results.size(), 3u);
   EXPECT_TRUE(results[0].isLegal);
@@ -1039,7 +1152,7 @@ TEST(ImplantCheckerOverlayTest, DenseCaseInterRowWidth)
   expectOldUnrelatedFiltered(results[0]);
 }
 
-TEST(ImplantCheckerOverlayTest, DenseCaseIntraRowSpacing)
+TEST_P(ImplantCheckerOverlayDensityTest, IntraRowSpacing)
 {
   const CheckRequest target = request(INTRA_SPACING_ROW, INTRA_SPACING_COL);
   const InstanceId neighbor = instId(INTRA_SPACING_ROW, INTRA_SPACING_COL + 3);
@@ -1068,7 +1181,8 @@ TEST(ImplantCheckerOverlayTest, DenseCaseIntraRowSpacing)
                                  UvDist(0),
                                  UvDist(0),
                                  LibCellID(),
-                                 libCellId(F1_FILL_MASTER)}}});
+                                 libCellId(F1_FILL_MASTER)}}},
+              GetParam());
 
   ASSERT_EQ(results.size(), 3u);
   EXPECT_TRUE(results[0].isLegal);
@@ -1129,7 +1243,7 @@ TEST(ImplantCheckerOverlayTest,
                                    INTRA_SPACING_COL + 3)}));
 }
 
-TEST(ImplantCheckerOverlayTest, DenseCaseInterRowSpacing)
+TEST_P(ImplantCheckerOverlayDensityTest, InterRowSpacing)
 {
   const CheckRequest target
       = request(INTER_SPACING_TARGET_ROW, INTER_SPACING_COL);
@@ -1160,7 +1274,8 @@ TEST(ImplantCheckerOverlayTest, DenseCaseInterRowSpacing)
                                  UvDist(0),
                                  UvDist(0),
                                  LibCellID(),
-                                 libCellId(F1_FILL_MASTER)}}});
+                                 libCellId(F1_FILL_MASTER)}}},
+              GetParam());
 
   ASSERT_EQ(results.size(), 3u);
   EXPECT_TRUE(results[0].isLegal);
@@ -1186,43 +1301,55 @@ TEST(ImplantCheckerOverlayTest, DenseCaseInterRowSpacing)
   expectOldUnrelatedFiltered(results[0]);
 }
 
-TEST(FillerRepairCheckerE2ETest, RepairsIntraRowWidth)
+TEST_P(FillerRepairCheckerDensityE2ETest, RepairsIntraRowWidth)
 {
   const RowId rowId = INTRA_WIDTH_ROW;
   const ColId colId = INTRA_WIDTH_COL;
   ASSERT_EQ(instId(rowId, colId), instId(INTRA_WIDTH_ROW, INTRA_WIDTH_COL));
-  expectPlannerRepairsWithFinalChecker(rowId, colId);
+  expectPlannerRepairsWithFinalChecker(rowId, colId, GetParam());
   SUCCEED();
 }
 
-TEST(FillerRepairCheckerE2ETest, RepairsInterRowWidth)
+TEST_P(FillerRepairCheckerDensityE2ETest, RepairsInterRowWidth)
 {
   const RowId rowId = INTER_WIDTH_TARGET_ROW;
   const ColId colId = INTER_WIDTH_COL;
   ASSERT_EQ(instId(rowId, colId),
             instId(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL));
-  expectPlannerRepairsWithFinalChecker(rowId, colId);
+  expectPlannerRepairsWithFinalChecker(rowId, colId, GetParam());
   SUCCEED();
 }
 
-TEST(FillerRepairCheckerE2ETest, RepairsIntraRowSpacing)
+TEST_P(FillerRepairCheckerDensityE2ETest, RepairsIntraRowSpacing)
 {
   const RowId rowId = INTRA_SPACING_ROW;
   const ColId colId = INTRA_SPACING_COL;
   ASSERT_EQ(instId(rowId, colId), instId(INTRA_SPACING_ROW, INTRA_SPACING_COL));
-  expectPlannerRepairsWithFinalChecker(rowId, colId);
+  expectPlannerRepairsWithFinalChecker(rowId, colId, GetParam());
   SUCCEED();
 }
 
-TEST(FillerRepairCheckerE2ETest, RepairsInterRowSpacing)
+TEST_P(FillerRepairCheckerDensityE2ETest, RepairsInterRowSpacing)
 {
   const RowId rowId = INTER_SPACING_TARGET_ROW;
   const ColId colId = INTER_SPACING_COL;
   ASSERT_EQ(instId(rowId, colId),
             instId(INTER_SPACING_TARGET_ROW, INTER_SPACING_COL));
-  expectPlannerRepairsWithFinalChecker(rowId, colId);
+  expectPlannerRepairsWithFinalChecker(rowId, colId, GetParam());
   SUCCEED();
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    FillerStdRatios,
+    ImplantCheckerOverlayDensityTest,
+    ::testing::Values(FILLER_50_STD_50, FILLER_20_STD_80, FILLER_10_STD_90),
+    densityCaseName);
+
+INSTANTIATE_TEST_SUITE_P(
+    FillerStdRatios,
+    FillerRepairCheckerDensityE2ETest,
+    ::testing::Values(FILLER_50_STD_50, FILLER_20_STD_80, FILLER_10_STD_90),
+    densityCaseName);
 
 TEST(FillerRepairCheckerE2ETest, CleanSnapshotReturnsEmptyRepair)
 {

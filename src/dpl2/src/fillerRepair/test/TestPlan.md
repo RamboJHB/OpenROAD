@@ -1,6 +1,6 @@
 # Test Plan — portable fillerRepair tests
 
-Updated: 2026-07-21.
+Updated: 2026-07-22.
 
 ## Migration gate
 
@@ -10,11 +10,11 @@ Copy `fillerRepair/` next to the destination's existing `infrastructure/` and
 real UDM include/link configuration. No DEF/LEF fixture or provider source is
 needed.
 
-The portable package contains 116 GoogleTests: 82 database-free planner unit
-tests and 34 final-checker/precheck E2E tests. The planner matrix covers Swap,
+The portable package contains 135 GoogleTests: 82 database-free planner unit
+tests and 53 final-checker/precheck E2E tests. The planner matrix covers Swap,
 candidate filtering, synthetic master metadata, window construction, ranking,
 subset enumeration, OracleGate protocol/error handling, budgets, determinism,
-adaptive expansion and end-to-end planner decisions. The 34 E2E tests cover:
+adaptive expansion and end-to-end planner decisions. The 53 E2E tests cover:
 
 1. final-checker intra-row minimum-width overlay acceptance/rejection;
 2. final-checker inter-row minimum-width overlay acceptance/rejection;
@@ -39,7 +39,10 @@ adaptive expansion and end-to-end planner decisions. The 34 E2E tests cover:
     leading/middle/trailing gaps, coalesced overlaps, excluded legal holes,
     clipping, multi-row order, empty spans, empty placement, unordered input,
     triple coverage, touching legal spans and mixed deterministic findings;
-14. no placement mutation by checker overlay queries or planner repair.
+14. no placement mutation by checker overlay queries or planner repair;
+15. exact whole-design filler:standard-cell ratios of 50:50, 20:80 and 10:90;
+    all four direct checker overlay classes and all four planner-to-checker
+    repair classes run independently at every ratio.
 
 The checker fixtures use the accessor-based `Layer`/`Rule` model. The local
 checker/engine matrix additionally exercises engine metadata extraction through
@@ -53,7 +56,9 @@ reaching the cap ends a no-solution search with the TRUNCATED verdict (never
 
 Each dense fixture has eight rows and 200 sites per row. Each direct overlay
 test evaluates at least three candidates: clean repair, unresolved violation,
-and repair that creates a new violation.
+and repair that creates a new violation. Scenario-critical target, neighbor
+and editable-filler identities are locked; all other sites are redistributed
+uniformly while preserving implant geometry, and the final ratio is asserted.
 
 ## Required commands
 
