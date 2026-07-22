@@ -568,7 +568,12 @@ class PortablePlannerDataSource final : public fr::PlannerDataSource
   {
     const fr::PlacedInstance* placed = instance(instanceId);
     if (placed == nullptr) {
-      return {};
+      return FillerCellRecord{OpType::Replace,
+                              LeafCellID(0, 0),
+                              UvDist(static_cast<int64_t>(0)),
+                              UvDist(static_cast<int64_t>(0)),
+                              LibCellID(0, 0),
+                              LibCellID(0, 0)};
     }
     return FillerCellRecord{
         OpType::Replace,

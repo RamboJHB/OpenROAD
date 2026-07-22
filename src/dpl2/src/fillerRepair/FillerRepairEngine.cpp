@@ -770,8 +770,12 @@ FillerCellRecord FillerRepairEngine::Impl::fillerCellRecord(
     InstanceId instanceId,
     MasterId newMasterId) const
 {
-  FillerCellRecord record{};
-  record.op_ = dpl2::OpType::Replace;
+  FillerCellRecord record{dpl2::OpType::Replace,
+                          eUNL::LeafCellID(0, 0),
+                          eUTL::UvDist(static_cast<int64_t>(0)),
+                          eUTL::UvDist(static_cast<int64_t>(0)),
+                          eLIB::LibCellID(0, 0),
+                          eLIB::LibCellID(0, 0)};
   const bool haveRef = instanceId >= 0
                        && static_cast<size_t>(instanceId) < udm_refs_.size()
                        && udm_refs_[instanceId].has_value();
