@@ -53,16 +53,16 @@ planner-to-checker case 的代表时间如下：
 | intra-row spacing | 0.65 s | 0.67 s | 0.65 s | 0.67 s | 0.66 s |
 | inter-row spacing | 1.09 s | 0.99 s | 0.99 s | 0.55 s | 0.55 s |
 
-71 个 portable checker/precheck E2E 全部通过；包含 planner(83)、local
+71 个 portable checker/precheck E2E 全部通过；包含 planner(82)、local
 checker/engine regression(97)与 portable checker density(71)的完整 normal
-CTest 为 **251/251**。同一 revision 的 ASan CTest 为 **251/251**，
-`-Wall -Wextra -Werror` 编译干净。
+CTest 为 **250/250**。上一轮 247-case 基线的 ASan 与
+`-Wall -Wextra -Werror` 干净；新增 multi-row regression 后尚未重跑这两项。
 
 **关于计时的诚实说明**：这些 fixture 的行很短（每个窗口约 40–60 个 site），
 单项时间由 checker DRC 路径与 per-test 进程启动主导，**不是** window 构造。因此
 window/ranker 扫描收窄（§5）在这些数上看不出明显加速——它是一个 O(行长) →
 O(log n + 窗口内 filler) 的**渐进复杂度**改进，收益出现在每行上千 instance 的真实
-100% occupancy 设计上，而不是 60-site fixture 上；本轮用 251/251 保持全绿来证明
+100% occupancy 设计上，而不是 60-site fixture 上；本轮用 250/250 保持全绿来证明
 “选出的 filler 完全一致”（行为不变）。这里没有明显的低 filler 比例性能退化，但
 fixture 有意保留了每类 DRC 的最小 editable/bridge support，因此不能外推到局部
 完全没有 support 的真实 case。
@@ -210,7 +210,7 @@ O(log n + 窗口内 filler)：
   邻居，收窄为对 inst.span 的二分，取代对 anchor 行与 ±1 行的整行扫描。
 
 这是**行为不变**的复杂度改进：选出的 filler 与投票结果完全一致，因此不改搜索
-语义、不动 engine 调用方式与任何接口数据结构，靠 251/251 normal CTest
+语义、不动 engine 调用方式与任何接口数据结构，靠 250/250 normal CTest
 验证等价。**故意保留** contiguous adaptive expansion；它能沿连续 filler run
 渐进扩展，但不能跨越 std cell 或空隙触达非连续 filler。该功能边界仍需 §4.1 的
 sound influence closure，或未来 replace/move/rewrite tier，才能根本解决。

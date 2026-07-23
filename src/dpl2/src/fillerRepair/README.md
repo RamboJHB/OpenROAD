@@ -50,13 +50,6 @@ oracle if DePlace registered that master after init. The direct UDM-handle
 overload retains lazy registration for focused engine tests.
 This changes only the in-memory master registry, not UDM placement.
 
-Filler classification normally follows the physical cell type. When a
-destination exposes stale type metadata, fillerRepair also recognizes an
-available cell/master name beginning with ASCII-case-insensitive `Fill`.
-This exact-prefix fallback does not admit similarly named substrings, does not
-expand the fillerSetting candidate universe, and does not change shared
-infrastructure or checker code.
-
 Implant metadata is read from the checker's accessor-based `Layer` model.
 The engine matches each physical implant shape using
 `Layer::getTechLayerId()`, then reads `Layer::Vt` and `Layer::Polar`; it does
@@ -69,7 +62,6 @@ the checker-provided layer name embedded in the diagnostic message.
 | Path | Purpose |
 |---|---|
 | `FillerRepairEngine.h/.cpp` | checker-owned implementation; its `Impl` owns the oracle, planner snapshot, precheck, update and repair |
-| `FillerClassification.h` | fillerRepair-local `Fill...` name fallback for stale destination cell-type metadata |
 | `PlacementPrecheck.h/.cpp` | UDM-free gap/overlap coverage sweep used by the public precheck API and portable boundary tests |
 | `FillerRepairPlanner.h/.cpp` | internal deterministic search pipeline and debug transcript |
 | `OracleGate.h/.cpp` | owns `PlannerOracle` plus `OracleRequest/Result/Status`, batching, cache and baseline-delta gate |
@@ -77,7 +69,7 @@ the checker-provided layer name embedded in the diagnostic message.
 | `Types.h` | deliberately standalone leaf: planner IDs, geometry/model types and exact final-checker wire helpers |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
 | `sources.cmake` | source-of-truth lists for planner, runtime and portable tests |
-| `test/FillerRepairPlannerTest.cpp` and same-level doubles | 83 portable database-free planner unit tests |
+| `test/FillerRepairPlannerTest.cpp` and same-level doubles | 82 portable database-free planner unit tests |
 | `test/FillerRepairCheckerE2ETest.cpp` | 71 portable real-checker, planner-to-checker and internal precheck cases |
 | `test/CMakeLists.txt` | standalone planner and E2E targets plus complete runtime-engine compile/link gate |
 
@@ -114,7 +106,7 @@ master-registration seam.
 
 ## Portable verification
 
-The 83 database-free planner tests and their same-level synthetic doubles
+The 82 database-free planner tests and their same-level synthetic doubles
 exercise every pure search stage without constructing UDM objects.
 
 The 71 E2E tests construct checker input directly with the final checker's
