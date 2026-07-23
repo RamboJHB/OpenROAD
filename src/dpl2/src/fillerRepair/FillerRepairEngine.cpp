@@ -13,6 +13,7 @@
 #include <utility>
 #include <vector>
 
+#include "FillerClassification.h"
 #include "FillerRepairPlanner.h"
 #include "Log.h"
 #include "OracleGate.h"
@@ -180,11 +181,33 @@ bool supportedOrientation(eUTL::PhysOrientation orientation)
          || orientation == eUTL::PhysOrientationE::MY;
 }
 
-// MUST match the checker's buildMasters predicate
-// (isCoreFiller() || isPadFiller()).
-bool isFillerMaster(const eLIB::PhysLibCell& cell)
+bool isFillerMasterType(const eLIB::PhysLibCell& cell)
 {
   return cell.getType().isCoreFiller() || cell.getType().isPadFiller();
+}
+
+bool hasFillerMasterName(const eLIB::PhysLibCell& cell)
+{
+  return internal::objectHasFillerNamePrefix(cell)
+         || internal::objectHasFillerNamePrefix(cell.getLibCellId());
+}
+
+// Some destination databases report a normal CORE type for filler masters.
+// Keep the conventional case-insensitive Fill... name fallback inside
+// fillerRepair; shared infrastructure and checker classification stay
+// untouched.
+bool isFillerMaster(const eLIB::PhysLibCell& cell)
+{
+  return isFillerMasterType(cell) || hasFillerMasterName(cell);
+}
+
+bool hasFillerPlacementName(const eLIB::PhysLibCell& master,
+                            const eUNL::LeafCellID& cellId,
+                            const eUNL::PhysCell& cell)
+{
+  return hasFillerMasterName(master)
+         || internal::objectHasFillerNamePrefix(cellId)
+         || internal::objectHasFillerNamePrefix(cell);
 }
 
 bool isStandardCellMaster(const eLIB::PhysLibCell& cell)
@@ -430,47 +453,6 @@ void FillerRepairEngine::Impl::buildPlannerData()
     master_lib_ids_[id] = cell->getLibCellId();
   }
 
-  // --- candidate universe: fillerSetting only, resolved to Network master
-  // ids. Entries the Network does not know cannot be validated by the
-  // checker either (it builds masters from the Network) -> Warning + skip.
-  {
-    for (const eLIB::PhysLibCell* cell : fillerMasters) {
-      if (cell == nullptr) {
-        continue;
-      }
-      const int id = network->getMasterId(cell->getLibCellId());
-      if (id < 0) {
-        // Fatal: the checker validates candidates against Network masters, so
-        // a configured master the Network never imported means the snapshot
-        // was built against different inputs -- refuse instead of silently
-        // shrinking the candidate universe.
-        addProblem(Severity::Fatal, "ConfiguredMasterNotInNetwork",
-                   cat("configured filler master libCell ",
-                       static_cast<int>(cell->getLibCellId().getIndexValue()),
-                       " is not in the Network"));
-        continue;
-      }
-      const MasterInfo* info = masterInfo(static_cast<MasterId>(id));
-      if (info == nullptr || !info->isFiller) {
-        addProblem(Severity::Fatal, "ConfiguredMasterNotFiller",
-                   cat("configured master ", id, " is not a filler master"));
-        continue;
-      }
-      filler_master_ids_.push_back(static_cast<MasterId>(id));
-    }
-    std::sort(filler_master_ids_.begin(), filler_master_ids_.end());
-    filler_master_ids_.erase(
-        std::unique(filler_master_ids_.begin(), filler_master_ids_.end()),
-        filler_master_ids_.end());
-  }
-  if (filler_master_ids_.empty()) {
-    // Empty allow list (or nothing usable in it) means repair could never
-    // offer a swap -- fail init instead of failing every later repair.
-    addProblem(Severity::Fatal, "NoConfiguredFillerMaster",
-               "fillerSetting::getFillerPhysCells() yields no usable filler "
-               "master");
-  }
-
   // --- placed instances: Network nodes with the checker's exact filters and
   // frame (state from the PhysCell, x relative to the row origin).
   instances_.resize(network->getNodes().size());
@@ -543,14 +525,29 @@ void FillerRepairEngine::Impl::buildPlannerData()
     }
 
     const MasterId masterId = static_cast<MasterId>(node->getMaster()->getId());
+    const bool fillerByName
+        = hasFillerPlacementName(*cell, lcId, physCell);
+    if (fillerByName && !isFillerMasterType(*cell)) {
+      log_.msg("engine",
+               cat("Fill-name fallback classified node ",
+                   node->getId(),
+                   " master ",
+                   masterId,
+                   " as filler"));
+    }
+    if (fillerByName && masterId >= 0
+        && static_cast<size_t>(masterId) < masters_.size()
+        && masters_[masterId].has_value()) {
+      masters_[masterId]->isFiller = true;
+    }
     const MasterInfo* info = masterInfo(masterId);
     if (info == nullptr) {
       addProblem(Severity::Fatal, "UnknownMaster",
                  cat("node ", node->getId(), " references master ", masterId));
       continue;
     }
-    const bool isFiller = isFillerMaster(*cell);
-    if (node->isFiller() != isFiller) {
+    const bool isFiller = isFillerMaster(*cell) || fillerByName;
+    if (node->isFiller() != isFiller && !fillerByName) {
       addProblem(Severity::Fatal, "FillerClassificationMismatch",
                  cat("node ", node->getId(),
                      " filler flag disagrees with master"));
@@ -594,6 +591,47 @@ void FillerRepairEngine::Impl::buildPlannerData()
               [](const PlacedInstance& a, const PlacedInstance& b) {
                 return a.x != b.x ? a.x < b.x : a.id < b.id;
               });
+  }
+
+  // --- candidate universe: fillerSetting only, resolved to Network master
+  // ids. Validate it after placed instances so a Fill... instance-name
+  // fallback can classify its otherwise mistyped master first.
+  {
+    for (const eLIB::PhysLibCell* cell : fillerMasters) {
+      if (cell == nullptr) {
+        continue;
+      }
+      const int id = network->getMasterId(cell->getLibCellId());
+      if (id < 0) {
+        // Fatal: the checker validates candidates against Network masters, so
+        // a configured master the Network never imported means the snapshot
+        // was built against different inputs -- refuse instead of silently
+        // shrinking the candidate universe.
+        addProblem(Severity::Fatal, "ConfiguredMasterNotInNetwork",
+                   cat("configured filler master libCell ",
+                       static_cast<int>(cell->getLibCellId().getIndexValue()),
+                       " is not in the Network"));
+        continue;
+      }
+      const MasterInfo* info = masterInfo(static_cast<MasterId>(id));
+      if (info == nullptr || !info->isFiller) {
+        addProblem(Severity::Fatal, "ConfiguredMasterNotFiller",
+                   cat("configured master ", id, " is not a filler master"));
+        continue;
+      }
+      filler_master_ids_.push_back(static_cast<MasterId>(id));
+    }
+    std::sort(filler_master_ids_.begin(), filler_master_ids_.end());
+    filler_master_ids_.erase(
+        std::unique(filler_master_ids_.begin(), filler_master_ids_.end()),
+        filler_master_ids_.end());
+  }
+  if (filler_master_ids_.empty()) {
+    // Empty allow list (or nothing usable in it) means repair could never
+    // offer a swap -- fail init instead of failing every later repair.
+    addProblem(Severity::Fatal, "NoConfiguredFillerMaster",
+               "fillerSetting::getFillerPhysCells() yields no usable filler "
+               "master");
   }
 
   // --- default snapshot halo: 2x the max implant WIDTH/SPACING from the

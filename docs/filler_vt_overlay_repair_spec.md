@@ -282,7 +282,7 @@ fail-closed,必须在 infrastructure 同步后成功 update 才能继续查询�
   checker/snapshot 重建。infrastructure 先同步现有 Node 的物理状态,
   `updateFillerRepair()` 只重建两套 checker snapshot;repair 不负责更新 Node,
   也不负责发现新增/删除的 UDM instance。
-- 82 个可移植 planner unit tests 与 database-free doubles 位于
+- 83 个可移植 planner unit tests 与 database-free doubles 位于
   `test/` 根目录并与 E2E test 同级;不 include local fake UDM tree/provider。
 - 71 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 8-row dense input,不读 DEF/LEF,不需要
@@ -538,7 +538,10 @@ empty candidates 保留为防御性路径,不是常态。
 
 runtime engine 的候选 universe 必须由
 `fillerSetting::getFillerPhysCells()` 取得,再解析为 `Network::Master::getId()`;
-不得从 placed-instance 枚举猜测,也不得解析 master 名。configured master 即使
+不得从 placed-instance 枚举猜测 candidate。正常分类沿用 physical cell type；
+若目的地 type metadata 过期，fillerRepair 内部把可取得的 cell/master 名称中
+以 ASCII 大小写不敏感 `Fill` 开头的对象也视为 filler。该精确前缀兜底不扩展
+candidate universe，也不修改 infrastructure/checker。configured master 即使
 尚未实例化也必须在 checker 构造前注册进 Network。
 
 **band polarity layout 约束(2026-07-15 落地)**:候选还必须与当前 master 的
@@ -964,7 +967,7 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 
 ## 10. 测试集
 
-当前 82 个 planner cases 是独立 GoogleTests,位于交付目录中的
+当前 83 个 planner cases 是独立 GoogleTests,位于交付目录中的
 `fillerRepair/test/`,并与 71 个 portable E2E cases 同级;E2E cases 集中在
 `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`:26 个 final-checker fixture/overlay
 case + 33 个 `FillerRepairPlanner`→final checker repair/failure case + 12 个
@@ -1065,15 +1068,15 @@ gate 语义:
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译清单唯一定义在
   `src/dpl2/src/fillerRepair/sources.cmake`。
-- 82 个 planner unit tests、71 个 portable checker/planner/precheck cases 与 97 个
+- 83 个 planner unit tests、71 个 portable checker/planner/precheck cases 与 97 个
   fake-UDM checker/engine tests 全为 GoogleTest;
-  82 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
+  83 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
   和 helper-built portable E2E 一起迁移;fake UDM checker/engine suite 留在 local;
   precheck/repair 均 non-mutating;
   runtime integration 使用 checker `check()` 预留点与 fillerRepair;
   Network Node 同步由 infrastructure 独立负责,checker DRC 算法未修改。
-  2026-07-23 normal CTest 为 250/250；新增 multi-row regression 后 ASan 与
-  `-Wall -Wextra -Werror` 尚待重跑。
+  2026-07-23 normal 与 ASan CTest 均为 251/251；
+  `-Wall -Wextra -Werror` 编译通过。
   详见 `src/dpl2/HandOff.md` 与 `src/dpl2/src/fillerRepair/test/TestPlan.md`。
 
 ---

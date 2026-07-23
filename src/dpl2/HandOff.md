@@ -6,8 +6,8 @@ Updated: 2026-07-23. Branch: `claude/wizardly-carson-secahu`.
 
 The destination already supplies complete infrastructure and checker sources.
 Runtime integration uses `src/dpl2/src/fillerRepair/` and the small wiring now
-placed in `ImplantLayerChecker::check()`. Its `test/` subtree contains 153
-portable GoogleTests: 82 database-free planner cases and 71 final-checker/
+placed in `ImplantLayerChecker::check()`. Its `test/` subtree contains 154
+portable GoogleTests: 83 database-free planner cases and 71 final-checker/
 precheck E2E cases. No DEF/LEF reader, fake UDM tree or destination fixture
 provider is needed. The repository-local fake-UDM checker/engine harness remains
 outside this payload at `src/dpl2/test/local/`.
@@ -18,7 +18,7 @@ repair neighborhood, not only across the whole synthetic design. All four
 width/spacing classes run at 50:50, 30:70, 20:80, 10:90 and 5:95. See
 `docs/filler_repair_dense_placement_analysis.md` for the observed limitation,
 fast no-solution proposal and future filler-span rewrite boundary. That note is
-future design guidance; production remains V2.1 swap-only.
+future design guidance; the current implementation remains V2.1 swap-only.
 
 The caller boundary is the existing checker. It owns the engine, so opto does
 not construct a second repair object:
@@ -71,6 +71,13 @@ use: until it does, precheck and repair fail closed
 
 fillerRepair provides the gate and checker callback; it does not commit.
 Precheck and repair are both non-mutating.
+
+Filler classification normally follows the physical cell type. Some destination
+databases preserve filler instance/master names but report a stale normal-cell
+type; within fillerRepair only, any available name beginning with
+ASCII-case-insensitive `Fill` is also treated as filler. Candidate discovery
+still comes exclusively from `fillerSetting::getFillerPhysCells()`. This
+fallback does not modify UDM, Network Nodes, infrastructure or checker code.
 
 ## Precheck scope
 
@@ -206,7 +213,7 @@ supplied infrastructure/checker sources.
 ## Build and verification
 
 The CMake below `fillerRepair/test` is a portable test package, not the
-destination's runtime owner. It builds an 82-case planner executable plus a
+destination's runtime owner. It builds an 83-case planner executable plus a
 71-case E2E executable that compiles the complete checker/engine source list.
 The separate local harness retains the 97 fake-UDM checker/engine cases.
 
@@ -242,11 +249,10 @@ lives under `src/dpl2/test/local/`. Runtime cases cover
 the internal repair precheck gate, hard macro and hard/soft blockage semantics,
 side-effect-free invalid replacement requests and snapshot update.
 
-2026-07-23 normal verification result: portable package 153/153 (planner 82/82
+2026-07-23 normal verification result: portable package 154/154 (planner 83/83
 plus final-checker/precheck E2E 71/71), checker/engine fake-UDM E2E 97/97, and
-full normal CTest 250/250. The last full ASan and `-Wall -Wextra -Werror`
-verification predates the density expansion and must be rerun before updating
-those claims. On Apple with an
+full normal CTest 251/251. Full ASan and `-Wall -Wextra -Werror` verification
+also pass at the same revision. On Apple with an
 unsanitized Homebrew GoogleTest, ASan discovery and CTest use
 `ASAN_OPTIONS=detect_container_overflow=0` to avoid incompatible libc++ container annotations. The
 engine cases include three layouts proving that unused-layer persistent

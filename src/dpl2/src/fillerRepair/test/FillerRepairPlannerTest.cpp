@@ -17,6 +17,7 @@
 
 #include <gtest/gtest.h>
 
+#include "fillerRepair/FillerClassification.h"
 #include "fillerRepair/FillerRepairPlanner.h"
 #include "fillerRepair/OracleGate.h"
 #include "fillerRepair/Ranker.h"
@@ -65,6 +66,33 @@ bool verbose()
 {
   const char* env = std::getenv("FR_VERBOSE");
   return env != nullptr && std::strcmp(env, "0") != 0;
+}
+
+void testFillerNameClassification()
+{
+  using dpl2::fillerRepair::internal::hasFillerNamePrefix;
+  using dpl2::fillerRepair::internal::objectHasFillerNamePrefix;
+
+  EXPECT_TRUE(hasFillerNamePrefix("Fill1"));
+  EXPECT_TRUE(hasFillerNamePrefix("fill_cell"));
+  EXPECT_TRUE(hasFillerNamePrefix("FILLER_X2"));
+  EXPECT_TRUE(hasFillerNamePrefix("fIlL_mixed_case"));
+  EXPECT_FALSE(hasFillerNamePrefix("Fil"));
+  EXPECT_FALSE(hasFillerNamePrefix("XFILL"));
+  EXPECT_FALSE(hasFillerNamePrefix("cell_fill"));
+
+  struct Named
+  {
+    std::string name;
+    const std::string& getName() const { return name; }
+  };
+  struct Unnamed
+  {
+  };
+
+  EXPECT_TRUE(objectHasFillerNamePrefix(Named{"FillByHandle"}));
+  EXPECT_FALSE(objectHasFillerNamePrefix(Named{"StdCell"}));
+  EXPECT_FALSE(objectHasFillerNamePrefix(Unnamed{}));
 }
 
 // --- Fixtures ---------------------------------------------------------------
@@ -3644,6 +3672,7 @@ void testPlannerUserGridMwMs1()
 void registerPlannerTests()
 {
   const std::vector<Test> tests = {
+      {"filler_name_classification", testFillerNameClassification},
       {"swap_construction", testSwapConstruction},
       {"canonical_key_order_independent", testCanonicalKeyOrderIndependent},
       {"wire_conversion", testWireConversion},

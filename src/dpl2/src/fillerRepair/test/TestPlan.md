@@ -1,6 +1,6 @@
 # Test Plan — portable fillerRepair tests
 
-Updated: 2026-07-22.
+Updated: 2026-07-23.
 
 ## Migration gate
 
@@ -10,11 +10,12 @@ Copy `fillerRepair/` next to the destination's existing `infrastructure/` and
 real UDM include/link configuration. No DEF/LEF fixture or provider source is
 needed.
 
-The portable package contains 153 GoogleTests: 82 database-free planner unit
+The portable package contains 154 GoogleTests: 83 database-free planner unit
 tests and 71 final-checker/precheck E2E tests. The planner matrix covers Swap,
 candidate filtering, synthetic master metadata, window construction, ranking,
 subset enumeration, OracleGate protocol/error handling, budgets, determinism,
-adaptive expansion and end-to-end planner decisions. The 71 E2E tests cover:
+adaptive expansion, exact case-insensitive `Fill` prefix classification and
+end-to-end planner decisions. The 71 E2E tests cover:
 
 1. final-checker intra-row minimum-width overlay acceptance/rejection;
 2. final-checker inter-row minimum-width overlay acceptance/rejection;
@@ -92,7 +93,7 @@ source fallback.
 
 ## Separate local regression
 
-The 82 planner tests and their database-free doubles are same-level sources under
+The 83 planner tests and their database-free doubles are same-level sources under
 `fillerRepair/test/` and move with the feature. The planner suite directly validates the internal
 `PlannerOracle` protocol, including missing, duplicate, unknown and extra
 `OracleResult` records; every batch-cardinality mismatch fails closed.

@@ -1,7 +1,7 @@
 # Portable fillerRepair tests
 
-This directory moves with `fillerRepair/` and contains 153 portable tests:
-82 database-free planner unit tests plus 71 final-checker/precheck E2E tests.
+This directory moves with `fillerRepair/` and contains 154 portable tests:
+83 database-free planner unit tests plus 71 final-checker/precheck E2E tests.
 No source below this directory includes the repository's fake UDM tree or
 depends on its `E2ETestProvider`.
 
@@ -49,7 +49,7 @@ cmake --build build-filler-repair-e2e
 ctest --test-dir build-filler-repair-e2e --output-on-failure
 ```
 
-The CMake project builds the 82-case planner executable and the 71-case E2E
+The CMake project builds the 83-case planner executable and the 71-case E2E
 executable. The latter always compiles `${DPL2_FILLER_REPAIR_SOURCES}`, including
 the public runtime engine. If the destination already has owning dpl2/checker
 targets, pass them through `DPL2_RUNTIME_LIBRARIES`; otherwise the standalone
