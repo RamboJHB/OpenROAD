@@ -103,9 +103,10 @@ gating. Additional three-layout cases verify that `repair()` repeats
 precheck and returns `PrecheckFailed`, that two-row hard macros supply coverage
 on both their origin and upper rows while
 hard blockages remove coverage requirements and soft blockages do not, that
-invalid target/size/precheck requests do not register replacement masters, and that
-`update()` refreshes an existing Node master mapping/checker snapshot while a
-failed update invalidates the private snapshot and leaves queries fail-closed.
+invalid target/size/precheck requests do not register replacement masters, and
+that `update()` never changes a stale Node mapping, rejects an unsynchronized
+infrastructure revision, accepts it after the test's infrastructure fixture
+synchronizes the Node, and leaves failed private snapshots fail-closed.
 Three additional instances verify that a missing rule on a layer used by Network
 masters makes `init()` fail closed; the existing three persistent-diagnostic
 repair instances prove that missing rules on unused layers remain non-blocking.

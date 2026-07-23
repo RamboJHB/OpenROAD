@@ -1,12 +1,12 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-07-22.
+Updated: 2026-07-23.
 
 `ImplantLayerChecker` is the caller-facing entry. It owns one
 `FillerRepairEngine`, which borrows the initialized Grid/Network already owned
 by DePlace and privately owns its oracle/planner snapshot. Neither layer
-mutates UDM. Infrastructure also provides the `Network::updateNodes()` refresh
-seam used after placement/master commits.
+mutates UDM or Network Nodes. Infrastructure owns UDM-to-Grid/Network
+synchronization after placement/master commits.
 
 ```cpp
 ImplantLayerChecker checker(deplace->getGrid(), deplace->getNetwork());
@@ -18,6 +18,7 @@ bool legal = checker.check(node, x, y, orient);
 if (legal) {
   commitTargetAndFillers(checker.getFillerChanges());
 }
+// Infrastructure synchronizes Grid/Network with committed UDM first.
 checker.updateFillerRepair(deplace->getDesMgr(), fillerSetting);
 ```
 
@@ -33,9 +34,10 @@ request's expanded row range is checked before it enters the checker batch;
 an illegal request is rejected without rejecting legal peers in the same
 batch. A defect in checked rows returns `PrecheckFailed`, no solution for that
 request and no changes. The whole-design `precheckFillerRepair()` remains the
-caller's global gate. After any placement/master commit, callers must run
-`updateFillerRepair()` before another repair; live reads are not a replacement
-for refreshing snapshot row membership.
+caller's global gate. After any placement/master commit, infrastructure must
+synchronize Network with UDM before callers run `updateFillerRepair()` to
+rebuild checker/engine snapshots. Live reads are not a replacement for
+refreshing snapshot row membership.
 
 `check()` forwards its exact `ipl::CheckRequest` to the engine. Repair overlays
 the requested target master and first asks the private oracle with empty filler
@@ -88,10 +90,11 @@ final-checker `ipl::FillerChanges`/`FillerCellRecord` wire. Destination builds c
 `DPL2_FILLER_REPAIR_SOURCES` from `sources.cmake` -- never a
 hand-copied file list. Migration steps live in `src/dpl2/HandOff.md`.
 The engine consumes only borrowed Grid/Network pointers and the idempotent
-`Network::addMaster(PhysLibCell, Grid)` registration API plus
-`Network::updateNodes(PhysDesMgr, Grid)` refresh API. A failed update leaves
-the engine fail-closed until a later successful init/update; there is no
-repair-specific importer.
+`Network::addMaster(PhysLibCell, Grid)` registration API. It never updates
+Network Nodes. `update()` validates the infrastructure revision and replaces
+only private checker/planner/precheck state. A stale or incomplete Network
+makes update fail closed until infrastructure synchronizes/rebuilds it and a
+later update succeeds; there is no repair-specific importer.
 
 `Types.h` is intentionally not merged into Engine, Planner or OracleGate.
 Geometry, diagnostics, violations and planner entry records are used by

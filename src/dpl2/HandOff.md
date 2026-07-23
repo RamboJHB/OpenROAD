@@ -1,13 +1,12 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-07-22. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-23. Branch: `claude/wizardly-carson-secahu`.
 
 ## Result
 
 The destination already supplies complete infrastructure and checker sources.
-Runtime integration uses `src/dpl2/src/fillerRepair/`, the infrastructure
-`Network::updateNodes()` refresh seam, and the small wiring now placed in
-`ImplantLayerChecker::check()`. Its `test/` subtree contains 153
+Runtime integration uses `src/dpl2/src/fillerRepair/` and the small wiring now
+placed in `ImplantLayerChecker::check()`. Its `test/` subtree contains 153
 portable GoogleTests: 82 database-free planner cases and 71 final-checker/
 precheck E2E cases. No DEF/LEF reader, fake UDM tree or destination fixture
 provider is needed. The repository-local fake-UDM checker/engine harness remains
@@ -65,8 +64,10 @@ use: until it does, precheck and repair fail closed
    mutation. The list is valid until the next `check()`; every new check clears
    it first. On false, inspect `getFillerRepairDiagnostics()` and do not commit.
 6. After a position/master commit that keeps the same instance set and Grid
-   topology, call `updateFillerRepair()` before the next query. Rebuild Grid/Network first
-   when rows, blockages or the instance set changed.
+   topology, infrastructure synchronizes affected Network Nodes from UDM;
+   then call `updateFillerRepair()` before the next query. Rebuild Grid/Network
+   when rows, blockages or the instance set changed. Repair never performs the
+   Network update.
 
 fillerRepair provides the gate and checker callback; it does not commit.
 Precheck and repair are both non-mutating.
@@ -153,10 +154,10 @@ Integration files:
    The branch also follows the destination checker's accessor-based
    `Layer`/`Rule` metadata model; there is no `ImplantLayer` compatibility
    struct to copy.
-3. Preserve the branch's `Network::updateNodes(const PhysDesMgr*, const Grid*)`
-   declaration/implementation. It refreshes existing Node state without
-   changing Node/Master IDs. The destination infrastructure remains responsible
-   for initially importing the complete instance universe.
+3. Do not add a repair-specific Network refresh API. The destination
+   infrastructure owns initial import and every later UDM-to-Network Node
+   synchronization. fillerRepair only validates the supplied revision and
+   rebuilds private snapshots.
 
 Runtime wiring (their CMake, 2 lines):
 
@@ -176,8 +177,8 @@ only modifications that may be needed on their side:
 
 The reused-infrastructure boundary requires the APIs already present in this
 branch: `DePlace::getGrid()`, `getNetwork()`, `getDesMgr()` and idempotent
-`Network::addMaster(...)`/`updateNodes(...)`. No RepairInfrastructure,
-leaf traversal or placement importer is copied into runtime.
+`Network::addMaster(...)`. No RepairInfrastructure, batch Node refresh, leaf
+traversal or placement importer is copied into runtime.
 
 Do not hand-copy file names -- both runtime and test CMake include the same
 `sources.cmake`. Do not add `fillerRepair/test/*` to a runtime target.
@@ -253,9 +254,10 @@ checker diagnostics remain non-blocking while a used implant layer with a
 missing rule makes initialization fail closed.
 
 The 97 checker/engine cases genuinely exercise Session, PhysDesMgr, physical
-IDs, filler-master lookup and Network refresh, so the repository-local
-test-only UDM-compatible provider and its one CMake include switch are still
-required. Runtime sources contain no fake include or conditional.
+IDs, filler-master lookup, stale-Network rejection and the infra-first snapshot
+update contract, so the repository-local test-only UDM-compatible provider and
+its one CMake include switch are still required. Runtime sources contain no
+fake include or conditional.
 
 ## Integration risks
 
@@ -263,14 +265,16 @@ required. Runtime sources contain no fake include or conditional.
   Repair checks the initial target influence before master registration and
   prechecks any farther row an adaptive candidate would edit. Illegal requests
   return `PrecheckFailed`; defects outside touched rows remain the global
-  precheck's responsibility. After any placement mutation, call
-  `updateFillerRepair()` before the next repair because local live reads cannot
-  discover an object moved in from another snapshot row.
+  precheck's responsibility. After any placement mutation, infrastructure must
+  first synchronize Network, then call `updateFillerRepair()` before the next
+  repair because local live reads cannot discover an object moved in from
+  another snapshot row.
 - Grid/Network/PhysDesMgr must describe the same revision and outlive the
-  borrowing engine. `update()` refreshes existing Node state and atomically
-  replaces the private snapshot. A failed update invalidates that snapshot and
-  leaves queries fail-closed. New/deleted instances or row/blockage changes
-  require infrastructure rebuild first.
+  borrowing engine. `update()` validates the shared revision and atomically
+  replaces only the private snapshot; it never changes Nodes. A stale Network
+  makes update fail, invalidates that snapshot and leaves queries fail-closed.
+  New/deleted instances or row/blockage changes require infrastructure rebuild
+  first.
 - Network completeness is an infrastructure contract: every placed/fixed
   physical instance, including hard macros, must be a Node. Hard blockages
   belong to Grid, not Network.
@@ -282,9 +286,9 @@ required. Runtime sources contain no fake include or conditional.
 - The supplied PhysDesMgr must be the UDM Session current design because the
   final checker constructor reads Session; init validates and fails closed on
   mismatch. The UDM design/library objects must outlive the engine.
-- Destination build must consume `sources.cmake`, the checker entry patch and
-  the Network refresh seam listed above; no other repair-specific file is part
-  of the delivery.
+- Destination build must consume `sources.cmake` and the checker entry patch;
+  no repair-specific infrastructure refresh file or API is part of the
+  delivery.
 - Destination verification still depends on its UDM include directories and
   link libraries/targets because Grid/Network headers use UDM types. Test data
   itself has no UDM/DEF/LEF dependency.

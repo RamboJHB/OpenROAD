@@ -319,6 +319,8 @@ class ImplantLayerChecker final : public DRCChecker
   // when implant legality needs a filler overlay repair.
   bool initFillerRepair(PhysDesMgr* desMgr,
                         const fillerSetting& fillerSettings);
+  // Rebuilds checker/repair snapshots after infrastructure has synchronized
+  // Network with UDM. Does not update Network Nodes.
   bool updateFillerRepair(PhysDesMgr* desMgr,
                           const fillerSetting& fillerSettings);
   CheckResult precheckFillerRepair() const;

@@ -150,7 +150,8 @@ Tier 2 应按 span 建模，不引入通用 Move。一个 rewrite 必须满足 r
    更远行，则该 request 在进入 checker batch 前扩展并补查对应行。multi-row object
    按垂直重叠计入每一行。未触达区域的 gap/overlap 仍由 public
    `precheckFillerRepair()` 全局 gate 负责；placement/master commit 后必须先
-   `updateFillerRepair()`，live read 不能代替 snapshot row membership refresh；
+   先由 infrastructure 同步 Grid/Network，再调用 `updateFillerRepair()` 重建
+   checker/engine snapshot；live read 不能代替 snapshot row membership refresh；
 2. influence closure 内无 editable filler：swap tier 返回
    `UnrepairableBySwap`；若不存在可重铺 filler span，则返回
    `NeedsPlacementRepair`；

@@ -1785,11 +1785,6 @@ bool FillerRepairEngine::update(eUNL::PhysDesMgr* desMgr,
 {
   auto replacement = std::make_unique<Impl>(grid_, network_);
   replacement->setDebugLogging(debug_logging_);
-  if (network_ == nullptr || !network_->updateNodes(desMgr, grid_)) {
-    impl_ = std::move(replacement);
-    return false;
-  }
-
   const bool initialized = replacement->init(desMgr, fillerSettings);
   impl_ = std::move(replacement);
   return initialized;

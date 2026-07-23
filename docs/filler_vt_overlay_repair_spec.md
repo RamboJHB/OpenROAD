@@ -1,7 +1,7 @@
 # 功能规格 — Filler VT Overlay 修复 V2.1(checker-guided,本阶段 swap-only)
 
 状态:**V2.1 定稿**。分支:`claude/wizardly-carson-secahu`。基线:`2023-base`。
-最后更新 2026-07-22。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
+最后更新 2026-07-23。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
 checker 源码。
 
 V2.1 相对 V2 是一次 reviewer 驱动的修订,聚焦三处高价值改动:**OracleGate 正确性、
@@ -248,18 +248,19 @@ overload 的 target master 首次注册只扩展既有 Network 的 in-memory mas
 不修改 DB。repair 拒绝同实例重入;
 checker 调用在 runtime engine `Impl` 内串行化。一个 runtime engine 私有拥有一套
 checker/planner snapshot、借用一套 Grid/Network,对应一个 design revision。位置/
-master commit 且实例集合、rows、blockages 不变时调用 checker 的
-`updateFillerRepair()` 刷新 existing Nodes
-并原子替换 private snapshot;实例增删或 Grid topology 变化时先由 infrastructure
-重建 Grid/Network。`update()` 返回 false 后 runtime engine 保持 fail-closed,必须成功 init
-或 update 后才能继续查询。
+master commit 且实例集合、rows、blockages 不变时,先由 infrastructure 将 UDM
+同步到 Network Nodes,再调用 checker 的 `updateFillerRepair()` 原子替换 private
+snapshot。repair engine 不更新 Node。实例增删或 Grid topology 变化时先由
+infrastructure 重建 Grid/Network。`update()` 返回 false 后 runtime engine 保持
+fail-closed,必须在 infrastructure 同步后成功 update 才能继续查询。
 
 ### 3.4 Infrastructure alignment (2026-07-18)
 
-- 移植目的地已经提供 final checker;integration 包含
-  `src/dpl2/src/fillerRepair/`、checker `check()` 预留点接线与 infrastructure
-  `Network::updateNodes()`。checker-owned engine 借用 supplied Grid/Network、私有
-  持有 checker/planner snapshot;本项目不修改其 DRC 算法,也不要求其提供本仓库的 CMake。
+- 移植目的地已经提供 final checker;integration 只包含
+  `src/dpl2/src/fillerRepair/` 与 checker `check()` 预留点接线。
+  checker-owned engine 借用 supplied Grid/Network、私有持有 checker/planner
+  snapshot;UDM 到 Network 的同步由目的地 infrastructure 负责。本项目不修改其
+  DRC 算法,也不要求其提供本仓库的 CMake。
 - `ImplantLayerChecker(Grid*, Network*)` 是唯一 caller repair 边界;通常直接传
   `DePlace::getGrid()` / `getNetwork()`，再调用 `initFillerRepair()`。
 - 单次 `initFillerRepair(PhysDesMgr*, fillerSetting)` 绑定现有 infrastructure,注册 configured
@@ -278,8 +279,9 @@ master commit 且实例集合、rows、blockages 不变时调用 checker 的
   `LeafCellID` / `LibCellID` 是 runtime `FillerCellRecord` handle。
 - placed masters 来自既有 Network;configured filler masters 在 init 时注册;
   checker request master 若在 init 后才加入 Network,repair 在验证后触发
-  checker/snapshot 重建。`updateFillerRepair()` 刷新现有 Node 的物理状态并重建两套 checker snapshot,
-  但不负责发现新增/删除的 UDM instance。
+  checker/snapshot 重建。infrastructure 先同步现有 Node 的物理状态,
+  `updateFillerRepair()` 只重建两套 checker snapshot;repair 不负责更新 Node,
+  也不负责发现新增/删除的 UDM instance。
 - 82 个可移植 planner unit tests 与 database-free doubles 位于
   `test/` 根目录并与 E2E test 同级;不 include local fake UDM tree/provider。
 - 71 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
@@ -575,7 +577,8 @@ PhysDesMgr/fillerSetting/active UDM design 一致,注册 configured filler maste
 也不构造 repair-specific infrastructure/checker。`check()` 直接传入 Network 已有的
 request master;repair 先验证 target/type/width/height,若 master 是 init 后加入则重建
 private checker/snapshot。实例集合不变的 placement/master
-commit 后,先同步 infrastructure/Grid,再调用 `updateFillerRepair()` 刷新两套 checker snapshot;
+commit 后,先由 infrastructure 同步 Grid/Network,再调用
+`updateFillerRepair()` 刷新两套 checker snapshot;repair 不更新 Network Nodes。
 新增/删除 instance 或 row/blockage 改变时必须先重建 Grid/Network,而不是复用旧
 snapshot。
 
@@ -1067,8 +1070,8 @@ gate 语义:
   82 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
   和 helper-built portable E2E 一起迁移;fake UDM checker/engine suite 留在 local;
   precheck/repair 均 non-mutating;
-  runtime integration 使用 checker `check()` 预留点、fillerRepair 与 Network
-  refresh seam;checker DRC 算法未修改。
+  runtime integration 使用 checker `check()` 预留点与 fillerRepair;
+  Network Node 同步由 infrastructure 独立负责,checker DRC 算法未修改。
   2026-07-23 normal CTest 为 250/250；新增 multi-row regression 后 ASan 与
   `-Wall -Wextra -Werror` 尚待重跑。
   详见 `src/dpl2/HandOff.md` 与 `src/dpl2/src/fillerRepair/test/TestPlan.md`。

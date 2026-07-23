@@ -49,10 +49,10 @@ class FillerRepairEngine
   // UDM/infrastructure objects must outlive the engine. init() is one-shot.
   bool init(eUNL::PhysDesMgr* desMgr, const fillerSetting& fillerSetting);
 
-  // Refreshes existing Network nodes from UDM and atomically replaces the
-  // engine snapshot. The Network must already contain every physical
-  // instance; rebuild Grid/Network before update() if rows, blockages or the
-  // instance set changed. A failed update leaves the engine fail-closed.
+  // Atomically replaces the private engine snapshot after infrastructure has
+  // synchronized Network with UDM. This method never changes Network Nodes.
+  // Rebuild Grid/Network first if rows, blockages or the instance set changed.
+  // A stale/incomplete Network makes update fail closed.
   // Do not call concurrently with precheck() or repair().
   bool update(eUNL::PhysDesMgr* desMgr, const fillerSetting& fillerSetting);
 

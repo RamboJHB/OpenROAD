@@ -59,6 +59,25 @@ bool sameChanges(const dpl2::ipl::FillerChanges& lhs,
   return true;
 }
 
+bool syncInfrastructureNode(frt::E2ETestDesign& design,
+                            dpl2::Grid* grid,
+                            dpl2::Network* network,
+                            frt::CellRole role)
+{
+  if (grid == nullptr || network == nullptr || design.desMgr() == nullptr) {
+    return false;
+  }
+  const eUNL::LeafCellID cellId = design.cell(role);
+  dpl2::Node* node = network->getNode(cellId);
+  const eUNL::PhysCell cell = design.desMgr()->getPhysCell(cellId);
+  if (node == nullptr || !cell.isValid()) {
+    return false;
+  }
+  const eLIB::PhysLibCell& master = cell.getPhysMaster();
+  return network->addMaster(master, grid) != nullptr
+         && network->updateNode(node, design.desMgr(), master);
+}
+
 struct LayoutCase
 {
   const char* name;
@@ -135,6 +154,13 @@ class EngineHarness
   frt::E2ETestDesign& design() { return objects_.design(); }
   dpl2::fillerRepair::FillerRepairEngine& engine() { return *engine_; }
   dpl2::Network& network() { return *objects_.infrastructure().network(); }
+  bool syncInfrastructureCell(frt::CellRole role)
+  {
+    return syncInfrastructureNode(design(),
+                                  objects_.infrastructure().grid(),
+                                  objects_.infrastructure().network(),
+                                  role);
+  }
   bool update()
   {
     return update(design().desMgr());
@@ -175,8 +201,16 @@ class CheckerHarness
   frt::E2ETestDesign& design() { return objects_.design(); }
   dpl2::ipl::ImplantLayerChecker& checker() { return *checker_; }
 
-  // Refresh Network/engine snapshots after a placement mutation (the caller
-  // contract before any subsequent check on a changed design).
+  bool syncInfrastructureCell(frt::CellRole role)
+  {
+    return syncInfrastructureNode(design(),
+                                  objects_.infrastructure().grid(),
+                                  objects_.infrastructure().network(),
+                                  role);
+  }
+
+  // Rebuild checker/engine snapshots after infrastructure has synchronized
+  // Network with the changed design.
   bool update()
   {
     return checker_->updateFillerRepair(design().desMgr(), *filler_setting_);
@@ -428,7 +462,9 @@ TEST_P(FillerRepairEngineE2E, RepairPrecheckFailureWarnsAndBlocks)
   harness.design().moveCell(frt::CellRole::Row1TailFiller,
                             harness.design().rowOriginX(1) + frt::kRowSites,
                             frt::kRowHeight);
-  ASSERT_TRUE(harness.update());  // caller refreshes the snapshot after a move
+  ASSERT_TRUE(
+      harness.syncInfrastructureCell(frt::CellRole::Row1TailFiller));
+  ASSERT_TRUE(harness.update());
   const frt::PhysicalSnapshot before = harness.design().snapshot();
   const auto& replacement
       = harness.design().master(frt::MasterRole::TargetNew);
@@ -455,7 +491,9 @@ TEST_P(FillerRepairEngineE2E, RepairIgnoresGapOutsideInfluenceRows)
   harness.design().moveCell(frt::CellRole::Row0TailFiller,
                             harness.design().rowOriginX(0) + frt::kRowSites,
                             0);
-  ASSERT_TRUE(harness.update());  // caller refreshes the snapshot after a move
+  ASSERT_TRUE(
+      harness.syncInfrastructureCell(frt::CellRole::Row0TailFiller));
+  ASSERT_TRUE(harness.update());
   const frt::PhysicalSnapshot before = harness.design().snapshot();
   ASSERT_FALSE(harness.engine().precheck().isLegal);  // global gate still sees it
   const auto outcome = harness.engine().repair(
@@ -562,7 +600,9 @@ TEST_P(FillerRepairEngineE2E,
       frt::CellRole::Row1TailFiller,
       harness.design().rowOriginX(1) + frt::kRowSites,
       frt::kRowHeight);
-  ASSERT_TRUE(harness.update());  // caller refreshes the snapshot after a move
+  ASSERT_TRUE(
+      harness.syncInfrastructureCell(frt::CellRole::Row1TailFiller));
+  ASSERT_TRUE(harness.update());
   const auto before = harness.design().snapshot();
   ASSERT_TRUE(harness.setTargetMaster(frt::MasterRole::TargetNew));
 
@@ -607,18 +647,39 @@ TEST_P(FillerRepairEngineE2E,
   EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
 }
 
-TEST_P(FillerRepairEngineE2E, UpdateRefreshesExistingNodeMasterMapping)
+TEST_P(FillerRepairEngineE2E,
+       UpdateRequiresInfrastructureNodeSynchronization)
 {
   EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
   const auto targetId = harness.design().cell(frt::CellRole::Target);
   const auto& replacement
       = harness.design().master(frt::MasterRole::TargetNew);
+  const dpl2::Node* target = harness.network().getNode(targetId);
+  ASSERT_NE(target, nullptr);
+  ASSERT_NE(target->getMaster(), nullptr);
+  const eLIB::LibCellID originalMaster = target->getMaster()->getDbMaster();
   EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
+
+  ASSERT_TRUE(harness.update());
   harness.design().replaceCellMaster(frt::CellRole::Target,
                                      frt::MasterRole::TargetNew);
+  EXPECT_FALSE(harness.update());
+  target = harness.network().getNode(targetId);
+  ASSERT_NE(target, nullptr);
+  ASSERT_NE(target->getMaster(), nullptr);
+  EXPECT_EQ(target->getMaster()->getDbMaster(), originalMaster);
+  EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
+  const auto stalePrecheck = harness.engine().precheck();
+  EXPECT_FALSE(stalePrecheck.isLegal);
+  EXPECT_TRUE(hasDiagnostic(stalePrecheck.diagnostics,
+                            "infrastructure_design_mismatch"));
+  EXPECT_TRUE(
+      hasDiagnostic(stalePrecheck.diagnostics, "precheck_not_initialized"));
+
+  ASSERT_TRUE(harness.syncInfrastructureCell(frt::CellRole::Target));
   ASSERT_TRUE(harness.update());
-  const dpl2::Node* target = harness.network().getNode(targetId);
+  target = harness.network().getNode(targetId);
   ASSERT_NE(target, nullptr);
   ASSERT_NE(target->getMaster(), nullptr);
   EXPECT_EQ(target->getMaster()->getDbMaster(), replacement.getLibCellId());

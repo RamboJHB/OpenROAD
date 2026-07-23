@@ -256,9 +256,9 @@ bool ImplantLayerChecker::updateFillerRepair(
     if (!fillerRepairEngine_->update(desMgr, fillerSettings)) {
         return false;
     }
-    // Network::updateNodes() changed the shared committed snapshot. Refresh
-    // this wrapper checker as well as the engine's private oracle so direct
-    // checker APIs and check() continue to describe the same revision.
+    // Infrastructure has already synchronized the shared Network. Refresh
+    // this wrapper checker after the engine rebuilt its private oracle so
+    // direct checker APIs and check() describe that same revision.
     return init(desMgr);
 }
 

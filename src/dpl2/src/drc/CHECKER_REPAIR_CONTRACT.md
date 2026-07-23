@@ -1,6 +1,6 @@
 # ImplantLayerChecker ↔ fillerRepair contract
 
-Updated: 2026-07-21.
+Updated: 2026-07-23.
 
 ## Final checker API
 
@@ -31,10 +31,11 @@ list when no repair was needed. Every `check()` clears the previous changes
 and diagnostics first, so a failed check cannot expose a partial or stale
 repair. The caller must read/commit the result before the next check.
 
-`updateFillerRepair()` refreshes Network and both checker snapshots: the
-engine's private oracle and the caller-facing checker. The engine retains a
-direct UDM-handle overload for focused regression tests, but normal placement
-checking enters only through `ImplantLayerChecker::check()`.
+After infrastructure synchronizes Network with committed UDM,
+`updateFillerRepair()` refreshes both checker snapshots: the engine's private
+oracle and the caller-facing checker. It never changes Network Nodes. The
+engine retains a direct UDM-handle overload for focused regression tests, but
+normal placement checking enters only through `ImplantLayerChecker::check()`.
 
 For each batch the checker computes the empty-overlay baseline, evaluates each
 candidate, and retains violations touching the target or not contained by the
@@ -129,13 +130,15 @@ by target/type/size validation or placement precheck leave the master registry
 unchanged. Once registration starts, a later oracle-rebuild failure leaves the
 engine fail-closed; Network currently has no transactional master rollback.
 
-After a same-instance-set placement/master commit, `update()` refreshes every
-existing Network Node from PhysDesMgr and atomically replaces the engine's
+After a same-instance-set placement/master commit, infrastructure must
+synchronize every affected Network Node from PhysDesMgr. `update()` then
+validates that shared revision and atomically replaces only the engine's
 private checker/planner/precheck snapshot. New/deleted instances or changes to
 rows/blockages require the infrastructure owner to rebuild Grid/Network first.
-The update is mandatory before the next query: local precheck reads current
-geometry for indexed nodes, but it cannot discover an object moved in from a
-different snapshot row.
+The snapshot update is mandatory before the next query: local precheck reads
+current geometry for indexed nodes, but it cannot discover an object moved in
+from a different snapshot row. An unsynchronized Network is rejected and
+leaves the engine fail-closed.
 
 The engine serializes its private oracle calls because the current const
 overlay path updates internal counters. Calls on the caller-facing checker and
