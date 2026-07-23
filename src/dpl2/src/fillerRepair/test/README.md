@@ -56,5 +56,5 @@ targets, pass them through `DPL2_RUNTIME_LIBRARIES`; otherwise the standalone
 fallback compiles the adjacent supplied sources. The test cannot pass merely
 by compiling the planner while the engine/real-UDM boundary is broken.
 
-Only the 91-case checker/engine suite and its fake UDM fixture/provider remain
+Only the 97-case checker/engine suite and its fake UDM fixture/provider remain
 outside the migration payload under `src/dpl2/test/local/`.

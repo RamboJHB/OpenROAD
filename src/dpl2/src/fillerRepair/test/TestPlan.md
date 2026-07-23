@@ -97,12 +97,13 @@ The 82 planner tests and their database-free doubles are same-level sources unde
 `PlannerOracle` protocol, including missing, duplicate, unknown and extra
 `OracleResult` records; every batch-cardinality mismatch fails closed.
 
-Only the 91 fake-UDM checker/engine cases, compatibility headers and runtime provider
+Only the 97 fake-UDM checker/engine cases, compatibility headers and runtime provider
 remain under `src/dpl2/test/local/`. The suite exercises repeated public precheck calls and opto-style external
 gating. Additional three-layout cases verify that `repair()` repeats
-precheck and returns `PrecheckFailed`, that hard macros supply coverage while
+precheck and returns `PrecheckFailed`, that two-row hard macros supply coverage
+on both their origin and upper rows while
 hard blockages remove coverage requirements and soft blockages do not, that
-invalid target/size requests do not register replacement masters, and that
+invalid target/size/precheck requests do not register replacement masters, and that
 `update()` refreshes an existing Node master mapping/checker snapshot while a
 failed update invalidates the private snapshot and leaves queries fail-closed.
 Three additional instances verify that a missing rule on a layer used by Network
@@ -114,7 +115,7 @@ a complete repair, returns empty changes for a clean candidate, and returns
 false with no partial/stale changes when precheck blocks. All three preserve
 the UDM physical snapshot.
 
-The whole test set is not UDM-independent: these 91 cases intentionally cover
+The whole test set is not UDM-independent: these 97 cases intentionally cover
 Session/PhysDesMgr extraction, physical handles, filler-master lookup, Network
 registration and refresh. Therefore the single test-only UDM-compatible
 provider and its CMake include switch remain necessary. No fake header,

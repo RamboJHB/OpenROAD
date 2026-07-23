@@ -39,11 +39,11 @@ class FillerRepairEngine::Impl final : private PlannerDataSource,
             const fillerSetting& fillerSettings);
   void setDebugLogging(bool enabled);
   ipl::CheckResult precheck() const;
-  // Gap/overlap coverage restricted to a target's influence rows. repair()
-  // uses this instead of the whole-design precheck(): a coverage defect
-  // outside the rows the repair can touch cannot affect (or be affected by)
-  // the local implant fix, and scanning only those rows is O(influence cells)
-  // rather than O(all placed cells) on every checker-driven repair.
+  // Gap/overlap coverage restricted to selected repair rows. repair() checks
+  // the initial target influence before registration; adaptive candidates
+  // that edit farther rows are checked before entering the checker batch.
+  // This keeps the safety gate proportional to touched rows instead of the
+  // whole placed design.
   ipl::CheckResult localPrecheck(const Region& influence) const;
   RepairOutcome repair(const ipl::CheckRequest& request);
   RepairOutcome repair(eUNL::LeafCellID targetCell,
@@ -90,6 +90,10 @@ class FillerRepairEngine::Impl final : private PlannerDataSource,
   Violation toPlannerViolation(const ipl::Violation& violation,
                                InstanceId targetInstance) const;
   Region snapshotGuard(const TargetPlace& target) const;
+  Region snapshotGuard(RowId rowId,
+                       DbCoord x,
+                       DbCoord width,
+                       DbCoord heightRows) const;
   RepairOutcome repairImpl(
       std::optional<ipl::CheckRequest> checkerRequest,
       std::optional<eUNL::LeafCellID> targetCell,
@@ -848,12 +852,66 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     }
   }
 
+  // The initial target influence was checked before any master registration.
+  // Adaptive windows can later introduce fillers from additional rows. Check
+  // only requests that actually edit outside the initial influence, and keep
+  // illegal requests out of the checker batch without rejecting legal peers.
+  const Region initialInfluence = snapshotGuard(first.targetPlace);
+  std::vector<size_t> legalIndices;
+  legalIndices.reserve(requests.size());
+  bool precheckFiltered = false;
+  for (size_t i = 0; i < requests.size(); ++i) {
+    Region influence = initialInfluence;
+    for (const FillerCellRecord& change : requests[i].fillerChanges) {
+      const Node* node = network_->getNode(change.cell_id_);
+      const PlacedInstance* placed
+          = node != nullptr ? instance(node->getId()) : nullptr;
+      if (placed != nullptr) {
+        const MasterInfo* master = masterInfo(placed->masterId);
+        const DbCoord heightRows
+            = master != nullptr ? std::max<DbCoord>(master->height, 1) : 1;
+        influence.rowLo = std::min(influence.rowLo, placed->rowId);
+        influence.rowHi = std::max(
+            influence.rowHi,
+            placed->rowId + static_cast<RowId>(heightRows) - 1);
+      }
+    }
+    if (influence.rowLo == initialInfluence.rowLo
+        && influence.rowHi == initialInfluence.rowHi) {
+      legalIndices.push_back(i);
+      continue;
+    }
+
+    const ipl::CheckResult placement = localPrecheck(influence);
+    if (placement.isLegal) {
+      legalIndices.push_back(i);
+      continue;
+    }
+
+    precheckFiltered = true;
+    OracleResult& out = results[i];
+    out.requestId = requests[i].requestId;
+    out.status = OracleStatus::InvalidOverlay;
+    out.isLegal = false;
+    for (const ipl::Diagnostic& diagnostic : placement.diagnostics) {
+      out.diagnostics.push_back(makeDiag(
+          Severity::Warning, diagnostic.status, diagnostic.message));
+    }
+    out.diagnostics.push_back(makeDiag(
+        Severity::Warning,
+        "PrecheckFailed",
+        "placement precheck failed in an adaptive filler row"));
+  }
+  if (legalIndices.empty()) {
+    return results;
+  }
+
   const ipl::CheckRequest target = toCheckRequest(first.targetPlace);
   const ::Rect guard = toGuardRect(first.guardRegion);
   std::vector<ipl::FillerChanges> changes;
-  changes.reserve(requests.size());
-  for (const OracleRequest& request : requests) {
-    changes.push_back(request.fillerChanges);
+  changes.reserve(legalIndices.size());
+  for (const size_t index : legalIndices) {
+    changes.push_back(requests[index].fillerChanges);
   }
 
   std::vector<ipl::CheckResult> raw;
@@ -870,11 +928,24 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   // missing OR extra result invalidates the whole batch. Preserve only the
   // returned cardinality so OracleGate can diagnose the exact mismatch; no
   // checker finding from a mis-correlated batch is consumed.
-  if (raw.size() != requests.size()) {
+  if (raw.size() != legalIndices.size()) {
     log_.msg("engine",
-             cat("overlay batch protocol error: expected ", requests.size(),
+             cat("overlay batch protocol error: expected ", legalIndices.size(),
                  " result(s), received ", raw.size()));
-    return std::vector<OracleResult>(raw.size());
+    if (!precheckFiltered) {
+      return std::vector<OracleResult>(raw.size());
+    }
+    for (const size_t index : legalIndices) {
+      OracleResult& out = results[index];
+      out.requestId = requests[index].requestId;
+      out.status = OracleStatus::CheckerError;
+      out.isLegal = false;
+      out.diagnostics.push_back(makeDiag(
+          Severity::Fatal,
+          "CheckerProtocolError",
+          "checker result count does not match the filtered overlay batch"));
+    }
+    return results;
   }
 
   // The final checker copies its approved, non-blocking PERSISTENT init
@@ -908,10 +979,11 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
         return offset;
       };
 
-  for (size_t i = 0; i < requests.size(); ++i) {
-    OracleResult& out = results[i];
-    out.requestId = requests[i].requestId;  // order IS the correlation
-    const ipl::CheckResult& r = raw[i];
+  for (size_t rawIndex = 0; rawIndex < raw.size(); ++rawIndex) {
+    const size_t requestIndex = legalIndices[rawIndex];
+    OracleResult& out = results[requestIndex];
+    out.requestId = requests[requestIndex].requestId;
+    const ipl::CheckResult& r = raw[rawIndex];
     for (size_t d = requestDiagOffset(r.diagnostics); d < r.diagnostics.size();
          ++d) {
       out.diagnostics.push_back(makeDiag(
@@ -944,18 +1016,26 @@ Region FillerRepairEngine::Impl::snapshotGuard(const TargetPlace& target) const
   const DbCoord width = master != nullptr ? master->width : 0;
   const DbCoord heightRows =
       master != nullptr ? std::max<DbCoord>(master->height, 1) : 1;
+  return snapshotGuard(target.rowId, target.x, width, heightRows);
+}
+
+Region FillerRepairEngine::Impl::snapshotGuard(RowId rowId,
+                                               DbCoord x,
+                                               DbCoord width,
+                                               DbCoord heightRows) const
+{
   const DbCoord halo =
       config_.snapshotHaloX > 0 ? config_.snapshotHaloX : default_halo_x_;
 
   Region guard;
-  guard.x = XInterval{target.x - halo, target.x + width + halo};
+  guard.x = XInterval{x - halo, x + width + halo};
   const RowId minRow = row_list_.empty() ? 0 : row_list_.front();
   const RowId maxRow = row_list_.empty() ? 0 : row_list_.back();
   guard.rowLo = std::max<RowId>(
-      minRow, target.rowId - static_cast<RowId>(config_.snapshotHaloRows));
+      minRow, rowId - static_cast<RowId>(config_.snapshotHaloRows));
   guard.rowHi = std::min<RowId>(
       maxRow,
-      target.rowId + static_cast<RowId>(heightRows) - 1
+      rowId + static_cast<RowId>(heightRows) - 1
           + static_cast<RowId>(config_.snapshotHaloRows));
   return guard;
 }
@@ -1096,9 +1176,36 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   const DbCoord targetX = inst->x;
   const Orient targetOrientation = inst->orientation;
 
+  const RowId requestedRowId = checkerRequest.has_value()
+                                   ? static_cast<RowId>(checkerRequest->rowId)
+                                   : targetRowId;
+  const DbCoord requestedX = checkerRequest.has_value()
+                                 ? static_cast<DbCoord>(checkerRequest->colId)
+                                       * site_width_
+                                 : targetX;
+  const Orient requestedOrientation
+      = checkerRequest.has_value()
+            ? toPlannerOrient(checkerRequest->orientation)
+            : targetOrientation;
+  const Region initialInfluence = snapshotGuard(
+      requestedRowId, requestedX, replacementWidth, replacementHeight);
+
+  // Fail before registering an uninstantiated replacement master. The
+  // rejected-request contract covers the in-memory Network registry too.
+  const ipl::CheckResult placement = localPrecheck(initialInfluence);
+  if (!placement.isLegal) {
+    result.diagnostics = placement.diagnostics;
+    addDiagnostic(Severity::Warning,
+                  "PrecheckFailed",
+                  "placement precheck failed in the target influence rows; "
+                  "filler repair was skipped");
+    return result;
+  }
+
   // DePlace may not have imported an uninstantiated target replacement yet.
-  // Register it only after request validation, then rebuild the checker and
-  // planner snapshot so all id tables share the expanded Network universe.
+  // Register it only after request and placement validation, then rebuild the
+  // checker and planner snapshot so all id tables share the expanded Network
+  // universe.
   if (network_->getMaster(newMaster->getLibCellId()) == nullptr) {
     const bool registered = ensureMasterRegistered(*newMaster);
     const bool rebuilt = registered && rebuildOracle();
@@ -1143,15 +1250,9 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   TargetPlace target;
   target.instanceId = targetInstanceId;
   target.masterId = static_cast<MasterId>(newMasterId);
-  target.rowId = checkerRequest.has_value()
-                     ? static_cast<RowId>(checkerRequest->rowId)
-                     : targetRowId;
-  target.x = checkerRequest.has_value()
-                 ? static_cast<DbCoord>(checkerRequest->colId) * site_width_
-                 : targetX;
-  target.orientation = checkerRequest.has_value()
-                           ? toPlannerOrient(checkerRequest->orientation)
-                           : targetOrientation;
+  target.rowId = requestedRowId;
+  target.x = requestedX;
+  target.orientation = requestedOrientation;
 
   const bool samePlacement = target.rowId == targetRowId
                              && target.x == targetX
@@ -1163,26 +1264,11 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   OracleRequest snapshotRequest;
   snapshotRequest.requestId = 0;
   snapshotRequest.targetPlace = target;
-  snapshotRequest.guardRegion = snapshotGuard(target);
+  snapshotRequest.guardRegion = initialInfluence;
   log_.msg("engine",
            cat("snapshot: target inst=", target.instanceId, " newMaster=",
                target.masterId, " guard=",
                show(snapshotRequest.guardRegion)));
-
-  // Influence-local placement gate. opto owns the whole-design precheck()
-  // before mutation; here we only refuse to repair on top of a gap/overlap
-  // inside the rows this repair can touch. A defect outside the influence
-  // rows is irrelevant to the local implant fix.
-  const ipl::CheckResult placement =
-      localPrecheck(snapshotRequest.guardRegion);
-  if (!placement.isLegal) {
-    result.diagnostics = placement.diagnostics;
-    addDiagnostic(Severity::Warning,
-                  "PrecheckFailed",
-                  "placement precheck failed in the target influence rows; "
-                  "filler repair was skipped");
-    return result;
-  }
 
   const OracleResult snapshot = checkPlaceWithOverlay(snapshotRequest);
   if (snapshot.status != OracleStatus::Checked) {
@@ -1490,12 +1576,11 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
     return result;
   }
 
-  // Legal spans (absolute DBU) come from the cached Grid domain, but placed
-  // spans are read LIVE from PhysDesMgr -- like the whole-design precheck() --
-  // so a placement change made after init/update is still detected. The
-  // by-row snapshot only provides which nodes to inspect for the influence
-  // rows (O(influence cells) rather than every placed node); a node whose live
-  // origin has left the row is skipped so it cannot be miscounted here.
+  // Legal spans (absolute DBU) come from the cached Grid domain. The by-row
+  // snapshot identifies the nodes to inspect, while status, origin and master
+  // size are read live from PhysDesMgr. The caller must update() after any
+  // placement/master commit: live reads catch changes to indexed nodes but do
+  // not discover a node moved in from a different snapshot row.
   std::vector<internal::PlacementCoverageRow> coverageRows;
   for (const PrecheckDomains::Row& domainRow : precheck_domains_->rows) {
     if (domainRow.id < influence.rowLo || domainRow.id > influence.rowHi) {
@@ -1521,8 +1606,10 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
       }
       const eUTL::Point2D origin = cell.getOrigin();
       const int64_t cellYl = origin.getY().getStorage();
-      if (cellYl < domainRow.yl || cellYl >= domainRow.yh) {
-        continue;  // node moved out of this row since the snapshot
+      const int64_t cellYh
+          = cellYl + cell.getPhysMaster().getHeight().getStorage();
+      if (cellYl >= domainRow.yh || cellYh <= domainRow.yl) {
+        continue;  // node no longer overlaps this row since the snapshot
       }
       const int64_t cellXl = origin.getX().getStorage();
       const int64_t cellXh =

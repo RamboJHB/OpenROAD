@@ -26,13 +26,16 @@ segments. A segment is a maximal run of valid pixels not reserved by
 halo/padding, so blockage cuts, fragmented-row holes and legal reserved
 whitespace are ignored. Warning diagnostics explain the location;
 `isLegal=false` is the hard opto-blocking value. It does not inspect
-target/master/candidates/IDs/implant DRC. Repair repeats the coverage check
-internally, but narrowed to the target's influence rows (the guard rows the
-repair can touch): a gap/overlap outside those rows cannot affect the local
-implant fix and does not block it, and the check is O(influence cells) rather
-than O(all placed cells). A defect inside the influence rows returns
-`PrecheckFailed`, no solution and no changes. The whole-design
-`precheckFillerRepair()` remains the caller's global gate.
+target/master/candidates/IDs/implant DRC. Before registering a replacement
+master, repair repeats the coverage check over the initial target influence.
+If adaptive search later proposes a filler change outside those rows, that
+request's expanded row range is checked before it enters the checker batch;
+an illegal request is rejected without rejecting legal peers in the same
+batch. A defect in checked rows returns `PrecheckFailed`, no solution for that
+request and no changes. The whole-design `precheckFillerRepair()` remains the
+caller's global gate. After any placement/master commit, callers must run
+`updateFillerRepair()` before another repair; live reads are not a replacement
+for refreshing snapshot row membership.
 
 `check()` forwards its exact `ipl::CheckRequest` to the engine. Repair overlays
 the requested target master and first asks the private oracle with empty filler
@@ -134,6 +137,6 @@ with its real UDM/infrastructure/checker headers. Supplying
 `DPL2_RUNTIME_LIBRARIES` reuses the destination's owning targets; when omitted,
 the standalone fallback compiles the sibling infrastructure/checker sources.
 
-The 91-case fake-UDM checker/engine suite stays outside this directory
+The 97-case fake-UDM checker/engine suite stays outside this directory
 under `src/dpl2/test/local/`; see that directory's README for local commands
 and dependency details.

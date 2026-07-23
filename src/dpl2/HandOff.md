@@ -56,10 +56,10 @@ use: until it does, precheck and repair fail closed
    warnings for logging, but the bool is a hard blocking contract.
 4. Call the existing `check(node, x, y, orient)`. It builds one
    `ipl::CheckRequest` and passes that exact request to the owned engine.
-   Repair repeats the coverage check internally, but narrowed to the target's
-   influence rows, and fails with empty changes if a gap/overlap lies in those
-   rows. A defect outside the influence rows is left to the global
-   `precheckFillerRepair()` gate and does not block the local repair.
+   Before registering a replacement master, repair repeats the coverage check
+   over the initial target influence. Adaptive requests that edit farther rows
+   expand the checked range before entering the checker batch. A defect outside
+   rows touched by a request is left to the global `precheckFillerRepair()` gate.
 5. If `check()` returns true, opto/infrastructure reads
    `getFillerChanges()` and commits that list together with its target
    mutation. The list is valid until the next `check()`; every new check clears
@@ -207,7 +207,7 @@ supplied infrastructure/checker sources.
 The CMake below `fillerRepair/test` is a portable test package, not the
 destination's runtime owner. It builds an 82-case planner executable plus a
 71-case E2E executable that compiles the complete checker/engine source list.
-The separate local harness retains the 91 fake-UDM checker/engine cases.
+The separate local harness retains the 97 fake-UDM checker/engine cases.
 
 Test dependencies: GoogleTest, Boost, TBB, C++17/C++20 and CMake 3.20+. Commands:
 
@@ -241,9 +241,9 @@ lives under `src/dpl2/test/local/`. Runtime cases cover
 the internal repair precheck gate, hard macro and hard/soft blockage semantics,
 side-effect-free invalid replacement requests and snapshot update.
 
-2026-07-22 normal verification result: portable package 153/153 (planner 82/82
-plus final-checker/precheck E2E 71/71), checker/engine fake-UDM E2E 91/91, and
-full normal CTest 244/244. The last full ASan and `-Wall -Wextra -Werror`
+2026-07-23 normal verification result: portable package 153/153 (planner 82/82
+plus final-checker/precheck E2E 71/71), checker/engine fake-UDM E2E 97/97, and
+full normal CTest 250/250. The last full ASan and `-Wall -Wextra -Werror`
 verification predates the density expansion and must be rerun before updating
 those claims. On Apple with an
 unsanitized Homebrew GoogleTest, ASan discovery and CTest use
@@ -252,19 +252,20 @@ engine cases include three layouts proving that unused-layer persistent
 checker diagnostics remain non-blocking while a used implant layer with a
 missing rule makes initialization fail closed.
 
-The 91 checker/engine cases genuinely exercise Session, PhysDesMgr, physical
+The 97 checker/engine cases genuinely exercise Session, PhysDesMgr, physical
 IDs, filler-master lookup and Network refresh, so the repository-local
 test-only UDM-compatible provider and its one CMake include switch are still
 required. Runtime sources contain no fake include or conditional.
 
 ## Integration risks
 
-- Opto should call the checker precheck before mutation for early rejection;
-  repair also enforces it internally -- narrowed to the target's influence
-  rows -- and returns `PrecheckFailed` on illegal coverage there. A coverage
-  defect elsewhere is only caught by the global precheck. After any placement
-  mutation, call `updateFillerRepair()` before the next repair so the private
-  snapshot is consistent (a stale Node otherwise fails the frame gate).
+- Opto should call the checker precheck before mutation for early rejection.
+  Repair checks the initial target influence before master registration and
+  prechecks any farther row an adaptive candidate would edit. Illegal requests
+  return `PrecheckFailed`; defects outside touched rows remain the global
+  precheck's responsibility. After any placement mutation, call
+  `updateFillerRepair()` before the next repair because local live reads cannot
+  discover an object moved in from another snapshot row.
 - Grid/Network/PhysDesMgr must describe the same revision and outlive the
   borrowing engine. `update()` refreshes existing Node state and atomically
   replaces the private snapshot. A failed update invalidates that snapshot and
@@ -302,8 +303,10 @@ required. Runtime sources contain no fake include or conditional.
   one-way.
 - On the checker path, a request master added to Network after initialization
   triggers a private snapshot rebuild. The direct test overload may add a
-  previously uninstantiated target master after validation; rejected requests
-  leave the registry unchanged.
+  previously uninstantiated target master after validation. Target/type/size
+  validation and placement-precheck failures leave the registry unchanged.
+  Once registration starts, a later rebuild failure leaves the engine
+  fail-closed because Network has no transactional master rollback.
 - Adaptive growth is still heuristic: it follows the best residual first and
   falls back to the opposite side only when that primary side adds nothing.
   Long irrelevant contiguous filler runs may therefore require several

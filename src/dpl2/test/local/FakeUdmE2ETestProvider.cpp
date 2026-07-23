@@ -106,10 +106,16 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
   fake_udm::DesignDb::addShape(extra, 3, kRowHeight / 2, kRowHeight);
 
   eLIB::PhysLibCell& hardMacro
-      = db.addMaster("HM6", 7, 6, kRowHeight, false);
+      = db.addMaster("HM6", 7, 6, 2 * kRowHeight, false);
   hardMacro.type_ = eLIB::PhysMacroType(eLIB::PhysMacroType::TypeE::BLOCK);
-  fake_udm::DesignDb::addShape(hardMacro, 0, 0, kRowHeight / 2);
-  fake_udm::DesignDb::addShape(hardMacro, 1, kRowHeight / 2, kRowHeight);
+  // This macro is placed MX in row 0. Its canonical two-row polarity must be
+  // P/N then N/P so mirroring produces the row track pattern P/N then N/P.
+  fake_udm::DesignDb::addShape(hardMacro, 1, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(hardMacro, 0, kRowHeight / 2, kRowHeight);
+  fake_udm::DesignDb::addShape(
+      hardMacro, 0, kRowHeight, 3 * kRowHeight / 2);
+  fake_udm::DesignDb::addShape(
+      hardMacro, 1, 3 * kRowHeight / 2, 2 * kRowHeight);
 
   eLIB::PhysLibCell& mismatched
       = db.addMaster("TX5", 8, 5, kRowHeight, false);
@@ -152,6 +158,9 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
   }
 
   for (const Placement& placement : kPlacements) {
+    if (setup.row0ThirdHardMacro && placement.cellIndex == 112) {
+      continue;  // the two-row hard macro supplies this upper-row coverage
+    }
     const int rowIndex = placement.row + rowIndexOffset;
     const eUTL::PhysOrientation orient = rowIndex % 2 == 0
                                              ? eUTL::PhysOrientationE::MX
@@ -212,6 +221,9 @@ class FakeDesignFixture final : public E2ETestDesign
     for (const Placement& placement : kPlacements) {
       const eUNL::PhysCell placed = db_.design.des_mgr_.getPhysCell(
           eUNL::LeafCellID(0, placement.cellIndex));
+      if (!placed.isValid()) {
+        continue;
+      }
       const eUTL::Point2D origin = placed.getOrigin();
       result.emplace_back(
           placement.cellIndex,
@@ -266,6 +278,9 @@ class FakeInfrastructureFixture final : public E2ETestInfrastructure
       const eUNL::LeafCellID id(0, placement.cellIndex);
       const eUNL::PhysCell cell = desMgr->getPhysCell(id);
       if (!cell.isValid()) {
+        if (setup.row0ThirdHardMacro && placement.cellIndex == 112) {
+          continue;
+        }
         return false;
       }
       placedMasters[cell.getPhysMaster().getLibCellId()]
@@ -276,7 +291,14 @@ class FakeInfrastructureFixture final : public E2ETestInfrastructure
       network_.addMaster(*master, &grid_);
     }
     for (const Placement& placement : kPlacements) {
-      network_.addNode(eUNL::LeafCellID(0, placement.cellIndex), desMgr);
+      const eUNL::LeafCellID id(0, placement.cellIndex);
+      if (!desMgr->getPhysCell(id).isValid()) {
+        if (setup.row0ThirdHardMacro && placement.cellIndex == 112) {
+          continue;
+        }
+        return false;
+      }
+      network_.addNode(id, desMgr);
     }
     for (const auto& node : network_.getNodes()) {
       grid_.paintPixel(node.get());

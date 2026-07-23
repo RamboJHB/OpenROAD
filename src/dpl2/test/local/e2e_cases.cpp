@@ -34,6 +34,16 @@ bool hasDiagnostic(const std::vector<dpl2::ipl::Diagnostic>& diagnostics,
                      });
 }
 
+std::string diagnosticText(
+    const std::vector<dpl2::ipl::Diagnostic>& diagnostics)
+{
+  std::string text;
+  for (const dpl2::ipl::Diagnostic& diagnostic : diagnostics) {
+    text += diagnostic.status + ": " + diagnostic.message + "\n";
+  }
+  return text;
+}
+
 bool sameChanges(const dpl2::ipl::FillerChanges& lhs,
                  const dpl2::ipl::FillerChanges& rhs)
 {
@@ -288,7 +298,8 @@ TEST_P(FillerRepairEngineE2E, HardMacroIsImportedAndCoversLegalSites)
   frt::DesignSetup setup = GetParam().setup;
   setup.row0ThirdHardMacro = true;
   EngineHarness harness(setup);
-  ASSERT_TRUE(harness.engineReady());
+  ASSERT_TRUE(harness.engineReady())
+      << diagnosticText(harness.engine().precheck().diagnostics);
   const auto macroId = harness.design().cell(frt::CellRole::Row0ThirdCell);
   const dpl2::Node* macro = harness.network().getNode(macroId);
   ASSERT_NE(macro, nullptr);
@@ -305,6 +316,26 @@ TEST_P(FillerRepairEngineE2E, HardMacroIsImportedAndCoversLegalSites)
   EXPECT_TRUE(outcome.changes.empty());
   EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "TargetNotStdCell"));
   EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       RepairPrecheckCountsUpperRowOfMultiRowHardMacro)
+{
+  frt::DesignSetup setup = GetParam().setup;
+  setup.row0ThirdHardMacro = true;
+  EngineHarness harness(setup);
+  ASSERT_TRUE(harness.engineReady())
+      << diagnosticText(harness.engine().precheck().diagnostics);
+  ASSERT_TRUE(harness.engine().precheck().isLegal);
+
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::Target),
+      harness.design().master(frt::MasterRole::TargetOld));
+  EXPECT_TRUE(outcome.hasSolution);
+  EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "Gap"));
+  EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "PrecheckFailed"));
+  EXPECT_EQ(harness.design().snapshot(), before);
 }
 
 TEST_P(FillerRepairEngineE2E, GapInsideInstanceHaloIsIgnored)
@@ -399,14 +430,17 @@ TEST_P(FillerRepairEngineE2E, RepairPrecheckFailureWarnsAndBlocks)
                             frt::kRowHeight);
   ASSERT_TRUE(harness.update());  // caller refreshes the snapshot after a move
   const frt::PhysicalSnapshot before = harness.design().snapshot();
+  const auto& replacement
+      = harness.design().master(frt::MasterRole::TargetNew);
+  EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
   const auto outcome = harness.engine().repair(
-      harness.design().cell(frt::CellRole::Target),
-      harness.design().master(frt::MasterRole::TargetNew));
+      harness.design().cell(frt::CellRole::Target), replacement);
   EXPECT_FALSE(outcome.hasSolution);
   EXPECT_TRUE(outcome.changes.empty());
   EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "Gap"));
   EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "PrecheckFailed"));
   EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "Overlap"));
+  EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 

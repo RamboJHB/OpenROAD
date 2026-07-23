@@ -124,13 +124,18 @@ not Network Nodes. The engine borrows the initialized Grid/Network, registers al
 `getFillerMasters()` candidates, then constructs the checker. The checker path
 uses a request master already present in Network and rebuilds its private
 snapshot if that master was added after init. The direct UDM-handle test
-overload may validate and register an uninstantiated master. Rejected requests
-leave the master registry unchanged.
+overload may validate and register an uninstantiated master. Requests rejected
+by target/type/size validation or placement precheck leave the master registry
+unchanged. Once registration starts, a later oracle-rebuild failure leaves the
+engine fail-closed; Network currently has no transactional master rollback.
 
 After a same-instance-set placement/master commit, `update()` refreshes every
 existing Network Node from PhysDesMgr and atomically replaces the engine's
 private checker/planner/precheck snapshot. New/deleted instances or changes to
 rows/blockages require the infrastructure owner to rebuild Grid/Network first.
+The update is mandatory before the next query: local precheck reads current
+geometry for indexed nodes, but it cannot discover an object moved in from a
+different snapshot row.
 
 The engine serializes its private oracle calls because the current const
 overlay path updates internal counters. Calls on the caller-facing checker and
@@ -139,15 +144,15 @@ reads of its last result must remain sequential.
 ## Internal precheck scope
 
 The public `precheckFillerRepair()` is a whole-design gap/overlap gate for
-opto. Inside `repair()`, the same coverage sweep is narrowed to the target's
-influence rows (the guard rows the repair can edit fillers in). Legal spans
-come from the cached Grid domain; placed spans are read live from PhysDesMgr
-for only the influence-row nodes, so the check is O(influence cells) and still
-reflects a post-init placement change. A gap/overlap outside the influence
-rows cannot affect the local implant fix and does not block it; a defect
-inside them returns `PrecheckFailed` with empty changes. After a placement
-mutation the caller must `updateFillerRepair()` before the next repair, or a
-stale Network Node fails the frame gate when the private snapshot rebuilds.
+opto. Inside `repair()`, the initial target influence is checked before target
+master registration. If adaptive search proposes filler changes in farther
+rows, each affected request expands that influence and is checked before the
+checker batch; an illegal request does not invalidate legal peers in the same
+batch. Legal spans come from the cached Grid domain and placed spans are read
+from PhysDesMgr for the snapshot nodes in those rows, keeping work proportional
+to the rows touched by repair. Multi-row objects contribute coverage to every
+vertically overlapped row. A defect in checked rows returns `PrecheckFailed`
+with empty changes; defects elsewhere remain the public global gate's job.
 
 ## Repair acceptance
 

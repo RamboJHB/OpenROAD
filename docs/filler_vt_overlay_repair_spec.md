@@ -285,7 +285,7 @@ master commit 且实例集合、rows、blockages 不变时调用 checker 的
 - 71 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 8-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
-- 91 个 checker/engine cases、fake UDM include
+- 97 个 checker/engine cases、fake UDM include
   tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
 - runtime 与 portable test 编译清单唯一定义在
   `src/dpl2/src/fillerRepair/sources.cmake`
@@ -595,8 +595,10 @@ persistent diagnostics，request-specific diagnostics 不移除。
   implant DRC;
 - 不修改数据库。opto 负责在任何 cell mutation 前主动调用并解释返回值。
 
-`check()` 把自己构造的 `CheckRequest` 原样交给 engine;engine 在解析 target 或
-注册 replacement master 前先重复 precheck。通过后以 request master 作为 target overlay,第一次
+`check()` 把自己构造的 `CheckRequest` 原样交给 engine;engine 在注册
+replacement master 前先对初始 target influence 重复 precheck。adaptive candidate
+若编辑初始范围之外的行，则该 request 在进入 checker batch 前扩展并补查对应行；
+非法 request 不会连带拒绝同 batch 的合法 request。通过后以 request master 作为 target overlay,第一次
 implant DRC 使用空 `FillerChanges`;无 violation 返回 success + empty changes,
 有 violation 才进入内部 planner。有解返回 `ipl::FillerChanges`,无解返回失败;
 commit 始终属于 opto/infrastructure。runtime diagnostics 和 wire types沿用
@@ -622,7 +624,9 @@ infrastructure 标记为不可放置的合法空白被排除,而不是按完整 
 precheck 不解析 target/new master,不枚举 candidate,不检查 Node/Master ID mapping,
 不调用 ImplantLayerChecker,也不把 off-grid/越界/其他 placement legality 单独分类。
 它是 non-mutating query。opto 应在 mutation 前主动调用以尽早阻断;`repair()`
-重复同一检查作为最终 safety gate。失败时 `RepairOutcome.hasSolution=false`,changes
+按初始 target influence 与实际 adaptive filler-change rows 执行局部 safety gate。
+multi-row object 对每个垂直重叠 row 提供 coverage。失败时
+`RepairOutcome.hasSolution=false`,changes
 为空,保留 `Gap`/`Overlap` diagnostics 并追加 warning `PrecheckFailed`,不会进入
 target master 注册、checker 或 planner。
 
@@ -970,7 +974,7 @@ filler:std-cell 比例。dense placement 风险、快速失败与 span-rewrite �
 `docs/filler_repair_dense_placement_analysis.md`;它是 future design note,不改变本阶段
 swap-only normative contract。
 
-91 个 checker/engine fake-UDM cases、provider 与完整 local fake regression
+97 个 checker/engine fake-UDM cases、provider 与完整 local fake regression
 copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
 
 前置与协议:
@@ -984,8 +988,8 @@ copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
   empty placement、unordered input、triple coverage、touching legal spans 与
   gap+overlap 确定性顺序。
 - external public runtime engine API 在 3 种 layout 上覆盖 repeated precheck、opto gate、
-  repair internal precheck、hard macro、hard/soft blockage、invalid replacement
-  无 registry 副作用与 update refresh。portable checker 另覆盖 changed neighbor
+  repair internal precheck、two-row hard macro upper-row coverage、hard/soft blockage、
+  invalid replacement/precheck 无 registry 副作用与 update refresh。portable checker 另覆盖 changed neighbor
   位于 guard 外仍能报告 target violation。
 - 验证 precheck 与 repair 前后 UDM physical records 完全相同。
 - guard-only filler 出现在 `fillerChanges` 中,判 invalid request。
@@ -1058,14 +1062,15 @@ gate 语义:
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译清单唯一定义在
   `src/dpl2/src/fillerRepair/sources.cmake`。
-- 82 个 planner unit tests、71 个 portable checker/planner/precheck cases 与 91 个
+- 82 个 planner unit tests、71 个 portable checker/planner/precheck cases 与 97 个
   fake-UDM checker/engine tests 全为 GoogleTest;
   82 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
   和 helper-built portable E2E 一起迁移;fake UDM checker/engine suite 留在 local;
   precheck/repair 均 non-mutating;
   runtime integration 使用 checker `check()` 预留点、fillerRepair 与 Network
   refresh seam;checker DRC 算法未修改。
-  2026-07-21 普通与 ASan CTest 均为 207/207,且 `-Wall -Wextra -Werror` 通过。
+  2026-07-23 normal CTest 为 250/250；新增 multi-row regression 后 ASan 与
+  `-Wall -Wextra -Werror` 尚待重跑。
   详见 `src/dpl2/HandOff.md` 与 `src/dpl2/src/fillerRepair/test/TestPlan.md`。
 
 ---

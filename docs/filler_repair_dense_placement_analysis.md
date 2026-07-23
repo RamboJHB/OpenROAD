@@ -1,8 +1,8 @@
 # Dense placement 下的 filler repair 风险与演进提议
 
-状态: 设计讨论稿，不改变 V2.1 swap-only production 算法。
+状态: 设计讨论稿；swap 搜索算法保持 V2.1，已记录 engine safety/performance 改进。
 
-更新: 2026-07-22。
+更新: 2026-07-23。
 
 ## 1. 新前提
 
@@ -54,15 +54,15 @@ planner-to-checker case 的代表时间如下：
 | inter-row spacing | 1.09 s | 0.99 s | 0.99 s | 0.55 s | 0.55 s |
 
 71 个 portable checker/precheck E2E 全部通过；包含 planner(82)、local
-checker/engine regression(94)与 portable checker density(71)的完整 normal
-CTest 为 **247/247**（`-j4` 实际 11.7 秒，串行约 45 秒；ASan 同样 247/247），
-`-Wall -Wextra -Werror` 干净。
+checker/engine regression(97)与 portable checker density(71)的完整 normal
+CTest 为 **250/250**。上一轮 247-case 基线的 ASan 与
+`-Wall -Wextra -Werror` 干净；新增 multi-row regression 后尚未重跑这两项。
 
 **关于计时的诚实说明**：这些 fixture 的行很短（每个窗口约 40–60 个 site），
 单项时间由 checker DRC 路径与 per-test 进程启动主导，**不是** window 构造。因此
 window/ranker 扫描收窄（§5）在这些数上看不出明显加速——它是一个 O(行长) →
 O(log n + 窗口内 filler) 的**渐进复杂度**改进，收益出现在每行上千 instance 的真实
-100% occupancy 设计上，而不是 60-site fixture 上；本轮用 247/247 保持全绿来证明
+100% occupancy 设计上，而不是 60-site fixture 上；本轮用 250/250 保持全绿来证明
 “选出的 filler 完全一致”（行为不变）。这里没有明显的低 filler 比例性能退化，但
 fixture 有意保留了每类 DRC 的最小 editable/bridge support，因此不能外推到局部
 完全没有 support 的真实 case。
@@ -145,12 +145,12 @@ Tier 2 应按 span 建模，不引入通用 Move。一个 rewrite 必须满足 r
 
 按以下顺序执行，只有带完备证明的路径才能声明不可修复：
 
-1. precheck 失败：返回 `PrecheckFailed`，不进入搜索。已落地：`repair()`
-   内置的 precheck 已收窄为 target influence rows（repair 可编辑 filler 的
-   guard rows）上的局部覆盖检查，placed span 从 PhysDesMgr 按 influence-row
-   node 实时读取，为 O(influence cells)；influence rows 之外的 gap/overlap
-   不影响该局部 implant 修复、也不再阻塞它，而 public `precheckFillerRepair()`
-   仍是整设计的全局 gate；
+1. precheck 失败：返回 `PrecheckFailed`，不进入搜索。已落地：`repair()` 在
+   replacement master 注册前检查初始 target influence；adaptive candidate 若编辑
+   更远行，则该 request 在进入 checker batch 前扩展并补查对应行。multi-row object
+   按垂直重叠计入每一行。未触达区域的 gap/overlap 仍由 public
+   `precheckFillerRepair()` 全局 gate 负责；placement/master commit 后必须先
+   `updateFillerRepair()`，live read 不能代替 snapshot row membership refresh；
 2. influence closure 内无 editable filler：swap tier 返回
    `UnrepairableBySwap`；若不存在可重铺 filler span，则返回
    `NeedsPlacementRepair`；
@@ -209,9 +209,10 @@ O(log n + 窗口内 filler)：
   邻居，收窄为对 inst.span 的二分，取代对 anchor 行与 ±1 行的整行扫描。
 
 这是**行为不变**的复杂度改进：选出的 filler 与投票结果完全一致，因此不改搜索
-语义、不动 engine 调用方式与任何接口数据结构，靠 247/247 全绿（normal + ASan）
-验证等价。**故意保留** adaptive expansion——它正是够到远处、非连续 filler 的机制，
-恰是稀疏场景所需（§3.2 的功能边界仍待 §4.1 influence closure 才根本解决）。
+语义、不动 engine 调用方式与任何接口数据结构，靠 250/250 normal CTest
+验证等价。**故意保留** contiguous adaptive expansion；它能沿连续 filler run
+渐进扩展，但不能跨越 std cell 或空隙触达非连续 filler。该功能边界仍需 §4.1 的
+sound influence closure，或未来 replace/move/rewrite tier，才能根本解决。
 
 ## 6. 建议实施顺序
 
