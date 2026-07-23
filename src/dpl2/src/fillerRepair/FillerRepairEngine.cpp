@@ -180,9 +180,10 @@ bool supportedOrientation(eUTL::PhysOrientation orientation)
          || orientation == eUTL::PhysOrientationE::MY;
 }
 
-// MUST match the checker's buildMasters predicate
-// (isCoreFiller() || isPadFiller()).
-bool isFillerMaster(const eLIB::PhysLibCell& cell)
+// Used only to reject an obviously non-standard target replacement. Filler
+// authority itself is explicit: Node::isFiller() for placed instances and the
+// fillerSetting allow-list for replacement candidates.
+bool hasUdmFillerType(const eLIB::PhysLibCell& cell)
 {
   return cell.getType().isCoreFiller() || cell.getType().isPadFiller();
 }
@@ -204,7 +205,7 @@ std::string masterDebug(const eLIB::PhysLibCell& cell)
 bool isStandardCellMaster(const eLIB::PhysLibCell& cell)
 {
   return cell.getType().isCore() && !cell.getType().isBlock()
-         && !isFillerMaster(cell);
+         && !hasUdmFillerType(cell);
 }
 
 ViolationKind toKind(ipl::RuleSource source)
@@ -267,7 +268,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
   }
 
   // --- rows: RowId = PhysRow iteration index over ALL rows (the checker's
-  // convention); legal spans and uniformity checks cover non-pad rows only.
+  // convention); legal spans and compatibility checks cover non-pad rows.
   struct RowFrame
   {
     DbCoord originX = 0;
@@ -335,16 +336,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
                          " gridSiteWidth=", grid->getSiteWidth().v,
                          " checkerSiteWidth=", checker->siteWidth()));
         }
-        if (row_height_ == 0) {
+        if (row_height_ == 0 || (height > 0 && height < row_height_)) {
           row_height_ = height;
-        } else if (row_height_ != height) {
-          addProblem(Severity::Fatal, "NonUniformRowHeight",
-                     cat("non-pad rows do not share one row height: "
-                         "reference={",
-                         showRow(referenceRowId,
-                                 frames[static_cast<size_t>(referenceRowId)]),
-                         "} observed={", showRow(rowId, frame),
-                         "} engineRowHeight=", row_height_));
         }
         const DbCoord spanWidth = (bbox.getXH() - bbox.getXL()).getStorage();
         if (spanWidth <= 0 || width <= 0 || spanWidth % width != 0) {
@@ -360,6 +353,21 @@ void FillerRepairEngine::Impl::buildPlannerData()
       ++rowId;
     }
     by_row_.resize(frames.size());
+  }
+  for (size_t i = 0; i < frames.size(); ++i) {
+    const RowFrame& frame = frames[i];
+    if (!frame.isPad
+        && (frame.siteHeight <= 0 || row_height_ <= 0
+            || frame.siteHeight % row_height_ != 0)) {
+      addProblem(Severity::Fatal, "IncompatibleRowHeight",
+                 cat("non-pad row height is not an integer multiple of the "
+                     "base row height: observed={",
+                     showRow(static_cast<RowId>(i), frame),
+                     "} baseRowHeight=", row_height_,
+                     " heightModuloBase=",
+                     row_height_ > 0 ? frame.siteHeight % row_height_
+                                     : frame.siteHeight));
+    }
   }
   if (site_width_ <= 0 || row_height_ <= 0 || row_list_.empty()) {
     addProblem(Severity::Fatal, "MissingRowGeometry",
@@ -488,7 +496,9 @@ void FillerRepairEngine::Impl::buildPlannerData()
     info.id = id;
     info.width = cell->getWidth().getStorage();
     info.height = heightInRows(cell->getHeight().getStorage());
-    info.isFiller = isFillerMaster(*cell);
+    // Replacement masters have no Node. The configured allow-list is their
+    // sole filler authority; UDM macro type is intentionally not consulted.
+    info.isFiller = isConfiguredFiller(cell->getLibCellId());
 
     // VT/polarity from implant RECT shapes (R0 frame).
     DbCoord bottomYl = 0;
@@ -553,15 +563,11 @@ void FillerRepairEngine::Impl::buildPlannerData()
         continue;
       }
       const MasterInfo* info = masterInfo(static_cast<MasterId>(id));
-      if (info == nullptr || !info->isFiller) {
-        addProblem(Severity::Fatal, "ConfiguredMasterNotFiller",
-                   cat("configured master failed filler classification: "
+      if (info == nullptr) {
+        addProblem(Severity::Fatal, "ConfiguredMasterMissingMetadata",
+                   cat("configured filler master has no planner metadata: "
                        "configuredIndex=",
                        configuredIndex, " networkMasterId=", id,
-                       " masterInfoPresent=", info != nullptr,
-                       " masterInfoIsFiller=",
-                       info != nullptr ? info->isFiller : false,
-                       " typePredicate=", isFillerMaster(*cell),
                        " {", masterDebug(*cell), "}"));
         ++configuredIndex;
         continue;
@@ -585,8 +591,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
                    " networkMasters=", network->getMasters().size()));
   }
 
-  // --- placed instances: Network nodes with the checker's exact filters and
-  // frame (state from the PhysCell, x relative to the row origin).
+  // --- placed instances: Network nodes with the checker's exact placement
+  // filters/frame. Node owns per-instance filler classification.
   instances_.resize(network->getNodes().size());
   udm_refs_.resize(network->getNodes().size());
   for (const auto& nodePtr : network->getNodes()) {
@@ -649,15 +655,10 @@ void FillerRepairEngine::Impl::buildPlannerData()
       continue;
     }
 
-    // Frame-coherence gate. The checker mixes two frames: its init/track
-    // pattern and our request wire use PhysRow ITERATION order with x
-    // relative to the row origin, while its overlay scan resolves committed
-    // neighbours and swapped fillers through Grid (gridSnapDownY/gridX:
-    // non-pad rows by y, core-relative). The chain is only correct when the
-    // two coincide for every placed node -- i.e. pad rows do not precede
-    // standard rows, iteration order is y-sorted, and the shared row origin
-    // is the core edge. On any other design the checker would compare mixed
-    // frames SILENTLY; refuse the snapshot loudly here instead.
+    // Keep the engine's snapshot in the same frame as the unchanged checker:
+    // PhysRow iteration order and x relative to each row origin. The checker
+    // also resolves overlay neighbours through Grid, so fail closed if those
+    // frames do not coincide for a placed node.
     const RowId gridRow = static_cast<RowId>(grid->gridSnapDownY(node).v);
     if (gridRow != rowId) {
       addProblem(Severity::Fatal, "RowFrameMismatch",
@@ -669,8 +670,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
                      grid->getRowCount().v, " physRows=", frames.size(),
                      " physRowData={",
                      showRow(rowId, frames[static_cast<size_t>(rowId)]),
-                     "}; pad rows before standard rows or non-y-sorted row "
-                     "iteration is not supported"));
+                     "}"));
       continue;
     }
     const DbCoord gridCol = static_cast<DbCoord>(grid->gridX(node).v);
@@ -694,8 +694,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
     }
 
     const MasterId masterId = static_cast<MasterId>(node->getMaster()->getId());
-    const MasterInfo* info = masterInfo(masterId);
-    if (info == nullptr) {
+    if (masterInfo(masterId) == nullptr) {
       addProblem(Severity::Fatal, "UnknownMaster",
                  cat("node references a master absent from planner snapshot: "
                      "node=",
@@ -706,21 +705,13 @@ void FillerRepairEngine::Impl::buildPlannerData()
                      " {", masterDebug(*cell), "}"));
       continue;
     }
-    const bool isFiller = isFillerMaster(*cell);
-    if (node->isFiller() != isFiller) {
-      addProblem(Severity::Fatal, "FillerClassificationMismatch",
-                 cat("node filler flag disagrees with physical master: node=",
-                     node->getId(), " leafCell=", lcId.getIndexValue(),
-                     " nodeType=", static_cast<int>(node->getType()),
-                     " nodeIsFiller=", node->isFiller(),
-                     " nodeIsStdCell=", node->isStdCell(),
-                     " masterId=", masterId,
-                     " masterInfoIsFiller=", info->isFiller,
-                     " typePredicate=", isFiller,
-                     " inConfiguredFillerList=",
-                     isConfiguredFiller(cell->getLibCellId()), " {",
-                     masterDebug(*cell), "}"));
-      continue;
+    MasterInfo& info = *masters_[static_cast<size_t>(masterId)];
+    const bool isFiller = node->isFiller();
+    if (isFiller) {
+      // A placed filler master may be guard-only and absent from the
+      // replacement allow-list. Preserve it as filler planner metadata while
+      // keeping filler_master_ids_ restricted to configured candidates.
+      info.isFiller = true;
     }
 
     const InstanceId id = static_cast<InstanceId>(node->getId());
@@ -730,7 +721,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
                           xOffset,
                           toPlannerOrient(physCell.getOrient()),
                           isFiller};
-    if (placed.isFiller && info->vt == kUnknownVt) {
+    if (placed.isFiller && info.vt == kUnknownVt) {
       addProblem(Severity::Warning, "FillerWithoutVt",
                  cat("placed filler ", id, " uses master ", masterId,
                      " without implant VT metadata -> not swappable"));
@@ -740,17 +731,17 @@ void FillerRepairEngine::Impl::buildPlannerData()
     instances_[id] = placed;
     udm_refs_[id] = UdmRef{lcId, cell->getLibCellId(), origin.getX(),
                            origin.getY()};
-    for (DbCoord offset = 0; offset < std::max<DbCoord>(info->height, 1);
+    for (DbCoord offset = 0; offset < std::max<DbCoord>(info.height, 1);
          ++offset) {
       PlacedInstance rowCopy = placed;
       rowCopy.rowId = rowId + static_cast<RowId>(offset);
-      if (rowCopy.rowId >= static_cast<RowId>(frames.size())) {
+      if (rowCopy.rowId >= static_cast<RowId>(by_row_.size())) {
         addProblem(Severity::Fatal, "MultiRowOutsideRows",
                    cat("multi-row node extends outside PhysRow inventory: "
                        "node=",
                        node->getId(), " leafCell=", lcId.getIndexValue(),
                        " startRow=", rowId,
-                       " masterHeightRows=", info->height,
+                       " masterHeightRows=", info.height,
                        " failingOffset=", offset,
                        " requestedRow=", rowCopy.rowId,
                        " physRows=", frames.size(), " origin=(",
@@ -1329,7 +1320,6 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   }
   const Node* targetNode = network_->getNode(targetId);
   if (targetNode == nullptr || !targetNode->isStdCell() || inst->isFiller
-      || oldMaster->isFiller
       || !isStandardCellMaster(*newMaster)) {
     addDiagnostic(Severity::Fatal,
                   "TargetNotStdCell",

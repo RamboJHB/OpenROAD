@@ -126,6 +126,7 @@ default and does not affect search behavior.
 | hard macros | Network Nodes; placed/fixed footprint supplies coverage |
 | hard/soft blockages and padding | Grid; hard is invalid, soft remains valid, padding is reserved |
 | filler allow-list | `fillerSetting::getFillerPhysCells()` |
+| placed filler identity | `Node::isFiller()` |
 | VT/band polarity | `PhysLibCell` implant shapes + checker `Layer::Vt/Polar` |
 | implant legality | final `ImplantLayerChecker` |
 | commit | opto/infrastructure |
@@ -208,7 +209,7 @@ supplied infrastructure/checker sources.
 The CMake below `fillerRepair/test` is a portable test package, not the
 destination's runtime owner. It builds an 82-case planner executable plus a
 71-case E2E executable that compiles the complete checker/engine source list.
-The separate local harness retains the 99 fake-UDM checker/engine cases.
+The separate local harness retains the 100 fake-UDM checker/engine cases.
 
 Test dependencies: GoogleTest, Boost, TBB, C++17/C++20 and CMake 3.20+. Commands:
 
@@ -243,8 +244,8 @@ the internal repair precheck gate, hard macro and hard/soft blockage semantics,
 side-effect-free invalid replacement requests and snapshot update.
 
 2026-07-24 verification result: portable package 153/153 (planner 82/82
-plus final-checker/precheck E2E 71/71), checker/engine fake-UDM E2E 99/99, and
-full normal and ASan CTest 252/252. The complete source list also builds under
+plus final-checker/precheck E2E 71/71), checker/engine fake-UDM E2E 100/100, and
+full normal and ASan CTest 253/253. The complete source list also builds under
 `-Wall -Wextra -Werror`. On Apple with an
 unsanitized Homebrew GoogleTest, ASan discovery and CTest use
 `ASAN_OPTIONS=detect_container_overflow=0` to avoid incompatible libc++ container annotations. The
@@ -252,17 +253,23 @@ engine cases include three layouts proving that unused-layer persistent
 checker diagnostics remain non-blocking while a used implant layer with a
 missing rule makes initialization fail closed.
 
-The 99 checker/engine cases genuinely exercise Session, PhysDesMgr, physical
+The 100 checker/engine cases genuinely exercise Session, PhysDesMgr, physical
 IDs, filler-master lookup, stale-Network rejection and the infra-first snapshot
 update contract, so the repository-local test-only UDM-compatible provider and
 its one CMake include switch are still required. Runtime sources contain no
 fake include or conditional.
 
-Initialization failures now carry the raw data needed for destination-design
-triage. Row failures report both reference and observed row/site geometry plus
-the Grid, checker and engine site widths. Master/instance failures report
-Network and physical IDs, Node classification, configured-list membership and
-the physical macro-type flags. These diagnostics are returned even when
+Initialization accepts mixed non-pad site heights when each height is an
+integer multiple of the smallest base height. Placed filler identity is
+authoritative from `Node::isFiller()` and configured replacement candidates
+are authoritative from `fillerSetting`; physical macro-type filler flags do
+not block engine initialization. The unchanged checker still performs its own
+overlay-request validation, so a replacement master rejected by checker
+metadata yields a safe no-solution result rather than bypassing DRC.
+
+Initialization failures carry the raw data needed for destination-design
+triage. Row failures report reference and observed row/site geometry plus the
+Grid, checker and engine site widths. These diagnostics are returned even when
 optional planner debug logging is disabled.
 
 ## Integration risks

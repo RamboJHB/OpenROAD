@@ -143,6 +143,16 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
                        kRowHeight,
                        kRowSites);
   }
+  if (setup.overlappingDoubleHeightRow) {
+    // A second site class may cover two base placement rows. Append it after
+    // the ordinary rows so PhysRow iteration order is deliberately not a Grid
+    // row-id mapping.
+    db.desMgr().addRow(0,
+                       kRowHeight,
+                       kSiteWidth,
+                       2 * kRowHeight,
+                       kRowSites);
+  }
   if (setup.padRowLast) {
     db.desMgr().addRow(setup.padRowOriginX,
                        kStandardRows * kRowHeight,

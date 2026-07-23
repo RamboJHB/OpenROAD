@@ -1,6 +1,6 @@
 # ImplantLayerChecker ↔ fillerRepair contract
 
-Updated: 2026-07-23.
+Updated: 2026-07-24.
 
 ## Final checker API
 
@@ -101,6 +101,21 @@ the new classes and all local checker/engine cases exercise the new boundary.
 This is a data-model alignment only; no DRC rule evaluation, scan behavior or
 planner algorithm changed.
 
+## 2026-07-24 engine initialization alignment
+
+No checker source changed. `FillerRepairEngine` now chooses the smallest
+non-pad PhysRow site height as its base height and accepts other non-pad site
+heights only when they are integer multiples of that base. Placed-instance
+filler identity comes from `Node::isFiller()`; the engine's replacement
+candidate universe comes from `fillerSetting::getFillerPhysCells()`. A
+disagreeing UDM macro-type filler flag therefore no longer blocks engine
+initialization.
+
+The checker retains its existing validation. In particular, it may still emit
+`replacement_master_not_filler` for a candidate its own metadata rejects. The
+engine treats that as a blocking result and returns no partial repair; it does
+not reinterpret or bypass checker legality.
+
 ## Row/column frames
 
 The checker internally uses TWO frames: `init(desMgr)` and the track pattern
@@ -199,7 +214,7 @@ synthetic doubles are same-level sources under `fillerRepair/test` and migrate w
 feature. Runtime engine coverage, UDM-compatible test data and its provider
 remain in the repository-local suite under `src/dpl2/test/local`. The runtime
 engine contains no snapshot builder or test conditional. The portable package
-passes 116/116; the full 2026-07-21 normal and ASan builds both pass 207/207,
+passes 153/153; the full 2026-07-24 normal and ASan builds both pass 253/253,
 with `-Wall -Wextra -Werror` clean.
 
 Future checker API or semantic changes must be recorded here before engine

@@ -140,13 +140,16 @@ with its real UDM/infrastructure/checker headers. Supplying
 `DPL2_RUNTIME_LIBRARIES` reuses the destination's owning targets; when omitted,
 the standalone fallback compiles the sibling infrastructure/checker sources.
 
-The 99-case fake-UDM checker/engine suite stays outside this directory
+The 100-case fake-UDM checker/engine suite stays outside this directory
 under `src/dpl2/test/local/`; see that directory's README for local commands
 and dependency details.
 
 Initialization diagnostics do not depend on `setDebugLogging()`. Fatal row
 geometry reports include the reference and observed row/site records and the
-Grid/checker/engine dimensions. Fatal master or instance classification
-reports include physical and Network IDs, Node flags, configured-filler-list
-membership and the physical macro-type predicates. This is intended to make a
-destination-design failure self-contained without changing repair behavior.
+Grid/checker/engine dimensions. Non-pad site heights may be integer multiples
+of the smallest base height. Placed filler identity comes from
+`Node::isFiller()` and replacement candidates come from the configured
+filler list; neither is rejected during engine initialization because a UDM
+macro-type filler flag disagrees.
+This keeps initialization tied to infrastructure classification without
+changing checker behavior.

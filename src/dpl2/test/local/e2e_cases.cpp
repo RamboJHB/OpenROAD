@@ -304,7 +304,7 @@ TEST(FillerRepairInitializationDiagnostics,
 }
 
 TEST(FillerRepairInitializationDiagnostics,
-     FillerMismatchReportsEveryClassificationSource)
+     NodeAndAllowListOverridePhysicalFillerType)
 {
   frt::DesignSetup setup;
   setup.misclassifiedFillerMasters = true;
@@ -326,28 +326,31 @@ TEST(FillerRepairInitializationDiagnostics,
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
 
-  EXPECT_FALSE(engine.init(objects.design().desMgr(), setting));
-  const auto diagnostics = engine.precheck().diagnostics;
-  const std::string all = diagnosticText(diagnostics);
-  EXPECT_TRUE(diagnosticContains(
-      diagnostics, "ConfiguredMasterNotFiller", "configuredIndex=0"))
-      << all;
-  EXPECT_TRUE(diagnosticContains(
-      diagnostics, "ConfiguredMasterNotFiller", "macroType=0"))
-      << all;
-  EXPECT_TRUE(diagnosticContains(
-      diagnostics, "ConfiguredMasterNotFiller", "coreFiller=0"))
-      << all;
-  EXPECT_TRUE(diagnosticContains(
-      diagnostics, "ConfiguredMasterNotFiller", "typePredicate=0"))
-      << all;
-  EXPECT_TRUE(diagnosticContains(
-      diagnostics, "FillerClassificationMismatch", "nodeIsFiller=1"))
-      << all;
-  EXPECT_TRUE(diagnosticContains(
-      diagnostics, "FillerClassificationMismatch",
-      "inConfiguredFillerList=1"))
-      << all;
+  ASSERT_TRUE(engine.init(objects.design().desMgr(), setting));
+  const frt::PhysicalSnapshot before = objects.design().snapshot();
+  const auto precheck = engine.precheck();
+  EXPECT_TRUE(precheck.isLegal) << diagnosticText(precheck.diagnostics);
+  EXPECT_EQ(objects.design().snapshot(), before);
+}
+
+TEST(FillerRepairInitializationDiagnostics,
+     MixedHeightPhysRowsUseSmallestBaseHeight)
+{
+  frt::DesignSetup setup;
+  setup.overlappingDoubleHeightRow = true;
+  EngineHarness harness(setup);
+  ASSERT_TRUE(harness.engineReady());
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  EXPECT_TRUE(harness.engine().precheck().isLegal);
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::Target),
+      harness.design().master(frt::MasterRole::TargetNew));
+  ASSERT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  ASSERT_EQ(outcome.changes.size(), 1U);
+  EXPECT_EQ(outcome.changes.front().new_lib_cell_,
+            harness.design().master(frt::MasterRole::RepairFiller)
+                .getLibCellId());
+  EXPECT_EQ(harness.design().snapshot(), before);
 }
 
 TEST_P(FillerRepairEngineE2E, CleanPlacementPrecheck)

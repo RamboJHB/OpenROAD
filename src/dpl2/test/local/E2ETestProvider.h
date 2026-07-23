@@ -67,6 +67,7 @@ struct DesignSetup
   int64_t padRowOriginX = 0;
   std::array<int64_t, kStandardRows> rowOriginX{0, 0, 0, 0, 0};
   std::array<int64_t, kStandardRows> rowSiteWidth{1, 1, 1, 1, 1};
+  bool overlappingDoubleHeightRow = false;
   bool misclassifiedFillerMasters = false;
   bool row0TailHardBlockage = false;
   bool row0TailSoftBlockage = false;
