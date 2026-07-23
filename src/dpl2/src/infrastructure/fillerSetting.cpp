@@ -68,7 +68,7 @@ fillerSetting::needAvoidAbut(std::pair<int, int> twoLibCell) const
     return avoid_pattern_.find(twoLibCell) != avoid_pattern_.end();
 }
 
-std::vector<const eLIB::PhysLibCell*> fillerSetting::getFillerMasters() const
+std::vector<const eLIB::PhysLibCell*> fillerSetting::getFillerPhysCells() const
 {
     std::vector<const eLIB::PhysLibCell*> result;
     if (design_ == nullptr) {

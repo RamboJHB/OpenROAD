@@ -122,7 +122,7 @@ PhysDesMgr, Grid, Network and one engine must describe one design revision.
 Network must contain every placed/fixed physical instance that can intersect
 the core, including hard macros. Placement blockages remain Grid state and are
 not Network Nodes. The engine borrows the initialized Grid/Network, registers all
-`getFillerMasters()` candidates, then constructs the checker. The checker path
+`getFillerPhysCells()` candidates, then constructs the checker. The checker path
 uses a request master already present in Network and rebuilds its private
 snapshot if that master was added after init. The direct UDM-handle test
 overload may validate and register an uninstantiated master. Requests rejected

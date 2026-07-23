@@ -23,7 +23,7 @@ public:
 
     // getter
     const std::vector<eLIB::LibCellID>& getFillerCells() const { return core_; }
-    std::vector<const eLIB::PhysLibCell*> getFillerMasters() const;
+    std::vector<const eLIB::PhysLibCell*> getFillerPhysCells() const;
     const std::map<std::pair<int, int>, bool>& getAvoidPattern() const
     {
       return avoid_pattern_;

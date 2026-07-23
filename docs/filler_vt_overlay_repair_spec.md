@@ -273,7 +273,7 @@ fail-closed,必须在 infrastructure 同步后成功 update 才能继续查询�
   soft blockage 保持 Grid 原有的可放置语义。std cell、filler 与 hard macro 必须
   作为 Network Node 导入并提供 coverage;placement blockage 属于 Grid,不作为 Node。
   它不检查 target、master size、candidate、ID mapping 或 implant DRC。
-- candidate universe 只来自 `fillerSetting::getFillerMasters()`;repair 内部过滤
+- candidate universe 只来自 `fillerSetting::getFillerPhysCells()`;repair 内部过滤
   同宽同高、异 VT、filler-only 与相同 bottom-band polarity layout。
 - checker/planner instance/master ID 固定为 `Node::getId()` / `Master::getId()`;
   `LeafCellID` / `LibCellID` 是 runtime `FillerCellRecord` handle。
@@ -537,7 +537,7 @@ orientation 兼容;没有可用替换时返回 empty candidates + diagnostics,�
 empty candidates 保留为防御性路径,不是常态。
 
 runtime engine 的候选 universe 必须由
-`fillerSetting::getFillerMasters()` 取得,再解析为 `Network::Master::getId()`;
+`fillerSetting::getFillerPhysCells()` 取得,再解析为 `Network::Master::getId()`;
 不得从 placed-instance 枚举猜测,也不得解析 master 名。configured master 即使
 尚未实例化也必须在 checker 构造前注册进 Network。
 

@@ -36,7 +36,7 @@ The V2.1 swap-only planner and real-UDM runtime E2E package are complete.
 5. Opto calls `ImplantLayerChecker::precheckFillerRepair()` before mutation; it checks gap/overlap only
    inside maximal supplied-Grid runs where pixels are valid and not reserved
    by halo/padding. Blockage cuts and legal empty regions are outside scope.
-6. Candidates come only from `fillerSetting::getFillerMasters()`.
+6. Candidates come only from `fillerSetting::getFillerPhysCells()`.
 7. Instance/master IDs are `Node::getId()` / `Master::getId()`; physical wire
    handles are `LeafCellID` / `LibCellID` in `FillerCellRecord`.
 8. Existing Network supplies placed masters. Configured filler masters are

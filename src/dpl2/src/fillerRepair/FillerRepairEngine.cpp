@@ -467,7 +467,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
     // Empty allow list (or nothing usable in it) means repair could never
     // offer a swap -- fail init instead of failing every later repair.
     addProblem(Severity::Fatal, "NoConfiguredFillerMaster",
-               "fillerSetting::getFillerMasters() yields no usable filler "
+               "fillerSetting::getFillerPhysCells() yields no usable filler "
                "master");
   }
 
@@ -1665,9 +1665,9 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
              "fatal: PhysDesMgr is not the Session current design");
     return false;
   }
-  if (fillerSettings.getFillerMasters().empty()) {
+  if (fillerSettings.getFillerPhysCells().empty()) {
     failInit("empty_filler_allow_list",
-             "fatal: fillerSetting::getFillerMasters() is empty");
+             "fatal: fillerSetting::getFillerPhysCells() is empty");
     return false;
   }
   if (network_->getNodes().empty() || network_->getMasters().empty()) {
@@ -1693,11 +1693,11 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
     }
   }
 
-  filler_masters_ = fillerSettings.getFillerMasters();
+  filler_masters_ = fillerSettings.getFillerPhysCells();
   for (const eLIB::PhysLibCell* master : filler_masters_) {
     if (master == nullptr) {
       failInit("null_filler_master",
-               "fatal: getFillerMasters() returned null");
+               "fatal: getFillerPhysCells() returned null");
       continue;
     }
     if (!ensureMasterRegistered(*master)) {

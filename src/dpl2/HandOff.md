@@ -125,7 +125,7 @@ default and does not affect search behavior.
 | cell/master topology and checker IDs | runtime Network |
 | hard macros | Network Nodes; placed/fixed footprint supplies coverage |
 | hard/soft blockages and padding | Grid; hard is invalid, soft remains valid, padding is reserved |
-| filler allow-list | `fillerSetting::getFillerMasters()` |
+| filler allow-list | `fillerSetting::getFillerPhysCells()` |
 | VT/band polarity | `PhysLibCell` implant shapes + checker `Layer::Vt/Polar` |
 | implant legality | final `ImplantLayerChecker` |
 | commit | opto/infrastructure |
