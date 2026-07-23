@@ -44,6 +44,19 @@ std::string diagnosticText(
   return text;
 }
 
+bool diagnosticContains(
+    const std::vector<dpl2::ipl::Diagnostic>& diagnostics,
+    const std::string& status,
+    const std::string& text)
+{
+  return std::any_of(
+      diagnostics.begin(), diagnostics.end(),
+      [&](const dpl2::ipl::Diagnostic& diagnostic) {
+        return diagnostic.status == status
+               && diagnostic.message.find(text) != std::string::npos;
+      });
+}
+
 bool sameChanges(const dpl2::ipl::FillerChanges& lhs,
                  const dpl2::ipl::FillerChanges& rhs)
 {
@@ -253,6 +266,89 @@ class FillerRepairEngineE2E
 };
 
 }  // namespace
+
+TEST(FillerRepairInitializationDiagnostics,
+     NonUniformSiteWidthReportsBothRowsAndConsumers)
+{
+  frt::DesignSetup setup;
+  setup.rowSiteWidth[3] = 2;
+  ProviderObjects objects(setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::fillerSetting setting(objects.design().design());
+  setting.addFillerCell(kDefaultFillers);
+  dpl2::fillerRepair::FillerRepairEngine engine(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+
+  EXPECT_FALSE(engine.init(objects.design().desMgr(), setting));
+  const auto diagnostics = engine.precheck().diagnostics;
+  const std::string all = diagnosticText(diagnostics);
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "NonUniformSiteWidth", "reference={row=0"))
+      << all;
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "NonUniformSiteWidth", "observed={row=3"))
+      << all;
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "NonUniformSiteWidth", "site=\"coreSite\""))
+      << all;
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "NonUniformSiteWidth", "siteWidth=2"))
+      << all;
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "NonUniformSiteWidth", "gridSiteWidth=1"))
+      << all;
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "NonUniformSiteWidth", "checkerSiteWidth=1"))
+      << all;
+}
+
+TEST(FillerRepairInitializationDiagnostics,
+     FillerMismatchReportsEveryClassificationSource)
+{
+  frt::DesignSetup setup;
+  setup.misclassifiedFillerMasters = true;
+  ProviderObjects objects(setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  for (const frt::CellRole role :
+       {frt::CellRole::Row0TailFiller,
+        frt::CellRole::Row1TailFiller,
+        frt::CellRole::TargetLeftFiller,
+        frt::CellRole::TargetRightFiller}) {
+    dpl2::Node* node = objects.infrastructure().network()->getNode(
+        objects.design().cell(role));
+    ASSERT_NE(node, nullptr);
+    node->setType(dpl2::Node::FILLER);
+  }
+  dpl2::fillerSetting setting(objects.design().design());
+  setting.addFillerCell(kDefaultFillers);
+  dpl2::fillerRepair::FillerRepairEngine engine(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+
+  EXPECT_FALSE(engine.init(objects.design().desMgr(), setting));
+  const auto diagnostics = engine.precheck().diagnostics;
+  const std::string all = diagnosticText(diagnostics);
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "ConfiguredMasterNotFiller", "configuredIndex=0"))
+      << all;
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "ConfiguredMasterNotFiller", "macroType=0"))
+      << all;
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "ConfiguredMasterNotFiller", "coreFiller=0"))
+      << all;
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "ConfiguredMasterNotFiller", "typePredicate=0"))
+      << all;
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "FillerClassificationMismatch", "nodeIsFiller=1"))
+      << all;
+  EXPECT_TRUE(diagnosticContains(
+      diagnostics, "FillerClassificationMismatch",
+      "inConfiguredFillerList=1"))
+      << all;
+}
 
 TEST_P(FillerRepairEngineE2E, CleanPlacementPrecheck)
 {

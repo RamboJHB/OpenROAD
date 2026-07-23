@@ -96,7 +96,11 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
 
   for (const MasterSpec& spec : kMasters) {
     eLIB::PhysLibCell& cell = db.addMaster(
-        spec.name, spec.libIndex, spec.width, kRowHeight, spec.isFiller);
+        spec.name,
+        spec.libIndex,
+        spec.width,
+        kRowHeight,
+        spec.isFiller && !setup.misclassifiedFillerMasters);
     fake_udm::DesignDb::addShape(cell, spec.nLayerRel, 0, kRowHeight / 2);
     fake_udm::DesignDb::addShape(
         cell, spec.pLayerRel, kRowHeight / 2, kRowHeight);
@@ -135,7 +139,7 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
   for (int row = 0; row < kStandardRows; ++row) {
     db.desMgr().addRow(setup.rowOriginX[static_cast<size_t>(row)],
                        row * kRowHeight,
-                       kSiteWidth,
+                       setup.rowSiteWidth[static_cast<size_t>(row)],
                        kRowHeight,
                        kRowSites);
   }

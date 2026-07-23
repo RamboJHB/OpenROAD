@@ -1,6 +1,6 @@
 # AGENTS.md — dpl2 filler repair project memory
 
-Updated: 2026-07-21. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-24. Branch: `claude/wizardly-carson-secahu`.
 
 Read `docs/filler_vt_overlay_repair_spec.md`, `src/dpl2/HandOff.md`,
 `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md` and the fillerRepair/test READMEs
@@ -17,8 +17,8 @@ The V2.1 swap-only planner and real-UDM runtime E2E package are complete.
 | Infrastructure | existing runtime Grid/Network are borrowed; `Network::updateNodes()` refreshes an unchanged instance set; engine registers configured filler masters and rebuilds for request masters added after init |
 | Checker | final blocking contract, accessor-based `Layer`/`Rule`, Node/Master IDs and FillerCellRecord wire |
 | Runtime API | caller owns one `ImplantLayerChecker`; it owns the engine, calls it from `check()`, and exposes precheck/update plus the last `FillerChanges` |
-| Portable tests | 116 GoogleTests: 82 planner cases plus 34 final-checker/planner/precheck E2E cases; no destination fixture provider |
-| Local regression | 91 fake-UDM checker/engine cases; repository CTest total 207 |
+| Portable tests | 153 GoogleTests: 82 planner cases plus 71 final-checker/planner/precheck E2E cases; no destination fixture provider |
+| Local regression | 99 fake-UDM checker/engine cases; repository CTest total 252 |
 | CMake | `fillerRepair/sources.cmake` exports runtime/planner/precheck/test source sets; the standalone test CMake accepts destination UDM include/link inputs |
 
 ## Fixed decisions
@@ -90,11 +90,11 @@ src/dpl2/test/local/run_fake_udm_e2e.sh
 SANITIZE=address src/dpl2/test/local/run_fake_udm_e2e.sh
 ```
 
-`fillerRepair/test` travels with the feature and contains 116 portable GoogleTests:
-82 database-free planner cases/doubles plus 34 final-checker/planner/precheck
+`fillerRepair/test` travels with the feature and contains 153 portable GoogleTests:
+82 database-free planner cases/doubles plus 71 final-checker/planner/precheck
 E2E cases. E2E data is built with `ImplantLayerCheckerHelper`; it needs no
 DEF/LEF reader or destination fixture provider. The local UDM-compatible
-include tree, provider and 91 checker/engine cases remain under `src/dpl2/test/local`.
+include tree, provider and 99 checker/engine cases remain under `src/dpl2/test/local`.
 
 The destination copies `fillerRepair/`, applies the small checker entry patch,
 and preserves the infrastructure `Network::updateNodes()` seam. Every test

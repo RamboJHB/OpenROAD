@@ -1,8 +1,13 @@
 # Repository-local fillerRepair harness
 
 This directory is intentionally not part of the migration payload. It owns the
-UDM-compatible include tree, the 97-case `E2ETestProvider` suite and local
+UDM-compatible include tree, the 99-case `E2ETestProvider` suite and local
 runner scripts.
+
+The suite includes focused initialization diagnostics for non-uniform row-site
+widths and conflicting Node/physical filler classifications. They verify that
+the returned fatal text contains enough raw row, Grid, checker, Network and
+physical-master data to analyze a real-design failure.
 
 The portable 82-case planner suite and its database-free doubles now live below
 `src/dpl2/src/fillerRepair/test/` as same-level sources; `run_planner_tests.sh` is only a

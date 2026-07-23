@@ -187,6 +187,20 @@ bool isFillerMaster(const eLIB::PhysLibCell& cell)
   return cell.getType().isCoreFiller() || cell.getType().isPadFiller();
 }
 
+std::string masterDebug(const eLIB::PhysLibCell& cell)
+{
+  const eLIB::PhysMacroType& type = cell.getType();
+  return cat("libCell=", cell.getLibCellId().getIndexValue(),
+             " width=", cell.getWidth().getStorage(),
+             " height=", cell.getHeight().getStorage(),
+             " macroType=", static_cast<int>(type.getType()),
+             " typeFlags{core=", type.isCore(),
+             ",coreFiller=", type.isCoreFiller(),
+             ",padFiller=", type.isPadFiller(),
+             ",block=", type.isBlock(),
+             ",endcap=", type.isEndcap(), "}");
+}
+
 bool isStandardCellMaster(const eLIB::PhysLibCell& cell)
 {
   return cell.getType().isCore() && !cell.getType().isBlock()
@@ -245,7 +259,10 @@ void FillerRepairEngine::Impl::buildPlannerData()
   if (desMgr == nullptr || grid == nullptr || network == nullptr
       || checker == nullptr) {
     addProblem(Severity::Fatal, "MissingDependency",
-               "engine initialization needs desMgr, grid, network and checker");
+               cat("engine initialization dependency is missing: desMgr=",
+                   desMgr != nullptr, " grid=", grid != nullptr,
+                   " network=", network != nullptr,
+                   " checker=", checker != nullptr));
     return;
   }
 
@@ -254,38 +271,88 @@ void FillerRepairEngine::Impl::buildPlannerData()
   struct RowFrame
   {
     DbCoord originX = 0;
+    DbCoord originY = 0;
     DbCoord yLo = 0;
     DbCoord yHi = 0;
+    DbCoord siteWidth = 0;
+    DbCoord siteHeight = 0;
+    DbCoord bboxXl = 0;
+    DbCoord bboxYl = 0;
+    DbCoord bboxXh = 0;
+    DbCoord bboxYh = 0;
+    int siteCount = 0;
+    std::string siteName;
     bool isPad = false;
   };
   std::vector<RowFrame> frames;
+  RowId referenceRowId = -1;
+  const auto showRow = [](RowId rowId, const RowFrame& frame) {
+    return cat("row=", rowId,
+               " site=\"", frame.siteName, "\"",
+               " isPad=", frame.isPad,
+               " siteWidth=", frame.siteWidth,
+               " siteHeight=", frame.siteHeight,
+               " siteCount=", frame.siteCount,
+               " origin=(", frame.originX, ",", frame.originY, ")",
+               " bbox=[", frame.bboxXl, ",", frame.bboxYl, ",",
+               frame.bboxXh, ",", frame.bboxYh, ")");
+  };
   {
     RowId rowId = 0;
     for (const eUNL::PhysRow& row : desMgr->getPhysRowIter()) {
       RowFrame frame;
       frame.isPad = row.getSite().getIsPad();
       frame.originX = row.getOrigin().getX().getStorage();
+      frame.originY = row.getOrigin().getY().getStorage();
       frame.yLo = row.getOrigin().getY().getStorage();
       frame.yHi = (row.getOrigin().getY() + row.getSite().getHeight())
                       .getStorage();
+      frame.siteWidth = row.getSite().getWidth().getStorage();
+      frame.siteHeight = row.getSite().getHeight().getStorage();
+      frame.siteCount = row.getSiteCnt();
+      frame.siteName = row.getSite().getName();
+      const eUTL::Rect bbox = row.getBbox();
+      frame.bboxXl = bbox.getXL().getStorage();
+      frame.bboxYl = bbox.getYL().getStorage();
+      frame.bboxXh = bbox.getXH().getStorage();
+      frame.bboxYh = bbox.getYH().getStorage();
       if (!frame.isPad) {
-        const DbCoord width = row.getSite().getWidth().getStorage();
-        const DbCoord height = row.getSite().getHeight().getStorage();
-        if (site_width_ == 0) site_width_ = width;
-        else if (site_width_ != width) {
+        const DbCoord width = frame.siteWidth;
+        const DbCoord height = frame.siteHeight;
+        if (referenceRowId < 0) {
+          referenceRowId = rowId;
+        }
+        if (site_width_ == 0) {
+          site_width_ = width;
+        } else if (site_width_ != width) {
           addProblem(Severity::Fatal, "NonUniformSiteWidth",
-                     "non-pad rows do not share one site width");
+                     cat("non-pad rows do not share one site width: "
+                         "reference={",
+                         showRow(referenceRowId,
+                                 frames[static_cast<size_t>(referenceRowId)]),
+                         "} observed={", showRow(rowId, frame),
+                         "} engineSiteWidth=", site_width_,
+                         " gridSiteWidth=", grid->getSiteWidth().v,
+                         " checkerSiteWidth=", checker->siteWidth()));
         }
-        if (row_height_ == 0) row_height_ = height;
-        else if (row_height_ != height) {
+        if (row_height_ == 0) {
+          row_height_ = height;
+        } else if (row_height_ != height) {
           addProblem(Severity::Fatal, "NonUniformRowHeight",
-                     "non-pad rows do not share one row height");
+                     cat("non-pad rows do not share one row height: "
+                         "reference={",
+                         showRow(referenceRowId,
+                                 frames[static_cast<size_t>(referenceRowId)]),
+                         "} observed={", showRow(rowId, frame),
+                         "} engineRowHeight=", row_height_));
         }
-        const eUTL::Rect bbox = row.getBbox();
         const DbCoord spanWidth = (bbox.getXH() - bbox.getXL()).getStorage();
         if (spanWidth <= 0 || width <= 0 || spanWidth % width != 0) {
           addProblem(Severity::Fatal, "InvalidRowSpan",
-                     cat("row ", rowId, " has an invalid legal span"));
+                     cat("invalid legal row span: {", showRow(rowId, frame),
+                         "} spanWidth=", spanWidth,
+                         " spanModuloSiteWidth=",
+                         width > 0 ? spanWidth % width : spanWidth));
         }
         row_list_.push_back(rowId);
       }
@@ -296,12 +363,26 @@ void FillerRepairEngine::Impl::buildPlannerData()
   }
   if (site_width_ <= 0 || row_height_ <= 0 || row_list_.empty()) {
     addProblem(Severity::Fatal, "MissingRowGeometry",
-               "no usable standard-cell row geometry");
+               cat("no usable standard-cell row geometry: physRows=",
+                   frames.size(), " nonPadRows=", row_list_.size(),
+                   " engineSiteWidth=", site_width_,
+                   " engineRowHeight=", row_height_,
+                   " gridSiteWidth=", grid->getSiteWidth().v,
+                   " gridRows=", grid->getRowCount().v,
+                   " gridSitesPerRow=", grid->getRowSiteCount().v,
+                   " checkerSiteWidth=", checker->siteWidth()));
   }
   if (checker->siteWidth() != site_width_) {
     addProblem(Severity::Fatal, "CheckerSiteWidthMismatch",
                cat("checker site width ", checker->siteWidth(),
-                   " differs from infrastructure ", site_width_));
+                   " differs from engine reference ", site_width_,
+                   "; gridSiteWidth=", grid->getSiteWidth().v,
+                   " reference={",
+                   referenceRowId >= 0
+                       ? showRow(referenceRowId,
+                                 frames[static_cast<size_t>(referenceRowId)])
+                       : std::string("none"),
+                   "}"));
   }
   // Planner windows/guards and the checker's inter-row comparisons both use
   // ONE x frame across rows; refuse non-pad rows with different origin X.
@@ -314,9 +395,16 @@ void FillerRepairEngine::Impl::buildPlannerData()
     for (size_t i = 0; i < frames.size(); ++i) {
       if (!frames[i].isPad && frames[i].originX != firstNonPad->originX) {
         addProblem(Severity::Fatal, "RowOriginMisaligned",
-                   cat("row ", i, " origin X ", frames[i].originX,
-                       " differs from first non-pad row origin X ",
-                       firstNonPad->originX));
+                   cat("non-pad row origins do not share one X frame: "
+                       "reference={",
+                       showRow(static_cast<RowId>(
+                                   std::distance(frames.begin(), firstNonPad)),
+                               *firstNonPad),
+                       "} observed={",
+                       showRow(static_cast<RowId>(i), frames[i]),
+                       "} gridCoreXl=",
+                       grid->getCore().getXL().getStorage(),
+                       " gridSiteWidth=", grid->getSiteWidth().v));
         break;
       }
     }
@@ -358,6 +446,15 @@ void FillerRepairEngine::Impl::buildPlannerData()
                ? std::max<DbCoord>((height + row_height_ - 1) / row_height_, 1)
                : 1;
   };
+  const auto isConfiguredFiller =
+      [&fillerMasters](eLIB::LibCellID libCellId) {
+        return std::any_of(
+            fillerMasters.begin(), fillerMasters.end(),
+            [libCellId](const eLIB::PhysLibCell* candidate) {
+              return candidate != nullptr
+                     && candidate->getLibCellId() == libCellId;
+            });
+      };
 
   // --- implant metadata: VT family / band polarity per master, derived from
   // the master's implant shapes exactly like the checker (layer identity via
@@ -434,8 +531,10 @@ void FillerRepairEngine::Impl::buildPlannerData()
   // ids. Entries the Network does not know cannot be validated by the
   // checker either (it builds masters from the Network) -> Warning + skip.
   {
+    size_t configuredIndex = 0;
     for (const eLIB::PhysLibCell* cell : fillerMasters) {
       if (cell == nullptr) {
+        ++configuredIndex;
         continue;
       }
       const int id = network->getMasterId(cell->getLibCellId());
@@ -445,18 +544,30 @@ void FillerRepairEngine::Impl::buildPlannerData()
         // was built against different inputs -- refuse instead of silently
         // shrinking the candidate universe.
         addProblem(Severity::Fatal, "ConfiguredMasterNotInNetwork",
-                   cat("configured filler master libCell ",
-                       static_cast<int>(cell->getLibCellId().getIndexValue()),
-                       " is not in the Network"));
+                   cat("configured filler master is not in Network: "
+                       "configuredIndex=",
+                       configuredIndex, " {", masterDebug(*cell),
+                       "} networkMasters=", network->getMasters().size(),
+                       " networkMasterId=", id));
+        ++configuredIndex;
         continue;
       }
       const MasterInfo* info = masterInfo(static_cast<MasterId>(id));
       if (info == nullptr || !info->isFiller) {
         addProblem(Severity::Fatal, "ConfiguredMasterNotFiller",
-                   cat("configured master ", id, " is not a filler master"));
+                   cat("configured master failed filler classification: "
+                       "configuredIndex=",
+                       configuredIndex, " networkMasterId=", id,
+                       " masterInfoPresent=", info != nullptr,
+                       " masterInfoIsFiller=",
+                       info != nullptr ? info->isFiller : false,
+                       " typePredicate=", isFillerMaster(*cell),
+                       " {", masterDebug(*cell), "}"));
+        ++configuredIndex;
         continue;
       }
       filler_master_ids_.push_back(static_cast<MasterId>(id));
+      ++configuredIndex;
     }
     std::sort(filler_master_ids_.begin(), filler_master_ids_.end());
     filler_master_ids_.erase(
@@ -467,8 +578,11 @@ void FillerRepairEngine::Impl::buildPlannerData()
     // Empty allow list (or nothing usable in it) means repair could never
     // offer a swap -- fail init instead of failing every later repair.
     addProblem(Severity::Fatal, "NoConfiguredFillerMaster",
-               "fillerSetting::getFillerPhysCells() yields no usable filler "
-               "master");
+               cat("fillerSetting::getFillerPhysCells() yields no usable "
+                   "filler master: configuredCount=",
+                   fillerMasters.size(),
+                   " acceptedCount=", filler_master_ids_.size(),
+                   " networkMasters=", network->getMasters().size()));
   }
 
   // --- placed instances: Network nodes with the checker's exact filters and
@@ -494,21 +608,44 @@ void FillerRepairEngine::Impl::buildPlannerData()
     }
     if (!supportedOrientation(physCell.getOrient())) {
       addProblem(Severity::Fatal, "UnsupportedOrientation",
-                 cat("node ", node->getId(), " has unsupported orientation"));
+                 cat("node has unsupported orientation: node=",
+                     node->getId(), " leafCell=",
+                     lcId.getIndexValue(), " master=",
+                     node->getMaster()->getId(), " orient=",
+                     static_cast<int>(physCell.getOrient().getValue()),
+                     " status=", static_cast<int>(status), " {",
+                     masterDebug(*cell), "}"));
       continue;
     }
     const eUTL::Point2D origin = physCell.getOrigin();
     const RowId rowId = rowContaining(origin.getY().getStorage());
     if (rowId < 0) {
       addProblem(Severity::Fatal, "NodeOutsideRows",
-                 cat("node ", node->getId(), " is not in any row"));
+                 cat("node origin is not in any PhysRow: node=",
+                     node->getId(), " leafCell=", lcId.getIndexValue(),
+                     " origin=(", origin.getX().getStorage(), ",",
+                     origin.getY().getStorage(), ") master=",
+                     node->getMaster()->getId(), " physRows=", frames.size(),
+                     " firstRowY=[",
+                     frames.empty() ? 0 : frames.front().yLo, ",",
+                     frames.empty() ? 0 : frames.front().yHi, ") lastRowY=[",
+                     frames.empty() ? 0 : frames.back().yLo, ",",
+                     frames.empty() ? 0 : frames.back().yHi, ") {",
+                     masterDebug(*cell), "}"));
       continue;
     }
     const DbCoord xOffset =
         origin.getX().getStorage() - frames[static_cast<size_t>(rowId)].originX;
     if (xOffset < 0) {
       addProblem(Severity::Fatal, "NodeLeftOfRowOrigin",
-                 cat("node ", node->getId(), " lies left of its row origin"));
+                 cat("node lies left of its row origin: node=",
+                     node->getId(), " leafCell=", lcId.getIndexValue(),
+                     " originX=", origin.getX().getStorage(),
+                     " xOffset=", xOffset, " {",
+                     showRow(rowId, frames[static_cast<size_t>(rowId)]),
+                     "} gridCoreXl=",
+                     grid->getCore().getXL().getStorage(), " {",
+                     masterDebug(*cell), "}"));
       continue;
     }
 
@@ -524,21 +661,35 @@ void FillerRepairEngine::Impl::buildPlannerData()
     const RowId gridRow = static_cast<RowId>(grid->gridSnapDownY(node).v);
     if (gridRow != rowId) {
       addProblem(Severity::Fatal, "RowFrameMismatch",
-                 cat("node ", node->getId(), " is row ", rowId,
-                     " by PhysRow iteration but row ", gridRow,
-                     " by Grid y-snap; pad rows before standard rows or "
-                     "non-y-sorted row iteration is not supported"));
+                 cat("PhysRow/Grid row frames disagree: node=",
+                     node->getId(), " leafCell=", lcId.getIndexValue(),
+                     " origin=(", origin.getX().getStorage(), ",",
+                     origin.getY().getStorage(), ") physRow=", rowId,
+                     " gridRow=", gridRow, " gridRows=",
+                     grid->getRowCount().v, " physRows=", frames.size(),
+                     " physRowData={",
+                     showRow(rowId, frames[static_cast<size_t>(rowId)]),
+                     "}; pad rows before standard rows or non-y-sorted row "
+                     "iteration is not supported"));
       continue;
     }
-    if (site_width_ > 0
-        && static_cast<DbCoord>(grid->gridX(node).v)
-               != xOffset / site_width_) {
+    const DbCoord gridCol = static_cast<DbCoord>(grid->gridX(node).v);
+    const DbCoord physCol = site_width_ > 0 ? xOffset / site_width_ : -1;
+    if (site_width_ > 0 && gridCol != physCol) {
       addProblem(Severity::Fatal, "ColFrameMismatch",
-                 cat("node ", node->getId(), " is column ",
-                     xOffset / site_width_, " by its row origin but column ",
-                     static_cast<DbCoord>(grid->gridX(node).v),
-                     " by the Grid core frame; the row origin X must equal "
-                     "the core left edge"));
+                 cat("PhysRow/Grid column frames disagree: node=",
+                     node->getId(), " leafCell=", lcId.getIndexValue(),
+                     " originX=", origin.getX().getStorage(),
+                     " rowOriginX=",
+                     frames[static_cast<size_t>(rowId)].originX,
+                     " gridCoreXl=",
+                     grid->getCore().getXL().getStorage(),
+                     " xOffset=", xOffset,
+                     " engineSiteWidth=", site_width_,
+                     " gridSiteWidth=", grid->getSiteWidth().v,
+                     " physRowColumn=", physCol,
+                     " gridColumn=", gridCol, " {",
+                     showRow(rowId, frames[static_cast<size_t>(rowId)]), "}"));
       continue;
     }
 
@@ -546,14 +697,29 @@ void FillerRepairEngine::Impl::buildPlannerData()
     const MasterInfo* info = masterInfo(masterId);
     if (info == nullptr) {
       addProblem(Severity::Fatal, "UnknownMaster",
-                 cat("node ", node->getId(), " references master ", masterId));
+                 cat("node references a master absent from planner snapshot: "
+                     "node=",
+                     node->getId(), " leafCell=", lcId.getIndexValue(),
+                     " masterId=", masterId,
+                     " plannerMasterSlots=", masters_.size(),
+                     " networkMasters=", network->getMasters().size(),
+                     " {", masterDebug(*cell), "}"));
       continue;
     }
     const bool isFiller = isFillerMaster(*cell);
     if (node->isFiller() != isFiller) {
       addProblem(Severity::Fatal, "FillerClassificationMismatch",
-                 cat("node ", node->getId(),
-                     " filler flag disagrees with master"));
+                 cat("node filler flag disagrees with physical master: node=",
+                     node->getId(), " leafCell=", lcId.getIndexValue(),
+                     " nodeType=", static_cast<int>(node->getType()),
+                     " nodeIsFiller=", node->isFiller(),
+                     " nodeIsStdCell=", node->isStdCell(),
+                     " masterId=", masterId,
+                     " masterInfoIsFiller=", info->isFiller,
+                     " typePredicate=", isFiller,
+                     " inConfiguredFillerList=",
+                     isConfiguredFiller(cell->getLibCellId()), " {",
+                     masterDebug(*cell), "}"));
       continue;
     }
 
@@ -580,8 +746,17 @@ void FillerRepairEngine::Impl::buildPlannerData()
       rowCopy.rowId = rowId + static_cast<RowId>(offset);
       if (rowCopy.rowId >= static_cast<RowId>(frames.size())) {
         addProblem(Severity::Fatal, "MultiRowOutsideRows",
-                   cat("node ", node->getId(),
-                       " extends outside legal rows"));
+                   cat("multi-row node extends outside PhysRow inventory: "
+                       "node=",
+                       node->getId(), " leafCell=", lcId.getIndexValue(),
+                       " startRow=", rowId,
+                       " masterHeightRows=", info->height,
+                       " failingOffset=", offset,
+                       " requestedRow=", rowCopy.rowId,
+                       " physRows=", frames.size(), " origin=(",
+                       origin.getX().getStorage(), ",",
+                       origin.getY().getStorage(), ") {",
+                       masterDebug(*cell), "}"));
         break;
       }
       rowCopy.x = origin.getX().getStorage()
@@ -1645,67 +1820,136 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
 {
   if (grid_ == nullptr || network_ == nullptr) {
     failInit("missing_infrastructure",
-             "fatal: missing initialized Grid or Network");
+             cat("fatal: missing initialized Grid or Network: grid=",
+                 grid_ != nullptr, " network=", network_ != nullptr));
     return false;
   }
   if (desMgr == nullptr) {
-    failInit("missing_phys_des_mgr", "fatal: missing PhysDesMgr");
+    failInit("missing_phys_des_mgr",
+             cat("fatal: missing PhysDesMgr: gridSiteWidth=",
+                 grid_->getSiteWidth().v,
+                 " gridRows=", grid_->getRowCount().v,
+                 " networkNodes=", network_->getNodes().size(),
+                 " networkMasters=", network_->getMasters().size()));
     return false;
   }
-  if (fillerSettings.getDesign() == nullptr
-      || fillerSettings.getDesign()->getPhysDesMgr() != desMgr) {
+  eUNL::Design* settingDesign = fillerSettings.getDesign();
+  eUNL::PhysDesMgr* settingDesMgr
+      = settingDesign != nullptr ? settingDesign->getPhysDesMgr() : nullptr;
+  if (settingDesign == nullptr || settingDesMgr != desMgr) {
     failInit("design_mismatch",
-             "fatal: fillerSetting and PhysDesMgr describe different designs");
+             cat("fatal: fillerSetting and PhysDesMgr describe different "
+                 "designs: settingDesign=",
+                 static_cast<const void*>(settingDesign),
+                 " settingPhysDesMgr=",
+                 static_cast<const void*>(settingDesMgr),
+                 " requestedPhysDesMgr=", static_cast<const void*>(desMgr)));
     return false;
   }
   eUNL::Design* activeDesign
       = eUNL::Session::getSession().getCurrentDesign();
-  if (activeDesign == nullptr || activeDesign->getPhysDesMgr() != desMgr) {
+  eUNL::PhysDesMgr* activeDesMgr
+      = activeDesign != nullptr ? activeDesign->getPhysDesMgr() : nullptr;
+  if (activeDesign == nullptr || activeDesMgr != desMgr) {
     failInit("active_design_mismatch",
-             "fatal: PhysDesMgr is not the Session current design");
+             cat("fatal: PhysDesMgr is not the Session current design: "
+                 "activeDesign=",
+                 static_cast<const void*>(activeDesign),
+                 " activePhysDesMgr=",
+                 static_cast<const void*>(activeDesMgr),
+                 " requestedPhysDesMgr=", static_cast<const void*>(desMgr),
+                 " settingDesign=", static_cast<const void*>(settingDesign)));
     return false;
   }
   if (fillerSettings.getFillerPhysCells().empty()) {
     failInit("empty_filler_allow_list",
-             "fatal: fillerSetting::getFillerPhysCells() is empty");
+             cat("fatal: fillerSetting::getFillerPhysCells() is empty: "
+                 "settingDesign=",
+                 static_cast<const void*>(settingDesign),
+                 " networkNodes=", network_->getNodes().size(),
+                 " networkMasters=", network_->getMasters().size()));
     return false;
   }
   if (network_->getNodes().empty() || network_->getMasters().empty()) {
     failInit("empty_infrastructure",
-             "fatal: Grid/Network must be initialized by dpl2 before repair");
+             cat("fatal: Grid/Network must be initialized by dpl2 before "
+                 "repair: networkNodes=",
+                 network_->getNodes().size(),
+                 " networkMasters=", network_->getMasters().size(),
+                 " gridSiteWidth=", grid_->getSiteWidth().v,
+                 " gridRows=", grid_->getRowCount().v,
+                 " gridSitesPerRow=", grid_->getRowSiteCount().v,
+                 " configuredFillers=",
+                 fillerSettings.getFillerPhysCells().size()));
     return false;
   }
+  size_t nodeIndex = 0;
   for (const auto& node : network_->getNodes()) {
     if (node == nullptr || node->getMaster() == nullptr
         || node->getMaster()->getPhysLibCell() == nullptr) {
       failInit("invalid_network_node",
-               "fatal: Network contains an incomplete node/master mapping");
+               cat("fatal: Network contains an incomplete node/master "
+                   "mapping: nodeVectorIndex=",
+                   nodeIndex, " nodePresent=", node != nullptr,
+                   " masterPresent=",
+                   node != nullptr && node->getMaster() != nullptr,
+                   " physMasterPresent=",
+                   node != nullptr && node->getMaster() != nullptr
+                       && node->getMaster()->getPhysLibCell() != nullptr,
+                   " networkNodes=", network_->getNodes().size(),
+                   " networkMasters=", network_->getMasters().size()));
       return false;
     }
     const eUNL::PhysCell cell = desMgr->getPhysCell(node->getDbInst());
     if (!cell.isValid()
         || cell.getPhysMaster().getLibCellId()
                != node->getMaster()->getDbMaster()) {
+      const int expectedLibCell
+          = node->getMaster()->getDbMaster().getIndexValue();
+      const int actualLibCell = cell.isValid()
+                                    ? cell.getPhysMaster()
+                                          .getLibCellId()
+                                          .getIndexValue()
+                                    : -1;
       failInit("infrastructure_design_mismatch",
-               cat("fatal: Network node ", node->getId(),
-                   " does not match the active PhysDesMgr"));
+               cat("fatal: Network node does not match active PhysDesMgr: "
+                   "nodeVectorIndex=",
+                   nodeIndex, " node=", node->getId(),
+                   " leafCell=", node->getDbInst().getIndexValue(),
+                   " physCellValid=", cell.isValid(),
+                   " networkMaster=", node->getMaster()->getId(),
+                   " expectedLibCell=", expectedLibCell,
+                   " actualLibCell=", actualLibCell,
+                   " nodeType=", static_cast<int>(node->getType()),
+                   " nodePlaced=", node->isPlaced(),
+                   " nodeFixed=", node->isFixed()));
       return false;
     }
+    ++nodeIndex;
   }
 
   filler_masters_ = fillerSettings.getFillerPhysCells();
+  size_t configuredIndex = 0;
   for (const eLIB::PhysLibCell* master : filler_masters_) {
     if (master == nullptr) {
       failInit("null_filler_master",
-               "fatal: getFillerPhysCells() returned null");
+               cat("fatal: getFillerPhysCells() returned null: "
+                   "configuredIndex=",
+                   configuredIndex,
+                   " configuredCount=", filler_masters_.size()));
+      ++configuredIndex;
       continue;
     }
     if (!ensureMasterRegistered(*master)) {
       failInit("filler_master_registration_failed",
-               cat("fatal: configured filler master libCell ",
-                   static_cast<int>(master->getLibCellId().getIndexValue()),
-                   " could not be registered in Network"));
+               cat("fatal: configured filler master could not be registered "
+                   "in Network: configuredIndex=",
+                   configuredIndex, " {", masterDebug(*master),
+                   "} networkMasters=", network_->getMasters().size(),
+                   " gridSiteWidth=", grid_->getSiteWidth().v,
+                   " gridRows=", grid_->getRowCount().v));
     }
+    ++configuredIndex;
   }
   return init_diagnostics_.empty();
 }
@@ -1745,7 +1989,14 @@ bool FillerRepairEngine::Impl::rebuildOracle()
     checkerReady = false;
     oracle_diagnostics_.push_back(
         {diagnostic.status,
-         cat("fatal: checker initialization: ", diagnostic.message)});
+         cat("fatal: checker initialization: ", diagnostic.message,
+             "; context{networkNodes=", network_->getNodes().size(),
+             " networkMasters=", network_->getMasters().size(),
+             " configuredFillers=", filler_masters_.size(),
+             " nonPadRows=", row_list_.size(),
+             " engineSiteWidth=", site_width_,
+             " gridSiteWidth=", grid_->getSiteWidth().v,
+             " checkerSiteWidth=", checker_->siteWidth(), "}")});
     log_.msg("engine",
              cat("blocking checker init diagnostic: ", diagnostic.status,
                  " ", diagnostic.message));

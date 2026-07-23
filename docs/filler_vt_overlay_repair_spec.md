@@ -287,7 +287,7 @@ fail-closed,必须在 infrastructure 同步后成功 update 才能继续查询�
 - 71 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 8-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
-- 97 个 checker/engine cases、fake UDM include
+- 99 个 checker/engine cases、fake UDM include
   tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
 - runtime 与 portable test 编译清单唯一定义在
   `src/dpl2/src/fillerRepair/sources.cmake`
@@ -960,6 +960,13 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 `gate` 记录 baseline、batch、cache、budget 与 best candidate。默认关闭;开启只增加
 可观测性,不改变排序、预算或 accept 结果。
 
+初始化 Fatal diagnostics 不依赖 `setDebugLogging()`。row/site 类失败必须输出
+reference/observed row 的 site name、pad flag、site width/height/count、origin 与
+bbox，并同时给出 Grid/checker/engine 的 site-width frame。master/instance 类失败
+必须输出 physical/Network ID、Node classification、configured filler membership
+以及 `PhysMacroType` predicates，使目的地 real-design 日志可独立用于定位数据源
+分歧。
+
 ---
 
 ## 10. 测试集
@@ -977,7 +984,7 @@ filler:std-cell 比例。dense placement 风险、快速失败与 span-rewrite �
 `docs/filler_repair_dense_placement_analysis.md`;它是 future design note,不改变本阶段
 swap-only normative contract。
 
-97 个 checker/engine fake-UDM cases、provider 与完整 local fake regression
+99 个 checker/engine fake-UDM cases、provider 与完整 local fake regression
 copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
 
 前置与协议:
@@ -1065,15 +1072,15 @@ gate 语义:
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译清单唯一定义在
   `src/dpl2/src/fillerRepair/sources.cmake`。
-- 82 个 planner unit tests、71 个 portable checker/planner/precheck cases 与 97 个
+- 82 个 planner unit tests、71 个 portable checker/planner/precheck cases 与 99 个
   fake-UDM checker/engine tests 全为 GoogleTest;
   82 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
   和 helper-built portable E2E 一起迁移;fake UDM checker/engine suite 留在 local;
   precheck/repair 均 non-mutating;
   runtime integration 使用 checker `check()` 预留点与 fillerRepair;
   Network Node 同步由 infrastructure 独立负责,checker DRC 算法未修改。
-  2026-07-23 normal CTest 为 250/250；新增 multi-row regression 后 ASan 与
-  `-Wall -Wextra -Werror` 尚待重跑。
+  2026-07-24 normal 与 ASan CTest 均为 252/252；完整 source list 在
+  `-Wall -Wextra -Werror` 下编译通过。
   详见 `src/dpl2/HandOff.md` 与 `src/dpl2/src/fillerRepair/test/TestPlan.md`。
 
 ---
