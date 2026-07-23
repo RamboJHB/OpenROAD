@@ -97,7 +97,7 @@ The 82 planner tests and their database-free doubles are same-level sources unde
 `PlannerOracle` protocol, including missing, duplicate, unknown and extra
 `OracleResult` records; every batch-cardinality mismatch fails closed.
 
-Only the 100 fake-UDM checker/engine cases, compatibility headers and runtime provider
+Only the 101 fake-UDM checker/engine cases, compatibility headers and runtime provider
 remain under `src/dpl2/test/local/`. The suite exercises repeated public precheck calls and opto-style external
 gating. Additional three-layout cases verify that `repair()` repeats
 precheck and returns `PrecheckFailed`, that two-row hard macros supply coverage
@@ -116,14 +116,16 @@ a complete repair, returns empty changes for a clean candidate, and returns
 false with no partial/stale changes when precheck blocks. All three preserve
 the UDM physical snapshot.
 
-Three local initialization cases cover the real-design failures: one injects
+Four local initialization cases cover the real-design failures: one injects
 a non-uniform site width and requires both row/site records plus
 Grid/checker/engine widths; one adds an overlapping double-height PhysRow and
 requires the smallest base height to be used; one makes physical filler type
 flags disagree with `Node::isFiller()`/the configured list and requires
-initialization plus precheck to succeed without database mutation.
+initialization plus precheck to succeed without database mutation. The fourth
+captures debug output and locks the raw rule/halo source plus request, Network,
+physical and matching-PhysRow snapshot frames.
 
-The whole test set is not UDM-independent: these 100 cases intentionally cover
+The whole test set is not UDM-independent: these 101 cases intentionally cover
 Session/PhysDesMgr extraction, physical handles, filler-master lookup, Network
 registration and refresh. Therefore the single test-only UDM-compatible
 provider and its CMake include switch remain necessary. No fake header,

@@ -214,7 +214,7 @@ synthetic doubles are same-level sources under `fillerRepair/test` and migrate w
 feature. Runtime engine coverage, UDM-compatible test data and its provider
 remain in the repository-local suite under `src/dpl2/test/local`. The runtime
 engine contains no snapshot builder or test conditional. The portable package
-passes 153/153; the full 2026-07-24 normal and ASan builds both pass 253/253,
+passes 153/153; the full 2026-07-24 normal and ASan builds both pass 254/254,
 with `-Wall -Wextra -Werror` clean.
 
 Future checker API or semantic changes must be recorded here before engine

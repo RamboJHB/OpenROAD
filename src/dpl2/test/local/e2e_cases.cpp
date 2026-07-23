@@ -353,6 +353,41 @@ TEST(FillerRepairInitializationDiagnostics,
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
+TEST(FillerRepairInitializationDiagnostics,
+     DebugTranscriptReportsHaloSourceAndSnapshotFrames)
+{
+  ProviderObjects objects({});
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::fillerSetting setting(objects.design().design());
+  setting.addFillerCell(kDefaultFillers);
+  dpl2::fillerRepair::FillerRepairEngine engine(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+  engine.setDebugLogging(true);
+
+  testing::internal::CaptureStdout();
+  const bool initialized = engine.init(objects.design().desMgr(), setting);
+  dpl2::fillerRepair::RepairOutcome outcome;
+  if (initialized) {
+    outcome = engine.repair(
+        objects.design().cell(frt::CellRole::Target),
+        objects.design().master(frt::MasterRole::TargetNew));
+  }
+  const std::string transcript = testing::internal::GetCapturedStdout();
+
+  ASSERT_TRUE(initialized) << transcript;
+  EXPECT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  EXPECT_NE(transcript.find("[fr][engine] implant rule input:"), std::string::npos);
+  EXPECT_NE(transcript.find("[fr][engine] default halo source:"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("[fr][engine] snapshot frame: request{"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("engineSnapshot{"), std::string::npos);
+  EXPECT_NE(transcript.find("network{"), std::string::npos);
+  EXPECT_NE(transcript.find("physical{"), std::string::npos);
+  EXPECT_NE(transcript.find("matchingPhysRows=["), std::string::npos);
+}
+
 TEST_P(FillerRepairEngineE2E, CleanPlacementPrecheck)
 {
   EngineHarness harness(GetParam().setup);

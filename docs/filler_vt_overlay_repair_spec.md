@@ -291,7 +291,7 @@ fail-closed,必须在 infrastructure 同步后成功 update 才能继续查询�
 - 71 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 8-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
-- 100 个 checker/engine cases、fake UDM include
+- 101 个 checker/engine cases、fake UDM include
   tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
 - runtime 与 portable test 编译清单唯一定义在
   `src/dpl2/src/fillerRepair/sources.cmake`
@@ -962,7 +962,10 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 `planner` 记录 request/config/final decision,`normalize` 记录 signature 输入,
 `window` 记录 L0/adaptive-L1 方向与增量,`swapgen`/`rank`/`enumerate` 记录候选空间,
 `gate` 记录 baseline、batch、cache、budget 与 best candidate。默认关闭;开启只增加
-可观测性,不改变排序、预算或 accept 结果。
+可观测性,不改变排序、预算或 accept 结果。engine init 另记录每个 implant layer
+的 raw WIDTH/SPACING 与 `defaultHaloX` 的胜出来源；snapshot 前记录 request、
+engine snapshot、live Network、PhysDesMgr、master bottom-band polarity 以及同时
+覆盖 physical/request Y 的全部 PhysRow iteration records。
 
 初始化 Fatal diagnostics 不依赖 `setDebugLogging()`。row/site 类失败必须输出
 reference/observed row 的 site name、pad flag、site width/height/count、origin 与
@@ -989,7 +992,7 @@ filler:std-cell 比例。dense placement 风险、快速失败与 span-rewrite �
 `docs/filler_repair_dense_placement_analysis.md`;它是 future design note,不改变本阶段
 swap-only normative contract。
 
-100 个 checker/engine fake-UDM cases、provider 与完整 local fake regression
+101 个 checker/engine fake-UDM cases、provider 与完整 local fake regression
 copy 均位于 `src/dpl2/test/local`,不进入迁移目录。
 
 前置与协议:
@@ -1077,14 +1080,14 @@ gate 语义:
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译清单唯一定义在
   `src/dpl2/src/fillerRepair/sources.cmake`。
-- 82 个 planner unit tests、71 个 portable checker/planner/precheck cases 与 100 个
+- 82 个 planner unit tests、71 个 portable checker/planner/precheck cases 与 101 个
   fake-UDM checker/engine tests 全为 GoogleTest;
   82 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
   和 helper-built portable E2E 一起迁移;fake UDM checker/engine suite 留在 local;
   precheck/repair 均 non-mutating;
   runtime integration 使用 checker `check()` 预留点与 fillerRepair;
   Network Node 同步由 infrastructure 独立负责,checker DRC 算法未修改。
-  2026-07-24 normal 与 ASan CTest 均为 253/253；完整 source list 在
+  2026-07-24 normal 与 ASan CTest 均为 254/254；完整 source list 在
   `-Wall -Wextra -Werror` 下编译通过。
   详见 `src/dpl2/HandOff.md` 与 `src/dpl2/src/fillerRepair/test/TestPlan.md`。
 

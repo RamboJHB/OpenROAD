@@ -161,6 +161,24 @@ Orient toPlannerOrient(eUTL::PhysOrientation orientation)
   return Orient::R0;
 }
 
+std::string orientationName(eUTL::PhysOrientation orientation)
+{
+  if (orientation == eUTL::PhysOrientationE::R0) return "R0";
+  if (orientation == eUTL::PhysOrientationE::R90) return "R90";
+  if (orientation == eUTL::PhysOrientationE::R180) return "R180";
+  if (orientation == eUTL::PhysOrientationE::R270) return "R270";
+  if (orientation == eUTL::PhysOrientationE::MX) return "MX";
+  if (orientation == eUTL::PhysOrientationE::MX90) return "MX90";
+  if (orientation == eUTL::PhysOrientationE::MY) return "MY";
+  if (orientation == eUTL::PhysOrientationE::MY90) return "MY90";
+  return cat("unknown(", static_cast<int>(orientation.getValue()), ")");
+}
+
+const char* polarityName(BandPolarity polarity)
+{
+  return polarity == BandPolarity::P ? "P" : "N";
+}
+
 eUTL::PhysOrientation toUdmOrient(Orient orient)
 {
   switch (orient) {
@@ -766,14 +784,33 @@ void FillerRepairEngine::Impl::buildPlannerData()
   // tech -- the same values the checker builds its rules from.
   {
     DbCoord maxRule = 0;
+    std::string maxRuleLayer = "none";
+    std::string maxRuleKind = "none";
     for (const eLIB::TechLayer& layer : tech.getLayerIter()) {
       if (!layer.isImplant()) {
         continue;
       }
-      maxRule = std::max<DbCoord>(maxRule, layer.getWidth().getStorage());
-      maxRule = std::max<DbCoord>(maxRule, layer.getMinSpacing().getStorage());
+      const DbCoord width = layer.getWidth().getStorage();
+      const DbCoord spacing = layer.getMinSpacing().getStorage();
+      log_.msg("engine",
+               cat("implant rule input: layer=\"", layer.getName(),
+                   "\" widthRaw=", width, " spacingRaw=", spacing));
+      if (width > maxRule) {
+        maxRule = width;
+        maxRuleLayer = layer.getName();
+        maxRuleKind = "WIDTH";
+      }
+      if (spacing > maxRule) {
+        maxRule = spacing;
+        maxRuleLayer = layer.getName();
+        maxRuleKind = "SPACING";
+      }
     }
     default_halo_x_ = 2 * maxRule;
+    log_.msg("engine",
+             cat("default halo source: layer=\"", maxRuleLayer,
+                 "\" kind=", maxRuleKind, " rawValue=", maxRule,
+                 " multiplier=2 defaultHaloX=", default_halo_x_));
   }
 
   const auto placedCount = std::count_if(
@@ -1337,6 +1374,9 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   }
 
   const InstanceId targetInstanceId = inst->id;
+  const MasterId oldMasterId = inst->masterId;
+  const BandPolarity oldBottomBandPolarity
+      = oldMaster->bottomBandPolarity;
   const RowId targetRowId = inst->rowId;
   const DbCoord targetX = inst->x;
   const Orient targetOrientation = inst->orientation;
@@ -1422,6 +1462,92 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   const bool samePlacement = target.rowId == targetRowId
                              && target.x == targetX
                              && target.orientation == targetOrientation;
+
+  if (debug_logging_) {
+    const eUNL::PhysCell physical = des_mgr_->getPhysCell(*targetCell);
+    const DbCoord coreYl = grid_->getCore().getYL().getStorage();
+    const DbCoord requestYRelative
+        = grid_->gridYToDbu(GridY{requestedRowId}).v;
+    const DbCoord requestYAbsolute = coreYl + requestYRelative;
+    std::string matchingRows;
+    if (physical.isValid()) {
+      const DbCoord physicalY = physical.getOrigin().getY().getStorage();
+      RowId physicalRowId = 0;
+      for (const eUNL::PhysRow& row : des_mgr_->getPhysRowIter()) {
+        const DbCoord rowYl = row.getOrigin().getY().getStorage();
+        const DbCoord rowYh
+            = (row.getOrigin().getY() + row.getSite().getHeight())
+                  .getStorage();
+        const bool containsPhysical
+            = physicalY >= rowYl && physicalY < rowYh;
+        const bool containsRequest
+            = requestYAbsolute >= rowYl && requestYAbsolute < rowYh;
+        if (containsPhysical || containsRequest) {
+          if (!matchingRows.empty()) {
+            matchingRows += "; ";
+          }
+          matchingRows += cat(
+              "{iterationId=", physicalRowId,
+              " site=\"", row.getSite().getName(), "\"",
+              " pad=", row.getSite().getIsPad(),
+              " y=[", rowYl, ",", rowYh, ")",
+              " height=", row.getSite().getHeight().getStorage(),
+              " orient=", orientationName(row.getOrient()),
+              " containsPhysical=", containsPhysical,
+              " containsRequest=", containsRequest, "}");
+        }
+        ++physicalRowId;
+      }
+    }
+    if (matchingRows.empty()) {
+      matchingRows = "none";
+    }
+    const MasterInfo* requestedMasterInfo = masterInfo(target.masterId);
+    log_.msg(
+        "engine",
+        cat("snapshot frame: request{source=",
+            checkerRequest.has_value() ? "checker" : "direct",
+            " inst=", target.instanceId,
+            " master=", target.masterId,
+            " row=", requestedRowId,
+            " col=",
+            site_width_ > 0 ? requestedX / site_width_ : -1,
+            " xDbu=", requestedX,
+            " yRelativeDbu=", requestYRelative,
+            " yAbsoluteDbu=", requestYAbsolute,
+            " orient=", orientationName(toUdmOrient(requestedOrientation)),
+            "} engineSnapshot{master=", oldMasterId,
+            " row=", targetRowId,
+            " xDbu=", targetX,
+            " orient=", orientationName(toUdmOrient(targetOrientation)),
+            " samePlacement=", samePlacement,
+            "} network{master=", targetNode->getMaster()->getId(),
+            " left=", targetNode->getLeft().v,
+            " bottom=", targetNode->getBottom().v,
+            " gridRow=", grid_->gridSnapDownY(targetNode).v,
+            " gridCol=", grid_->gridX(targetNode).v,
+            " orient=", orientationName(targetNode->getOrient()),
+            "} physical{valid=", physical.isValid(),
+            physical.isValid()
+                ? cat(" masterLib=",
+                      physical.getPhysMaster()
+                          .getLibCellId()
+                          .getIndexValue(),
+                      " origin=(",
+                      physical.getOrigin().getX().getStorage(), ",",
+                      physical.getOrigin().getY().getStorage(), ")",
+                      " orient=", orientationName(physical.getOrient()))
+                : std::string(),
+            "} masterBands{oldBottom=",
+            polarityName(oldBottomBandPolarity),
+            " requestedBottom=",
+            requestedMasterInfo != nullptr
+                ? polarityName(requestedMasterInfo->bottomBandPolarity)
+                : "missing",
+            " requestedHeightRows=",
+            requestedMasterInfo != nullptr ? requestedMasterInfo->height : -1,
+            "} matchingPhysRows=[", matchingRows, "]"));
+  }
 
   // 2) Initial snapshot: the new target place with ZERO filler changes.
   // Snapshot and every later engine baseline/candidate go through this same

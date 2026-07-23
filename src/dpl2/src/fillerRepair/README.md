@@ -140,7 +140,7 @@ with its real UDM/infrastructure/checker headers. Supplying
 `DPL2_RUNTIME_LIBRARIES` reuses the destination's owning targets; when omitted,
 the standalone fallback compiles the sibling infrastructure/checker sources.
 
-The 100-case fake-UDM checker/engine suite stays outside this directory
+The 101-case fake-UDM checker/engine suite stays outside this directory
 under `src/dpl2/test/local/`; see that directory's README for local commands
 and dependency details.
 
@@ -153,3 +153,9 @@ filler list; neither is rejected during engine initialization because a UDM
 macro-type filler flag disagrees.
 This keeps initialization tied to infrastructure classification without
 changing checker behavior.
+
+With debug logging enabled, initialization prints every implant layer's raw
+WIDTH/SPACING values and the exact layer/value selected for `defaultHaloX`.
+Before the empty-overlay snapshot it prints request, engine snapshot, live
+Network and physical placement frames, master bottom-band polarity, and every
+PhysRow containing either the physical or requested Y coordinate.

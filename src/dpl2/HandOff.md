@@ -209,7 +209,7 @@ supplied infrastructure/checker sources.
 The CMake below `fillerRepair/test` is a portable test package, not the
 destination's runtime owner. It builds an 82-case planner executable plus a
 71-case E2E executable that compiles the complete checker/engine source list.
-The separate local harness retains the 100 fake-UDM checker/engine cases.
+The separate local harness retains the 101 fake-UDM checker/engine cases.
 
 Test dependencies: GoogleTest, Boost, TBB, C++17/C++20 and CMake 3.20+. Commands:
 
@@ -244,8 +244,8 @@ the internal repair precheck gate, hard macro and hard/soft blockage semantics,
 side-effect-free invalid replacement requests and snapshot update.
 
 2026-07-24 verification result: portable package 153/153 (planner 82/82
-plus final-checker/precheck E2E 71/71), checker/engine fake-UDM E2E 100/100, and
-full normal and ASan CTest 253/253. The complete source list also builds under
+plus final-checker/precheck E2E 71/71), checker/engine fake-UDM E2E 101/101, and
+full normal and ASan CTest 254/254. The complete source list also builds under
 `-Wall -Wextra -Werror`. On Apple with an
 unsanitized Homebrew GoogleTest, ASan discovery and CTest use
 `ASAN_OPTIONS=detect_container_overflow=0` to avoid incompatible libc++ container annotations. The
@@ -253,7 +253,7 @@ engine cases include three layouts proving that unused-layer persistent
 checker diagnostics remain non-blocking while a used implant layer with a
 missing rule makes initialization fail closed.
 
-The 100 checker/engine cases genuinely exercise Session, PhysDesMgr, physical
+The 101 checker/engine cases genuinely exercise Session, PhysDesMgr, physical
 IDs, filler-master lookup, stale-Network rejection and the infra-first snapshot
 update contract, so the repository-local test-only UDM-compatible provider and
 its one CMake include switch are still required. Runtime sources contain no
