@@ -82,12 +82,16 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
   db.coreSite.width_ = eUTL::UvDist(kSiteWidth);
   db.coreSite.height_ = eUTL::UvDist(kRowHeight);
   db.tech().addLayer(
-      "VTL_N", true, 0, 6, setup.usedLayerMissingRule ? 0 : 2);
-  db.tech().addLayer("VTL_P", true, 1, 6, 2);
-  db.tech().addLayer("VTH_N", true, 2, 6, 2);
-  db.tech().addLayer("VTH_P", true, 3, 6, 2);
-  db.tech().addLayer("VTS_N", true, 4, 6, 2);
-  db.tech().addLayer("VTS_P", true, 5, 6, 2);
+      "VTL_N",
+      true,
+      0,
+      setup.implantRuleWidth,
+      setup.usedLayerMissingRule ? 0 : 2);
+  db.tech().addLayer("VTL_P", true, 1, setup.implantRuleWidth, 2);
+  db.tech().addLayer("VTH_N", true, 2, setup.implantRuleWidth, 2);
+  db.tech().addLayer("VTH_P", true, 3, setup.implantRuleWidth, 2);
+  db.tech().addLayer("VTS_N", true, 4, setup.implantRuleWidth, 2);
+  db.tech().addLayer("VTS_P", true, 5, setup.implantRuleWidth, 2);
   db.tech().addLayer("M1", false, 6);
   if (setup.unusedRuleLayers) {
     db.tech().addLayer("VTUL_N", true, 7, 6, 0);

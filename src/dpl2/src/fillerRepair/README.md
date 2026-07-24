@@ -157,7 +157,10 @@ This keeps initialization tied to infrastructure classification without
 changing checker behavior.
 
 With debug logging enabled, initialization prints every implant layer's raw
-WIDTH/SPACING values and the exact layer/value selected for `defaultHaloX`.
+WIDTH/SPACING values, the widest placed master, and the exact source selected
+for `defaultHaloX`. The default is twice the larger of the maximum implant
+rule and maximum placed-master width, so the initial snapshot is never
+narrower than the conservative two-cell horizontal ring.
 Before the empty-overlay snapshot it prints request, engine snapshot, live
 Network and physical placement frames, master bottom-band polarity, and every
 PhysRow containing either the physical or requested Y coordinate.

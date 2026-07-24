@@ -62,6 +62,7 @@ struct DesignSetup
 {
   bool unusedRuleLayers = false;
   bool usedLayerMissingRule = false;
+  int implantRuleWidth = 6;
   bool padRowFirst = false;
   bool padRowLast = false;
   int64_t padRowOriginX = 0;

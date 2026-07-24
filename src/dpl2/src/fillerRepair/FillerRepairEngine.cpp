@@ -780,8 +780,9 @@ void FillerRepairEngine::Impl::buildPlannerData()
               });
   }
 
-  // --- default snapshot halo: 2x the max implant WIDTH/SPACING from the
-  // tech -- the same values the checker builds its rules from.
+  // --- default snapshot halo: cover both the largest checker rule and two
+  // widest placed instances. The latter is a conservative horizontal
+  // approximation of the spec's two-cell guard ring.
   {
     DbCoord maxRule = 0;
     std::string maxRuleLayer = "none";
@@ -806,11 +807,43 @@ void FillerRepairEngine::Impl::buildPlannerData()
         maxRuleKind = "SPACING";
       }
     }
-    default_halo_x_ = 2 * maxRule;
-    log_.msg("engine",
-             cat("default halo source: layer=\"", maxRuleLayer,
-                 "\" kind=", maxRuleKind, " rawValue=", maxRule,
-                 " multiplier=2 defaultHaloX=", default_halo_x_));
+
+    DbCoord maxPlacedWidth = 0;
+    InstanceId maxPlacedInstance = -1;
+    MasterId maxPlacedMaster = -1;
+    for (const std::optional<PlacedInstance>& slot : instances_) {
+      if (!slot.has_value()) {
+        continue;
+      }
+      const MasterInfo* master = masterInfo(slot->masterId);
+      if (master != nullptr && master->width > maxPlacedWidth) {
+        maxPlacedWidth = master->width;
+        maxPlacedInstance = slot->id;
+        maxPlacedMaster = slot->masterId;
+      }
+    }
+
+    const bool placedWidthWins = maxPlacedWidth > maxRule;
+    const DbCoord haloUnit = std::max(maxRule, maxPlacedWidth);
+    default_halo_x_ = 2 * haloUnit;
+    if (placedWidthWins) {
+      log_.msg(
+          "engine",
+          cat("default halo source: kind=PLACED_MASTER_WIDTH instance=",
+              maxPlacedInstance, " master=", maxPlacedMaster,
+              " rawValue=", maxPlacedWidth, " ruleCandidate{layer=\"",
+              maxRuleLayer, "\" kind=", maxRuleKind,
+              " rawValue=", maxRule,
+              "} multiplier=2 defaultHaloX=", default_halo_x_));
+    } else {
+      log_.msg(
+          "engine",
+          cat("default halo source: kind=IMPLANT_", maxRuleKind,
+              " layer=\"", maxRuleLayer, "\" rawValue=", maxRule,
+              " placedCandidate{instance=", maxPlacedInstance,
+              " master=", maxPlacedMaster, " rawValue=", maxPlacedWidth,
+              "} multiplier=2 defaultHaloX=", default_halo_x_));
+    }
   }
 
   const auto placedCount = std::count_if(

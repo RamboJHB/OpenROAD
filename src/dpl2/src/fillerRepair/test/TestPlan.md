@@ -122,8 +122,9 @@ Grid/checker/engine widths; one adds an overlapping double-height PhysRow and
 requires the smallest base height to be used; one makes physical filler type
 flags disagree with `Node::isFiller()`/the configured list and requires
 initialization plus precheck to succeed without database mutation. The fourth
-captures debug output and locks the raw rule/halo source plus request, Network,
-physical and matching-PhysRow snapshot frames.
+lowers implant WIDTH below the widest placed master and captures debug output,
+locking the conservative placed-width `defaultHaloX` source plus request,
+Network, physical and matching-PhysRow snapshot frames.
 
 The whole test set is not UDM-independent: these 101 cases intentionally cover
 Session/PhysDesMgr extraction, physical handles, filler-master lookup, Network

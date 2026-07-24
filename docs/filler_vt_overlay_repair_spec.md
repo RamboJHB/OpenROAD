@@ -1,7 +1,7 @@
 # 功能规格 — Filler VT Overlay 修复 V2.1(checker-guided,本阶段 swap-only)
 
 状态:**V2.1 定稿**。分支:`claude/wizardly-carson-secahu`。基线:`2023-base`。
-最后更新 2026-07-23。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
+最后更新 2026-07-24。对齐 `src/dpl2/src/fillerRepair` 实现与 `src/dpl2/src/drc`
 checker 源码。
 
 V2.1 相对 V2 是一次 reviewer 驱动的修订,聚焦三处高价值改动:**OracleGate 正确性、
@@ -735,6 +735,11 @@ guardRegion = expandByCellRing(repairWindow, 2)
 携带同一个 `guardRegion`;guard-only 区域的 filler 只参与 checking/diagnostics,
 不得出现在 `fillerChanges` 中(违反判 invalid request)。
 
+planner 建立 L0 之前的 initial target snapshot 使用横向 conservative default:
+`defaultHaloX = 2 * max(maxImplantWidthOrSpacing, maxPlacedMasterWidth)`。
+因此 rule 比 standard cell 窄时仍不会小于 two-cell ring 的宽度上界;debug
+diagnostics 同时记录 rule candidate、placed-master candidate 与最终胜出来源。
+
 ### 6.4 cluster:第一版单 cluster
 
 opto 一次只改一个 cell,本次 snapshot 的所有 violation 都在同一 anchor 邻域内。
@@ -974,7 +979,7 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 `window` 记录 L0/adaptive-L1 方向与增量,`swapgen`/`rank`/`enumerate` 记录候选空间,
 `gate` 记录 baseline、batch、cache、budget 与 best candidate。默认关闭;开启只增加
 可观测性,不改变排序、预算或 accept 结果。engine init 另记录每个 implant layer
-的 raw WIDTH/SPACING 与 `defaultHaloX` 的胜出来源；snapshot 前记录 request、
+的 raw WIDTH/SPACING、最宽 placed master 与 `defaultHaloX` 的胜出来源；snapshot 前记录 request、
 engine snapshot、live Network、PhysDesMgr、master bottom-band polarity 以及同时
 覆盖 physical/request Y 的全部 PhysRow iteration records。
 

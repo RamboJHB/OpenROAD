@@ -356,7 +356,9 @@ TEST(FillerRepairInitializationDiagnostics,
 TEST(FillerRepairInitializationDiagnostics,
      DebugTranscriptReportsHaloSourceAndSnapshotFrames)
 {
-  ProviderObjects objects({});
+  frt::DesignSetup setup;
+  setup.implantRuleWidth = 2;
+  ProviderObjects objects(setup);
   ASSERT_TRUE(objects.hasDesign());
   ASSERT_TRUE(objects.hasInfrastructure());
   dpl2::fillerSetting setting(objects.design().design());
@@ -380,6 +382,13 @@ TEST(FillerRepairInitializationDiagnostics,
   EXPECT_NE(transcript.find("[fr][engine] implant rule input:"), std::string::npos);
   EXPECT_NE(transcript.find("[fr][engine] default halo source:"),
             std::string::npos);
+  EXPECT_NE(transcript.find("kind=PLACED_MASTER_WIDTH"), std::string::npos);
+  EXPECT_NE(transcript.find("rawValue=6"), std::string::npos);
+  EXPECT_NE(transcript.find("ruleCandidate{layer=\"VTL_N\" kind=WIDTH "
+                            "rawValue=2}"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("defaultHaloX=12"), std::string::npos);
+  EXPECT_NE(transcript.find("guard=[-4,24) rows[1,3]"), std::string::npos);
   EXPECT_NE(transcript.find("[fr][engine] snapshot frame: request{"),
             std::string::npos);
   EXPECT_NE(transcript.find("engineSnapshot{"), std::string::npos);
