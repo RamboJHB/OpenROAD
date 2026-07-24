@@ -79,25 +79,11 @@ gtest_discover_tests(
   TEST_PREFIX "planner."
   DISCOVERY_TIMEOUT 30)
 
-# Supplied infrastructure/checker sources, compiled exactly as delivered by
-# dpl2; only UDM headers/linkage come through dpl2_test_udm.
-set(DPL2_SUPPLIED_CHAIN_SOURCES
-    "${DPL2_SRC}/infrastructure/Grid.cpp"
-    "${DPL2_SRC}/infrastructure/Object.cpp"
-    "${DPL2_SRC}/infrastructure/network.cpp"
-    "${DPL2_SRC}/infrastructure/architecture.cpp"
-    "${DPL2_SRC}/infrastructure/Padding.cpp"
-    "${DPL2_SRC}/infrastructure/fillerSetting.cpp"
-    "${DPL2_SRC}/drc/ImplantLayerChecker.cpp")
-
-set(DPL2_CHECKER_HELPER_SOURCES
-    "${DPL2_SRC}/infrastructure/Grid.cpp"
-    "${DPL2_SRC}/infrastructure/Object.cpp"
-    "${DPL2_SRC}/infrastructure/network.cpp"
-    "${DPL2_SRC}/infrastructure/Padding.cpp"
-    "${DPL2_SRC}/infrastructure/fillerSetting.cpp"
-    "${DPL2_SRC}/drc/ImplantLayerChecker.cpp"
-    "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp")
+# Supplied infrastructure/checker sources are compiled exactly as delivered by
+# dpl2; only UDM headers/linkage come through dpl2_test_udm. The shared ones
+# live in the dpl2_fr_chain_common object library below; the two sources that
+# belong to only one consumer (architecture.cpp, ImplantLayerCheckerHelper.cpp)
+# stay on that consumer.
 
 function(dpl2_configure_chain_target target)
   target_include_directories(
@@ -113,16 +99,44 @@ function(dpl2_configure_chain_target target)
   dpl2_configure_test(${target} 20)
 endfunction()
 
+# Shared OBJECT libraries: every C++20 consumer below used to list these same
+# sources, so each one was compiled once per executable with identical flags
+# (the runtime engine and the whole infra/checker chain, twice). Compiling them
+# once here and linking the objects keeps the source lists in sources.cmake
+# authoritative while removing the duplicate work. Object libraries carry the
+# same flags via dpl2_configure_chain_target, and each consumer still applies
+# it to itself, so include dirs, -Werror and ASan are unchanged.
+add_library(dpl2_fr_chain_common OBJECT
+    "${DPL2_SRC}/infrastructure/Grid.cpp"
+    "${DPL2_SRC}/infrastructure/Object.cpp"
+    "${DPL2_SRC}/infrastructure/network.cpp"
+    "${DPL2_SRC}/infrastructure/Padding.cpp"
+    "${DPL2_SRC}/infrastructure/fillerSetting.cpp"
+    "${DPL2_SRC}/drc/ImplantLayerChecker.cpp")
+dpl2_configure_chain_target(dpl2_fr_chain_common)
+
+# Planner + precheck, split from the engine because the real-UDM checker E2E
+# deliberately links the planner WITHOUT FillerRepairEngine.cpp.
+add_library(dpl2_fr_planner_obj OBJECT
+    ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
+    ${DPL2_FILLER_REPAIR_PRECHECK_SOURCE})
+dpl2_configure_chain_target(dpl2_fr_planner_obj)
+
+add_library(dpl2_fr_engine_obj OBJECT
+    "${DPL2_SRC}/fillerRepair/FillerRepairEngine.cpp")
+dpl2_configure_chain_target(dpl2_fr_engine_obj)
+
 if(DPL2_TEST_USE_FAKE_UDM)
   # Standalone E2E: fake UDM provides the test DATA, everything else is the
   # runtime chain.
   add_executable(
     dpl2_filler_repair_e2e
-    ${DPL2_SUPPLIED_CHAIN_SOURCES}
-    ${DPL2_FILLER_REPAIR_SOURCES}
+    "${DPL2_SRC}/infrastructure/architecture.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/local/e2e_cases.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/local/FakeUdmE2ETestProvider.cpp")
-  target_link_libraries(dpl2_filler_repair_e2e PRIVATE GTest::gtest_main)
+  target_link_libraries(dpl2_filler_repair_e2e PRIVATE
+    GTest::gtest_main
+    dpl2_fr_chain_common dpl2_fr_planner_obj dpl2_fr_engine_obj)
   dpl2_configure_chain_target(dpl2_filler_repair_e2e)
   gtest_discover_tests(
     dpl2_filler_repair_e2e
@@ -135,11 +149,11 @@ if(DPL2_TEST_USE_FAKE_UDM)
   # all placement/rule/master test data comes from the official helper input.
   add_executable(
     dpl2_filler_repair_checker_e2e
-    ${DPL2_CHECKER_HELPER_SOURCES}
-    ${DPL2_FILLER_REPAIR_SOURCES}
+    "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp"
     ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
   target_link_libraries(
-    dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main)
+    dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main
+    dpl2_fr_chain_common dpl2_fr_planner_obj dpl2_fr_engine_obj)
   dpl2_configure_chain_target(dpl2_filler_repair_checker_e2e)
   gtest_discover_tests(
     dpl2_filler_repair_checker_e2e
@@ -150,20 +164,26 @@ else()
   # against the real UDM headers -- the runtime migration gate.
   add_library(
     dpl2_filler_repair_compile_check STATIC
-    ${DPL2_SUPPLIED_CHAIN_SOURCES}
-    ${DPL2_FILLER_REPAIR_SOURCES})
+    "${DPL2_SRC}/infrastructure/architecture.cpp")
+  target_link_libraries(
+    dpl2_filler_repair_compile_check PRIVATE
+    dpl2_fr_chain_common dpl2_fr_planner_obj dpl2_fr_engine_obj)
   dpl2_configure_chain_target(dpl2_filler_repair_compile_check)
 
   # The portable helper-built E2E remains runnable in real-UDM mode because
   # its data is ImplantInput, not a fake or destination-specific provider.
+  # [fillerRepair-fix] This target must link the runtime engine: since the
+  # checker took ownership of FillerRepairEngine, ImplantLayerChecker.cpp
+  # references its constructor/destructor/init/update/precheck/repair, so the
+  # historical planner-only source list left the real-UDM migration gate
+  # unlinkable (undefined FillerRepairEngine symbols).
   add_executable(
     dpl2_filler_repair_checker_e2e
-    ${DPL2_CHECKER_HELPER_SOURCES}
-    ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-    ${DPL2_FILLER_REPAIR_PRECHECK_SOURCE}
+    "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp"
     ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
   target_link_libraries(
-    dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main)
+    dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main
+    dpl2_fr_chain_common dpl2_fr_planner_obj dpl2_fr_engine_obj)
   dpl2_configure_chain_target(dpl2_filler_repair_checker_e2e)
   gtest_discover_tests(
     dpl2_filler_repair_checker_e2e

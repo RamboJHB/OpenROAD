@@ -24,5 +24,7 @@ cmake -S "$dpl2_root/test" -B "$build_dir" \
   -DDPL2_ENABLE_ASAN="$asan" \
   -DDPL2_TEST_FAKE_UDM_INCLUDE_DIR="$script_dir/fake_udm/include" \
   -DDPL2_TEST_USE_FAKE_UDM=ON
-cmake --build "$build_dir" --target dpl2_filler_repair_planner_test --parallel
+jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+cmake --build "$build_dir" --target dpl2_filler_repair_planner_test \
+  --parallel "$jobs"
 "$build_dir/dpl2_filler_repair_planner_test" "$@"
