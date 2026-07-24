@@ -1,6 +1,6 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-07-23.
+Updated: 2026-07-24.
 
 `ImplantLayerChecker` is the caller-facing entry. It owns one
 `FillerRepairEngine`, which borrows the initialized Grid/Network already owned
@@ -61,12 +61,13 @@ the checker-provided layer name embedded in the diagnostic message.
 
 | Path | Purpose |
 |---|---|
+| `../infrastructure/Objects.h` | infrastructure-owned `OpType` and `FillerCellRecord` shared by checker and fillerRepair |
 | `FillerRepairEngine.h/.cpp` | checker-owned implementation; its `Impl` owns the oracle, planner snapshot, precheck, update and repair |
 | `PlacementPrecheck.h/.cpp` | UDM-free gap/overlap coverage sweep used by the public precheck API and portable boundary tests |
 | `FillerRepairPlanner.h/.cpp` | internal deterministic search pipeline and debug transcript |
 | `OracleGate.h/.cpp` | owns `PlannerOracle` plus `OracleRequest/Result/Status`, batching, cache and baseline-delta gate |
 | `PlannerDataSource.h/.cpp` | small planner-only data contract and candidate filter; implemented privately by `FillerRepairEngine::Impl` |
-| `Types.h` | deliberately standalone leaf: planner IDs, geometry/model types and exact final-checker wire helpers |
+| `Types.h` | deliberately standalone leaf: planner IDs, geometry/model types and helpers for the shared infrastructure record |
 | `Swap`, `Signature`, `Window`, `Ranker`, `SubsetSearch` | search stages |
 | `sources.cmake` | source-of-truth lists for planner, runtime and portable tests |
 | `test/FillerRepairPlannerTest.cpp` and same-level doubles | 82 portable database-free planner unit tests |
@@ -86,7 +87,8 @@ final decision. Logging never changes search order or acceptance.
 
 Planner `OracleRequest`, `OracleStatus` and requestId stay internal to
 `OracleGate`; their change payload and the public result are both the exact
-final-checker `ipl::FillerChanges`/`FillerCellRecord` wire. Destination builds compile
+shared `dpl2::FillerCellRecord` wire owned by `infrastructure/Objects.h`;
+final-checker APIs group it as `ipl::FillerChanges`. Destination builds compile
 `DPL2_FILLER_REPAIR_SOURCES` from `sources.cmake` -- never a
 hand-copied file list. Migration steps live in `src/dpl2/HandOff.md`.
 The engine consumes only borrowed Grid/Network pointers and the idempotent

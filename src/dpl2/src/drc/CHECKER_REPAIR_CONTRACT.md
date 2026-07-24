@@ -5,6 +5,11 @@ Updated: 2026-07-24.
 ## Final checker API
 
 ```cpp
+// infrastructure/Objects.h, namespace dpl2
+enum class OpType : uint8_t { Replace = 0, Delete = 1, Add = 2 };
+struct FillerCellRecord;
+
+// drc/ImplantLayerChecker.h, namespace dpl2::ipl
 using FillerChanges = std::vector<FillerCellRecord>;
 
 std::vector<CheckResult> checkPlaceWithOverlays(
@@ -14,8 +19,9 @@ std::vector<CheckResult> checkPlaceWithOverlays(
 ```
 
 One `FillerChanges` is one atomic candidate. Results correlate by input order;
-result count must equal candidate count. The checker wire has no request ID or
-status enum.
+result count must equal candidate count. `OpType` and `FillerCellRecord` are
+owned by `infrastructure/Objects.h`; the checker owns the `FillerChanges`
+alias and overlay API. The shared wire has no request ID or status enum.
 
 ## 2026-07-20 checker entry wiring
 
@@ -57,7 +63,7 @@ classification; a count-based single-prefix strip is wrong.
 - checker `InstanceId`: `Node::getId()`;
 - checker `MasterId`: `Master::getId()`;
 - physical cell/master handles: `LeafCellID` / `LibCellID`;
-- swap record:
+- shared infrastructure record:
   `FillerCellRecord{Replace, cell_id_, origin_x_, origin_y_,
   orig_lib_cell_, new_lib_cell_}`;
 - relationship: `IntraRow` or `InterRow`.
@@ -66,20 +72,21 @@ classification; a count-based single-prefix strip is wrong.
 planner oracle requestId/status values from ordered results. Missing or extra
 ordered results invalidate the entire batch and stop the search. It does not
 convert the change list: planner requests, checker calls and `RepairOutcome`
-all carry the same `ipl::FillerChanges`/`FillerCellRecord` records.
+all carry the same `ipl::FillerChanges` containing
+`dpl2::FillerCellRecord` records.
 
 The planner-only protocol is owned by `OracleGate.h` and is named
 `PlannerOracle` plus `OracleRequest`/`OracleResult`/`OracleStatus`; these names
 are intentionally distinct from final-checker `ImplantLayerChecker` and
 `ipl::CheckResult`. Shared planner geometry/model types remain in standalone
-`Types.h`. This is a fillerRepair-only ownership cleanup; checker source and
-DRC behavior are unchanged.
+`Types.h`. Shared edit records remain in `infrastructure/Objects.h`; checker
+source owns only its vector alias and API. Checker DRC behavior is unchanged.
 
 ## 2026-07-19 fillerRepair wire simplification
 
 No checker source or DRC behavior changed. fillerRepair removed its private,
 reduced change-record representation. `PlannerDataSource` now materializes the
-exact `FillerCellRecord` above when an overlay is created; the engine
+exact infrastructure-owned `FillerCellRecord` above when an overlay is created; the engine
 passes that record unchanged to `checkPlaceWithOverlays()` and returns the
 accepted records unchanged to opto. This pins all three boundaries to
 `new_lib_cell_` and prevents mapping drift between checked and returned data.

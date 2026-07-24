@@ -1,6 +1,6 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-07-23. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-24. Branch: `claude/wizardly-carson-secahu`.
 
 ## Result
 
@@ -127,6 +127,7 @@ default and does not affect search behavior.
 | hard/soft blockages and padding | Grid; hard is invalid, soft remains valid, padding is reserved |
 | filler allow-list | `fillerSetting::getFillerPhysCells()` |
 | placed filler identity | `Node::isFiller()` |
+| atomic filler edit wire | `dpl2::OpType`/`FillerCellRecord` in `infrastructure/Objects.h`; checker groups records as `ipl::FillerChanges` |
 | VT/band polarity | `PhysLibCell` implant shapes + checker `Layer::Vt/Polar` |
 | implant legality | final `ImplantLayerChecker` |
 | commit | opto/infrastructure |
@@ -148,14 +149,17 @@ Integration files:
    `infrastructure/` and `drc/` directories (the runtime sources include
    `infrastructure/...` and `drc/ImplantLayerChecker.h` relative to that common
    source root).
-2. Apply the branch's small `ImplantLayerChecker.h/.cpp` entry wiring: owned
+2. Keep `dpl2::OpType` and `FillerCellRecord` at the end of
+   `infrastructure/Objects.h`. Do not duplicate the record in checker or
+   fillerRepair.
+3. Apply the branch's small `ImplantLayerChecker.h/.cpp` entry wiring: owned
    engine initialization/update/precheck, the `check()` call, and last-result
    accessors. This fills the destination checker's existing TODO and does not
    alter its DRC rule/scan algorithms.
    The branch also follows the destination checker's accessor-based
    `Layer`/`Rule` metadata model; there is no `ImplantLayer` compatibility
    struct to copy.
-3. Do not add a repair-specific Network refresh API. The destination
+4. Do not add a repair-specific Network refresh API. The destination
    infrastructure owns initial import and every later UDM-to-Network Node
    synchronization. fillerRepair only validates the supplied revision and
    rebuilds private snapshots.

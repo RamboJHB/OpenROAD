@@ -1,6 +1,7 @@
 #pragma once
 
 #include "drc/DRCChecker.h"
+#include "infrastructure/Objects.h"
 #include <phys/fpManager.hh>
 #include <phys/physDesMgr.hh>
 #include <phys/physHier.hh>
@@ -58,24 +59,6 @@ class Master;
 namespace fillerRepair {
 class FillerRepairEngine;
 }
-
-// replace holders for filler masters with new master ids
-enum class OpType : uint8_t {
-  Replace = 0,
-  Delete = 1,
-  Add = 2,
-};
-
-struct FillerCellRecord {
-  OpType op_;
-  LeafCellID cell_id_;
-  UvDist origin_x_;
-  UvDist origin_y_;
-  LibCellID orig_lib_cell_;
-  // [fillerRepair-fix] renamed from new_cell_id_: the cpp consumes
-  // change.new_lib_cell_ (validateOverlayRequest / overlay scan).
-  LibCellID new_lib_cell_;
-};
 
 namespace ipl {
 class TestImplantCmd;

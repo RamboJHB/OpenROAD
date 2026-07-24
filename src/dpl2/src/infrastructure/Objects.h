@@ -2,6 +2,9 @@
 // Copyright (c) 2024-2025, The OpenROAD Authors
 
 #pragma once
+
+#include <cstdint>
+
 #include "Coordinates.h"
 #include "dpl2/DePlace.h"
 
@@ -232,6 +235,24 @@ class Pin
   // Offsets from cell center.
   DbuX offsetX_{0};
   DbuY offsetY_{0};
+};
+
+// Atomic filler edit shared by infrastructure, checker and fillerRepair.
+enum class OpType : uint8_t
+{
+  Replace = 0,
+  Delete = 1,
+  Add = 2,
+};
+
+struct FillerCellRecord
+{
+  OpType op_;
+  LeafCellID cell_id_;
+  UvDist origin_x_;
+  UvDist origin_y_;
+  LibCellID orig_lib_cell_;
+  LibCellID new_lib_cell_;
 };
 
 }  // namespace dpl2

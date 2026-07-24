@@ -5,8 +5,10 @@
 //
 // The planner is a deterministic, non-mutating component (spec section 3.1): it
 // depends only on PlannerDataSource plus the planner-internal oracle protocol in
-// OracleGate.h. The only shared checker wire type is ipl::FillerChanges; test
-// builds provide the same UDM ID/value types through their test-only UDM shim.
+// OracleGate.h. The change record is the infrastructure-owned
+// dpl2::FillerCellRecord; checker APIs group records as ipl::FillerChanges.
+// Test builds provide the same UDM ID/value types through their test-only UDM
+// shim.
 //
 // Conventions:
 //  - All x coordinates are DBU. Site alignment comes from
@@ -184,9 +186,9 @@ struct Violation
   std::vector<ViolationParticipant> participants;
 };
 
-// Exact final-checker wire helpers. The record itself is deliberately not
-// duplicated in fillerRepair: the planner, oracle and public result all carry
-// ipl::FillerCellRecord unchanged.
+// Exact shared-wire helpers. The record itself is deliberately not duplicated
+// in fillerRepair: the planner, oracle and public result all carry the
+// infrastructure-owned dpl2::FillerCellRecord unchanged.
 inline InstanceId fillerRecordInstanceId(const FillerCellRecord& change)
 {
   return static_cast<InstanceId>(change.cell_id_.getIndexValue());

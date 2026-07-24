@@ -14,8 +14,8 @@ The V2.1 swap-only planner and real-UDM runtime E2E package are complete.
 |---|---|
 | Planner | internal `FillerRepairPlanner`; adaptive-L1, filler domains, per-band ranking/filtering, deterministic `FillerCellRecord` output and opt-in `[fr][stage]` transcript complete |
 | Unit tests | 82/82 database-free GoogleTests as same-level sources under `fillerRepair/test`; portable with the feature |
-| Infrastructure | existing runtime Grid/Network are borrowed; `Network::updateNodes()` refreshes an unchanged instance set; engine registers configured filler masters and rebuilds for request masters added after init |
-| Checker | final blocking contract, accessor-based `Layer`/`Rule`, Node/Master IDs and FillerCellRecord wire |
+| Infrastructure | existing runtime Grid/Network are borrowed; infrastructure owns UDM-to-Grid/Network synchronization; `Objects.h` owns `OpType`/`FillerCellRecord`; engine registers configured filler masters and rebuilds private snapshots |
+| Checker | final blocking contract, accessor-based `Layer`/`Rule`, Node/Master IDs and `ipl::FillerChanges` alias/API |
 | Runtime API | caller owns one `ImplantLayerChecker`; it owns the engine, calls it from `check()`, and exposes precheck/update plus the last `FillerChanges` |
 | Portable tests | 153 GoogleTests: 82 planner cases plus 71 final-checker/planner/precheck E2E cases; no destination fixture provider |
 | Local regression | 101 fake-UDM checker/engine cases; repository CTest total 254 |
@@ -25,7 +25,8 @@ The V2.1 swap-only planner and real-UDM runtime E2E package are complete.
 
 1. The planner is deterministic and non-mutating. Its algorithm uses dense
    integer IDs; request/result changes deliberately reuse the checker
-   `FillerCellRecord`, supplied by real UDM or the test-only fake UDM.
+   infrastructure-owned `dpl2::FillerCellRecord`; checker APIs group those
+   records as `ipl::FillerChanges`.
 2. This stage supports same-position/same-size filler swaps only.
 3. `ImplantLayerChecker` is the only DRC oracle.
    Checker metadata is owned by its `Layer`/`Rule` classes; fillerRepair reads
@@ -82,8 +83,9 @@ One checker/engine pair borrows infrastructure and privately owns an oracle
 snapshot for one design revision. Precheck and repair do not mutate UDM; repair may idempotently
 extend Network's in-memory master registry after request validation and repeats
 precheck internally. Checker calls are serialized privately per engine.
-`update()` refreshes existing Nodes and replaces the private snapshot; failure
-leaves the engine fail-closed.
+Infrastructure must synchronize Grid/Network before `update()`. The method
+validates that revision and replaces only private checker/planner/precheck
+state; failure leaves the engine fail-closed.
 
 ## Tests
 
@@ -100,8 +102,9 @@ E2E cases. E2E data is built with `ImplantLayerCheckerHelper`; it needs no
 DEF/LEF reader or destination fixture provider. The local UDM-compatible
 include tree, provider and 101 checker/engine cases remain under `src/dpl2/test/local`.
 
-The destination copies `fillerRepair/`, applies the small checker entry patch,
-and preserves the infrastructure `Network::updateNodes()` seam. Every test
+The destination copies `fillerRepair/`, keeps `OpType`/`FillerCellRecord` in
+`infrastructure/Objects.h`, and applies the small checker entry patch.
+Infrastructure owns every UDM-to-Grid/Network synchronization. Every test
 source copied with `fillerRepair/` targets real UDM wire types.
 
 Local dependencies are GoogleTest, Boost, TBB, C++17/C++20 and CMake. On Apple ASan, use the

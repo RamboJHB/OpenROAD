@@ -236,9 +236,11 @@ engine tests,保留 validate-then-lazy-register 行为。snapshot/oracle 全部�
 planner-only `OracleRequest`/`OracleStatus`/`requestId`
 abstraction 位于 `OracleGate.h`,只供 `internal::FillerRepairPlanner` 与 unit-test
 fake 使用；其 change payload 与 public result 都直接使用 final checker 的
-`ipl::FillerChanges`/`FillerCellRecord`，不存在第二套 change 类型或转换层。
+`ipl::FillerChanges`；其中的 `dpl2::FillerCellRecord` 由
+`infrastructure/Objects.h` 统一拥有，不存在第二套 change 类型或转换层。
 `Types.h` 有意保持为独立叶子，只放 geometry、planner model 与终版 checker wire
-helper；不并入 Engine、Planner 或 OracleGate，避免任一上层反向成为共享依赖。
+helper；record 本身不在 `Types.h`。它不并入 Engine、Planner 或 OracleGate，
+避免任一上层反向成为共享依赖。
 runtime 签名只使用 final checker 的 `ipl::CheckResult`、`ipl::Diagnostic`、
 `ipl::FillerChanges`。`init()` 成功前,
 `precheck()`/`repair()` 一律 fail-closed。
@@ -310,7 +312,7 @@ feature 的需要。代码中不出现 Move/FillerRewrite/adapter 转换,也没�
 
 planner 的原子操作就是 `Swap`。它在搜索中保留紧凑的 instance/master id 与
 排序/几何元数据；发给 checker 或返回调用方时，由 `PlannerDataSource` 生成完整
-`FillerCellRecord`:
+`dpl2::FillerCellRecord`:
 
 ```cpp
 struct Swap
@@ -410,7 +412,8 @@ class PlannerOracle
 
 planner 的 `Swap` 是搜索元数据；`PlannerDataSource::fillerCellRecord()` 在创建
 oracle request 时一次性生成终版 checker wire。`OracleRequest`、planner
-result、checker batch 和 `RepairOutcome` 全程复用同一个 `FillerCellRecord`。
+result、checker batch 和 `RepairOutcome` 全程复用同一个
+infrastructure-owned `FillerCellRecord`。
 
 #### 5.2.1 checker 实际交付形态(终版契约,2026-07-18)
 
@@ -419,14 +422,12 @@ checker 已交付真实 overlay 实现,UDM extraction 内联。**对接以实物
 baseline,再返回每个候选的 **blocking violation list**。
 
 ```cpp
-// batch = 单 target + 单 guardRegion + N 个候选;结果按输入顺序一一对应
-// (没有 requestId:顺序即关联)。CheckRequest 用 colId(site 单位)。
-std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
-    const CheckRequest& request,
-    const Rect& guardRegion,          // eUTL::Rect(UDM 类型)
-    const std::vector<FillerChanges>& fillerChanges) const;
-
-using FillerChanges = std::vector<FillerCellRecord>;
+// infrastructure/Objects.h (namespace dpl2)
+enum class OpType : uint8_t {
+  Replace = 0,
+  Delete = 1,
+  Add = 2,
+};
 
 struct FillerCellRecord {
   OpType op_;                       // 本阶段为 Replace
@@ -436,6 +437,16 @@ struct FillerCellRecord {
   eLIB::LibCellID orig_lib_cell_;
   eLIB::LibCellID new_lib_cell_;
 };
+
+// drc/ImplantLayerChecker.h (namespace dpl2::ipl)
+using FillerChanges = std::vector<dpl2::FillerCellRecord>;
+
+// batch = 单 target + 单 guardRegion + N 个候选;结果按输入顺序一一对应
+// (没有 requestId:顺序即关联)。CheckRequest 用 colId(site 单位)。
+std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
+    const CheckRequest& request,
+    const Rect& guardRegion,          // eUTL::Rect(UDM 类型)
+    const std::vector<FillerChanges>& fillerChanges) const;
 
 struct CheckResult {                  // 没有 status 枚举
   bool isLegal;                       // = blocking 为空 && diagnostics 干净
