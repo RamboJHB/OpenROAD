@@ -115,78 +115,69 @@ add_library(dpl2_fr_chain_common OBJECT
     "${DPL2_SRC}/drc/ImplantLayerChecker.cpp")
 dpl2_configure_chain_target(dpl2_fr_chain_common)
 
-# Planner + precheck, split from the engine because the real-UDM checker E2E
-# deliberately links the planner WITHOUT FillerRepairEngine.cpp.
-add_library(dpl2_fr_planner_obj OBJECT
-    ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-    ${DPL2_FILLER_REPAIR_PRECHECK_SOURCE})
-dpl2_configure_chain_target(dpl2_fr_planner_obj)
+# The complete migration payload, exactly as sources.cmake defines it.
+add_library(dpl2_fr_runtime_obj OBJECT ${DPL2_FILLER_REPAIR_SOURCES})
+dpl2_configure_chain_target(dpl2_fr_runtime_obj)
 
-add_library(dpl2_fr_engine_obj OBJECT
-    "${DPL2_SRC}/fillerRepair/FillerRepairEngine.cpp")
-dpl2_configure_chain_target(dpl2_fr_engine_obj)
+# --- Targets defined ONCE for both UDM modes -------------------------------
+#
+# dpl2_test_udm is the only fake/real switch, so every target below is built
+# from the same sources with the same link closure in both modes. This is what
+# makes the destination migration gate testable here: the fake-UDM run we do
+# locally exercises the exact target graph a destination builds, and only the
+# include dirs / libraries behind dpl2_test_udm differ.
+#
+# Keeping two divergent branches is how this rotted before: the real-UDM branch
+# linked a planner-only source list, so when the checker took ownership of
+# FillerRepairEngine and ImplantLayerChecker.cpp began referencing its
+# ctor/dtor/init/update/precheck/repair, that branch stopped linking
+# (undefined FillerRepairEngine symbols) and nobody could see it without a
+# real UDM. Note a STATIC compile-check library would NOT have caught it --
+# archives do not resolve symbols; only linking an executable does.
 
+# Migration gate: the portable planner+engine wired to the final checker
+# through ImplantLayerCheckerHelper. Its data is ImplantInput, not a fake or
+# destination-specific provider, so it compiles, links and RUNS in both modes.
+add_executable(
+  dpl2_filler_repair_checker_e2e
+  "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp"
+  ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
+target_link_libraries(
+  dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main
+  dpl2_fr_chain_common dpl2_fr_runtime_obj)
+dpl2_configure_chain_target(dpl2_filler_repair_checker_e2e)
+gtest_discover_tests(
+  dpl2_filler_repair_checker_e2e
+  TEST_PREFIX "portable-e2e."
+  DISCOVERY_TIMEOUT 30)
+
+# architecture.cpp is supplied infrastructure that no test entry point pulls
+# in; this keeps it in the compile gate for both modes.
+add_library(
+  dpl2_filler_repair_compile_check STATIC
+  "${DPL2_SRC}/infrastructure/architecture.cpp")
+target_link_libraries(
+  dpl2_filler_repair_compile_check PRIVATE
+  dpl2_fr_chain_common dpl2_fr_runtime_obj)
+dpl2_configure_chain_target(dpl2_filler_repair_compile_check)
+
+# --- Fake-UDM only ---------------------------------------------------------
+# The historical engine regression is the one target that cannot be built
+# against a real UDM: its data comes from FakeUdmE2ETestProvider, which
+# constructs fake-UDM objects directly. Everything it links is otherwise the
+# same runtime chain.
 if(DPL2_TEST_USE_FAKE_UDM)
-  # Standalone E2E: fake UDM provides the test DATA, everything else is the
-  # runtime chain.
   add_executable(
     dpl2_filler_repair_e2e
-    "${DPL2_SRC}/infrastructure/architecture.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/local/e2e_cases.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/local/FakeUdmE2ETestProvider.cpp")
   target_link_libraries(dpl2_filler_repair_e2e PRIVATE
     GTest::gtest_main
-    dpl2_fr_chain_common dpl2_fr_planner_obj dpl2_fr_engine_obj)
+    dpl2_fr_chain_common dpl2_fr_runtime_obj)
   dpl2_configure_chain_target(dpl2_filler_repair_e2e)
   gtest_discover_tests(
     dpl2_filler_repair_e2e
     TEST_PREFIX "e2e."
     NO_PRETTY_VALUES
-    DISCOVERY_TIMEOUT 30)
-
-  # Migration payload E2E: pure planner wired to the final checker through
-  # ImplantLayerCheckerHelper. Fake UDM headers satisfy only infra type names;
-  # all placement/rule/master test data comes from the official helper input.
-  add_executable(
-    dpl2_filler_repair_checker_e2e
-    "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp"
-    ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
-  target_link_libraries(
-    dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main
-    dpl2_fr_chain_common dpl2_fr_planner_obj dpl2_fr_engine_obj)
-  dpl2_configure_chain_target(dpl2_filler_repair_checker_e2e)
-  gtest_discover_tests(
-    dpl2_filler_repair_checker_e2e
-    TEST_PREFIX "portable-e2e."
-    DISCOVERY_TIMEOUT 30)
-else()
-  # Verify that every supplied and runtime source compiles and links
-  # against the real UDM headers -- the runtime migration gate.
-  add_library(
-    dpl2_filler_repair_compile_check STATIC
-    "${DPL2_SRC}/infrastructure/architecture.cpp")
-  target_link_libraries(
-    dpl2_filler_repair_compile_check PRIVATE
-    dpl2_fr_chain_common dpl2_fr_planner_obj dpl2_fr_engine_obj)
-  dpl2_configure_chain_target(dpl2_filler_repair_compile_check)
-
-  # The portable helper-built E2E remains runnable in real-UDM mode because
-  # its data is ImplantInput, not a fake or destination-specific provider.
-  # [fillerRepair-fix] This target must link the runtime engine: since the
-  # checker took ownership of FillerRepairEngine, ImplantLayerChecker.cpp
-  # references its constructor/destructor/init/update/precheck/repair, so the
-  # historical planner-only source list left the real-UDM migration gate
-  # unlinkable (undefined FillerRepairEngine symbols).
-  add_executable(
-    dpl2_filler_repair_checker_e2e
-    "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp"
-    ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
-  target_link_libraries(
-    dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main
-    dpl2_fr_chain_common dpl2_fr_planner_obj dpl2_fr_engine_obj)
-  dpl2_configure_chain_target(dpl2_filler_repair_checker_e2e)
-  gtest_discover_tests(
-    dpl2_filler_repair_checker_e2e
-    TEST_PREFIX "portable-e2e."
     DISCOVERY_TIMEOUT 30)
 endif()

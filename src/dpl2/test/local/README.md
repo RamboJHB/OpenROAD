@@ -19,6 +19,32 @@ migration payload.
 ```sh
 src/dpl2/test/local/run_planner_tests.sh
 SANITIZE=address src/dpl2/test/local/run_planner_tests.sh
-src/dpl2/test/local/run_fake_udm_e2e.sh
-SANITIZE=address src/dpl2/test/local/run_fake_udm_e2e.sh
+src/dpl2/test/local/run_fake_udm_e2e.sh              # engine regression only
+ALL=1 src/dpl2/test/local/run_fake_udm_e2e.sh        # whole suite, 254 cases
+SANITIZE=address ALL=1 src/dpl2/test/local/run_fake_udm_e2e.sh
 ```
+
+## Migration gate (no UDM required)
+
+`run_migration_gate.sh` configures with `DPL2_TEST_USE_FAKE_UDM=OFF` -- the
+destination code path -- and supplies the fake headers through the real-UDM
+knob, so it runs with no UDM installed. Point `DPL2_UDM_INCLUDE_DIRS` /
+`DPL2_UDM_LIBRARIES` at a genuine install to use one.
+
+```sh
+src/dpl2/test/local/run_migration_gate.sh            # 153 portable cases
+SANITIZE=address src/dpl2/test/local/run_migration_gate.sh
+```
+
+Its value is exercising the destination configuration (no fake test provider,
+no fake-only target), not the headers being real. It proves every supplied and
+runtime source compiles and that the executable **link closure** is complete:
+a source missing from a target surfaces as an undefined symbol. A static
+compile-check library cannot prove this -- archives do not resolve symbols,
+only linking an executable does.
+
+Both UDM modes now build the same targets from the same sources, with
+`dpl2_test_udm` as the only switch. Keeping two divergent branches is how the
+real-UDM configuration silently stopped linking once the checker took
+ownership of `FillerRepairEngine`: nothing local could build that branch.
+Run this gate after any change to the target/source wiring.
