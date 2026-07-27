@@ -18,12 +18,6 @@
 #include <gtest/gtest.h>
 
 #include "fillerRepair/FillerRepairPlanner.h"
-#include "fillerRepair/OracleGate.h"
-#include "fillerRepair/Ranker.h"
-#include "fillerRepair/Signature.h"
-#include "fillerRepair/SubsetSearch.h"
-#include "fillerRepair/Swap.h"
-#include "fillerRepair/Window.h"
 #include "PlannerTestDataSource.h"
 #include "PlannerTestOracle.h"
 #include "SyntheticMasterCatalog.h"

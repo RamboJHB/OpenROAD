@@ -3,7 +3,7 @@
 
 // Filler-repair entry point. It borrows the Grid/Network already owned
 // by dpl2, and privately owns the checker/snapshot needed for one physical-
-// design revision. Neither precheck() nor repair() mutates UDM.
+// design revision. repair() never mutates UDM.
 
 #pragma once
 
@@ -53,15 +53,12 @@ class FillerRepairEngine
   // synchronized Network with UDM. This method never changes Network Nodes.
   // Rebuild Grid/Network first if rows, blockages or the instance set changed.
   // A stale/incomplete Network makes update fail closed.
-  // Do not call concurrently with precheck() or repair().
+  // Do not call concurrently with repair().
   bool update(eUNL::PhysDesMgr* desMgr, const fillerSetting& fillerSetting);
 
-  // Placement-only gate for opto to call before any cell mutation.
-  // isLegal=false blocks opto and diagnostics contain Gap/Overlap warnings.
-  ipl::CheckResult precheck() const;
-
-  // Pre-commit implant overlay query. An internal precheck blocks repair and
-  // returns warning diagnostics when placement coverage is not legal.
+  // Pre-commit implant overlay query. The only placement gate here is
+  // regional: repair refuses to run on top of a gap/overlap inside the rows
+  // it can edit. Whole-design placement legality stays with infrastructure.
   // This is the checker-facing entry: the candidate pose/master are consumed
   // from the exact CheckRequest built by ImplantLayerChecker::check().
   RepairOutcome repair(const ipl::CheckRequest& request);

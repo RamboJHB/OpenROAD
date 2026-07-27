@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -14,10 +15,6 @@
 #include <vector>
 
 #include "FillerRepairPlanner.h"
-#include "Log.h"
-#include "OracleGate.h"
-#include "PlacementPrecheck.h"
-#include "PlannerDataSource.h"
 #include "infrastructure/Grid.h"
 #include "infrastructure/Objects.h"
 #include "infrastructure/fillerSetting.h"
@@ -25,8 +22,6 @@
 
 namespace dpl2 {
 namespace fillerRepair {
-
-struct PrecheckDomains;
 
 class FillerRepairEngine::Impl final : private PlannerDataSource,
                                        private PlannerOracle
@@ -38,7 +33,6 @@ class FillerRepairEngine::Impl final : private PlannerDataSource,
   bool init(eUNL::PhysDesMgr* desMgr,
             const fillerSetting& fillerSettings);
   void setDebugLogging(bool enabled);
-  ipl::CheckResult precheck() const;
   // Gap/overlap coverage restricted to selected repair rows. repair() checks
   // the initial target influence before registration; adaptive candidates
   // that edit farther rows are checked before entering the checker batch.
@@ -141,7 +135,21 @@ class FillerRepairEngine::Impl final : private PlannerDataSource,
   std::vector<Diagnostic> setup_diagnostics_;
   std::vector<ipl::Diagnostic> init_diagnostics_;
   std::vector<ipl::Diagnostic> oracle_diagnostics_;
-  std::unique_ptr<PrecheckDomains> precheck_domains_;
+  // Row frame from Grid (RowId = grid row; x core-left-relative). One shared
+  // origin for every row -- the same frame the checker's CheckRequest uses.
+  struct RowFrame
+  {
+    DbCoord yLo = 0;
+    DbCoord yHi = 0;
+  };
+  std::vector<RowFrame> row_frames_;
+  DbCoord core_xl_ = 0;
+  DbCoord core_yl_ = 0;
+  // Legal coverage spans per row, derived from Grid pixels lazily on first
+  // use (repair touches only the target influence rows, so prebuilding the
+  // whole grid at init was pure startup cost).
+  mutable std::map<RowId, std::vector<XInterval>> legal_spans_;
+  const std::vector<XInterval>& legalSpansForRow(RowId rowId) const;
   bool debug_logging_ = false;
   bool initialized_ = false;
   bool init_attempted_ = false;
@@ -256,6 +264,118 @@ ViolationRelation toRelation(ipl::Relationship relationship)
 
 }  // namespace
 
+
+// --- placement coverage sweep (merged from PlacementPrecheck) --------------
+// Pure gap/overlap answer for "is each legal x interval covered exactly
+// once"; used only for the target influence rows inside repair().
+namespace internal {
+
+enum class CoverageFindingKind
+{
+  Gap,
+  Overlap
+};
+
+struct PlacementCoverageRow
+{
+  RowId rowId = 0;
+  std::vector<XInterval> legalSpans;
+  std::vector<XInterval> placedSpans;
+};
+
+struct CoverageFinding
+{
+  CoverageFindingKind kind = CoverageFindingKind::Gap;
+  RowId rowId = 0;
+  XInterval span;
+};
+
+inline const char* coverageFindingStatus(CoverageFindingKind kind)
+{
+  return kind == CoverageFindingKind::Gap ? "Gap" : "Overlap";
+}
+
+// Returns findings in row/legal-span/x order. Adjacent findings of the same
+// kind in one row are coalesced, including across touching legal spans.
+std::vector<CoverageFinding> findCoverageFindings(
+    std::vector<PlacementCoverageRow> rows)
+{
+  std::sort(
+      rows.begin(),
+      rows.end(),
+      [](const PlacementCoverageRow& left, const PlacementCoverageRow& right) {
+        return left.rowId < right.rowId;
+      });
+
+  std::vector<CoverageFinding> findings;
+  for (PlacementCoverageRow& row : rows) {
+    std::sort(row.legalSpans.begin(),
+              row.legalSpans.end(),
+              [](const XInterval& left, const XInterval& right) {
+                return left.xl != right.xl ? left.xl < right.xl
+                                           : left.xh < right.xh;
+              });
+    for (const XInterval& legal : row.legalSpans) {
+      if (legal.empty()) {
+        continue;
+      }
+      std::vector<DbCoord> cuts{legal.xl, legal.xh};
+      std::vector<DbCoord> starts;
+      std::vector<DbCoord> ends;
+      starts.reserve(row.placedSpans.size());
+      ends.reserve(row.placedSpans.size());
+      for (const XInterval& span : row.placedSpans) {
+        const DbCoord clippedXl = std::max(span.xl, legal.xl);
+        const DbCoord clippedXh = std::min(span.xh, legal.xh);
+        if (clippedXh <= clippedXl) {
+          continue;
+        }
+        cuts.push_back(clippedXl);
+        cuts.push_back(clippedXh);
+        starts.push_back(clippedXl);
+        ends.push_back(clippedXh);
+      }
+      std::sort(cuts.begin(), cuts.end());
+      cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+      std::sort(starts.begin(), starts.end());
+      std::sort(ends.begin(), ends.end());
+
+      size_t nextStart = 0;
+      size_t nextEnd = 0;
+      int active = 0;
+      for (size_t index = 0; index + 1 < cuts.size(); ++index) {
+        const DbCoord segmentXl = cuts[index];
+        const DbCoord segmentXh = cuts[index + 1];
+        while (nextEnd < ends.size() && ends[nextEnd] <= segmentXl) {
+          --active;
+          ++nextEnd;
+        }
+        while (nextStart < starts.size() && starts[nextStart] <= segmentXl) {
+          ++active;
+          ++nextStart;
+        }
+        if (segmentXh <= segmentXl || active == 1) {
+          continue;
+        }
+        const CoverageFindingKind kind = active == 0
+                                             ? CoverageFindingKind::Gap
+                                             : CoverageFindingKind::Overlap;
+        if (!findings.empty() && findings.back().kind == kind
+            && findings.back().rowId == row.rowId
+            && findings.back().span.xh == segmentXl) {
+          findings.back().span.xh = segmentXh;
+        } else {
+          findings.push_back(
+              CoverageFinding{kind, row.rowId, {segmentXl, segmentXh}});
+        }
+      }
+    }
+  }
+  return findings;
+}
+
+}  // namespace internal
+
 void FillerRepairEngine::Impl::buildPlannerData()
 {
   eUNL::PhysDesMgr* desMgr = des_mgr_;
@@ -285,187 +405,34 @@ void FillerRepairEngine::Impl::buildPlannerData()
     return;
   }
 
-  // --- rows: RowId = PhysRow iteration index over ALL rows (the checker's
-  // convention); legal spans and compatibility checks cover non-pad rows.
-  struct RowFrame
-  {
-    DbCoord originX = 0;
-    DbCoord originY = 0;
-    DbCoord yLo = 0;
-    DbCoord yHi = 0;
-    DbCoord siteWidth = 0;
-    DbCoord siteHeight = 0;
-    DbCoord bboxXl = 0;
-    DbCoord bboxYl = 0;
-    DbCoord bboxXh = 0;
-    DbCoord bboxYh = 0;
-    int siteCount = 0;
-    std::string siteName;
-    bool isPad = false;
-  };
-  std::vector<RowFrame> frames;
-  RowId referenceRowId = -1;
-  const auto showRow = [](RowId rowId, const RowFrame& frame) {
-    return cat("row=", rowId,
-               " site=\"", frame.siteName, "\"",
-               " isPad=", frame.isPad,
-               " siteWidth=", frame.siteWidth,
-               " siteHeight=", frame.siteHeight,
-               " siteCount=", frame.siteCount,
-               " origin=(", frame.originX, ",", frame.originY, ")",
-               " bbox=[", frame.bboxXl, ",", frame.bboxYl, ",",
-               frame.bboxXh, ",", frame.bboxYh, ")");
-  };
-  {
-    RowId rowId = 0;
-    for (const eUNL::PhysRow& row : desMgr->getPhysRowIter()) {
-      RowFrame frame;
-      frame.isPad = row.getSite().getIsPad();
-      frame.originX = row.getOrigin().getX().getStorage();
-      frame.originY = row.getOrigin().getY().getStorage();
-      frame.yLo = row.getOrigin().getY().getStorage();
-      frame.yHi = (row.getOrigin().getY() + row.getSite().getHeight())
-                      .getStorage();
-      frame.siteWidth = row.getSite().getWidth().getStorage();
-      frame.siteHeight = row.getSite().getHeight().getStorage();
-      frame.siteCount = row.getSiteCnt();
-      frame.siteName = row.getSite().getName();
-      const eUTL::Rect bbox = row.getBbox();
-      frame.bboxXl = bbox.getXL().getStorage();
-      frame.bboxYl = bbox.getYL().getStorage();
-      frame.bboxXh = bbox.getXH().getStorage();
-      frame.bboxYh = bbox.getYH().getStorage();
-      if (!frame.isPad) {
-        const DbCoord width = frame.siteWidth;
-        const DbCoord height = frame.siteHeight;
-        if (referenceRowId < 0) {
-          referenceRowId = rowId;
-        }
-        if (site_width_ == 0) {
-          site_width_ = width;
-        } else if (site_width_ != width) {
-          addProblem(Severity::Fatal, "NonUniformSiteWidth",
-                     cat("non-pad rows do not share one site width: "
-                         "reference={",
-                         showRow(referenceRowId,
-                                 frames[static_cast<size_t>(referenceRowId)]),
-                         "} observed={", showRow(rowId, frame),
-                         "} engineSiteWidth=", site_width_,
-                         " gridSiteWidth=", grid->getSiteWidth().v,
-                         " checkerSiteWidth=", checker->siteWidth()));
-        }
-        if (row_height_ == 0 || (height > 0 && height < row_height_)) {
-          row_height_ = height;
-        }
-        const DbCoord spanWidth = (bbox.getXH() - bbox.getXL()).getStorage();
-        if (spanWidth <= 0 || width <= 0 || spanWidth % width != 0) {
-          addProblem(Severity::Fatal, "InvalidRowSpan",
-                     cat("invalid legal row span: {", showRow(rowId, frame),
-                         "} spanWidth=", spanWidth,
-                         " spanModuloSiteWidth=",
-                         width > 0 ? spanWidth % width : spanWidth));
-        }
-        row_list_.push_back(rowId);
-      }
-      frames.push_back(frame);
-      ++rowId;
-    }
-    by_row_.resize(frames.size());
+  // --- rows: RowId = Grid row index; x is core-left-relative. Grid is the
+  // single row/frame authority (the checker builds CheckRequest.rowId/colId
+  // from the same Grid calls), and infrastructure data is trusted as-is: the
+  // engine no longer re-validates site widths, row spans, origins or per-node
+  // frame coherence.
+  site_width_ = grid->getSiteWidth().v;
+  core_xl_ = grid->getCore().getXL().getStorage();
+  core_yl_ = grid->getCore().getYL().getStorage();
+  const int rowCount = grid->getRowCount().v;
+  row_frames_.reserve(static_cast<size_t>(std::max(rowCount, 0)));
+  row_list_.reserve(static_cast<size_t>(std::max(rowCount, 0)));
+  for (GridY y{0}; y < grid->getRowCount(); ++y) {
+    RowFrame frame;
+    frame.yLo = core_yl_ + grid->gridYToDbu(y).v;
+    frame.yHi = core_yl_ + grid->gridYToDbu(y + 1).v;
+    row_frames_.push_back(frame);
+    row_list_.push_back(y.v);
   }
-  for (size_t i = 0; i < frames.size(); ++i) {
-    const RowFrame& frame = frames[i];
-    if (!frame.isPad
-        && (frame.siteHeight <= 0 || row_height_ <= 0
-            || frame.siteHeight % row_height_ != 0)) {
-      addProblem(Severity::Fatal, "IncompatibleRowHeight",
-                 cat("non-pad row height is not an integer multiple of the "
-                     "base row height: observed={",
-                     showRow(static_cast<RowId>(i), frame),
-                     "} baseRowHeight=", row_height_,
-                     " heightModuloBase=",
-                     row_height_ > 0 ? frame.siteHeight % row_height_
-                                     : frame.siteHeight));
-    }
+  if (!row_frames_.empty()) {
+    row_height_ = row_frames_.front().yHi - row_frames_.front().yLo;
   }
+  by_row_.resize(row_frames_.size());
   if (site_width_ <= 0 || row_height_ <= 0 || row_list_.empty()) {
     addProblem(Severity::Fatal, "MissingRowGeometry",
-               cat("no usable standard-cell row geometry: physRows=",
-                   frames.size(), " nonPadRows=", row_list_.size(),
-                   " engineSiteWidth=", site_width_,
-                   " engineRowHeight=", row_height_,
-                   " gridSiteWidth=", grid->getSiteWidth().v,
-                   " gridRows=", grid->getRowCount().v,
-                   " gridSitesPerRow=", grid->getRowSiteCount().v,
-                   " checkerSiteWidth=", checker->siteWidth()));
+               cat("no usable row geometry from Grid: rows=",
+                   row_frames_.size(), " siteWidth=", site_width_,
+                   " rowHeight=", row_height_));
   }
-  if (checker->siteWidth() != site_width_) {
-    addProblem(Severity::Fatal, "CheckerSiteWidthMismatch",
-               cat("checker site width ", checker->siteWidth(),
-                   " differs from engine reference ", site_width_,
-                   "; gridSiteWidth=", grid->getSiteWidth().v,
-                   " reference={",
-                   referenceRowId >= 0
-                       ? showRow(referenceRowId,
-                                 frames[static_cast<size_t>(referenceRowId)])
-                       : std::string("none"),
-                   "}"));
-  }
-  // Planner windows/guards and the checker's inter-row comparisons both use
-  // ONE x frame across rows; refuse non-pad rows with different origin X.
-  // The baseline is the FIRST NON-PAD row -- pad rows may sit anywhere and
-  // must neither serve as the baseline nor be checked themselves.
-  const auto firstNonPad =
-      std::find_if(frames.begin(), frames.end(),
-                   [](const RowFrame& frame) { return !frame.isPad; });
-  if (firstNonPad != frames.end()) {
-    for (size_t i = 0; i < frames.size(); ++i) {
-      if (!frames[i].isPad && frames[i].originX != firstNonPad->originX) {
-        addProblem(Severity::Fatal, "RowOriginMisaligned",
-                   cat("non-pad row origins do not share one X frame: "
-                       "reference={",
-                       showRow(static_cast<RowId>(
-                                   std::distance(frames.begin(), firstNonPad)),
-                               *firstNonPad),
-                       "} observed={",
-                       showRow(static_cast<RowId>(i), frames[i]),
-                       "} gridCoreXl=",
-                       grid->getCore().getXL().getStorage(),
-                       " gridSiteWidth=", grid->getSiteWidth().v));
-        break;
-      }
-    }
-  }
-  // y -> row lookup; ties on yLo resolve to the FIRST row in row order,
-  // mirroring the checker's linear first-match scan.
-  struct RowRange
-  {
-    DbCoord yLo = 0;
-    DbCoord yHi = 0;
-    RowId rowId = 0;
-  };
-  std::vector<RowRange> rowRanges;
-  rowRanges.reserve(frames.size());
-  for (size_t i = 0; i < frames.size(); ++i) {
-    rowRanges.push_back(
-        RowRange{frames[i].yLo, frames[i].yHi, static_cast<RowId>(i)});
-  }
-  std::sort(rowRanges.begin(), rowRanges.end(),
-            [](const RowRange& a, const RowRange& b) {
-              return a.yLo != b.yLo ? a.yLo < b.yLo : a.rowId < b.rowId;
-            });
-  const auto rowContaining = [&rowRanges](DbCoord y) -> RowId {
-    auto it = std::upper_bound(
-        rowRanges.begin(), rowRanges.end(), y,
-        [](DbCoord value, const RowRange& range) { return value < range.yLo; });
-    if (it == rowRanges.begin()) {
-      return -1;
-    }
-    --it;
-    while (it != rowRanges.begin() && std::prev(it)->yLo == it->yLo) {
-      --it;
-    }
-    return (y >= it->yLo && y < it->yHi) ? it->rowId : -1;
-  };
 
   const auto heightInRows = [this](DbCoord height) {
     return row_height_ > 0
@@ -609,8 +576,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
                    " networkMasters=", network->getMasters().size()));
   }
 
-  // --- placed instances: Network nodes with the checker's exact placement
-  // filters/frame. Node owns per-instance filler classification.
+  // --- placed instances: Grid supplies row and column (trusted, no
+  // cross-frame re-validation); PhysDesMgr supplies status and origin.
   instances_.resize(network->getNodes().size());
   udm_refs_.resize(network->getNodes().size());
   for (const auto& nodePtr : network->getNodes()) {
@@ -630,98 +597,16 @@ void FillerRepairEngine::Impl::buildPlannerData()
         && status != eUNL::PhysObjStatus::LOC_FIXED) {
       continue;
     }
-    if (!supportedOrientation(physCell.getOrient())) {
-      addProblem(Severity::Fatal, "UnsupportedOrientation",
-                 cat("node has unsupported orientation: node=",
-                     node->getId(), " leafCell=",
-                     lcId.getIndexValue(), " master=",
-                     node->getMaster()->getId(), " orient=",
-                     static_cast<int>(physCell.getOrient().getValue()),
-                     " status=", static_cast<int>(status), " {",
-                     masterDebug(*cell), "}"));
-      continue;
+    const RowId rowId = static_cast<RowId>(grid->gridSnapDownY(node).v);
+    if (rowId < 0 || rowId >= static_cast<RowId>(row_frames_.size())) {
+      continue;  // outside the core grid: context the planner cannot edit
     }
     const eUTL::Point2D origin = physCell.getOrigin();
-    const RowId rowId = rowContaining(origin.getY().getStorage());
-    if (rowId < 0) {
-      addProblem(Severity::Fatal, "NodeOutsideRows",
-                 cat("node origin is not in any PhysRow: node=",
-                     node->getId(), " leafCell=", lcId.getIndexValue(),
-                     " origin=(", origin.getX().getStorage(), ",",
-                     origin.getY().getStorage(), ") master=",
-                     node->getMaster()->getId(), " physRows=", frames.size(),
-                     " firstRowY=[",
-                     frames.empty() ? 0 : frames.front().yLo, ",",
-                     frames.empty() ? 0 : frames.front().yHi, ") lastRowY=[",
-                     frames.empty() ? 0 : frames.back().yLo, ",",
-                     frames.empty() ? 0 : frames.back().yHi, ") {",
-                     masterDebug(*cell), "}"));
-      continue;
-    }
-    const DbCoord xOffset =
-        origin.getX().getStorage() - frames[static_cast<size_t>(rowId)].originX;
-    if (xOffset < 0) {
-      addProblem(Severity::Fatal, "NodeLeftOfRowOrigin",
-                 cat("node lies left of its row origin: node=",
-                     node->getId(), " leafCell=", lcId.getIndexValue(),
-                     " originX=", origin.getX().getStorage(),
-                     " xOffset=", xOffset, " {",
-                     showRow(rowId, frames[static_cast<size_t>(rowId)]),
-                     "} gridCoreXl=",
-                     grid->getCore().getXL().getStorage(), " {",
-                     masterDebug(*cell), "}"));
-      continue;
-    }
-
-    // Keep the engine's snapshot in the same frame as the unchanged checker:
-    // PhysRow iteration order and x relative to each row origin. The checker
-    // also resolves overlay neighbours through Grid, so fail closed if those
-    // frames do not coincide for a placed node.
-    const RowId gridRow = static_cast<RowId>(grid->gridSnapDownY(node).v);
-    if (gridRow != rowId) {
-      addProblem(Severity::Fatal, "RowFrameMismatch",
-                 cat("PhysRow/Grid row frames disagree: node=",
-                     node->getId(), " leafCell=", lcId.getIndexValue(),
-                     " origin=(", origin.getX().getStorage(), ",",
-                     origin.getY().getStorage(), ") physRow=", rowId,
-                     " gridRow=", gridRow, " gridRows=",
-                     grid->getRowCount().v, " physRows=", frames.size(),
-                     " physRowData={",
-                     showRow(rowId, frames[static_cast<size_t>(rowId)]),
-                     "}"));
-      continue;
-    }
-    const DbCoord gridCol = static_cast<DbCoord>(grid->gridX(node).v);
-    const DbCoord physCol = site_width_ > 0 ? xOffset / site_width_ : -1;
-    if (site_width_ > 0 && gridCol != physCol) {
-      addProblem(Severity::Fatal, "ColFrameMismatch",
-                 cat("PhysRow/Grid column frames disagree: node=",
-                     node->getId(), " leafCell=", lcId.getIndexValue(),
-                     " originX=", origin.getX().getStorage(),
-                     " rowOriginX=",
-                     frames[static_cast<size_t>(rowId)].originX,
-                     " gridCoreXl=",
-                     grid->getCore().getXL().getStorage(),
-                     " xOffset=", xOffset,
-                     " engineSiteWidth=", site_width_,
-                     " gridSiteWidth=", grid->getSiteWidth().v,
-                     " physRowColumn=", physCol,
-                     " gridColumn=", gridCol, " {",
-                     showRow(rowId, frames[static_cast<size_t>(rowId)]), "}"));
-      continue;
-    }
+    const DbCoord x = origin.getX().getStorage() - core_xl_;
 
     const MasterId masterId = static_cast<MasterId>(node->getMaster()->getId());
     if (masterInfo(masterId) == nullptr) {
-      addProblem(Severity::Fatal, "UnknownMaster",
-                 cat("node references a master absent from planner snapshot: "
-                     "node=",
-                     node->getId(), " leafCell=", lcId.getIndexValue(),
-                     " masterId=", masterId,
-                     " plannerMasterSlots=", masters_.size(),
-                     " networkMasters=", network->getMasters().size(),
-                     " {", masterDebug(*cell), "}"));
-      continue;
+      continue;  // trusted Network: master tables are built from it above
     }
     MasterInfo& info = *masters_[static_cast<size_t>(masterId)];
     const bool isFiller = node->isFiller();
@@ -736,7 +621,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
     PlacedInstance placed{id,
                           masterId,
                           rowId,
-                          xOffset,
+                          x,
                           toPlannerOrient(physCell.getOrient()),
                           isFiller};
     if (placed.isFiller && info.vt == kUnknownVt) {
@@ -749,28 +634,17 @@ void FillerRepairEngine::Impl::buildPlannerData()
     instances_[id] = placed;
     udm_refs_[id] = UdmRef{lcId, cell->getLibCellId(), origin.getX(),
                            origin.getY()};
-    for (DbCoord offset = 0; offset < std::max<DbCoord>(info.height, 1);
-         ++offset) {
-      PlacedInstance rowCopy = placed;
-      rowCopy.rowId = rowId + static_cast<RowId>(offset);
-      if (rowCopy.rowId >= static_cast<RowId>(by_row_.size())) {
-        addProblem(Severity::Fatal, "MultiRowOutsideRows",
-                   cat("multi-row node extends outside PhysRow inventory: "
-                       "node=",
-                       node->getId(), " leafCell=", lcId.getIndexValue(),
-                       " startRow=", rowId,
-                       " masterHeightRows=", info.height,
-                       " failingOffset=", offset,
-                       " requestedRow=", rowCopy.rowId,
-                       " physRows=", frames.size(), " origin=(",
-                       origin.getX().getStorage(), ",",
-                       origin.getY().getStorage(), ") {",
-                       masterDebug(*cell), "}"));
+    // Multi-row instances appear in every row they occupy (one shared x
+    // frame, so the copy keeps the same x).
+    const DbCoord heightRows = std::max<DbCoord>(info.height, 1);
+    for (DbCoord offset = 0; offset < heightRows; ++offset) {
+      const RowId row = rowId + static_cast<RowId>(offset);
+      if (row >= static_cast<RowId>(by_row_.size())) {
         break;
       }
-      rowCopy.x = origin.getX().getStorage()
-                  - frames[static_cast<size_t>(rowCopy.rowId)].originX;
-      by_row_[rowCopy.rowId].push_back(rowCopy);
+      PlacedInstance rowCopy = placed;
+      rowCopy.rowId = row;
+      by_row_[row].push_back(rowCopy);
     }
   }
   for (std::vector<PlacedInstance>& list : by_row_) {
@@ -1674,155 +1548,6 @@ ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
 
 }  // namespace
 
-// Grid legal domain for one precheck row plus the y-sorted lookup index.
-// The Grid legal domain (rows, blockages, padding reservations) is immutable
-// within one engine snapshot -- only PLACED cells move between precheck
-// calls -- so this is computed once at init and reused per call.
-struct PrecheckDomains
-{
-  struct Row
-  {
-    int id = 0;
-    int64_t yl = 0;
-    int64_t yh = 0;
-    std::vector<XInterval> legalSpans;
-  };
-  std::vector<Row> rows;
-  std::vector<size_t> order;      // row indices sorted by yl (ties by id)
-  std::vector<int64_t> sortedYl;  // rows[order[i]].yl, for binary search
-};
-
-namespace {
-
-PrecheckDomains buildPrecheckDomains(const Grid* grid)
-{
-  // Grid is the infrastructure authority for placeable row sites. A valid
-  // pixel belongs to a physical row and is not cut by a hard blockage/group
-  // boundary; padding_reserved_by marks a halo/padding site where whitespace
-  // is intentional. Only maximal runs satisfying both conditions require
-  // exactly one placed-cell cover.
-  PrecheckDomains domains;
-  const eUTL::Rect core = grid->getCore();
-  const int64_t coreXl = core.getXL().getStorage();
-  const int64_t coreYl = core.getYL().getStorage();
-  const int64_t siteWidth = grid->getSiteWidth().v;
-  if (siteWidth <= 0) {
-    return domains;
-  }
-  for (GridY y{0}; y < grid->getRowCount(); ++y) {
-    PrecheckDomains::Row row;
-    row.id = y.v;
-    row.yl = coreYl + grid->gridYToDbu(y).v;
-    row.yh = coreYl + grid->gridYToDbu(y + 1).v;
-
-    bool inLegalSpan = false;
-    int legalStart = 0;
-    for (GridX x{0}; x < grid->getRowSiteCount(); ++x) {
-      const Pixel* pixel = grid->gridPixel(x, y);
-      const bool requiresCoverage
-          = pixel != nullptr && pixel->is_valid
-            && pixel->padding_reserved_by == nullptr;
-      if (requiresCoverage && !inLegalSpan) {
-        inLegalSpan = true;
-        legalStart = x.v;
-      } else if (!requiresCoverage && inLegalSpan) {
-        row.legalSpans.push_back({coreXl + legalStart * siteWidth,
-                                  coreXl + x.v * siteWidth});
-        inLegalSpan = false;
-      }
-    }
-    if (inLegalSpan) {
-      row.legalSpans.push_back(
-          {coreXl + legalStart * siteWidth,
-           coreXl + grid->getRowSiteCount().v * siteWidth});
-    }
-    if (!row.legalSpans.empty() && row.yh > row.yl) {
-      domains.rows.push_back(std::move(row));
-    }
-  }
-
-  // y-sorted index over the rows so each node binary-searches its overlapped
-  // rows instead of scanning all of them (real designs: 1e5..1e6 nodes x 1e3
-  // rows made the full scan the dominant precheck cost).
-  domains.order.resize(domains.rows.size());
-  for (size_t i = 0; i < domains.order.size(); ++i) {
-    domains.order[i] = i;
-  }
-  const std::vector<PrecheckDomains::Row>& rows = domains.rows;
-  std::sort(domains.order.begin(), domains.order.end(),
-            [&rows](size_t a, size_t b) {
-              return rows[a].yl != rows[b].yl ? rows[a].yl < rows[b].yl
-                                              : rows[a].id < rows[b].id;
-            });
-  domains.sortedYl.reserve(domains.order.size());
-  for (const size_t idx : domains.order) {
-    domains.sortedYl.push_back(rows[idx].yl);
-  }
-  return domains;
-}
-
-std::vector<internal::CoverageFinding> findGapAndOverlap(
-    eUNL::PhysDesMgr* desMgr,
-    const Network* network,
-    const PrecheckDomains& domains)
-{
-  std::vector<std::vector<XInterval>> placedSpans(domains.rows.size());
-
-  for (const auto& nodePtr : network->getNodes()) {
-    if (nodePtr == nullptr) {
-      continue;
-    }
-    const eUNL::PhysCell cell = desMgr->getPhysCell(nodePtr->getDbInst());
-    if (!cell.isValid()) {
-      continue;
-    }
-    const eUNL::PhysObjStatus status = cell.getStatus();
-    if (status != eUNL::PhysObjStatus::PLACED
-        && status != eUNL::PhysObjStatus::LOC_FIXED) {
-      continue;
-    }
-    const eUTL::Point2D origin = cell.getOrigin();
-    const int64_t cellXl = origin.getX().getStorage();
-    const int64_t cellXh = cellXl + cell.getPhysMaster().getWidth().getStorage();
-    const int64_t cellYl = origin.getY().getStorage();
-    const int64_t cellYh = cellYl + cell.getPhysMaster().getHeight().getStorage();
-
-    // First y-sorted position whose row could still overlap [cellYl, cellYh):
-    // start at the first row with yl > cellYl and walk back over rows whose
-    // span still crosses cellYl (at most one for non-overlapping rows).
-    size_t pos = static_cast<size_t>(
-        std::upper_bound(domains.sortedYl.begin(), domains.sortedYl.end(),
-                         cellYl)
-        - domains.sortedYl.begin());
-    while (pos > 0 && domains.rows[domains.order[pos - 1]].yh > cellYl) {
-      --pos;
-    }
-    for (; pos < domains.order.size()
-           && domains.rows[domains.order[pos]].yl < cellYh;
-         ++pos) {
-      const size_t rowIdx = domains.order[pos];
-      const PrecheckDomains::Row& row = domains.rows[rowIdx];
-      if (cellYl >= row.yh || cellYh <= row.yl) {
-        continue;
-      }
-      placedSpans[rowIdx].push_back({cellXl, cellXh});
-    }
-  }
-
-  std::vector<internal::PlacementCoverageRow> coverageRows;
-  coverageRows.reserve(domains.rows.size());
-  for (size_t i = 0; i < domains.rows.size(); ++i) {
-    internal::PlacementCoverageRow coverageRow;
-    coverageRow.rowId = domains.rows[i].id;
-    coverageRow.legalSpans = domains.rows[i].legalSpans;
-    coverageRow.placedSpans = std::move(placedSpans[i]);
-    coverageRows.push_back(std::move(coverageRow));
-  }
-  return internal::findCoverageFindings(std::move(coverageRows));
-}
-
-}  // namespace
-
 FillerRepairEngine::Impl::Impl(Grid* grid, Network* network)
     : grid_(grid), network_(network), log_(false)
 {
@@ -1849,8 +1574,6 @@ bool FillerRepairEngine::Impl::init(eUNL::PhysDesMgr* desMgr,
                              oracle_diagnostics_.end());
     return false;
   }
-  precheck_domains_ =
-      std::make_unique<PrecheckDomains>(buildPrecheckDomains(grid_));
   return true;
 }
 
@@ -1862,37 +1585,12 @@ void FillerRepairEngine::Impl::setDebugLogging(bool enabled)
   log_.setEnabled(enabled);
 }
 
-ipl::CheckResult FillerRepairEngine::Impl::precheck() const
-{
-  ipl::CheckResult result;
-  if (!initialized_ || precheck_domains_ == nullptr) {
-    result.isLegal = false;
-    result.diagnostics = init_diagnostics_;
-    result.diagnostics.push_back(
-        {"precheck_not_initialized",
-         "warning: init() must succeed before placement precheck"});
-    return result;
-  }
-  const std::vector<internal::CoverageFinding> findings
-      = findGapAndOverlap(des_mgr_, network_, *precheck_domains_);
-  result.isLegal = findings.empty();
-  for (const internal::CoverageFinding& finding : findings) {
-    const char* status = internal::coverageFindingStatus(finding.kind);
-    result.diagnostics.push_back(
-        {status,
-         cat("warning: placement ", status, " row=", finding.rowId,
-             " x=[", finding.span.xl, ",", finding.span.xh,
-             ") -> opto must block mutation")});
-  }
-  return result;
-}
-
 ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
     const Region& influence) const
 {
   ipl::CheckResult result;
   result.isLegal = true;
-  if (!initialized_ || precheck_domains_ == nullptr) {
+  if (!initialized_) {
     result.isLegal = false;
     result.diagnostics.push_back(
         {"precheck_not_initialized",
@@ -1900,20 +1598,20 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
     return result;
   }
 
-  // Legal spans (absolute DBU) come from the cached Grid domain. The by-row
-  // snapshot identifies the nodes to inspect, while status, origin and master
-  // size are read live from PhysDesMgr. The caller must update() after any
-  // placement/master commit: live reads catch changes to indexed nodes but do
-  // not discover a node moved in from a different snapshot row.
+  // Regional coverage gate only (spec: repair checks the rows it can edit;
+  // whole-design placement legality is infrastructure's own gate). Legal
+  // spans come lazily from Grid pixels for exactly these rows; placed spans
+  // are read live from PhysDesMgr for the row's snapshot nodes.
   std::vector<internal::PlacementCoverageRow> coverageRows;
-  for (const PrecheckDomains::Row& domainRow : precheck_domains_->rows) {
-    if (domainRow.id < influence.rowLo || domainRow.id > influence.rowHi) {
-      continue;
-    }
+  const RowId rowLo = std::max<RowId>(influence.rowLo, 0);
+  const RowId rowHi = std::min<RowId>(
+      influence.rowHi, static_cast<RowId>(row_frames_.size()) - 1);
+  for (RowId rowId = rowLo; rowId <= rowHi; ++rowId) {
+    const RowFrame& frame = row_frames_[static_cast<size_t>(rowId)];
     internal::PlacementCoverageRow coverageRow;
-    coverageRow.rowId = domainRow.id;
-    coverageRow.legalSpans = domainRow.legalSpans;
-    for (const PlacedInstance& inst : instancesInRow(domainRow.id)) {
+    coverageRow.rowId = rowId;
+    coverageRow.legalSpans = legalSpansForRow(rowId);
+    for (const PlacedInstance& inst : instancesInRow(rowId)) {
       if (static_cast<size_t>(inst.id) >= udm_refs_.size()
           || !udm_refs_[inst.id].has_value()) {
         continue;
@@ -1929,14 +1627,14 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
         continue;
       }
       const eUTL::Point2D origin = cell.getOrigin();
-      const int64_t cellYl = origin.getY().getStorage();
-      const int64_t cellYh
+      const DbCoord cellYl = origin.getY().getStorage();
+      const DbCoord cellYh
           = cellYl + cell.getPhysMaster().getHeight().getStorage();
-      if (cellYl >= domainRow.yh || cellYh <= domainRow.yl) {
+      if (cellYl >= frame.yHi || cellYh <= frame.yLo) {
         continue;  // node no longer overlaps this row since the snapshot
       }
-      const int64_t cellXl = origin.getX().getStorage();
-      const int64_t cellXh =
+      const DbCoord cellXl = origin.getX().getStorage() - core_xl_;
+      const DbCoord cellXh =
           cellXl + cell.getPhysMaster().getWidth().getStorage();
       coverageRow.placedSpans.push_back({cellXl, cellXh});
     }
@@ -1955,6 +1653,39 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
              ") -> filler repair blocked in target influence rows")});
   }
   return result;
+}
+
+const std::vector<XInterval>& FillerRepairEngine::Impl::legalSpansForRow(
+    RowId rowId) const
+{
+  const auto it = legal_spans_.find(rowId);
+  if (it != legal_spans_.end()) {
+    return it->second;
+  }
+  // A valid pixel not reserved by halo/padding requires exactly one placed
+  // cover; maximal runs of such pixels form the legal spans (core-left-
+  // relative like every planner x).
+  std::vector<XInterval> spans;
+  bool inSpan = false;
+  DbCoord spanStart = 0;
+  for (GridX x{0}; x < grid_->getRowSiteCount(); ++x) {
+    const Pixel* pixel = grid_->gridPixel(x, GridY{rowId});
+    const bool requiresCoverage = pixel != nullptr && pixel->is_valid
+                                  && pixel->padding_reserved_by == nullptr;
+    if (requiresCoverage && !inSpan) {
+      inSpan = true;
+      spanStart = static_cast<DbCoord>(x.v) * site_width_;
+    } else if (!requiresCoverage && inSpan) {
+      inSpan = false;
+      spans.push_back({spanStart, static_cast<DbCoord>(x.v) * site_width_});
+    }
+  }
+  if (inSpan) {
+    spans.push_back({spanStart,
+                     static_cast<DbCoord>(grid_->getRowSiteCount().v)
+                         * site_width_});
+  }
+  return legal_spans_.emplace(rowId, std::move(spans)).first->second;
 }
 
 void FillerRepairEngine::Impl::failInit(const std::string& status,
@@ -2032,50 +1763,12 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  fillerSettings.getFillerPhysCells().size()));
     return false;
   }
-  size_t nodeIndex = 0;
-  for (const auto& node : network_->getNodes()) {
-    if (node == nullptr || node->getMaster() == nullptr
-        || node->getMaster()->getPhysLibCell() == nullptr) {
-      failInit("invalid_network_node",
-               cat("fatal: Network contains an incomplete node/master "
-                   "mapping: nodeVectorIndex=",
-                   nodeIndex, " nodePresent=", node != nullptr,
-                   " masterPresent=",
-                   node != nullptr && node->getMaster() != nullptr,
-                   " physMasterPresent=",
-                   node != nullptr && node->getMaster() != nullptr
-                       && node->getMaster()->getPhysLibCell() != nullptr,
-                   " networkNodes=", network_->getNodes().size(),
-                   " networkMasters=", network_->getMasters().size()));
-      return false;
-    }
-    const eUNL::PhysCell cell = desMgr->getPhysCell(node->getDbInst());
-    if (!cell.isValid()
-        || cell.getPhysMaster().getLibCellId()
-               != node->getMaster()->getDbMaster()) {
-      const int expectedLibCell
-          = node->getMaster()->getDbMaster().getIndexValue();
-      const int actualLibCell = cell.isValid()
-                                    ? cell.getPhysMaster()
-                                          .getLibCellId()
-                                          .getIndexValue()
-                                    : -1;
-      failInit("infrastructure_design_mismatch",
-               cat("fatal: Network node does not match active PhysDesMgr: "
-                   "nodeVectorIndex=",
-                   nodeIndex, " node=", node->getId(),
-                   " leafCell=", node->getDbInst().getIndexValue(),
-                   " physCellValid=", cell.isValid(),
-                   " networkMaster=", node->getMaster()->getId(),
-                   " expectedLibCell=", expectedLibCell,
-                   " actualLibCell=", actualLibCell,
-                   " nodeType=", static_cast<int>(node->getType()),
-                   " nodePlaced=", node->isPlaced(),
-                   " nodeFixed=", node->isFixed()));
-      return false;
-    }
-    ++nodeIndex;
-  }
+  // Per-node Network<->UDM cross-validation was removed deliberately:
+  // infrastructure data is trusted as-is, and with lazy initialization the
+  // engine is typically created MID-CHECK, while the candidate Node already
+  // carries its proposed master ahead of the pending UDM commit
+  // (DePlace::isLegal updates the Node before checkDRC). Nodes whose master
+  // or physical record is unusable are simply skipped by buildPlannerData.
 
   filler_masters_ = fillerSettings.getFillerPhysCells();
   size_t configuredIndex = 0;
@@ -2188,11 +1881,6 @@ bool FillerRepairEngine::update(eUNL::PhysDesMgr* desMgr,
   const bool initialized = replacement->init(desMgr, fillerSettings);
   impl_ = std::move(replacement);
   return initialized;
-}
-
-ipl::CheckResult FillerRepairEngine::precheck() const
-{
-  return impl_->precheck();
 }
 
 RepairOutcome FillerRepairEngine::repair(eUNL::LeafCellID targetCell,

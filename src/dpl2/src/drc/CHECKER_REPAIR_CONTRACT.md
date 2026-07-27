@@ -226,3 +226,49 @@ with `-Wall -Wextra -Werror` clean.
 
 Future checker API or semantic changes must be recorded here before engine
 changes are merged.
+
+## 2026-07-27 contract: opto-owned fcRecord, lazy engine
+
+Supersedes the 2026-07-20 checker-entry wiring above where they differ.
+
+- The caller (opto) owns a `std::vector<FillerCellRecord>` and passes it by
+  reference through `DePlace::isLegal -> checkDRC ->
+  ImplantLayerChecker::check(node, x, y, orient, fcRecord)`. On a DRC-illegal
+  candidate the checker consults the repair engine; when a checker-verified
+  swap set exists, `check()` returns true and APPENDS the records to fcRecord.
+  The checker stores no filler-change member; `getFillerChanges()`,
+  `initFillerRepair()`, `updateFillerRepair()` and `precheckFillerRepair()`
+  no longer exist.
+- The engine is created and initialized LAZILY on the first failing check.
+  Context: desMgr is remembered by the checker's own `init()`; the
+  fillerSetting comes from `setFillerRepairContext()` (harnesses) or the
+  provider `DePlace` registers via `setFillerRepairSettingProvider()`
+  (dependency inversion: the checker never names DePlace, so builds without
+  it still link). A failed lazy init fails closed for the checker's lifetime
+  or until a new context is set.
+- Global placement precheck is gone from the engine; infrastructure owns
+  whole-design placement legality. The engine keeps only the regional
+  gap/overlap gate over rows a repair can edit, with per-row legal spans
+  derived lazily from Grid pixels.
+- Trust-infra: the engine consumes Grid/Network as-is. RowId = Grid row,
+  x core-left-relative (the frame `check()` builds requests in). The former
+  per-node Network<->UDM cross-validation and PhysRow/Grid frame gates were
+  removed: with lazy init the engine runs mid-check while the candidate Node
+  already carries its proposed master ahead of the pending UDM commit.
+- Filler authority is the UDM master type (checker `isCoreFiller`, Network's
+  aligned predicate). The former "Node/allow-list overrides physical type"
+  doctrine is gone; `fillerSetting` remains only the replacement-candidate
+  allow list.
+- [fillerRepair-fix] `checkDirect()` lazily extends `masterItems_` when the
+  request master was registered in Network after checker init (the
+  `DePlace::isLegal` addMaster-then-check flow); both builders are idempotent
+  by master id.
+
+## Verified test boundary (2026-07-27)
+
+Portable planner 82 + portable checker E2E 59 build and run in BOTH harness
+modes (fake-UDM and the real-UDM-mode migration gate: 141/141). The portable
+checker fixtures use the band-polarity model: per VT family an N layer
+(bottom band) and a P layer (top band), `basePolar=N`, odd-row placements MX;
+inter-row expectations pick the N or P rule by boundary parity. Local
+fake-UDM engine regression: 62 cases. Full local suite 203/203 normal + ASan.

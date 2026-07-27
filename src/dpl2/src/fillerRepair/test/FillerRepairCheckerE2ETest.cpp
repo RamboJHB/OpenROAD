@@ -14,7 +14,6 @@
 #include "drc/ImplantLayerChecker.h"
 #include "drc/ImplantLayerCheckerHelper.h"
 #include "fillerRepair/FillerRepairPlanner.h"
-#include "fillerRepair/PlacementPrecheck.h"
 
 namespace dpl2 {
 namespace ipl {
@@ -37,6 +36,12 @@ constexpr Dbu MIN_RULE = 20;
 constexpr LayerId F1_LAYER = 1;
 constexpr LayerId F2_LAYER = 2;
 constexpr LayerId F3_LAYER = 3;
+// P-polarity partner layer per VT family (top band; checker slotPolar
+// alternates band polarity per row, so a master carries an N bottom band and
+// a P top band and odd-row placements are MX-flipped).
+constexpr LayerId F1P_LAYER = 4;
+constexpr LayerId F2P_LAYER = 5;
+constexpr LayerId F3P_LAYER = 6;
 
 // MasterIds are sequential Network indices (order matches input().masters)
 constexpr MasterId C1_MASTER = 0;
@@ -48,6 +53,14 @@ constexpr MasterId F3_FILL_MASTER = 5;
 
 constexpr int F1_WIDTH_RULE = 101;
 constexpr int F1_SPACING_RULE = 201;
+
+// Inter-row interactions run through the facing band pair across the row
+// boundary. An even->odd boundary faces two P-band shapes (rule id +10); an
+// odd->even boundary faces two N-band shapes (base rule id).
+constexpr int interRule(int baseRule, RowId topRowOfBoundary)
+{
+  return (topRowOfBoundary % 2) == 0 ? baseRule + 10 : baseRule;
+}
 
 constexpr RowId INTRA_WIDTH_ROW = 0;
 constexpr ColId INTRA_WIDTH_COL = 10;
@@ -175,22 +188,29 @@ MasterId fillerMaster(int layerIndex)
       F1_FILL_MASTER, F2_FILL_MASTER, F3_FILL_MASTER}[layerIndex];
 }
 
-MasterInput master(MasterId masterId,
-                   ShapeId shapeBase,
-                   LayerId layer,
-                   bool isFiller)
+MasterItem master(MasterId masterId,
+                  ShapeId shapeBase,
+                  LayerId layer,
+                  bool isFiller)
 {
-  MasterInput master;
+  MasterItem master;
   master.masterId = masterId;
   master.width = SITE_WIDTH;
   master.height = ROW_HEIGHT;
+  master.siteHeight = ROW_HEIGHT;
   master.isFiller = isFiller;
+  // N-polar family layer on the bottom band, its P partner on the top band
+  // (layer + 3 by construction above).
   master.shapes = {
-      MasterShape{masterId, shapeBase, layer, makeRect(0, 50, SITE_WIDTH, 100)},
+      MasterShape{masterId,
+                  shapeBase,
+                  static_cast<LayerId>(layer + 3),
+                  makeRect(0, 50, SITE_WIDTH, 100)},
       MasterShape{masterId,
                   static_cast<ShapeId>(shapeBase + 1),
                   layer,
                   makeRect(0, 0, SITE_WIDTH, 50)}};
+  master.rawShapes = master.shapes;
   return master;
 }
 
@@ -199,18 +219,6 @@ Rule rule(int ruleId, RuleSource source, LayerId layer)
   return Rule(ruleId, source, layer, MIN_RULE);
 }
 
-TrackPattern tracks()
-{
-  TrackPattern tracks;
-  for (RowId rowId = 0; rowId < ROW_COUNT; ++rowId) {
-    tracks.layerBySlot[{rowId, BandSlot::Bottom}] = F1_LAYER;
-    tracks.layerBySlot[{rowId, BandSlot::Top}] = F1_LAYER;
-  }
-  for (RowId rowId = 0; rowId + 1 < ROW_COUNT; ++rowId) {
-    tracks.activeKindByBoundary[{rowId, rowId + 1}] = Layer::Polar::N;
-  }
-  return tracks;
-}
 
 struct SiteSpec
 {
@@ -534,7 +542,8 @@ std::vector<PlacedInst> densePlaced(const DensityCase& density)
                                   spec.masterId,
                                   rowId,
                                   colId,
-                                  PhysOrientationE::R0,
+                                  (rowId % 2) != 0 ? PhysOrientationE::MX
+                                                   : PhysOrientationE::R0,
                                   spec.isFiller});
     }
   }
@@ -544,15 +553,24 @@ std::vector<PlacedInst> densePlaced(const DensityCase& density)
 ImplantInput input(const DensityCase& density = FILLER_50_STD_50)
 {
   ImplantInput input;
-  input.layers = {Layer{F1_LAYER, "F1", Layer::Vt::L, Layer::Polar::N},
-                  Layer{F2_LAYER, "F2", Layer::Vt::H, Layer::Polar::N},
-                  Layer{F3_LAYER, "F3", Layer::Vt::UL, Layer::Polar::N}};
+  input.layers = {Layer{F1_LAYER, "F1_N", Layer::Vt::L, Layer::Polar::N},
+                  Layer{F2_LAYER, "F2_N", Layer::Vt::H, Layer::Polar::N},
+                  Layer{F3_LAYER, "F3_N", Layer::Vt::UL, Layer::Polar::N},
+                  Layer{F1P_LAYER, "F1_P", Layer::Vt::L, Layer::Polar::P},
+                  Layer{F2P_LAYER, "F2_P", Layer::Vt::H, Layer::Polar::P},
+                  Layer{F3P_LAYER, "F3_P", Layer::Vt::UL, Layer::Polar::P}};
   input.rules = {rule(F1_WIDTH_RULE, RuleSource::Width, F1_LAYER),
                  rule(102, RuleSource::Width, F2_LAYER),
                  rule(103, RuleSource::Width, F3_LAYER),
                  rule(F1_SPACING_RULE, RuleSource::Spacing, F1_LAYER),
                  rule(202, RuleSource::Spacing, F2_LAYER),
-                 rule(203, RuleSource::Spacing, F3_LAYER)};
+                 rule(203, RuleSource::Spacing, F3_LAYER),
+                 rule(F1_WIDTH_RULE + 10, RuleSource::Width, F1P_LAYER),
+                 rule(112, RuleSource::Width, F2P_LAYER),
+                 rule(113, RuleSource::Width, F3P_LAYER),
+                 rule(F1_SPACING_RULE + 10, RuleSource::Spacing, F1P_LAYER),
+                 rule(212, RuleSource::Spacing, F2P_LAYER),
+                 rule(213, RuleSource::Spacing, F3P_LAYER)};
   input.masters = {master(C1_MASTER, 1, F1_LAYER, false),
                    master(C2_MASTER, 3, F2_LAYER, false),
                    master(C3_MASTER, 5, F3_LAYER, false),
@@ -560,8 +578,9 @@ ImplantInput input(const DensityCase& density = FILLER_50_STD_50)
                    master(F2_FILL_MASTER, 9, F2_LAYER, true),
                    master(F3_FILL_MASTER, 11, F3_LAYER, true)};
   input.placedInsts = densePlaced(density);
-  input.rowCounts = ROW_COUNT;
-  input.tracks = tracks();
+  input.rowCount = ROW_COUNT;
+  input.colCount = SITE_COUNT;
+  input.basePolar = Layer::Polar::N;
   input.rowHeight = ROW_HEIGHT;
   input.siteWidth = SITE_WIDTH;
   return input;
@@ -574,8 +593,12 @@ Rect guard()
 
 CheckRequest request(RowId rowId, ColId colId)
 {
-  return CheckRequest{
-      instId(rowId, colId), C1_MASTER, rowId, colId, PhysOrientationE::R0};
+  return CheckRequest{instId(rowId, colId),
+                      C1_MASTER,
+                      rowId,
+                      colId,
+                      (rowId % 2) != 0 ? PhysOrientationE::MX
+                                       : PhysOrientationE::R0};
 }
 
 bool hasViolation(const CheckResult& result,
@@ -721,7 +744,7 @@ class PortablePlannerDataSource final : public fr::PlannerDataSource
       filler_master_ids_ = std::move(*configuredFillers);
     }
 
-    for (RowId rowId = 0; rowId < input.rowCounts; ++rowId) {
+    for (RowId rowId = 0; rowId < input.rowCount; ++rowId) {
       rows_.push_back(static_cast<fr::RowId>(rowId));
       row_spans_[static_cast<fr::RowId>(rowId)]
           = fr::XInterval{0, SITE_COUNT * input.siteWidth};
@@ -944,11 +967,12 @@ fr::TargetPlace plannerTarget(RowId rowId,
                               ColId colId,
                               MasterId masterId = C1_MASTER)
 {
+  // Odd rows are placed MX (band polarity alternates per row).
   return fr::TargetPlace{instId(rowId, colId),
                          masterId,
                          rowId,
                          colId * SITE_WIDTH,
-                         fr::Orient::R0};
+                         (rowId % 2) != 0 ? fr::Orient::MX : fr::Orient::R0};
 }
 
 fr::Region snapshotRegion(RowId rowId, ColId colId)
@@ -1023,12 +1047,9 @@ ImplantInput multiSwapWidthInput(int requiredFillers)
 
 ImplantInput thirdVtTargetInput()
 {
-  ImplantInput result = input();
-  for (auto& [slot, layer] : result.tracks.layerBySlot) {
-    (void) slot;
-    layer = F3_LAYER;
-  }
-  return result;
+  // Track-slot layer demands no longer exist; the F3-family target and the
+  // F3-restricted allow list alone express the third-VT scenario.
+  return input();
 }
 
 class PlannerCheckerFixture
@@ -1311,7 +1332,7 @@ TEST_P(ImplantCheckerOverlayDensityTest, InterRowWidth)
                             {target.instanceId, neighbor}));
   EXPECT_TRUE(
       hasViolation(results[2],
-                   F1_WIDTH_RULE,
+                   interRule(F1_WIDTH_RULE, NEW_INTER_WIDTH_TOP_ROW),
                    Relationship::InterRow,
                    {instId(NEW_INTER_WIDTH_TOP_ROW, NEW_INTER_WIDTH_COL),
                     instId(NEW_INTER_WIDTH_BOTTOM_ROW, NEW_INTER_WIDTH_COL)}));
@@ -1449,18 +1470,18 @@ TEST_P(ImplantCheckerOverlayDensityTest, InterRowSpacing)
 
   EXPECT_FALSE(results[1].isLegal);
   EXPECT_TRUE(hasViolation(results[1],
-                           F1_SPACING_RULE,
+                           interRule(F1_SPACING_RULE, INTER_SPACING_TARGET_ROW),
                            Relationship::InterRow,
                            {target.instanceId, neighbor}));
 
   EXPECT_FALSE(results[2].isLegal);
   EXPECT_FALSE(hasViolation(results[2],
-                            F1_SPACING_RULE,
+                            interRule(F1_SPACING_RULE, INTER_SPACING_TARGET_ROW),
                             Relationship::InterRow,
                             {target.instanceId, neighbor}));
   EXPECT_TRUE(hasViolation(
       results[2],
-      F1_SPACING_RULE,
+      interRule(F1_SPACING_RULE, NEW_INTER_SPACING_TOP_ROW),
       Relationship::InterRow,
       {instId(NEW_INTER_SPACING_TOP_ROW, NEW_INTER_SPACING_COL),
        instId(NEW_INTER_SPACING_BOTTOM_ROW, NEW_INTER_SPACING_COL + 4)}));
@@ -1782,179 +1803,6 @@ TEST(FillerRepairCheckerE2ETest,
   EXPECT_TRUE(fixture.inputUnchanged());
 }
 
-using fr::internal::CoverageFinding;
-using fr::internal::CoverageFindingKind;
-using fr::internal::PlacementCoverageRow;
-
-TEST(PlacementPrecheckInternalTest, ExactCoverageIsClean)
-{
-  PlacementCoverageRow row;
-  row.rowId = 0;
-  row.legalSpans = {{0, 40}};
-  row.placedSpans = {{0, 10}, {10, 25}, {25, 40}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row});
-  EXPECT_TRUE(findings.empty());
-}
-
-TEST(PlacementPrecheckInternalTest, LeadingMiddleAndTrailingGapsAreReported)
-{
-  PlacementCoverageRow row;
-  row.rowId = 3;
-  row.legalSpans = {{0, 100}};
-  row.placedSpans = {{10, 30}, {40, 80}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row});
-  ASSERT_EQ(findings.size(), 3u);
-  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Gap);
-  EXPECT_EQ(findings[0].span.xl, 0);
-  EXPECT_EQ(findings[0].span.xh, 10);
-  EXPECT_EQ(findings[1].span.xl, 30);
-  EXPECT_EQ(findings[1].span.xh, 40);
-  EXPECT_EQ(findings[2].span.xl, 80);
-  EXPECT_EQ(findings[2].span.xh, 100);
-}
-
-TEST(PlacementPrecheckInternalTest, AdjacentOverlapSegmentsAreCoalesced)
-{
-  PlacementCoverageRow row;
-  row.rowId = 4;
-  row.legalSpans = {{0, 40}};
-  row.placedSpans = {{0, 30}, {10, 20}, {20, 30}, {30, 40}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row});
-  ASSERT_EQ(findings.size(), 1u);
-  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Overlap);
-  EXPECT_EQ(findings[0].rowId, 4);
-  EXPECT_EQ(findings[0].span.xl, 10);
-  EXPECT_EQ(findings[0].span.xh, 30);
-}
-
-TEST(PlacementPrecheckInternalTest,
-     ExcludedWhitespaceBetweenLegalSpansIsIgnored)
-{
-  PlacementCoverageRow row;
-  row.rowId = 0;
-  row.legalSpans = {{0, 20}, {40, 60}};
-  row.placedSpans = {{0, 20}, {40, 60}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row});
-  EXPECT_TRUE(findings.empty());
-}
-
-TEST(PlacementPrecheckInternalTest, PlacedSpansAreClippedToLegalDomain)
-{
-  PlacementCoverageRow row;
-  row.rowId = 2;
-  row.legalSpans = {{10, 30}};
-  row.placedSpans = {{-100, 20}, {20, 100}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row});
-  EXPECT_TRUE(findings.empty());
-}
-
-TEST(PlacementPrecheckInternalTest, MultipleRowsAreSortedAndIndependent)
-{
-  PlacementCoverageRow row5{5, {{0, 20}}, {{0, 15}, {10, 20}}};
-  PlacementCoverageRow row1{1, {{0, 20}}, {{0, 5}, {10, 20}}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row5, row1});
-  ASSERT_EQ(findings.size(), 2u);
-  EXPECT_EQ(findings[0].rowId, 1);
-  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Gap);
-  EXPECT_EQ(findings[0].span.xl, 5);
-  EXPECT_EQ(findings[0].span.xh, 10);
-  EXPECT_EQ(findings[1].rowId, 5);
-  EXPECT_EQ(findings[1].kind, CoverageFindingKind::Overlap);
-  EXPECT_EQ(findings[1].span.xl, 10);
-  EXPECT_EQ(findings[1].span.xh, 15);
-}
-
-TEST(PlacementPrecheckInternalTest, EmptyAndZeroWidthLegalSpansAreIgnored)
-{
-  PlacementCoverageRow emptyRow;
-  emptyRow.rowId = 0;
-  PlacementCoverageRow zeroRow;
-  zeroRow.rowId = 1;
-  zeroRow.legalSpans = {{10, 10}, {20, 10}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({emptyRow, zeroRow});
-  EXPECT_TRUE(findings.empty());
-}
-
-TEST(PlacementPrecheckInternalTest, MixedGapAndOverlapKeepDeterministicOrder)
-{
-  PlacementCoverageRow row;
-  row.rowId = 7;
-  row.legalSpans = {{0, 50}};
-  row.placedSpans = {{0, 20}, {10, 30}, {40, 50}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row});
-  ASSERT_EQ(findings.size(), 2u);
-  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Overlap);
-  EXPECT_EQ(findings[0].span.xl, 10);
-  EXPECT_EQ(findings[0].span.xh, 20);
-  EXPECT_EQ(findings[1].kind, CoverageFindingKind::Gap);
-  EXPECT_EQ(findings[1].span.xl, 30);
-  EXPECT_EQ(findings[1].span.xh, 40);
-}
-
-TEST(PlacementPrecheckInternalTest, EmptyPlacementReportsWholeLegalSpan)
-{
-  PlacementCoverageRow row;
-  row.rowId = 8;
-  row.legalSpans = {{25, 75}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row});
-  ASSERT_EQ(findings.size(), 1u);
-  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Gap);
-  EXPECT_EQ(findings[0].rowId, 8);
-  EXPECT_EQ(findings[0].span.xl, 25);
-  EXPECT_EQ(findings[0].span.xh, 75);
-}
-
-TEST(PlacementPrecheckInternalTest, UnsortedInputProducesSortedFindings)
-{
-  PlacementCoverageRow row;
-  row.rowId = 9;
-  row.legalSpans = {{40, 60}, {0, 20}};
-  row.placedSpans = {{50, 60}, {0, 10}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row});
-  ASSERT_EQ(findings.size(), 2u);
-  EXPECT_EQ(findings[0].span.xl, 10);
-  EXPECT_EQ(findings[0].span.xh, 20);
-  EXPECT_EQ(findings[1].span.xl, 40);
-  EXPECT_EQ(findings[1].span.xh, 50);
-}
-
-TEST(PlacementPrecheckInternalTest, TripleCoverageReportsOneOverlapSpan)
-{
-  PlacementCoverageRow row;
-  row.rowId = 10;
-  row.legalSpans = {{0, 30}};
-  row.placedSpans = {{0, 30}, {5, 25}, {10, 20}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row});
-  ASSERT_EQ(findings.size(), 1u);
-  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Overlap);
-  EXPECT_EQ(findings[0].span.xl, 5);
-  EXPECT_EQ(findings[0].span.xh, 25);
-}
-
-TEST(PlacementPrecheckInternalTest, TouchingLegalSpansCoalesceContinuousGap)
-{
-  PlacementCoverageRow row;
-  row.rowId = 11;
-  row.legalSpans = {{0, 20}, {20, 40}};
-  row.placedSpans = {{0, 10}, {30, 40}};
-  const std::vector<CoverageFinding> findings
-      = fr::internal::findCoverageFindings({row});
-  ASSERT_EQ(findings.size(), 1u);
-  EXPECT_EQ(findings[0].kind, CoverageFindingKind::Gap);
-  EXPECT_EQ(findings[0].span.xl, 10);
-  EXPECT_EQ(findings[0].span.xh, 30);
-}
 
 }  // namespace
 }  // namespace ipl

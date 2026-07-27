@@ -20,7 +20,7 @@ migration payload.
 src/dpl2/test/local/run_planner_tests.sh
 SANITIZE=address src/dpl2/test/local/run_planner_tests.sh
 src/dpl2/test/local/run_fake_udm_e2e.sh              # engine regression only
-ALL=1 src/dpl2/test/local/run_fake_udm_e2e.sh        # whole suite, 254 cases
+ALL=1 src/dpl2/test/local/run_fake_udm_e2e.sh        # whole suite, 203 cases
 SANITIZE=address ALL=1 src/dpl2/test/local/run_fake_udm_e2e.sh
 ```
 
@@ -32,7 +32,7 @@ knob, so it runs with no UDM installed. Point `DPL2_UDM_INCLUDE_DIRS` /
 `DPL2_UDM_LIBRARIES` at a genuine install to use one.
 
 ```sh
-src/dpl2/test/local/run_migration_gate.sh            # 153 portable cases
+src/dpl2/test/local/run_migration_gate.sh            # 141 portable cases
 SANITIZE=address src/dpl2/test/local/run_migration_gate.sh
 ```
 

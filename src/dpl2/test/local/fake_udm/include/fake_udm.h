@@ -169,6 +169,12 @@ class PhysOrientation
  public:
   PhysOrientation() = default;
   PhysOrientation(PhysOrientationE value) : value_(value) {}
+  // Integer round-trip used by the checker helper's dump/load enum codecs.
+  explicit PhysOrientation(int value)
+      : value_(static_cast<PhysOrientationE>(value))
+  {
+  }
+  explicit operator int() const { return static_cast<int>(value_); }
   PhysOrientationE getValue() const { return value_; }
   operator PhysOrientationE() const { return value_; }
 
@@ -179,6 +185,18 @@ class PhysOrientation
 template <typename T>
 class uvRIter
 {
+};
+
+// Scoped performance logger: the real one times a region and reports it.
+// Nothing in the repair chain reads timings, so this is a no-op with the
+// same construction shape.
+class PerfLogger
+{
+ public:
+  explicit PerfLogger(const std::string&, bool singleLine = false)
+  {
+    (void) singleLine;
+  }
 };
 
 }  // namespace eUTL
@@ -270,6 +288,88 @@ class TechShape
   eUTL::Rect rect_;
 };
 
+// Per-orientation obstruction shape map keyed by layer; the alias the real
+// library exports and PhysLibObs::getShapes returns.
+using LayerShapeMapT = std::map<TechLayerRelativeID, std::vector<TechShape>>;
+
+// --- LEF58 tech-rule model (checker buildRules input) ----------------------
+// Minimal mirror of the UDM rule-check classes: a TechRule owns one
+// polymorphic RuleCheck whose _type discriminates the concrete class the
+// checker dynamic_casts to. Fixtures construct rules directly.
+enum class RuleCheckType
+{
+  WIDTH_RULE,
+  SPACING_IMPLANT_RULE,
+  OTHER_RULE,
+};
+
+enum class RuleCheckOrthoTypeE
+{
+  NONE,
+  HORIZONTAL,
+  VERTICAL,
+};
+
+struct RuleCheck
+{
+  explicit RuleCheck(RuleCheckType type) : _type(type) {}
+  virtual ~RuleCheck() = default;
+  RuleCheckType _type;
+};
+
+class WidthRule : public RuleCheck
+{
+ public:
+  WidthRule() : RuleCheck(RuleCheckType::WIDTH_RULE) {}
+  eUTL::UvDist getWidth() const { return width_; }
+  const std::string& getOtherImplLayerName() const { return other_layer_; }
+  bool getZeroPRL() const { return zero_prl_; }
+  bool getExceptCornerTouch() const { return except_corner_touch_; }
+  eUTL::UvDist getLength() const { return length_; }
+  const std::string& getCheckImplantGroup() const { return check_group_; }
+
+  eUTL::UvDist width_;
+  std::string other_layer_;
+  bool zero_prl_ = false;
+  bool except_corner_touch_ = false;
+  eUTL::UvDist length_;
+  std::string check_group_;
+};
+
+class SpacingImplantRule : public RuleCheck
+{
+ public:
+  struct SIItem
+  {
+    eUTL::UvDist minSpacing;
+    std::string layerName2;
+    RuleCheckOrthoTypeE prlOrient = RuleCheckOrthoTypeE::NONE;
+    eUTL::UvDist prl;
+    bool exceptAbutted = false;
+    bool exceptCornerTouch = false;
+    eUTL::UvDist length;
+    std::vector<std::string> layerNameList;
+  };
+
+  SpacingImplantRule() : RuleCheck(RuleCheckType::SPACING_IMPLANT_RULE) {}
+  const std::vector<SIItem>& getSpacingImplantTable() const { return table_; }
+
+  std::vector<SIItem> table_;
+};
+
+class TechRule
+{
+ public:
+  explicit TechRule(std::shared_ptr<RuleCheck> check)
+      : check_(std::move(check))
+  {
+  }
+  const RuleCheck& getCheck() const { return *check_; }
+
+ private:
+  std::shared_ptr<RuleCheck> check_;
+};
+
 class TechLayer
 {
  public:
@@ -294,6 +394,7 @@ class TechLayer
   }
   eUTL::UvDist getWidth() const { return width_; }
   eUTL::UvDist getMinSpacing() const { return min_spacing_; }
+  const std::vector<TechRule>& getRuleIter() const { return rules_; }
 
   std::string name_;
   bool is_implant_ = false;
@@ -303,6 +404,7 @@ class TechLayer
   int rel_id_ = -1;
   eUTL::UvDist width_;
   eUTL::UvDist min_spacing_;
+  std::vector<TechRule> rules_;
 };
 
 class TechSite

@@ -31,7 +31,7 @@
 #include <string>
 #include <vector>
 
-#include "fillerRepair/Log.h"
+#include "fillerRepair/Types.h"
 #include "fillerRepair/PlannerDataSource.h"
 #include "PlannerTestDataSource.h"
 

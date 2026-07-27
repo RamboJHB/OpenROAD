@@ -7,6 +7,7 @@
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
 #include <drc/PaddingChecker.h>
+#include <drc/ImplantLayerChecker.h>
 #include <PlacementDRC.h>
 
 namespace dpl2 {
@@ -36,6 +37,12 @@ DePlace::DePlace()
   this->design_ = design;
   padding_->setDesginManager(desMgr_);
   filler_setting_ = std::make_unique<fillerSetting>(design);
+  // Filler repair reaches the active fillerSetting through this provider
+  // (dependency inversion: the checker never names DePlace).
+  ipl::ImplantLayerChecker::setFillerRepairSettingProvider(
+      []() -> const fillerSetting* {
+        return DePlace::get()->getFillerSetting();
+      });
   if (!data_loaded_) {
     importDb();
     initGrid();

@@ -47,9 +47,16 @@ else()
     dpl2_test_udm INTERFACE ${DPL2_TEST_UDM_LIBRARIES})
 endif()
 
-function(dpl2_configure_test target standard)
+# `strictness` is "strict" (-Werror; the fillerRepair payload and test code we
+# own) or "delivered" (warnings visible but not fatal; infra/checker sources
+# arrive from their own owners and their warning noise must not block us).
+function(dpl2_configure_test target standard strictness)
   target_compile_features(${target} PRIVATE "cxx_std_${standard}")
-  target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+  if(strictness STREQUAL "strict")
+    target_compile_options(${target} PRIVATE -Wall -Wextra -Werror)
+  else()
+    target_compile_options(${target} PRIVATE -Wall -Wextra)
+  endif()
   if(DPL2_ENABLE_ASAN)
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
       target_compile_options(
@@ -73,7 +80,7 @@ target_include_directories(
   dpl2_filler_repair_planner_test SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
 target_link_libraries(
   dpl2_filler_repair_planner_test PRIVATE GTest::gtest_main dpl2_test_udm)
-dpl2_configure_test(dpl2_filler_repair_planner_test 17)
+dpl2_configure_test(dpl2_filler_repair_planner_test 17 strict)
 gtest_discover_tests(
   dpl2_filler_repair_planner_test
   TEST_PREFIX "planner."
@@ -85,10 +92,14 @@ gtest_discover_tests(
 # belong to only one consumer (architecture.cpp, ImplantLayerCheckerHelper.cpp)
 # stay on that consumer.
 
-function(dpl2_configure_chain_target target)
+function(dpl2_configure_chain_target target strictness)
+  # infrastructure/ is its own include root: the delivered sources there
+  # include each other bare (<Grid.h>, <Coordinates.h>), as in the
+  # destination build.
   target_include_directories(
     ${target}
-    PRIVATE "${DPL2_SRC}" "${CMAKE_CURRENT_LIST_DIR}/../include")
+    PRIVATE "${DPL2_SRC}" "${DPL2_SRC}/infrastructure"
+            "${CMAKE_CURRENT_LIST_DIR}/../include")
   target_include_directories(${target} SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
   target_link_libraries(${target} PRIVATE dpl2_test_udm)
   if(DPL2_ENABLE_ASAN AND APPLE AND EXISTS "/opt/homebrew/opt/tbb/lib/libtbb.a")
@@ -96,7 +107,7 @@ function(dpl2_configure_chain_target target)
   else()
     target_link_libraries(${target} PRIVATE TBB::tbb)
   endif()
-  dpl2_configure_test(${target} 20)
+  dpl2_configure_test(${target} 20 ${strictness})
 endfunction()
 
 # Shared OBJECT libraries: every C++20 consumer below used to list these same
@@ -112,12 +123,13 @@ add_library(dpl2_fr_chain_common OBJECT
     "${DPL2_SRC}/infrastructure/network.cpp"
     "${DPL2_SRC}/infrastructure/Padding.cpp"
     "${DPL2_SRC}/infrastructure/fillerSetting.cpp"
+    "${DPL2_SRC}/drc/util.cpp"
     "${DPL2_SRC}/drc/ImplantLayerChecker.cpp")
-dpl2_configure_chain_target(dpl2_fr_chain_common)
+dpl2_configure_chain_target(dpl2_fr_chain_common delivered)
 
 # The complete migration payload, exactly as sources.cmake defines it.
 add_library(dpl2_fr_runtime_obj OBJECT ${DPL2_FILLER_REPAIR_SOURCES})
-dpl2_configure_chain_target(dpl2_fr_runtime_obj)
+dpl2_configure_chain_target(dpl2_fr_runtime_obj strict)
 
 # --- Targets defined ONCE for both UDM modes -------------------------------
 #
@@ -145,7 +157,7 @@ add_executable(
 target_link_libraries(
   dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main
   dpl2_fr_chain_common dpl2_fr_runtime_obj)
-dpl2_configure_chain_target(dpl2_filler_repair_checker_e2e)
+dpl2_configure_chain_target(dpl2_filler_repair_checker_e2e strict)
 gtest_discover_tests(
   dpl2_filler_repair_checker_e2e
   TEST_PREFIX "portable-e2e."
@@ -159,7 +171,7 @@ add_library(
 target_link_libraries(
   dpl2_filler_repair_compile_check PRIVATE
   dpl2_fr_chain_common dpl2_fr_runtime_obj)
-dpl2_configure_chain_target(dpl2_filler_repair_compile_check)
+dpl2_configure_chain_target(dpl2_filler_repair_compile_check delivered)
 
 # --- Fake-UDM only ---------------------------------------------------------
 # The historical engine regression is the one target that cannot be built
@@ -174,7 +186,7 @@ if(DPL2_TEST_USE_FAKE_UDM)
   target_link_libraries(dpl2_filler_repair_e2e PRIVATE
     GTest::gtest_main
     dpl2_fr_chain_common dpl2_fr_runtime_obj)
-  dpl2_configure_chain_target(dpl2_filler_repair_e2e)
+  dpl2_configure_chain_target(dpl2_filler_repair_e2e strict)
   gtest_discover_tests(
     dpl2_filler_repair_e2e
     TEST_PREFIX "e2e."

@@ -10,6 +10,9 @@
 #include <unordered_map>
 #include <tbb/enumerable_thread_specific.h>
 #include "util/performance.hh"
+#include "fillerRepair/FillerRepairEngine.h"
+#include <cstdlib>
+#include "infrastructure/fillerSetting.h"
 
 #include "infrastructure/Grid.h"
 #include "infrastructure/Objects.h"
@@ -214,6 +217,7 @@ ImplantLayerChecker::~ImplantLayerChecker()
 bool ImplantLayerChecker::init(PhysDesMgr* desMgr)
 {
     eUTL::PerfLogger perfLogger("dpl2.init");
+    desMgr_ = desMgr;
     bool isFullUtil = grid_->isFullUtil();
     std::cout << "Fully utilized grid: " << isFullUtil << std::endl;
 
@@ -824,15 +828,81 @@ bool ImplantLayerChecker::check(const Node* node, GridX x,
 
     bool isLegal = checkDirect(request).isLegal;
     if (!isLegal) {
-        //!!! todo: call filler repairer here
-        // isLegal = repair.check(request, fcRecord)
+        isLegal = repairFillers(request, fcRecord);
     }
     return isLegal;
+}
+
+void ImplantLayerChecker::setFillerRepairContext(PhysDesMgr* desMgr,
+    const fillerSetting* setting)
+{
+    desMgr_ = desMgr;
+    repairSetting_ = setting;
+    repairEngine_.reset();
+    repairEngineFailed_ = false;
+}
+
+namespace {
+ImplantLayerChecker::FillerSettingProvider g_fillerSettingProvider = nullptr;
+}
+
+void ImplantLayerChecker::setFillerRepairSettingProvider(
+    FillerSettingProvider provider)
+{
+    g_fillerSettingProvider = provider;
+}
+
+bool ImplantLayerChecker::repairFillers(const CheckRequest& request,
+    std::vector<FillerCellRecord>& fcRecord) const
+{
+    if (repairEngineFailed_) {
+        return false;  // one failed lazy init fails all later repairs closed
+    }
+    if (!repairEngine_) {
+        // Lazy engine init (most checks are legal and never pay this):
+        // context comes from the seam when set, else from the DePlace owner.
+        const fillerSetting* setting = repairSetting_ != nullptr
+            ? repairSetting_
+            : (g_fillerSettingProvider != nullptr ? g_fillerSettingProvider()
+                                                  : nullptr);
+        PhysDesMgr* desMgr = desMgr_;  // remembered by this checker's init()
+        if (setting == nullptr || desMgr == nullptr) {
+            repairEngineFailed_ = true;
+            return false;
+        }
+        auto engine = std::make_unique<fillerRepair::FillerRepairEngine>(
+            grid_, network_);
+        // Test/debug transcript switch; no effect on search or acceptance.
+        engine->setDebugLogging(std::getenv("FR_VERBOSE") != nullptr);
+        if (!engine->init(desMgr, *setting)) {
+            repairEngineFailed_ = true;
+            return false;
+        }
+        repairEngine_ = std::move(engine);
+    }
+    fillerRepair::RepairOutcome outcome = repairEngine_->repair(request);
+    if (!outcome.hasSolution) {
+        return false;
+    }
+    // Append-only into the caller's record; the checker stores nothing.
+    fcRecord.insert(fcRecord.end(), outcome.changes.begin(),
+        outcome.changes.end());
+    return true;
 }
 
 CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
 {
     CheckResult result;
+    // [fillerRepair-fix] A candidate master registered in Network after this
+    // checker's init (DePlace::isLegal does addMaster+updateNode before
+    // checkDRC) has no MasterItem yet; scanInst would index out of bounds.
+    // Both builders are idempotent by master id, so extend the model lazily.
+    if (request.masterId >= 0
+        && static_cast<size_t>(request.masterId) >= masterItems_.size()) {
+        ImplantLayerChecker* self = const_cast<ImplantLayerChecker*>(this);
+        self->buildMasters();
+        self->buildMstIntervals();
+    }
     if (siteWidth_ <= 0 || request.colId < 0) {
         result.diagnostics = diagnostics_;
         result.diagnostics.push_back({"placement_not_site_aligned",

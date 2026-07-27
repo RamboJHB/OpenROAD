@@ -1,20 +1,22 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Internal pure filler-repair planner (spec sections 3.2 / 5.4).
-//
-// Deterministic pipeline: normalize -> window -> swap gen ->
-// rank -> subset search -> oracle gate -> result. The planner owns no state
-// between repair() calls and never mutates the design; all effects are the
-// returned FillerRepairResult. With RepairConfig::verbose enabled, each stage
-// prints a deterministic [fr][stage] decision transcript.
+// Filler-repair planner: the complete deterministic search pipeline
+// (spec sections 3.2 / 5.4 / 6.2-6.9), merged into one module:
+//   swap model -> violation signatures -> repair window -> ranking ->
+//   subset enumeration -> oracle gate -> pipeline driver.
+// The planner owns no state between repair() calls and never mutates the
+// design; the final checker stays the only legality oracle.
 
 #pragma once
 
 #include <atomic>
+#include <cstdint>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
 
-#include "Log.h"
-#include "OracleGate.h"
 #include "PlannerDataSource.h"
 #include "Types.h"
 
@@ -39,6 +41,323 @@ struct RepairConfig
   int maxAdaptiveLevels = 32;
   bool verbose = false;           // enables the [fr] debug transcript
 };
+
+// --- Swap: the atomic operation (spec section 4) ---------------------------
+
+struct RepairWindow;
+
+struct Swap
+{
+  InstanceId instanceId = 0;
+  MasterId oldMasterId = 0;
+  MasterId newMasterId = 0;
+  RowId rowId = 0;
+  XInterval span;
+  VtId oldVt = kUnknownVt;
+  VtId newVt = kUnknownVt;
+};
+
+using Overlay = std::vector<Swap>;
+
+// Builds a validated Swap or explains why it cannot exist: the instance must
+// be a placed filler and the new master a same-width/same-height filler
+// master different from the current one. On failure *error (if given)
+// receives the reason.
+std::optional<Swap> makeSwap(const PlannerDataSource& view,
+                             InstanceId instanceId,
+                             MasterId newMasterId,
+                             std::string* error = nullptr);
+
+// Checker-call cache key: sorted_unique((instanceId, newMasterId)) serialized
+// to a string. Order-independent.
+std::string canonicalKey(const Overlay& overlay);
+
+// Wire conversion, deterministic order (sorted by instanceId).
+ipl::FillerChanges toFillerChanges(const Overlay& overlay,
+                                   const PlannerDataSource& dataSource);
+
+struct SwapGenerationResult
+{
+  // Deterministic order: window editable order (row, x), then candidate
+  // master id ascending.
+  std::vector<Swap> swaps;
+  // NoUsableMaster per replacement-less filler, plus any provider
+  // diagnostics. A filler without swaps is a normal outcome, not an error.
+  std::vector<Diagnostic> diagnostics;
+};
+
+SwapGenerationResult generateSwaps(
+    const RepairWindow& window,
+    const PlannerDataSource& view,
+    const DebugLog& log);
+
+// --- violation signatures / relatedness (spec 6.2) -------------------------
+
+// A violation with the derived fields the planner works on. `raw` is kept by
+// value: normalization must outlive the request's snapshot vector.
+struct NormalizedViolation
+{
+  Violation raw;
+
+  std::vector<RowId> rowIds;  // sorted unique, never empty
+  bool rowIdFallback = false;  // rowIds were missing; anchor row substituted
+
+  // xWindow united with all participant x ranges: the geometric footprint
+  // used for windowing and the unfixable fast check.
+  XInterval xRange;
+
+  std::vector<InstanceId> cellAnchors;        // target + non-filler participants
+  std::vector<InstanceId> fillerParticipants;  // filler participants
+};
+
+// Normalizes the initial snapshot. Deterministic; logs one line per
+// violation (signature summary -> derived footprint).
+std::vector<NormalizedViolation> normalizeViolations(
+    const FillerRepairRequest& request,
+    const PlannerDataSource& view,
+    const DebugLog& log);
+
+// Pinned signature match across two checker snapshots (see file header).
+bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth);
+
+// Pinned relatedness: participants touch a changed instance, or xWindow is
+// within `ruleDistance` of a changed span on the same/adjacent row.
+bool isRelatedToOverlay(const Violation& violation,
+                        const Overlay& overlay,
+                        DbCoord ruleDistance);
+
+// Rule-distance estimate for geometry heuristics: the largest requiredValue
+// in the snapshot, falling back to one site. Only used for windows and
+// relatedness margins -- never for legality decisions (checker-as-oracle).
+DbCoord estimateRuleDistance(const std::vector<Violation>& violations,
+                             DbCoord siteWidth);
+
+// --- repair window: L0 + adaptive-L1 (spec 6.3, V2.1 #7/#8) ----------------
+
+struct RepairWindow
+{
+  int level = 0;
+  std::vector<RowId> rows;  // sorted; rows the planner may edit fillers in
+  XInterval x;              // editable x range (snapped to whole instances)
+
+  // Fillers inside rows/x, sorted by (row, x): the move-generation universe.
+  std::vector<InstanceId> editableFillers;
+  // Subset of editableFillers flagged as bridge fillers (default-mandatory
+  // candidates, spec 6.3/6.5).
+  std::vector<InstanceId> bridgeFillers;
+
+  Region area() const
+  {
+    if (rows.empty()) {
+      return Region{};
+    }
+    return Region{x, rows.front(), rows.back()};
+  }
+
+  Region guardRegion;  // two-cell ring around area()
+
+  bool containsEditable(InstanceId id) const;
+};
+
+// Builds L0 for the (single) violation cluster around the anchor.
+// `ruleDistance` widens bridge detection margins only. `level` is retained for
+// source compatibility and must be 0; adaptive growth uses the API below.
+RepairWindow buildWindow(int level,
+                         const TargetPlace& anchor,
+                         const std::vector<NormalizedViolation>& violations,
+                         const PlannerDataSource& view,
+                         DbCoord ruleDistance,
+                         const DebugLog& log);
+
+// One adaptive-L1 step (spec 6.3, V2.1 #8). `blocking` is the best non-clean
+// candidate's residual/new-related violation set. Direction is derived from
+// those x windows relative to `current`; when no directional finding exists,
+// both sides are tried. The step is deterministic and never sweeps an entire
+// filler run: each selected side adds at most `fillersPerRow` adjacent fillers
+// per relevant row, stopping at a non-filler boundary.
+RepairWindow expandWindowAdaptive(const RepairWindow& current,
+                                  const TargetPlace& anchor,
+                                  const std::vector<Violation>& blocking,
+                                  const PlannerDataSource& view,
+                                  int fillersPerRow,
+                                  const DebugLog& log);
+
+// --- ranking into filler domains (spec 6.6, V2.1 #9) -----------------------
+
+// One editable filler with its full, preference-ordered candidate domain.
+// Ranking never truncates a domain (V2.1 #9).
+struct FillerDomain
+{
+  InstanceId instanceId = 0;
+  std::vector<Swap> options;
+};
+
+std::vector<FillerDomain> rankFillers(
+    const std::vector<Swap>& swaps,
+    const TargetPlace& anchor,
+    const std::vector<NormalizedViolation>& violations,
+    const RepairWindow& window,
+    const PlannerDataSource& view,
+    const DebugLog& log);
+
+// --- subset enumeration (spec 6.7, V2.1 #9/#10) ----------------------------
+
+struct EnumerationPlan
+{
+  bool complete = false;          // full space emitted -> definitive result
+  std::vector<Overlay> overlays;  // enumeration order, capped at budget
+};
+
+EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
+                                  const RepairConfig& config,
+                                  int budget,
+                                  const DebugLog& log);
+
+// --- oracle gate: baseline-delta accept (spec 6.8, 4.2) --------------------
+
+// Planner-internal oracle protocol. These types live with their sole owner
+// instead of the shared model in Types.h. Runtime callers never see an oracle
+// request id or status; FillerRepairEngine translates final-checker results at
+// this boundary while the FillerChanges payload remains unchanged.
+using OracleRequestId = int32_t;
+
+struct OracleRequest
+{
+  OracleRequestId requestId = -1;  // planner-generated, unique per batch
+  TargetPlace targetPlace;
+  Region guardRegion;  // repair window expanded by a two-cell guard halo
+  ipl::FillerChanges fillerChanges;  // one atomic overlay candidate
+};
+
+enum class OracleStatus
+{
+  Checked,
+  InvalidOverlay,
+  CheckerError
+};
+
+struct OracleResult
+{
+  OracleRequestId requestId = -1;  // must echo OracleRequest.requestId
+  OracleStatus status = OracleStatus::CheckerError;
+  bool isLegal = false;  // meaningful only when status == Checked
+  std::vector<Violation> violations;
+  std::vector<Diagnostic> diagnostics;
+};
+
+// Runtime and test implementations provide the oracle. The interface is not
+// a second DRC checker: the final ImplantLayerChecker remains the sole source
+// of legality.
+class PlannerOracle
+{
+ public:
+  virtual ~PlannerOracle() = default;
+
+  virtual OracleResult checkPlaceWithOverlay(const OracleRequest& request) = 0;
+  virtual std::vector<OracleResult> checkPlaceWithOverlays(
+      const std::vector<OracleRequest>& requests) = 0;
+};
+
+inline bool isOracleSnapshotClean(const OracleResult& result)
+{
+  return result.status == OracleStatus::Checked && result.isLegal
+         && result.violations.empty();
+}
+
+// Delta classification of one checker result against the baseline.
+struct DeltaSummary
+{
+  bool usable = false;
+  bool inconsistent = false;   // isLegal disagrees with violations-empty (#1)
+  int residualOriginals = 0;   // originals still matched in the result
+  int newInWindow = 0;
+  int relatedInHalo = 0;
+  int unrelatedInHalo = 0;     // reported, never blocking
+  // Actual residual/new-related findings that prevented acceptance. Adaptive
+  // L1 uses their rows/x windows to choose the next growth side (V2.1 #8).
+  std::vector<Violation> blockingViolations;
+  bool clean = false;
+};
+
+class OracleGate
+{
+ public:
+  OracleGate(const PlannerDataSource& dataSource,
+             PlannerOracle& oracle,
+             const TargetPlace& anchor,
+             const std::vector<Violation>& originals,
+             DbCoord siteWidth,
+             DbCoord ruleDistance,
+             const RepairConfig& config,
+             const DebugLog& log);
+
+  // Baseline for `window.guardRegion`; consumes budget only on a cache miss.
+  // False when the baseline is unusable (checker error) OR fails the baseline
+  // consistency gate (spec 6.8, V2.1 #2+#4): the baseline must reproduce every
+  // original that lies inside the guard, and must not carry an unexpected
+  // in-window violation that was not in the input snapshot. A false return is
+  // fatal for the window -- either a checker error or a stale/inconsistent
+  // snapshot, both of which the planner must not silently treat as "repaired".
+  bool runBaseline(const RepairWindow& window, int& budget);
+
+  struct SearchResult
+  {
+    bool foundClean = false;
+    Overlay cleanOverlay;
+    bool protocolError = false;
+    bool budgetExhausted = false;
+    // Best non-clean candidate, also used to steer adaptive-L1 growth.
+    bool hasBest = false;
+    Overlay bestOverlay;
+    DeltaSummary bestSummary;
+  };
+
+  // Evaluates candidates in enumeration order, batched; early exit on the
+  // first delta-clean overlay. Consumes budget per checker-evaluated request.
+  SearchResult search(const std::vector<Overlay>& candidates,
+                      const RepairWindow& window,
+                      const Region& guard,
+                      int& budget);
+
+  int requestsSent() const { return requests_sent_; }
+  int batchesSent() const { return batches_sent_; }
+  int cacheHits() const { return cache_hits_; }
+  const std::vector<Diagnostic>& diagnostics() const { return diagnostics_; }
+
+ private:
+  std::string cacheKey(const Region& guard, const Overlay& overlay) const;
+  // nullptr on protocol error / budget exhaustion (flags set accordingly).
+  const OracleResult* resolve(const std::vector<Overlay>& chunk,
+                              const Region& guard,
+                              int& budget,
+                              bool& protocolError);
+  DeltaSummary classify(const OracleResult& result,
+                        const Overlay& overlay,
+                        const RepairWindow& window) const;
+  // Baseline consistency gate (spec 6.8, V2.1 #2+#4). Uses the already-fetched
+  // baseline_, spends no budget. Pushes a fatal BaselineMismatch diagnostic and
+  // returns false when the snapshot is stale/inconsistent.
+  bool checkBaselineConsistency(const RepairWindow& window);
+
+  const PlannerDataSource& data_source_;
+  PlannerOracle& oracle_;
+  const TargetPlace& anchor_;
+  const std::vector<Violation>& originals_;
+  DbCoord site_width_;
+  DbCoord rule_distance_;
+  const RepairConfig& config_;
+  const DebugLog& log_;
+
+  std::map<std::string, OracleResult> cache_;
+  const OracleResult* baseline_ = nullptr;  // points into cache_
+  OracleRequestId next_request_id_ = 0;
+  int requests_sent_ = 0;
+  int batches_sent_ = 0;
+  int cache_hits_ = 0;
+  std::vector<Diagnostic> diagnostics_;
+};
+
+// --- pipeline driver -------------------------------------------------------
 
 namespace internal {
 

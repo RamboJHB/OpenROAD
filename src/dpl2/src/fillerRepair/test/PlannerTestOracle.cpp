@@ -5,7 +5,6 @@
 
 #include <algorithm>
 
-#include "fillerRepair/Log.h"
 
 namespace dpl2::fillerRepair {
 

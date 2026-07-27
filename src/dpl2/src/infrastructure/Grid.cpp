@@ -5,6 +5,11 @@
 #include <cmath>
 #include <Grid.h>
 
+// [fillerRepair-fix] tbb::task_arena is used below (iterateAllPhysNets) but
+// no header here declared it; builds only worked where another header leaked
+// it transitively.
+#include <tbb/task_arena.h>
+
 #include <phys/physNet.hh>
 
 // NOLINT(misc-include-cleaner) Boost polygon headers require a specific

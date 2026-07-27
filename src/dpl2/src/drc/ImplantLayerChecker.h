@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
 #include <string>
@@ -22,6 +23,11 @@ using eUTL::PhysOrientation;
 namespace dpl2 {
 class Network;
 class Master;
+class fillerSetting;
+
+namespace fillerRepair {
+class FillerRepairEngine;
+}
 
 namespace ipl {
 
@@ -302,11 +308,31 @@ public:
     const std::vector<Diagnostic>& getDiags() const {return diagnostics_;}
     size_t mergedShapeCount() const;
 
+    // Presets what lazy filler-repair initialization would otherwise obtain
+    // from the registered provider (desMgr from this checker's init,
+    // fillerSetting from set_filler_option). Call before check() in
+    // harnesses that do not run under a DePlace owner.
+    void setFillerRepairContext(PhysDesMgr* desMgr,
+        const fillerSetting* setting);
+
+    // Dependency inversion: the infrastructure owner (DePlace) registers how
+    // to reach the active fillerSetting; the checker never names DePlace, so
+    // builds without it still link.
+    using FillerSettingProvider = const fillerSetting* (*)();
+    static void setFillerRepairSettingProvider(FillerSettingProvider provider);
+
     friend class TestImplantCmd;
     friend class ImplantLayerCheckerHelper;
 
 private:
     bool init(PhysDesMgr* desMgr);
+
+    // Filler repair is lazy (most checks pass and never need it): the engine
+    // is created and initialized on the first failing check. On a repairable
+    // failure the repair records are APPENDED to the caller's fcRecord; the
+    // checker keeps no filler-change member state.
+    bool repairFillers(const CheckRequest& request,
+        std::vector<FillerCellRecord>& fcRecord) const;
 
     struct BucketKey
     {
@@ -481,6 +507,13 @@ private:
     std::map<std::string, LayerId> layerNameToIdx_;
     const std::array<Relationship, 2> relations_ =
     {Relationship::IntraRow, Relationship::InterRow};
+
+    // Filler repair (lazy). desMgr_ is remembered by init(); the setting
+    // comes from setFillerRepairContext() or DePlace::get() at first use.
+    PhysDesMgr* desMgr_ = nullptr;
+    const fillerSetting* repairSetting_ = nullptr;
+    mutable std::unique_ptr<fillerRepair::FillerRepairEngine> repairEngine_;
+    mutable bool repairEngineFailed_ = false;
 };
 
 } // namespace ipl
