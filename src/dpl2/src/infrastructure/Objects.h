@@ -2,17 +2,13 @@
 // Copyright (c) 2024-2025, The OpenROAD Authors
 
 #pragma once
-
-#include <cstdint>
-
-#include "Coordinates.h"
-#include "dpl2/DePlace.h"
+#include <Coordinates.h>
+#include <dpl2/DePlace.h>
 
 // UDM
 #include <phys/fpManager.hh>
 #include <phys/physDesMgr.hh>
 #include <phys/physHier.hh>
-#include <physHierImpl.hh>
 #include <util/iter.hh>
 
 using eLIB::PhysLibCell;
@@ -49,7 +45,6 @@ class Master
   void addEdge(const MasterEdge& edge);
   void setBBox(const Rect& box);
   void clearEdges();
-  // [fillerRepair-fix] was `ID`: call sites use setId/getId.
   ADD_SETTER_GETTER_PP(int, Id, id_);
   ADD_SETTER_GETTER_PP(LibCellID, DbMaster, db_master_);
   ADD_SETTER_GETTER_PP(int, BottomPowerType, bottom_pwr_);
@@ -152,7 +147,7 @@ class Node
   Master* master_{nullptr};
   Group* group_{nullptr};
   const Rect* region_{nullptr};  // group rect
-  // Regions.
+  // // Regions.
   int group_id_{-1};
   // used layers
   uint8_t used_layers_{0};
@@ -161,7 +156,6 @@ class Node
 class Group
 {
  public:
-  // [fillerRepair-fix] impl stores/returns values, not pointers.
   const std::vector<Rect>& getRects() const;
   std::vector<Node*> getCells() const;
   const Rect& getBBox() const;
@@ -237,22 +231,45 @@ class Pin
   DbuY offsetY_{0};
 };
 
-// Atomic filler edit shared by infrastructure, checker and fillerRepair.
-enum class OpType : uint8_t
-{
-  Replace = 0,
-  Delete = 1,
-  Add = 2,
+enum class OpType : uint8_t {
+    Replace = 0,
+    Delete = 1,
+    Add    = 2,
 };
 
-struct FillerCellRecord
-{
-  OpType op_;
-  LeafCellID cell_id_;
-  UvDist origin_x_;
-  UvDist origin_y_;
-  LibCellID orig_lib_cell_;
-  LibCellID new_lib_cell_;
+struct FillerCellRecord {
+    OpType    op_;
+    LeafCellID    cell_id_;
+    UvDist    origin_x_;
+    UvDist    origin_y_;
+    LibCellID    orig_lib_cell_;
+    LibCellID    new_lib_cell_;
 };
 
-}  // namespace dpl2
+/**
+ * Lightweight lookup table that maps edge type name strings to integer
+ * indices.
+ */
+class EdgeTypeTable
+{
+ public:
+  template <typename InputIt>
+  void addNames(InputIt first, InputIt last)
+  {
+    for (auto it = first; it != last; ++it) {
+      edge_types_indices_.try_emplace(*it, edge_types_indices_.size());
+    }
+  }
+
+  bool hasTable() const { return !edge_types_indices_.empty(); }
+  int getEdgeTypeIdx(const std::string& edge_type) const;
+  std::size_t size() const { return edge_types_indices_.size(); }
+
+  using const_iterator = std::unordered_map<std::string, int>::const_iterator;
+  const_iterator begin() const { return edge_types_indices_.begin(); }
+  const_iterator end() const { return edge_types_indices_.end(); }
+
+ private:
+  std::unordered_map<std::string, int> edge_types_indices_;
+};
+} // namespace dpl2
