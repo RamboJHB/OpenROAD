@@ -4,6 +4,7 @@
 
 #include <functional>
 #include <map>
+#include <utility>
 #include <vector>
 #include <optional>
 
@@ -88,6 +89,11 @@ class Grid
   GridY gridSnapDownY(const Node* cell) const;
   GridY gridRoundY(const Node* cell) const;
   GridY gridEndY(const Node* cell) const;
+
+  // [fillerRepair-fix] Grid cell of a placed node, used by
+  // ImplantLayerChecker::getSnapshot. Composition of gridX/gridSnapDownY, so
+  // the pair is always in the same frame as those two calls.
+  std::pair<GridX, GridY> gridXY(const Node* cell) const;
 
   DbuY gridYToDbu(GridY y) const;
 

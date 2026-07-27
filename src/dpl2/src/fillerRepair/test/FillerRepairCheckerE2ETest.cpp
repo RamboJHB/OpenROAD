@@ -33,15 +33,19 @@ constexpr RowId ROW_COUNT = 8;
 constexpr ColId SITE_COUNT = 200;
 constexpr Dbu MIN_RULE = 20;
 
-constexpr LayerId F1_LAYER = 1;
-constexpr LayerId F2_LAYER = 2;
-constexpr LayerId F3_LAYER = 3;
+// Layer ids ARE indices into ImplantInput::layers, exactly like rule ids:
+// the checker resolves them as layers_[id] (its own buildLayers assigns
+// layers_.size()), so any other numbering indexes out of bounds.
+constexpr LayerId F1_LAYER = 0;
+constexpr LayerId F2_LAYER = 1;
+constexpr LayerId F3_LAYER = 2;
 // P-polarity partner layer per VT family (top band; checker slotPolar
 // alternates band polarity per row, so a master carries an N bottom band and
-// a P top band and odd-row placements are MX-flipped).
-constexpr LayerId F1P_LAYER = 4;
-constexpr LayerId F2P_LAYER = 5;
-constexpr LayerId F3P_LAYER = 6;
+// a P top band and odd-row placements are MX-flipped). Kept at +3 so
+// master() can derive the partner from the family layer.
+constexpr LayerId F1P_LAYER = 3;
+constexpr LayerId F2P_LAYER = 4;
+constexpr LayerId F3P_LAYER = 5;
 
 // MasterIds are sequential Network indices (order matches input().masters)
 constexpr MasterId C1_MASTER = 0;
@@ -51,15 +55,19 @@ constexpr MasterId F1_FILL_MASTER = 3;
 constexpr MasterId F2_FILL_MASTER = 4;
 constexpr MasterId F3_FILL_MASTER = 5;
 
-constexpr int F1_WIDTH_RULE = 101;
-constexpr int F1_SPACING_RULE = 201;
+// Rule ids ARE indices into ImplantInput::rules: the checker looks rules up
+// as rules_[ruleId] (its own buildRules assigns rules_.size()), so any other
+// numbering indexes out of bounds. Keep these in sync with input().rules.
+constexpr int F1_WIDTH_RULE = 0;    // N-band width, F1 family
+constexpr int F1_SPACING_RULE = 3;  // N-band spacing, F1 family
+constexpr int P_RULE_OFFSET = 6;    // same rule on the P-band partner layer
 
 // Inter-row interactions run through the facing band pair across the row
-// boundary. An even->odd boundary faces two P-band shapes (rule id +10); an
-// odd->even boundary faces two N-band shapes (base rule id).
+// boundary. An even->odd boundary faces two P-band shapes; an odd->even
+// boundary faces two N-band shapes.
 constexpr int interRule(int baseRule, RowId topRowOfBoundary)
 {
-  return (topRowOfBoundary % 2) == 0 ? baseRule + 10 : baseRule;
+  return (topRowOfBoundary % 2) == 0 ? baseRule + P_RULE_OFFSET : baseRule;
 }
 
 constexpr RowId INTRA_WIDTH_ROW = 0;
@@ -559,18 +567,19 @@ ImplantInput input(const DensityCase& density = FILLER_50_STD_50)
                   Layer{F1P_LAYER, "F1_P", Layer::Vt::L, Layer::Polar::P},
                   Layer{F2P_LAYER, "F2_P", Layer::Vt::H, Layer::Polar::P},
                   Layer{F3P_LAYER, "F3_P", Layer::Vt::UL, Layer::Polar::P}};
-  input.rules = {rule(F1_WIDTH_RULE, RuleSource::Width, F1_LAYER),
-                 rule(102, RuleSource::Width, F2_LAYER),
-                 rule(103, RuleSource::Width, F3_LAYER),
-                 rule(F1_SPACING_RULE, RuleSource::Spacing, F1_LAYER),
-                 rule(202, RuleSource::Spacing, F2_LAYER),
-                 rule(203, RuleSource::Spacing, F3_LAYER),
-                 rule(F1_WIDTH_RULE + 10, RuleSource::Width, F1P_LAYER),
-                 rule(112, RuleSource::Width, F2P_LAYER),
-                 rule(113, RuleSource::Width, F3P_LAYER),
-                 rule(F1_SPACING_RULE + 10, RuleSource::Spacing, F1P_LAYER),
-                 rule(212, RuleSource::Spacing, F2P_LAYER),
-                 rule(213, RuleSource::Spacing, F3P_LAYER)};
+  // Index == rule id (see F1_WIDTH_RULE above).
+  input.rules = {rule(0, RuleSource::Width, F1_LAYER),
+                 rule(1, RuleSource::Width, F2_LAYER),
+                 rule(2, RuleSource::Width, F3_LAYER),
+                 rule(3, RuleSource::Spacing, F1_LAYER),
+                 rule(4, RuleSource::Spacing, F2_LAYER),
+                 rule(5, RuleSource::Spacing, F3_LAYER),
+                 rule(6, RuleSource::Width, F1P_LAYER),
+                 rule(7, RuleSource::Width, F2P_LAYER),
+                 rule(8, RuleSource::Width, F3P_LAYER),
+                 rule(9, RuleSource::Spacing, F1P_LAYER),
+                 rule(10, RuleSource::Spacing, F2P_LAYER),
+                 rule(11, RuleSource::Spacing, F3P_LAYER)};
   input.masters = {master(C1_MASTER, 1, F1_LAYER, false),
                    master(C2_MASTER, 3, F2_LAYER, false),
                    master(C3_MASTER, 5, F3_LAYER, false),

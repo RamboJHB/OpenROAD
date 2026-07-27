@@ -75,7 +75,8 @@ add_executable(
   ${DPL2_FILLER_REPAIR_PORTABLE_PLANNER_TEST_SOURCES})
 target_include_directories(
   dpl2_filler_repair_planner_test
-  PRIVATE "${DPL2_SRC}" "${CMAKE_CURRENT_LIST_DIR}/../include")
+  PRIVATE "${DPL2_SRC}" "${DPL2_SRC}/infrastructure"
+          "${CMAKE_CURRENT_LIST_DIR}/../include")
 target_include_directories(
   dpl2_filler_repair_planner_test SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
 target_link_libraries(

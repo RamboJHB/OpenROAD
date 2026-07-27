@@ -2,6 +2,8 @@
 
 #include <array>
 #include <string>
+#include <vector>
+#include <Coordinates.h>
 #include <dpl2/DePlace.h>
 
 namespace dpl2 {
@@ -43,6 +45,21 @@ class DRCChecker
                      GridX x,
                      GridY y,
                      const eUTL::PhysOrientation& orient) const = 0;
+
+  // [fillerRepair-fix] Repair-aware form: a checker that can fix the
+  // candidate by editing fillers appends its records to `fcRecord` and
+  // returns true. Declared here so ImplantLayerChecker's `override` is valid
+  // and so callers holding a DRCChecker* reach the repair path. The default
+  // ignores the record vector, so a checker without repair needs no change.
+  virtual bool check(const Node* cell,
+                     GridX x,
+                     GridY y,
+                     const eUTL::PhysOrientation& orient,
+                     std::vector<FillerCellRecord>& fcRecord) const
+  {
+    (void) fcRecord;
+    return check(cell, x, y, orient);
+  }
 
  protected:
   Grid* grid_;

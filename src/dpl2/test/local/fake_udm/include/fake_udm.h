@@ -314,6 +314,7 @@ struct RuleCheck
 {
   explicit RuleCheck(RuleCheckType type) : _type(type) {}
   virtual ~RuleCheck() = default;
+  RuleCheckType getType() const { return _type; }
   RuleCheckType _type;
 };
 

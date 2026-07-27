@@ -438,6 +438,12 @@ GridY Grid::gridSnapDownY(const Node* cell) const
   return gridSnapDownY(cell->getBottom());
 }
 
+// [fillerRepair-fix] see Grid.h: (column, row) of a placed node.
+std::pair<GridX, GridY> Grid::gridXY(const Node* cell) const
+{
+  return {gridX(cell), gridSnapDownY(cell)};
+}
+
 GridY Grid::gridRoundY(const Node* cell) const
 {
   return gridRoundY(cell->getBottom());

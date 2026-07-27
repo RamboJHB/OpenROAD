@@ -228,12 +228,12 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
     // Set checker state that buildRules/buildMasters/buildInst depend on
     checker.layers_ = inputLayers_;
     checker.rules_ = inputRules_;
-    checker.groups_ = inputGroups_;
+    // [fillerRepair-fix] follow the checker rename/removal: groups_ ->
+    // layerGroups_; the interval/shape id counters are gone.
+    checker.layerGroups_ = inputGroups_;
     checker.basePolar_ = inputBasePolar_;
     checker.rowHeight_ = inputRowHeight_;
     checker.siteWidth_ = inputSiteWidth_;
-    checker.nextIntervalId_ = 1;
-    checker.nextShapeId_ = 1;
 
     // Populate masterItems_ indexed by MasterId (aligned with Network::masters_)
     const size_t masterCount = network_->getMasters().size();
@@ -254,7 +254,9 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
         checker.masterItems_[i] = std::move(item);
     }
 
-    checker.buildRules(inputLayers_, inputGroups_, inputRules_);
+    // [fillerRepair-fix] buildRules() now reads the members set above.
+    checker.buildRules();
+    checker.setMaxRuleValue();
     checker.buildMstIntervals();
 }
 
@@ -280,8 +282,8 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
     }
 
     // -- groups --
-    out << "implant_groups " << checker.groups_.size() << "\n";
-    for (const auto& [name, layers] : checker.groups_) {
+    out << "implant_groups " << checker.layerGroups_.size() << "\n";
+    for (const auto& [name, layers] : checker.layerGroups_) {
         out << std::quoted(name) << ' ';
         dumpVector(out, layers);
         out << "\n";
