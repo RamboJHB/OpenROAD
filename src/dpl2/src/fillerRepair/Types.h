@@ -24,6 +24,11 @@
 #include <utility>
 #include <vector>
 
+// dpl2::FillerCellRecord is used by value below, so include its owning header
+// directly instead of relying on the checker header to carry it transitively:
+// drc/DRCChecker.h reaches dpl2/DePlace.h, which only forward-declares it.
+#include "infrastructure/Objects.h"
+
 #include "drc/ImplantLayerChecker.h"
 
 namespace dpl2::fillerRepair {

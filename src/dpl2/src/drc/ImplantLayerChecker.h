@@ -44,7 +44,9 @@ enum class Relationship {IntraRow, InterRow, Count};
 enum class OutcomeStatus {Satisfied, Violated, NotApplicable, Skipped};
 enum class ViolationType {AllStdCell, AllFiller, Mixed};
 
-constexpr std::array<char*, (unsigned) Relationship::Count>
+// [fillerRepair-fix] String literals are const char[N]; binding them to char*
+// is ill-formed (-Werror=write-strings). Matches kRuleSourceNames below.
+constexpr std::array<const char*, (unsigned) Relationship::Count>
   kRelationshipNames{"intra_row", "inter_row"};
 inline std::string toString(Relationship rel)
 {return std::string(kRelationshipNames[(unsigned)rel]);}
@@ -275,11 +277,15 @@ public:
     bool check(const Node* cell, GridX x, GridY y,
         const eUTL::PhysOrientation& orient) const override;
 
+    // [fillerRepair-fix] Not an override: DRCChecker declares only the 4-arg
+    // check(). This is the filler-repair-aware extension; the 4-arg override
+    // above delegates to it with a local record vector, so callers dispatching
+    // through DRCChecker* still reach this logic.
     bool check(const Node* cell,
         GridX x,
         GridY y,
         const eUTL::PhysOrientation& orient,
-        std::vector<FillerCellRecord>& fcRecord) const override;
+        std::vector<FillerCellRecord>& fcRecord) const;
 
     CheckResult checkDirect(const CheckRequest& request) const;
     std::vector<CheckResult> checkPlaceWithOverlays(const CheckRequest& request,
