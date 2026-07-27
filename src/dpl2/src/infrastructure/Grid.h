@@ -7,20 +7,20 @@
 #include <vector>
 #include <optional>
 
-#include "Coordinates.h"
-#include "Objects.h"
-#include "Padding.h"
-#include "utl/Logger.h"
-#include "boost/icl/interval_map.hpp"
-#include "dpl2/DePlace.h"
+#include <Coordinates.h>
+#include <Objects.h>
+#include <Padding.h>
+#include <utl/Logger.h>
+#include <boost/icl/interval_map.hpp>
+#include <dpl2/DePlace.h>
 
 namespace dpl2 {
-class TestGridCmd;
-class TestObjectsCmd;
-class DePlace;
-namespace ipl {
-  class ImplantLayerCheckerHelper;
-}
+  class TestGridCmd;
+  class TestObjectsCmd;
+  class DePlace;
+  namespace ipl {
+    class ImplantLayerCheckerHelper;
+  }
 }
 
 namespace dpl2 {
@@ -110,23 +110,24 @@ class Grid
       Node* cell,
       bool padded,
       const std::function<void(Pixel* pixel, bool padded)>& visitor) const;
-  void visitCellBoundaries(
+  void visitCellBoundaryPixels(
       Node& cell,
       const std::function<
-      void(Pixel* pixel, int edgeDirection, GridX x, GridY y)>& visitor)
+          void(Pixel* pixel, int edgeDirection, GridX x, GridY y)>& visitor)
       const;
 
   GridY getRowCount() const { return row_count_; }
   GridX getRowSiteCount() const { return row_site_count_; }
   DbuX getSiteWidth() const { return site_width_; }
+  unsigned getPixelYSize() const {return pixels_.size();}
 
   Pixel* gridPixel(GridX x, GridY y) const;
   Pixel& pixel(GridY y, GridX x) { return pixels_[y.v][x.v]; }
   const Pixel& pixel(GridY y, GridX x) const { return pixels_[y.v][x.v]; }
 
   std::optional<PhysOrientation> getSiteOrientation(GridX x,
-                                                    GridY y,
-                                                    std::string site_name) const;
+                                                  GridY y,
+                                                  std::string site_name) const;
   // std::pair<TechSite*, PhysOrientation> getShortestSite(GridX grid_x,
   //                                                       GridY grid_y);
 
@@ -145,6 +146,7 @@ class Grid
   bool isMultiHeight(const PhysLibCell& master) const;
 
 
+  bool isFullUtil() const;
 
  private:
   friend class TestGridCmd;

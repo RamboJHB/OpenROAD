@@ -1,13 +1,18 @@
+// 1-808
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2018-2025, The OpenROAD Authors
+
 #include <cmath>
-#include "Grid.h"
+#include <Grid.h>
 
 #include <phys/physNet.hh>
-#include <tbb/task_arena.h>
 
-#include "boost/polygon/polygon.hpp"  // NOLINT(misc-include-cleaner) Boost polygon
-#include "boost/polygon/polygon_90_set_data.hpp"
-#include "boost/polygon/rectangle_concept.hpp"
-#include "boost/polygon/rectangle_data.hpp"
+// NOLINT(misc-include-cleaner) Boost polygon headers require a specific
+// include order.
+#include <boost/polygon/polygon.hpp>
+#include <boost/polygon/polygon_90_set_data.hpp>
+#include <boost/polygon/rectangle_concept.hpp>
+#include <boost/polygon/rectangle_data.hpp>
 
 namespace dpl2 {
 
@@ -16,8 +21,7 @@ PixelPt::PixelPt(Pixel* pixel1, GridX grid_x, GridY grid_y)
 {
 }
 
-////////////////////////////////////////////////////////////////
-
+/////////////////////////////////////////////////////////////////////
 void Grid::clear()
 {
   pixels_.clear();
@@ -134,24 +138,22 @@ void Grid::markHopeless(PhysDesMgr* desMgr,
 
   gtl::polygon_90_set_data<int> hopeless;
   hopeless += gtl::rectangle_data<int>{0, 0, row_site_count_.v, row_count_.v};
-
   const Rect core = getCore();
 
   // Fragmented row support; mark valid sites.
   visitDbRows(desMgr, [&](const PhysRow& db_row) {
     const Point2D orig = db_row.getOrigin();
-
     const GridX x_start{(orig.getX() - core.getXL()).getStorage() / site_width_.v};
     const GridX x_end{x_start + db_row.getSiteCnt()};
     const GridY y_row{gridSnapDownY(DbuY{(orig.getY()
-          - core_.getYL()).getStorage()})};
+        - core_.getYL()).getStorage()})};
     for (GridX x{x_start}; x < x_end; x++) {
       Pixel* pixel = gridPixel(x, y_row);
       pixel->is_valid = true;
     }
     row_sites_[y_row.v].add(
-        {{x_start.v, x_end.v}, {{(db_row.getSite().getName()),
-        db_row.getOrient()}}});
+        {{x_start.v, x_end.v},
+         {{(db_row.getSite().getName()), db_row.getOrient()}}});
     // The safety margin is to avoid having only a very few sites
     // within the diamond search that may still lead to failures.
     const int safety = 20;
@@ -206,64 +208,61 @@ void Grid::markBlocked(PhysDesMgr* desMgr)
         }
       };
 
-  struct ShieldWireVisitor : public eUNL::UnlBaseVisitor<eUNL::PhysNet,
-  eUNL::PhysNetID> {
-    const std::function<void(const Rect&, TechLayer)>& addBlockedLayers;
-    const PhysDesMgr* desMgr;
+struct ShieldWireVisitor :
+  public eUNL::UnlBaseVisitor<eUNL::PhysNet, eUNL::PhysNetID> {
+  const std::function<void(const Rect&, TechLayer)>& addBlockedLayers;
+  const PhysDesMgr* desMgr;
 
-    ShieldWireVisitor(const std::function<void(const Rect&, TechLayer)>& a,
-        const PhysDesMgr* d)
-        : addBlockedLayers(a), desMgr(d) {}
+  ShieldWireVisitor(const std::function<void(const Rect&, TechLayer)>& a,
+    const PhysDesMgr* d)
+    : addBlockedLayers(a), desMgr(d) {}
 
-    bool filter(const eUNL::PhysNet& net,
-        const eUNL::PhysNetID&) override {
-      return net.hasSWire();
-    }
-
-    eUNL::UnlIterStatus visit(const eUNL::PhysNet& net,
-        const eUNL::PhysNetID&) override {
-      const eUNL::PhysSWire& swire = net.getSWire();
-      for (const eUNL::PhysShape& sbox : swire.getShapes()) {
-        if (sbox.isVia() || sbox.getUsage() == eUNL::ShapeUsageE::DRCFILL) {
-          continue;
-        }
-        const Rect& wire_rect = sbox.getRect();
-        TechLayerID tech_layer_id = sbox.getLayer();
-        TechLayer tech_layer = desMgr->getTopTech().getTechLayer(
-            tech_layer_id.getLocalId());
-        addBlockedLayers(wire_rect, tech_layer);
-      }
-      return eUNL::UnlIterStatus::CONTINUE;
-    }
-  };
-
-  tbb::task_arena arena;
-  ShieldWireVisitor swVisitor{addBlockedLayers, desMgr};
-  desMgr->iterateAllPhysNets(arena, swVisitor,
-      /*inclFlat=*/true, /*inclPg=*/false);
-  for (const PhysBlockage& blockage : desMgr_->getPhysBlockageIter()) {
-    if (blockage.isSoft()) {
-      continue;
-    }
-    for (const eLIB::TechShape& bbox : blockage.getShapes()) {
-      Rect box = bbox.getBbox(true);
-      box.move(-core.getXL(), -core.getYL());
-      GridRect grid_rect = gridCovering(box);
-        // Clip to the core area
-      GridRect core{.xlo = GridX{0},
-                    .ylo = GridY{0},
-                    .xhi = GridX{row_site_count_},
-                    .yhi = GridY{row_count_}};
-      grid_rect = grid_rect.intersect(core);
-      for (GridY y = grid_rect.ylo; y < grid_rect.yhi; y++) {
-        for (GridX x = grid_rect.xlo; x < grid_rect.xhi; x++) {
-          Pixel& pixel1 = pixel(y, x);
-          pixel1.is_valid = false;
-        }
-      }
-    }
-
+  bool filter(const eUNL::PhysNet& net, const eUNL::PhysNetID& netId) override {
+    return net.hasSWire();
   }
+
+  eUNL::UnlIterStatus visit(const eUNL::PhysNet& net,
+    const eUNL::PhysNetID& netId) override {
+    const eUNL::PhysSWire& swire = net.getSWire();
+    for (const eUNL::PhysShape& sbox : swire.getShapes()) {
+      if (sbox.isVia() || sbox.getUsage() == eUNL::ShapeUsageE::DRCFILL) {
+        continue;
+      }
+      const Rect& wire_rect = sbox.getRect();
+      TechLayerID tech_layer_id = sbox.getLayer();
+      TechLayer tech_layer =
+        desMgr->getTopTech().getTechLayer(tech_layer_id.getLocalId());
+      addBlockedLayers(wire_rect, tech_layer);
+    }
+    return eUNL::UnlIterStatus::CONTINUE;
+  }
+};
+
+tbb::task_arena arena;
+ShieldWireVisitor swVisitor{addBlockedLayers, desMgr};
+desMgr->iterateAllPhysNets(arena, swVisitor, /*inclFlat=*/true, /*inclPg=*/false);
+for (const PhysBlockage& blockage : desMgr_->getPhysBlockageIter()) {
+  if (blockage.isSoft()) {
+    continue;
+  }
+  for (const eLIB::TechShape& bbox : blockage.getShapes()) {
+    Rect box = bbox.getBbox(true);
+    box.move(-core.getXL(), -core.getYL());
+    GridRect grid_rect = gridCovering(box);
+      // Clip to the core area
+    GridRect core{.xlo = GridX{0},
+                  .ylo = GridY{0},
+                  .xhi = GridX{row_site_count_},
+                  .yhi = GridY{row_count_}};
+    grid_rect = grid_rect.intersect(core);
+    for (GridY y = grid_rect.ylo; y < grid_rect.yhi; y++) {
+      for (GridX x = grid_rect.xlo; x < grid_rect.xhi; x++) {
+        Pixel& pixel1 = pixel(y, x);
+        pixel1.is_valid = false;
+      }
+    }
+  }
+}
 }
 
 void Grid::initGrid(PhysDesMgr* desMgr,
@@ -279,20 +278,19 @@ void Grid::initGrid(PhysDesMgr* desMgr,
 
   markBlocked(desMgr);
 }
-
 Pixel* Grid::gridPixel(GridX grid_x, GridY grid_y) const
 {
   if (grid_x >= 0 && grid_x < row_site_count_ && grid_y >= 0
-      && grid_y < row_count_) {
+    && grid_y < row_count_) {
     return const_cast<Pixel*>(&pixels_[grid_y.v][grid_x.v]);
   }
   return nullptr;
 }
 
 void Grid::visitDbRows(const PhysDesMgr* desMgr,
-                const std::function<void(const PhysRow&)>& func) const
+                    const std::function<void(const PhysRow&)>& func) const
 {
-  for (const auto& row : desMgr->getPhysRowIter()) {
+  for (const auto& row : desMgr_->getPhysRowIter()) {
     if (row.getSite().getIsPad() == false) {
       func(row);
     }
@@ -300,9 +298,9 @@ void Grid::visitDbRows(const PhysDesMgr* desMgr,
 }
 
 int Grid::countValidPixels(GridX x_begin,
-                           GridY y_begin,
-                           GridX x_end,
-                           GridY y_end) const
+                            GridY y_begin,
+                            GridX x_end,
+                            GridY y_end) const
 {
   int count = 0;
   for (GridY y = y_begin; y < y_end; y++) {
@@ -336,7 +334,7 @@ void Grid::applyCellContribution(Node* node,
   const float area_per_pixel
       = (cell_area / static_cast<float>(cell_pixel_count)) * scale;
   // const float pins_per_pixel
-  //     = (static_cast<float>(node->getNumPins()) / cell_pixel_count) * scale;
+      // = (static_cast<float>(node->getNumPins()) / cell_pixel_count) * scale;
 
   const int grid_size = static_cast<int>(total_area_.size());
   for (GridY y = y_begin; y < y_end; y++) {
@@ -381,14 +379,14 @@ GridX Grid::gridEndX(const Node* cell) const
 GridX Grid::gridPaddedX(const Node* cell) const
 {
   return gridX(cell->getLeft()
-               - gridToDbu(padding_->padLeft(cell), getSiteWidth()));
+             - gridToDbu(padding_->padLeft(cell), getSiteWidth()));
 }
 
 GridX Grid::gridPaddedEndX(const Node* cell) const
 {
   const DbuX site_width = getSiteWidth();
   const DbuX end_x = cell->getLeft() + cell->getWidth()
-                     + gridToDbu(padding_->padRight(cell), site_width);
+                 + gridToDbu(padding_->padRight(cell), site_width);
   return GridX{divCeil(end_x.v, site_width.v)};
 }
 
@@ -430,7 +428,6 @@ GridY Grid::gridEndY(DbuY y) const
   return GridY{static_cast<int>(it - row_index_to_y_dbu_.begin())};
 }
 
-
 GridY Grid::gridSnapDownY(const Node* cell) const
 {
   return gridSnapDownY(cell->getBottom());
@@ -468,8 +465,8 @@ GridY Grid::gridHeight(const PhysLibCell& master) const
 {
   if (uniform_row_height_) {
     DbuY row_height = uniform_row_height_.value();
-    return GridY{std::max(1, divCeil(master.getHeight().getStorage(),
-          row_height.v))};
+    return GridY{std::max(1,
+        divCeil(master.getHeight().getStorage(), row_height.v))};
   }
 
   if (!master.hasSitePattern()) {
@@ -509,6 +506,22 @@ bool Grid::isMultiHeight(const PhysLibCell& master) const
   return master.hasSitePattern();
 }
 
+bool Grid::isFullUtil() const
+{
+  if (pixels_.size() == 0) {
+    std::cout << "WARN: grid pixel is empty." << std::endl;
+  }
+  for (unsigned y = 0; y < pixels_.size(); y++) {
+    for (unsigned x = 0; x < pixels_[y].size(); x++) {
+      const Pixel& pixel = pixels_[y][x];
+      if (pixel.is_valid && pixel.cell == nullptr) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 void Grid::visitCellPixels(
     Node* cell,
     bool padded,
@@ -519,11 +532,10 @@ void Grid::visitCellPixels(
   bool have_obstructions = false;
   const Rect core = getCore();
 
-  for (const eLIB::PhysLibObs& lib_obs : obstructions) {
+  for (const PhysLibObs& lib_obs : obstructions) {
     const auto& tech_obs = lib_obs.getShapes(inst.getOrient());
     for (const auto& obs : tech_obs) {
       if (desMgr_->getTopTech().getTechLayer(obs.first).isOverlap()) {
-        // TODO getTopTech??
         have_obstructions = true;
         for (const TechShape& obstruction : obs.second) {
           Rect rect = obstruction.getRect();
@@ -540,7 +552,6 @@ void Grid::visitCellPixels(
         }
       }
     }
-
   }
   if (!have_obstructions) {
     const auto grid_box = gridCovering(cell);
@@ -562,11 +573,11 @@ void Grid::visitCellPixels(
   }
 }
 
-void Grid::visitCellBoundaries(
+void Grid::visitCellBoundaryPixels(
     Node& cell,
     const std::function<
         void(Pixel* pixel, int edgeDirection, GridX x, GridY y)>& visitor)
-    const
+const
 {
   const PhysCell& inst = desMgr_->getPhysCell(cell.getDbInst());
 
@@ -600,11 +611,10 @@ void Grid::visitCellBoundaries(
   bool have_obstructions = false;
   const Rect core = getCore();
 
-  for (const eLIB::PhysLibObs& lib_obs : obstructions) {
+  for (const PhysLibObs& lib_obs : obstructions) {
     const auto& layer_obs = lib_obs.getShapes(inst.getOrient());
     for (const auto& obs : layer_obs) {
       if (desMgr_->getTopTech().getTechLayer(obs.first).isOverlap()) {
-        // TODO getTopTech??
         have_obstructions = true;
         for (const TechShape& obstruction : obs.second) {
           Rect rect = obstruction.getRect();
@@ -614,20 +624,18 @@ void Grid::visitCellBoundaries(
         }
       }
     }
-
   }
   if (!have_obstructions) {
     const auto grid_rect = gridCovering(&cell);
     // debugPrint(logger_,
-    //            DPL,
-    //            "hybrid",
-    //            1,
-    //            "Checking cell {} isHybrid {} in rows. Y start {} y end {}",
-    //            cell.getDbInst().getName(),
-    //            cell.isHybrid(),
-    //            grid_rect.ylo,
-    //            grid_rect.yhi);
-
+    //           DPL,
+    //           "hybrid",
+    //           1,
+    //           "Checking cell {} isHybrid {} in rows. Y start {} y end {}",
+    //           cell.getDbInst().getName(),
+    //           cell.isHybrid(),
+    //           grid_rect.ylo,
+    //           grid_rect.yhi);
     visit(grid_rect.xlo, grid_rect.xhi, grid_rect.ylo, grid_rect.yhi);
   }
 }
@@ -641,20 +649,20 @@ void Grid::erasePixel(Node* cell)
 {
   const auto grid_rect = gridCoveringPadded(cell);
   // debugPrint(logger_,
-  //            DPL,
-  //            "hybrid",
-  //            1,
-  //            "Checking cell {} isHybrid {}",
-  //            cell->getDbInst().getName(),
-  //            cell->isHybrid());
+  //           DPL,
+  //           "hybrid",
+  //           1,
+  //           "Checking cell {} isHybrid {}",
+  //           cell->getDbInst().getName(),
+  //           cell->isHybrid());
   // debugPrint(logger_,
-  //            DPL,
-  //            "hybrid",
-  //            1,
-  //            "Checking cell {} in rows. Y start {} y end {}",
-  //            cell->getDbInst().getName(),
-  //            grid_rect.ylo,
-  //            grid_rect.yhi);
+  //           DPL,
+  //           "hybrid",
+  //           1,
+  //           "Checking cell {} in rows. Y start {} y end {}",
+  //           cell->getDbInst().getName(),
+  //           grid_rect.ylo,
+  //           grid_rect.yhi);
 
   // Clear cell occupancy and padding reservations for this cell
   for (GridX x = grid_rect.xlo; x < grid_rect.xhi; x++) {
@@ -683,7 +691,6 @@ void Grid::paintPixel(Node* cell, GridX grid_x, GridY grid_y)
   // Paint the actual cell footprint (not including padding)
   GridX cell_x_end = grid_x + gridWidth(cell);
   GridY cell_y_end = gridEndY(gridYToDbu(grid_y) + cell->getHeight());
-
   // Mark actual cell pixels
   for (GridX x{grid_x}; x < cell_x_end; x++) {
     for (GridY y{grid_y}; y < cell_y_end; y++) {
@@ -739,7 +746,6 @@ void Grid::paintCellPadding(Node* cell,
     }
   }
 }
-
 
 GridRect Grid::gridCovering(const Rect& rect) const
 {
