@@ -12,9 +12,6 @@ class Network;
 
 namespace ipl {
 
-// Backward-compatible alias for code not yet migrated to MasterItem
-using MasterInput = MasterItem;
-
 struct PlacedInst
 {
     InstanceId instanceId = 0;
@@ -32,10 +29,9 @@ struct ImplantInput
     std::unordered_map<std::string, std::vector<LayerId>> groups;
     std::vector<MasterItem> masters;
     std::vector<PlacedInst> placedInsts;
-    // Number of standard rows; the helper builds rows 0..rowCounts-1 with
-    // y = rowId * rowHeight (previously an explicit 0..N-1 id list).
-    int rowCounts = 0;
-    TrackPattern tracks;
+    int rowCount = 0;
+    int colCount = 0;
+    Layer::Polar basePolar = Layer::Polar::P;
     Dbu rowHeight = 0;
     Dbu siteWidth = 0;
 };
@@ -51,12 +47,15 @@ public:
     Network* getNetwork() const { return network_.get(); }
     void initChecker(ImplantLayerChecker& checker);
 
+    bool dump(const std::string& filePath, const ImplantLayerChecker& checker) const;
+    static ImplantInput load(const std::string& filePath);
+
 private:
     std::unique_ptr<Grid> grid_;
     std::unique_ptr<Network> network_;
     // Preserve input data needed by initChecker
     std::vector<MasterItem> inputMasters_;
-    TrackPattern inputTracks_;
+    Layer::Polar inputBasePolar_ = Layer::Polar::P;
     std::vector<Layer> inputLayers_;
     std::unordered_map<std::string, std::vector<LayerId>> inputGroups_;
     std::vector<Rule> inputRules_;

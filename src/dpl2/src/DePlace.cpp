@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
 
-#include "dpl2/DePlace.h"
-#include "infrastructure/Grid.h"
-#include "infrastructure/network.h"
-#include "infrastructure/Padding.h"
-#include "drc/PaddingChecker.h"
-#include "drc/EdgeSpacingChecker.h"
-#include "PlacementDRC.h"
+#include <dpl2/DePlace.h>
+#include <infrastructure/Grid.h>
+#include <infrastructure/network.h>
+#include <infrastructure/Padding.h>
+#include <infrastructure/fillerSetting.h>
+#include <drc/PaddingChecker.h>
+#include <PlacementDRC.h>
 
 namespace dpl2 {
 
@@ -35,6 +35,7 @@ DePlace::DePlace()
   this->desMgr_ = desMgr;
   this->design_ = design;
   padding_->setDesginManager(desMgr_);
+  filler_setting_ = std::make_unique<fillerSetting>(design);
   if (!data_loaded_) {
     importDb();
     initGrid();
@@ -61,28 +62,34 @@ void DePlace::setPadding(PhysLibCell* master, const int left, const int right)
 {
   padding_->setPadding(master, GridX{left}, GridX{right});
 }
-
 /**
- * @brief Attempts to find a legal placement for a leaf cell after remapping its master in dpl2's internal cache.
+ * @brief Attempts to find a legal placement for a leaf cell after remapping
+ * its master in dpl2's internal cache.
  *
  * Given a leaf cell and a target module name, this overload:
- *   1. Resolves @p moduleName to a PhysLibCell via LibObjAccessor,
- *   2. Registers the new master via addMaster() and updates the Node via updateNode(),
- *   3. Searches within a @p diameter-extended bounding box around the cell's original position
- *      for a DRC-legal placement via legalCellInRect().
+ *    1. Resolves @p moduleName to a PhysLibCell via LibObjAccessor,
+ *    2. Registers the new master via addMaster() and updates the Node via
+ *       updateNode(),
+ *    3. Searches within a @p diameter-extended bounding box around
+ *    the cell's original position
+ *    for a DRC-legal placement via legalCellInRect().
  *
- * Note: This remaps the master only in dpl2's own Master/Node cache; it does not modify
- *       UDM (no changeLeafCellsMaster call). The caller is responsible for any UDM-side remap
+ * Note: This remaps the master only in dpl2's own Master/Node cache;
+ * it does not modify
+ *       UDM (no changeLeafCellsMaster call).
+ *       The caller is responsible for any UDM-side remap
  *       if required.
  *
  * @param cellId     The leaf cell to remap and place.
- * @param diameter   Search region extension (in uv units) around the cell's original bbox.
- * @param moduleName Target module name whose PhysLibCell replaces the cell's current master.
- * @return The (left, bottom) UV coordinates of the placed cell, or (-1, -1) on failure.
+ * @param diameter   Search region extension (in uv units)
+ * around the cell's original bbox.
+ * @param moduleName Target module name whose
+ * PhysLibCell replaces the cell's current master.
+ * @return The (left, bottom) UV coordinates
+ * of the placed cell, or (-1, -1) on failure.
  */
-std::pair<int, int> DePlace::findLeg(LeafCellID cellId,
-                                     int diameter,
-                                     std::string moduleName)
+std::pair<int, int> DePlace::findLeg(LeafCellID cellId, int diameter,
+    std::string moduleName)
 {
   eFNL::ModuleID moduleId = design_->getLibAcc().findModule(moduleName);
   auto* libCell = design_->getLibAcc().getLibCell(moduleId);
@@ -90,40 +97,41 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId,
     return {-1, -1};
   }
 
-  const PhysLibCell& physLibCell
-      = design_->getLibAcc().getPhysLibCell(libCell->getId());
+  const PhysLibCell& physLibCell =
+    design_->getLibAcc().getPhysLibCell(libCell->getId());
+
   Node* cell = this->network_->getNode(cellId);
-  // Filler-TODO check_drc here?
   unplaceCell(cell);
-  this->network_->addMaster(
-      physLibCell, this->grid_.get(), this->drc_engine_.get());
+  this->network_->addMaster(physLibCell, this->grid_.get(),
+      this->edge_type_table_.get());
   this->network_->updateNode(cell, desMgr_, physLibCell);
 
-  eUTL::Rect rect(
-      eUTL::UvDist(cell->getLeft().v - diameter),
-      eUTL::UvDist(cell->getBottom().v - diameter),
-      eUTL::UvDist(cell->getLeft().v + cell->getWidth().v + diameter),
+  eUTL::Rect rect(eUTL::UvDist(cell->getLeft().v - diameter), \
+      eUTL::UvDist(cell->getBottom().v - diameter), \
+      eUTL::UvDist(cell->getLeft().v + cell->getWidth().v + diameter), \
       eUTL::UvDist(cell->getBottom().v + cell->getHeight().v + diameter));
+
   legalCellInRect(rect, cell);
 
   return {cell->getLeft().v, cell->getBottom().v};
 }
-
 /**
- * @brief Attempts to find a legal placement for a leaf cell after remapping its master in dpl2's internal cache.
+ * @brief Attempts to find a legal placement for a leaf cell after
+ * remapping its master in dpl2's internal cache.
  *
  * This is the core-area overload: it searches the entire core area
  * (this->core_) for a DRC-legal position.
  *
- * Same remap semantics as the diameter overload - only dpl2 Node/Master
+ * Same remap semantics as the diameter overload — only dpl2 Node/Master
  * cache is changed, not UDM.
  *
  * @param cellId     The leaf cell to remap and place.
- * @param moduleName Target module name whose PhysLibCell replaces the cell's current master.
- * @return The (left, bottom) UV coordinates of the placed cell, or (-1, -1) on failure.
+ * @param moduleName Target module name whose PhysLibCell
+ * replaces the cell's current master.
+ * @return The (left, bottom) UV coordinates of the
+ * placed cell, or (-1, -1) on failure.
  */
-std::pair<int, int> DePlace::findLeg(LeafCellID cellId,
-                                     std::string moduleName)
+std::pair<int, int> DePlace::findLeg(LeafCellID cellId, std::string moduleName)
 {
   Rect rect = this->core_;
   eFNL::ModuleID moduleId = design_->getLibAcc().findModule(moduleName);
@@ -131,61 +139,66 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId,
   if (!libCell) {
     return {-1, -1};
   }
-  const PhysLibCell& physLibCell
-      = design_->getLibAcc().getPhysLibCell(libCell->getId());
+  const PhysLibCell& physLibCell =
+    design_->getLibAcc().getPhysLibCell(libCell->getId());
 
   Node* cell = this->network_->getNode(cellId);
   unplaceCell(cell);
-  this->network_->addMaster(
-      physLibCell, this->grid_.get(), this->drc_engine_.get());
+  this->network_->addMaster(physLibCell,
+      this->grid_.get(), this->edge_type_table_.get());
   this->network_->updateNode(cell, desMgr_, physLibCell);
+
   legalCellInRect(rect, cell);
 
   return {cell->getLeft().v, cell->getBottom().v};
 }
 
 /**
- * @brief findLeg - repack a cell to a different cell type at its current
- *        location, then validate the new footprint for DRC legality.
+ * @brief isLegal - repack a cell to a different cell type at itscurrent
+ * location, then validate the new footprint for DRC legality
  *
- * Unplaces @p cellId, adds the PhysLibCell for @p moduleName to the grid,
+ * Unplaces @p cellId, adds the PhysLibCell for @p lcId to the grid,
  * updates the node, and checks DRC. The cell is NOT moved; only its master
  * is swapped in place. This overload is designed for ECO scenarios where
- * the caller wants to know "can this cell be swapped to a different standard
+ * the caller wants to know "can this cell be swapped to a differrent standard
  * cell without shifting its (left, bottom) coordinates."
  *
  * @param cellId     LeafCellID of the cell to repack.
- * @param moduleName Name of the target library cell master.
+ * @param lcId       LibCellID of the target library cell master.
+ * @param fcRecord   The Filler Cell modify record in checkDRC.
  * @retval true      The repacked cell is DRC-legal at the current location.
- * @retval false     The repacked cell violates DRC (likely insufficient
- *                   space or incompatible master footprint).
+ * @retval false     The repacked cell violates DRC
+ * (likely insufficient space or incompatible master footprint).
  */
-bool DePlace::isLegal(LeafCellID cellId, std::string moduleName)
+bool DePlace::isLegal(LeafCellID cellId, LibCellID lcId,
+    std::vector<FillerCellRecord>& fcRecord)
 {
   Rect rect = this->core_;
-  eFNL::ModuleID moduleId = design_->getLibAcc().findModule(moduleName);
-  auto* libCell = design_->getLibAcc().getLibCell(moduleId);
-  if (!libCell) {
-    return false;
-  }
-  const PhysLibCell& physLibCell
-      = design_->getLibAcc().getPhysLibCell(libCell->getId());
+  const PhysLibCell& physLibCell = design_->getLibAcc().getPhysLibCell(lcId);
 
   Node* cell = this->network_->getNode(cellId);
+  LibCellID oriLcId = cell->getMaster()->getDbMaster();
+  const PhysLibCell& oriLc = design_->getLibAcc().getPhysLibCell(oriLcId);
+
+  // todo: not modify db for the legality check
   unplaceCell(cell);
-  this->network_->addMaster(
-      physLibCell, this->grid_.get(), this->drc_engine_.get());
+  this->network_->addMaster(physLibCell, this->grid_.get(),
+      this->edge_type_table_.get());
   this->network_->updateNode(cell, desMgr_, physLibCell);
 
-  bool is_valid = drc_engine_->checkDRC(cell);
+  bool is_valid = drc_engine_->checkDRC(cell, fcRecord);
+
+  this->network_->updateNode(cell, desMgr_, oriLc);
+  placeCell(cell, grid_->gridX(cell), grid_->gridSnapDownY(cell));
+
   return is_valid;
 }
 
 Rect DePlace::getCoreArea()
 {
   std::vector<PhysRow> rows;
-  DbuRect rect(
-      Rect(UvDist(INT_MAX), UvDist(INT_MAX), UvDist(INT_MIN), UvDist(INT_MIN)));
+  DbuRect rect(Rect(UvDist(INT_MAX), UvDist(INT_MAX),
+      UvDist(INT_MIN), UvDist(INT_MIN)));
   for (const auto& row : desMgr_->getPhysRowIter()) {
     if (row.getSite().getIsPad() == false) {
       rows.push_back(row);
@@ -242,7 +255,7 @@ void DePlace::setGridCell(Node* cell, Pixel* pixel)
 void DePlace::initGrid()
 {
   grid_->initGrid(
-      desMgr_, padding_, max_displacement_x_, max_displacement_y_);
+    desMgr_, padding_, max_displacement_x_, max_displacement_y_);
   // Get core from grid after initialization
   core_ = grid_->getCore();
 }
@@ -252,9 +265,9 @@ void DePlace::deleteGrid()
   grid_->clear();
 }
 
-// ============================================================================
+// =============================================================================
 // Stub implementations for Place.cpp - to be implemented later
-// ============================================================================
+// =============================================================================
 
 DbuPt DePlace::nearestPt(const Node* cell, const DbuRect& rect) const
 {
@@ -262,15 +275,11 @@ DbuPt DePlace::nearestPt(const Node* cell, const DbuRect& rect) const
   DbuX nearest_x = cell->getLeft();
   DbuY nearest_y = cell->getBottom();
 
-  if (nearest_x < rect.xl)
-    nearest_x = rect.xl;
-  else if (nearest_x > rect.xh)
-    nearest_x = rect.xh;
+  if (nearest_x < rect.xl) nearest_x = rect.xl;
+  else if (nearest_x > rect.xh) nearest_x = rect.xh;
 
-  if (nearest_y < rect.yl)
-    nearest_y = rect.yl;
-  else if (nearest_y > rect.yh)
-    nearest_y = rect.yh;
+  if (nearest_y < rect.yl) nearest_y = rect.yl;
+  else if (nearest_y > rect.yh) nearest_y = rect.yh;
 
   return DbuPt{nearest_x, nearest_y};
 }
@@ -283,12 +292,11 @@ void DePlace::groupInitPixels()
       pixel->util = 0.0;
     }
   }
-
   for (auto& group : arch_->getRegions()) {
     if (group->getCells().empty()) {
       if (group->getId() != 0) {
         // logger_->warn(
-        //     DPL, 42, "No cells found in group {}.", group->getName());
+        //     DPL, 42, "No cells found in group {}. ", group->getName());
       }
       continue;
     }
@@ -308,8 +316,8 @@ void DePlace::groupInitPixels()
         }
         if (rect.xh % site_width != 0) {
           Pixel* pixel = grid_->gridPixel(grid_rect.xhi - 1, k);
-          pixel->util -= (site_width - rect.xh % site_width).v
-                         / static_cast<double>(site_width.v);
+          pixel->util -= ((site_width - rect.xh) % site_width).v
+                        / static_cast<double>(site_width.v);
         }
       }
     }
@@ -335,4 +343,4 @@ void DePlace::groupInitPixels()
   }
 }
 
-}  // namespace dpl2
+} // namespace dpl2
