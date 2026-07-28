@@ -329,7 +329,7 @@ const std::array<LocalDensityWindow, 4>& localDensityWindows()
           4,
           42,
           62,
-          {{INTRA_SPACING_ROW, 51}, {INTRA_SPACING_ROW, 52}},
+          {{INTRA_SPACING_ROW, 51}},
           {{2, 48},
            {2, 49},
            {2, 50},
@@ -342,6 +342,7 @@ const std::array<LocalDensityWindow, 4>& localDensityWindows()
            {3, 48},
            {3, 49},
            {3, 50},
+           {3, 52},
            {3, 53},
            {3, 54},
            {3, 55},
@@ -361,21 +362,23 @@ const std::array<LocalDensityWindow, 4>& localDensityWindows()
           5,
           62,
           82,
-          {{INTER_SPACING_NEIGHBOR_ROW, 72}},
+          {{INTER_SPACING_TARGET_ROW, 71}},
           {{3, 70},
            {3, 71},
            {3, 72},
            {3, 73},
            {3, 74},
            {3, 75},
+           {4, 68},
+           {4, 69},
            {4, 70},
-           {4, 71},
            {4, 72},
            {4, 73},
            {4, 74},
            {4, 75},
            {5, 70},
            {5, 71},
+           {5, 72},
            {5, 73},
            {5, 74},
            {5, 75}}}};
@@ -484,24 +487,32 @@ std::vector<PlacedInst> densePlaced(const DensityCase& density)
   }
   setFiller(sites, INTRA_SPACING_ROW, 48, F2_FILL_MASTER);
   setFiller(sites, INTRA_SPACING_ROW, 49, F2_FILL_MASTER);
+  // The checker only sees cols in [colId - maxRuleValue_, colId + width +
+  // maxRuleValue_ - 1] (= 48..52 here), so the neighbour F1 run must START by
+  // col 52. F1 runs 48..50 and 52..55 straddle a single editable bridge
+  // filler at col 51: both runs clear min width, the 1-site gap is below it,
+  // and swapping the bridge to F1 merges them (same layer, touching ->
+  // NotApplicable). Cols 48/49 (F1 cell + filler) and 54/55 come from the
+  // background pattern.
   setCell(sites, INTRA_SPACING_ROW, 50, C1_MASTER);
-  setFiller(sites, INTRA_SPACING_ROW, 51, F1_FILL_MASTER);
-  setFiller(sites, INTRA_SPACING_ROW, 52, F2_FILL_MASTER);
-  setCell(sites, INTRA_SPACING_ROW, 53, C1_MASTER);
-  setFiller(sites, INTRA_SPACING_ROW, 54, F1_FILL_MASTER);
-  setFiller(sites, INTRA_SPACING_ROW, 55, F2_FILL_MASTER);
-  setCell(sites, INTRA_SPACING_ROW, 56, C2_MASTER);
+  setFiller(sites, INTRA_SPACING_ROW, 51, F2_FILL_MASTER);
+  setCell(sites, INTRA_SPACING_ROW, 52, C1_MASTER);
+  setFiller(sites, INTRA_SPACING_ROW, 53, F1_FILL_MASTER);
 
+  // Same reach constraint across the row boundary: the row-5 F1 run must
+  // start by col 72. Row 4 carries the target run 68..70 and the editable
+  // bridge at 71; swapping that bridge to F1 makes the two rows' facing
+  // bands touch. Row 5 keeps its background F1 run at 72..73.
+  setFiller(sites, INTER_SPACING_TARGET_ROW, 68, F1_FILL_MASTER);
+  setFiller(sites, INTER_SPACING_TARGET_ROW, 69, F1_FILL_MASTER);
   setCell(sites, INTER_SPACING_TARGET_ROW, 70, C1_MASTER);
-  setFiller(sites, INTER_SPACING_TARGET_ROW, 71, F1_FILL_MASTER);
+  setFiller(sites, INTER_SPACING_TARGET_ROW, 71, F2_FILL_MASTER);
   setCell(sites, INTER_SPACING_TARGET_ROW, 72, C2_MASTER);
   setFiller(sites, INTER_SPACING_TARGET_ROW, 73, F2_FILL_MASTER);
   setCell(sites, INTER_SPACING_TARGET_ROW, 74, C2_MASTER);
   setFiller(sites, INTER_SPACING_TARGET_ROW, 75, F2_FILL_MASTER);
-  setFiller(sites, INTER_SPACING_NEIGHBOR_ROW, 72, F2_FILL_MASTER);
-  setCell(sites, INTER_SPACING_NEIGHBOR_ROW, 73, C1_MASTER);
-  setFiller(sites, INTER_SPACING_NEIGHBOR_ROW, 74, F1_FILL_MASTER);
-  setFiller(sites, INTER_SPACING_NEIGHBOR_ROW, 75, F2_FILL_MASTER);
+  setCell(sites, INTER_SPACING_NEIGHBOR_ROW, 72, C1_MASTER);
+  setFiller(sites, INTER_SPACING_NEIGHBOR_ROW, 73, F1_FILL_MASTER);
 
   setCell(sites, NEW_INTRA_WIDTH_ROW, 98, C2_MASTER);
   setFiller(sites, NEW_INTRA_WIDTH_ROW, 99, F2_FILL_MASTER);
@@ -1351,23 +1362,23 @@ TEST_P(ImplantCheckerOverlayDensityTest, InterRowWidth)
 TEST_P(ImplantCheckerOverlayDensityTest, IntraRowSpacing)
 {
   const CheckRequest target = request(INTRA_SPACING_ROW, INTRA_SPACING_COL);
-  const InstanceId neighbor = instId(INTRA_SPACING_ROW, INTRA_SPACING_COL + 3);
+  const InstanceId neighbor = instId(INTRA_SPACING_ROW, INTRA_SPACING_COL + 2);
   const std::vector<CheckResult> results
       = check(target,
               {{FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTRA_SPACING_ROW, 52),
+                                 leafCellId(INTRA_SPACING_ROW, 51),
                                  UvDist(0),
                                  UvDist(0),
                                  LibCellID(),
                                  libCellId(F1_FILL_MASTER)}},
                {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTRA_SPACING_ROW, 52),
+                                 leafCellId(INTRA_SPACING_ROW, 51),
                                  UvDist(0),
                                  UvDist(0),
                                  LibCellID(),
                                  libCellId(F2_FILL_MASTER)}},
                {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTRA_SPACING_ROW, 52),
+                                 leafCellId(INTRA_SPACING_ROW, 51),
                                  UvDist(0),
                                  UvDist(0),
                                  LibCellID(),
@@ -1415,19 +1426,23 @@ TEST(ImplantCheckerOverlayTest,
   ASSERT_TRUE(checker.getDiags().empty());
 
   const CheckRequest target = request(INTRA_SPACING_ROW, INTRA_SPACING_COL);
-  const Dbu targetX = INTRA_SPACING_COL * SITE_WIDTH;
+  // Guard spans the target's F1 runs (cols 48..53) on its own row. The
+  // checker builds its snapshot from the guard, so the guard must cover the
+  // pair under test; the changed filler is on a different row entirely --
+  // well outside the guard -- and must neither mask nor invent the target's
+  // violation.
   const Dbu targetY = INTRA_SPACING_ROW * ROW_HEIGHT;
-  const Rect targetOnlyGuard = makeRect(
-      targetX, targetY, targetX + SITE_WIDTH, targetY + ROW_HEIGHT);
+  const Rect scenarioGuard = makeRect(
+      48 * SITE_WIDTH, targetY, 54 * SITE_WIDTH, targetY + ROW_HEIGHT);
   const FillerChanges unchangedOutsideGuard{
       FillerCellRecord{OpType::Replace,
-                       leafCellId(INTRA_SPACING_ROW, 52),
+                       leafCellId(OLD_UNRELATED_ROW, 189),
                        UvDist(0),
                        UvDist(0),
                        LibCellID(),
-                       libCellId(F2_FILL_MASTER)}};
+                       libCellId(F3_FILL_MASTER)}};
   const std::vector<CheckResult> results = checker.checkPlaceWithOverlays(
-      target, targetOnlyGuard, {unchangedOutsideGuard});
+      target, scenarioGuard, {unchangedOutsideGuard});
 
   ASSERT_EQ(results.size(), 1u);
   EXPECT_FALSE(results.front().isLegal);
@@ -1436,7 +1451,7 @@ TEST(ImplantCheckerOverlayTest,
                            Relationship::IntraRow,
                            {target.instanceId,
                             instId(INTRA_SPACING_ROW,
-                                   INTRA_SPACING_COL + 3)}));
+                                   INTRA_SPACING_COL + 2)}));
 }
 
 TEST_P(ImplantCheckerOverlayDensityTest, InterRowSpacing)
@@ -1444,23 +1459,23 @@ TEST_P(ImplantCheckerOverlayDensityTest, InterRowSpacing)
   const CheckRequest target
       = request(INTER_SPACING_TARGET_ROW, INTER_SPACING_COL);
   const InstanceId neighbor
-      = instId(INTER_SPACING_NEIGHBOR_ROW, INTER_SPACING_COL + 3);
+      = instId(INTER_SPACING_NEIGHBOR_ROW, INTER_SPACING_COL + 2);
   const std::vector<CheckResult> results
       = check(target,
               {{FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTER_SPACING_NEIGHBOR_ROW, 72),
+                                 leafCellId(INTER_SPACING_TARGET_ROW, 71),
                                  UvDist(0),
                                  UvDist(0),
                                  LibCellID(),
                                  libCellId(F1_FILL_MASTER)}},
                {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTER_SPACING_NEIGHBOR_ROW, 72),
+                                 leafCellId(INTER_SPACING_TARGET_ROW, 71),
                                  UvDist(0),
                                  UvDist(0),
                                  LibCellID(),
                                  libCellId(F2_FILL_MASTER)}},
                {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTER_SPACING_NEIGHBOR_ROW, 72),
+                                 leafCellId(INTER_SPACING_TARGET_ROW, 71),
                                  UvDist(0),
                                  UvDist(0),
                                  LibCellID(),

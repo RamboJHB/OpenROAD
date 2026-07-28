@@ -1,6 +1,6 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-07-27.
+Updated: 2026-07-28.
 
 `ImplantLayerChecker::check()` is the caller-facing entry. Opto owns the
 `FillerCellRecord` vector; the checker appends checker-verified repair swaps
@@ -43,13 +43,33 @@ replacement-candidate allow list.
 | `Types.h` | leaf types: geometry, diagnostics, violations, planner entry records, debug log |
 | `sources.cmake` | source-of-truth lists for the runtime payload and portable tests |
 | `test/FillerRepairPlannerTest.cpp` + doubles | 82 portable database-free planner unit tests |
-| `test/FillerRepairCheckerE2ETest.cpp` | 59 portable real-checker and planner-to-checker cases (band-polarity model: N bottom / P top band per master, MX on odd rows) |
+| `test/FillerRepairCheckerE2ETest.cpp` | 59 portable real-checker and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript
 
 `FR_VERBOSE=1` enables the deterministic `[fr][stage]` transcript on the
 checker's lazily-created engine; planner tests use the same variable. Logging
 never changes search order or acceptance.
+
+## Portable fixture model
+
+The portable checker fixtures encode four invariants of the current checker;
+breaking any of them silently changes what the cases test:
+
+- **Rule and layer ids ARE indices** into `ImplantInput::rules` / `layers`.
+  The checker resolves them as `rules_[id]` / `layers_[id]` (its own builders
+  assign the container size), so semantic numbering indexes out of bounds.
+- **Band polarity**: each VT family has an N layer (bottom band in R0) and a
+  P partner (top band), `basePolar = N`, and odd rows are placed MX. Inter-row
+  expectations pick the N or P rule by boundary parity (`interRule`).
+- **Rule reach sizes the snapshot**: `getSnapshot` spans
+  `colId +/- maxRuleValue_` sites, where
+  `maxRuleValue_ = ceil(max rule minValue / siteWidth)`. A neighbour further
+  out is never in `shapes`, so the spacing scenarios keep their neighbour run
+  starting within that window, with a single editable bridge filler forming
+  the sub-minimum gap.
+- **Min width still applies** to every run, so a scenario's runs must stay at
+  or above `MIN_RULE` while the gap between them stays below it.
 
 ## Verification
 
