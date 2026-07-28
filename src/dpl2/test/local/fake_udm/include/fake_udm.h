@@ -592,9 +592,14 @@ class PhysLibObs
   std::map<TechLayerRelativeID, std::vector<TechShape>> shapes_;
 };
 
+class LibCell;
+
 class PhysLibCell
 {
  public:
+  // The real UDM reaches the timing-library view from the physical one;
+  // commands print its name. Defined out of line: LibCell comes later.
+  const LibCell& getLibCell() const;
   eUTL::UvDist getWidth() const { return width_; }
   eUTL::UvDist getHeight() const { return height_; }
   const PhysMacroType& getType() const { return type_; }
@@ -615,6 +620,8 @@ class PhysLibCell
   std::vector<PhysLibPort*> ports_;
   std::vector<MacroEdge> edges_;
   std::vector<int> site_patterns_;
+  // Owned by value so getLibCell() can hand back a reference.
+  std::shared_ptr<LibCell> lib_cell_;
 };
 
 class PhysLib
@@ -628,8 +635,16 @@ class LibCell
 {
  public:
   int getId() const { return id_; }
+  const std::string& getName() const { return name_; }
   int id_ = -1;
+  std::string name_;
 };
+
+inline const LibCell& PhysLibCell::getLibCell() const
+{
+  static const LibCell kUnnamed;
+  return lib_cell_ ? *lib_cell_ : kUnnamed;
+}
 
 }  // namespace eLIB
 
