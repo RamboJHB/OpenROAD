@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "PlannerTestOracle.h"
+#include "TestRepairOracle.h"
 
 #include <algorithm>
 
@@ -10,7 +10,7 @@ namespace dpl2::fillerRepair {
 
 namespace {
 
-ViolationParticipant participantOf(const PlannerDataSource& view,
+ViolationParticipant participantOf(const PlacementView& view,
                                    const PlacedInstance& inst,
                                    const TargetPlace& target)
 {
@@ -41,14 +41,14 @@ bool inGuardRegion(const Violation& v, const Region& region)
 
 }  // namespace
 
-OracleResult PlannerTestOracle::checkPlaceWithOverlay(
+OracleResult TestRepairOracle::checkPlaceWithOverlay(
     const OracleRequest& request)
 {
   ++request_count_;
   return evaluate(request);
 }
 
-std::vector<OracleResult> PlannerTestOracle::checkPlaceWithOverlays(
+std::vector<OracleResult> TestRepairOracle::checkPlaceWithOverlays(
     const std::vector<OracleRequest>& requests)
 {
   ++batch_count_;
@@ -63,7 +63,7 @@ std::vector<OracleResult> PlannerTestOracle::checkPlaceWithOverlays(
   return results;
 }
 
-MasterId PlannerTestOracle::effectiveMaster(
+MasterId TestRepairOracle::effectiveMaster(
     const PlacedInstance& inst,
     const OracleRequest& request,
     const std::map<InstanceId, MasterId>& overlay) const
@@ -78,7 +78,7 @@ MasterId PlannerTestOracle::effectiveMaster(
   return inst.masterId;
 }
 
-std::vector<PlannerTestOracle::Run> PlannerTestOracle::buildRuns(
+std::vector<TestRepairOracle::Run> TestRepairOracle::buildRuns(
     RowId rowId,
     const OracleRequest& request,
     const std::map<InstanceId, MasterId>& overlay) const
@@ -101,7 +101,7 @@ std::vector<PlannerTestOracle::Run> PlannerTestOracle::buildRuns(
   return runs;
 }
 
-OracleResult PlannerTestOracle::evaluate(const OracleRequest& request) const
+OracleResult TestRepairOracle::evaluate(const OracleRequest& request) const
 {
   OracleResult result;
   result.requestId = request.requestId;  // echo, always

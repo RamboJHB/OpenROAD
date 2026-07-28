@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "FillerRepairPlanner.h"
+#include "RepairPlanner.h"
 
 #include <algorithm>
 #include <map>
@@ -11,10 +11,10 @@
 namespace dpl2::fillerRepair {
 
 // --------------------------------------------------------------------------
-// merged from Swap.cpp
+// Swap model
 // --------------------------------------------------------------------------
 
-std::optional<Swap> makeSwap(const PlannerDataSource& view,
+std::optional<Swap> makeSwap(const PlacementView& view,
                              InstanceId instanceId,
                              MasterId newMasterId,
                              std::string* error)
@@ -79,7 +79,7 @@ std::string canonicalKey(const Overlay& overlay)
 }
 
 ipl::FillerChanges toFillerChanges(const Overlay& overlay,
-                                   const PlannerDataSource& dataSource)
+                                   const PlacementView& dataSource)
 {
   ipl::FillerChanges changes;
   changes.reserve(overlay.size());
@@ -97,7 +97,7 @@ ipl::FillerChanges toFillerChanges(const Overlay& overlay,
 
 SwapGenerationResult generateSwaps(
     const RepairWindow& window,
-    const PlannerDataSource& view,
+    const PlacementView& view,
     const DebugLog& log)
 {
   SwapGenerationResult result;
@@ -165,7 +165,7 @@ SwapGenerationResult generateSwaps(
 }
 
 // --------------------------------------------------------------------------
-// merged from Signature.cpp
+// Violation-signature stage
 // --------------------------------------------------------------------------
 
 namespace {
@@ -204,7 +204,7 @@ DbCoord intervalDistance(const XInterval& a, const XInterval& b)
 
 std::vector<NormalizedViolation> normalizeViolations(
     const FillerRepairRequest& request,
-    const PlannerDataSource& view,
+    const PlacementView& view,
     const DebugLog& log)
 {
   std::vector<NormalizedViolation> result;
@@ -336,7 +336,7 @@ DbCoord estimateRuleDistance(const std::vector<Violation>& violations,
 }
 
 // --------------------------------------------------------------------------
-// merged from Window.cpp
+// Repair-window stage
 // --------------------------------------------------------------------------
 
 namespace {
@@ -348,7 +348,7 @@ namespace {
 // hi = first that starts at/after x.xh. When nothing overlaps, lo == hi at the
 // gap and the +/- ring extension yields exactly the nearest instances on each
 // side, matching the previous full-row-scan behavior.
-std::vector<PlacedInstance> instancesInRing(const PlannerDataSource& view,
+std::vector<PlacedInstance> instancesInRing(const PlacementView& view,
                                             RowId rowId,
                                             const XInterval& x,
                                             int ring)
@@ -370,7 +370,7 @@ std::vector<PlacedInstance> instancesInRing(const PlannerDataSource& view,
   return result;
 }
 
-std::vector<RowId> clampRows(const PlannerDataSource& view, RowId lo, RowId hi)
+std::vector<RowId> clampRows(const PlacementView& view, RowId lo, RowId hi)
 {
   std::vector<RowId> result;
   for (const RowId row : view.rows()) {
@@ -386,7 +386,7 @@ RepairWindow finalizeWindow(int level,
                             const std::set<InstanceId>& editable,
                             const std::set<InstanceId>& bridge,
                             XInterval x,
-                            const PlannerDataSource& view,
+                            const PlacementView& view,
                             const DebugLog& log)
 {
   RepairWindow window;
@@ -446,7 +446,7 @@ bool RepairWindow::containsEditable(InstanceId id) const
 RepairWindow buildWindow(int level,
                          const TargetPlace& anchor,
                          const std::vector<NormalizedViolation>& violations,
-                         const PlannerDataSource& view,
+                         const PlacementView& view,
                          DbCoord ruleDistance,
                          const DebugLog& log)
 {
@@ -522,7 +522,7 @@ RepairWindow buildWindow(int level,
 RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                   const TargetPlace& anchor,
                                   const std::vector<Violation>& blocking,
-                                  const PlannerDataSource& view,
+                                  const PlacementView& view,
                                   int fillersPerRow,
                                   const DebugLog& log)
 {
@@ -676,7 +676,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
 }
 
 // --------------------------------------------------------------------------
-// merged from Ranker.cpp
+// Ranking stage
 // --------------------------------------------------------------------------
 
 namespace {
@@ -689,7 +689,7 @@ namespace {
 // only through the single facing band pair across the row boundary
 // (checker: activeKindByBoundary) -- one band vote.
 // Tie breaks toward the smaller VT id (deterministic).
-VtId neighborMajorityVt(const PlannerDataSource& view, const PlacedInstance& inst)
+VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
 {
   const XInterval span = instanceSpan(view, inst);
   std::map<VtId, int> votes;
@@ -786,7 +786,7 @@ std::vector<FillerDomain> rankFillers(
     const TargetPlace& anchor,
     const std::vector<NormalizedViolation>& violations,
     const RepairWindow& window,
-    const PlannerDataSource& view,
+    const PlacementView& view,
     const DebugLog& log)
 {
   const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);
@@ -873,7 +873,7 @@ std::vector<FillerDomain> rankFillers(
 }
 
 // --------------------------------------------------------------------------
-// merged from SubsetSearch.cpp
+// Subset-enumeration stage
 // --------------------------------------------------------------------------
 
 namespace {
@@ -1003,7 +1003,7 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
 }
 
 // --------------------------------------------------------------------------
-// merged from OracleGate.cpp
+// Oracle-gate stage (baseline-delta accept)
 // --------------------------------------------------------------------------
 
 namespace {
@@ -1047,8 +1047,8 @@ bool inGuardRegion(const Violation& v, const Region& guard)
 
 }  // namespace
 
-OracleGate::OracleGate(const PlannerDataSource& dataSource,
-                       PlannerOracle& oracle,
+OracleGate::OracleGate(const PlacementView& dataSource,
+                       RepairOracle& oracle,
                        const TargetPlace& anchor,
                        const std::vector<Violation>& originals,
                        DbCoord siteWidth,
@@ -1446,7 +1446,7 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
 }
 
 // --------------------------------------------------------------------------
-// merged from FillerRepairPlanner.cpp
+// Pipeline driver
 // --------------------------------------------------------------------------
 
 namespace {
@@ -1477,9 +1477,9 @@ std::string windowLabel(const RepairWindow& window)
 
 namespace internal {
 
-FillerRepairPlanner::FillerRepairPlanner(
-    const PlannerDataSource& view,
-    PlannerOracle& oracle,
+RepairPlanner::RepairPlanner(
+    const PlacementView& view,
+    RepairOracle& oracle,
     RepairConfig config)
     : view_(view),
       oracle_(oracle),
@@ -1488,7 +1488,7 @@ FillerRepairPlanner::FillerRepairPlanner(
 {
 }
 
-FillerRepairResult FillerRepairPlanner::repair(
+FillerRepairResult RepairPlanner::repair(
     const FillerRepairRequest& request)
 {
   FillerRepairResult result;

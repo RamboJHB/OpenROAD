@@ -35,14 +35,30 @@ replacement-candidate allow list.
 
 ## Main files
 
+The module is one runtime layer over one pure search pipeline, joined by two
+explicit seams. The engine implements both seams; the planner depends on
+nothing else, which is what keeps it database-free and portable.
+
+```
+                 FillerRepairEngine          (runtime: UDM/Grid/Network + checker)
+                   implements v   ^ implements
+        PlacementView (data in)   |   RepairOracle (legality out)
+                              \   |   /
+                            RepairPlanner     (pure deterministic search)
+                                   |
+                    RepairTypes + Debug       (leaf data model, logging)
+```
+
 | Path | Purpose |
 |---|---|
-| `FillerRepairEngine.h/.cpp` | runtime engine: snapshot over Grid/Network, regional coverage gate, oracle/planner ownership, repair entries |
-| `FillerRepairPlanner.h/.cpp` | the complete deterministic search pipeline: swap model, violation signatures, L0/adaptive window, ranking, subset enumeration, oracle gate, driver |
-| `PlannerDataSource.h` | header-only read-only view contract + shared binary-search helpers |
-| `Types.h` | leaf types: geometry, diagnostics, violations, planner entry records, debug log |
+| `FillerRepairEngine.h/.cpp` | runtime entry: snapshot over Grid/Network, regional coverage gate, owns the private checker and planner, implements both seams |
+| `PlacementView.h` | **seam 1** — read-only placement view the planner queries (`MasterInfo`, `PlacedInstance`, candidate query, span/binary-search helpers) |
+| `RepairOracle.h` | **seam 2** — legality oracle protocol (`OracleRequest/Result/Status`); not a second DRC checker |
+| `RepairPlanner.h/.cpp` | the search pipeline in flow order: swap model → violation signatures → L0/adaptive window → ranking → subset enumeration → oracle gate → driver, plus `RepairConfig` |
+| `RepairTypes.h` | leaf data model: ids, geometry, violations, diagnostics, entry/exit records. Depends on nothing in the module |
+| `Debug.h` | `[fr][stage]` transcript (`cat`, `show`, `DebugLog`) |
 | `sources.cmake` | source-of-truth lists for the runtime payload and portable tests |
-| `test/FillerRepairPlannerTest.cpp` + doubles | 82 portable database-free planner unit tests |
+| `test/RepairPlannerTest.cpp` + `TestPlacementView.h`, `TestRepairOracle.*`, `SyntheticMasterCatalog.*` | 82 portable database-free planner unit tests (the doubles implement the two seams) |
 | `test/FillerRepairCheckerE2ETest.cpp` | 59 portable real-checker and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript

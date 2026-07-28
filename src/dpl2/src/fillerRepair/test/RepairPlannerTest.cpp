@@ -17,9 +17,9 @@
 
 #include <gtest/gtest.h>
 
-#include "fillerRepair/FillerRepairPlanner.h"
-#include "PlannerTestDataSource.h"
-#include "PlannerTestOracle.h"
+#include "fillerRepair/RepairPlanner.h"
+#include "TestPlacementView.h"
+#include "TestRepairOracle.h"
 #include "SyntheticMasterCatalog.h"
 
 namespace fr = dpl2::fillerRepair;
@@ -81,9 +81,9 @@ fr::MasterId cellMaster(fr::VtId vt)
 
 // Full master library: widths {2,3,4,8} x VTs {1,2,3}, all fillers, plus one
 // width-4 std cell master per VT (mirrors appendix A of the spec).
-fr::PlannerTestDataSource makeLibrary()
+fr::TestPlacementView makeLibrary()
 {
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   design.setSiteWidth(1);
   for (const fr::DbCoord w : {2, 3, 4, 8}) {
     for (const fr::VtId vt : {kVt1, kVt2, kVt3}) {
@@ -105,7 +105,7 @@ fr::PlannerTestDataSource makeLibrary()
 // All fillers here; callers often swap inst 103 to a std cell (the anchor).
 struct RowFixture
 {
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   fr::InstanceId anchor = 103;
 };
 
@@ -128,7 +128,7 @@ fr::Region wholeDesignRegion()
   return fr::Region{fr::XInterval{-1000, 1000}, 0, 100};
 }
 
-fr::TargetPlace anchorPlace(const fr::PlannerTestDataSource& design, fr::InstanceId id)
+fr::TargetPlace anchorPlace(const fr::TestPlacementView& design, fr::InstanceId id)
 {
   const fr::PlacedInstance* inst = design.instance(id);
   fr::TargetPlace place;
@@ -199,10 +199,10 @@ void testPlannerDoesNotRunPlacementPrecheck()
   RowFixture f = makeCoveredRow();
   f.design.remove(101);  // hole [4,6)
 
-  fr::PlannerTestOracle checker(f.design, {});
+  fr::TestRepairOracle checker(f.design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(f.design, checker, config);
+  fr::internal::RepairPlanner planner(f.design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(f.design, f.anchor);
@@ -245,7 +245,7 @@ void testCandidateProvider()
 // band shapes' layers. Master names are decoration.
 void testSyntheticCatalogDescribeWidthsAndVts()
 {
-  fr::PlannerTestDataSource design;  // only needed to satisfy the provider's view
+  fr::TestPlacementView design;  // only needed to satisfy the provider's view
   fr::SyntheticMasterCatalog provider(/*siteWidth=*/1, /*rowHeight=*/2);
   provider.addAppendixALibrary();
 
@@ -283,7 +283,7 @@ void testSyntheticCatalogDescribeWidthsAndVts()
 // reason codes from buildMasters.
 void testSyntheticCatalogRejectsMalformedMasters()
 {
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   fr::SyntheticMasterCatalog provider(/*siteWidth=*/2, /*rowHeight=*/2);
   provider.addLayer(1, "VTS_N");
   provider.addLayer(2, "VTS_P");
@@ -325,7 +325,7 @@ void testSyntheticCatalogRejectsMalformedMasters()
 // design sync via registerInto.
 void testSyntheticCatalogCandidatesContract()
 {
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   design.setSiteWidth(1);
   fr::SyntheticMasterCatalog provider(1, /*rowHeight=*/2);
   provider.addAppendixALibrary();
@@ -356,7 +356,7 @@ void testSyntheticCatalogCandidatesContract()
   EXPECT_TRUE(unknown.candidates.empty());
   EXPECT_TRUE(!unknown.diagnostics.empty());
 
-  // registerInto synced width/height/vt into the PlannerDataSource.
+  // registerInto synced width/height/vt into the PlacementView.
   const fr::MasterInfo* info = design.masterInfo(43);
   EXPECT_TRUE(info != nullptr);
   EXPECT_EQ(info->width, 4);
@@ -365,7 +365,7 @@ void testSyntheticCatalogCandidatesContract()
 }
 
 // Planner smoke: the planner solves a single-swap case with the appendix-A
-// catalog driving both the PlannerDataSource master table and the candidates.
+// catalog driving both the PlacementView master table and the candidates.
 //
 // Vt Type: 0=VTS, 1=VTL, 3=VTUL  |  Widths: {2, 4}
 // cell type: 1=std cell, 0=filler  |  Format: (vt type, width, cell type)
@@ -378,7 +378,7 @@ void testSyntheticCatalogCandidatesContract()
 // (602 -> VTS would fix the first two but leaves the VTL[0,4) MW residual.)
 void testPlannerSolvesWithSyntheticCatalog()
 {
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   design.setSiteWidth(1);
   fr::SyntheticMasterCatalog provider(1, /*rowHeight=*/2);
   provider.addAppendixALibrary();
@@ -403,7 +403,7 @@ void testPlannerSolvesWithSyntheticCatalog()
   anchor.x = 0;
 
   // Snapshot from the checker, as runtime does.
-  fr::PlannerTestOracle snapshotChecker(design, rules);
+  fr::TestRepairOracle snapshotChecker(design, rules);
   fr::OracleRequest snapReq;
   snapReq.requestId = 0;
   snapReq.targetPlace = anchor;
@@ -414,10 +414,10 @@ void testPlannerSolvesWithSyntheticCatalog()
       snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
   EXPECT_EQ(request.violations.size(), 3u);
 
-  fr::PlannerTestOracle checker(design, rules);
+  fr::TestRepairOracle checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   const auto result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
@@ -432,7 +432,7 @@ void testPlannerSolvesWithSyntheticCatalog()
 // row1 below it (inter-row MS), plus everything else VT1. Recoloring the
 // row1 filler to VT1... would merge with neighbors; instead the clean fix is
 // recoloring it to VT2? See per-test comments; rules are chosen per case.
-fr::OracleRequest baselineRequest(const fr::PlannerTestDataSource& design,
+fr::OracleRequest baselineRequest(const fr::TestPlacementView& design,
                                         fr::InstanceId anchor,
                                         fr::OracleRequestId id)
 {
@@ -446,7 +446,7 @@ fr::OracleRequest baselineRequest(const fr::PlannerTestDataSource& design,
 void testCheckerEchoAndOrder()
 {
   RowFixture f = makeCoveredRow();
-  fr::PlannerTestOracle checker(f.design, {});
+  fr::TestRepairOracle checker(f.design, {});
 
   std::vector<fr::OracleRequest> batch;
   for (const fr::OracleRequestId id : {7, 3, 5}) {
@@ -464,7 +464,7 @@ void testCheckerEchoAndOrder()
 void testCheckerInvalidIsolated()
 {
   RowFixture f = makeCoveredRow();
-  fr::PlannerTestOracle checker(f.design, {});
+  fr::TestRepairOracle checker(f.design, {});
 
   auto valid = baselineRequest(f.design, f.anchor, 1);
   auto invalid = baselineRequest(f.design, f.anchor, 2);
@@ -490,7 +490,7 @@ void testCheckerIntraMsDetectAndClear()
 
   fr::PlannerTestRules rules;
   rules.msIntra = 3;
-  fr::PlannerTestOracle checker(f.design, rules);
+  fr::TestRepairOracle checker(f.design, rules);
 
   const auto baseline = checker.checkPlaceWithOverlay(
       baselineRequest(f.design, /*anchor=*/100, 1));
@@ -515,7 +515,7 @@ void testCheckerInterRowRules()
   // Row0: VT2 run [0,4) then VT1 [4,16).
   // Row1: VT1 [0,3), VT2 [3,10), VT1 [10,16).
   // VT2 overlap = [3,4), width 1 < mwInter 2 -> inter-row MW violation.
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 16)
       .place(100, fillerMaster(4, kVt2), 0, 0)
       .place(101, fillerMaster(4, kVt1), 0, 4)
@@ -529,7 +529,7 @@ void testCheckerInterRowRules()
 
   fr::PlannerTestRules rules;
   rules.mwInter = 2;
-  fr::PlannerTestOracle checker(design, rules);
+  fr::TestRepairOracle checker(design, rules);
 
   const auto result = checker.checkPlaceWithOverlay(baselineRequest(design, 100, 1));
   EXPECT_TRUE(result.status == fr::OracleStatus::Checked);
@@ -544,7 +544,7 @@ void testCheckerInterRowRules()
   design.remove(201).place(201, fillerMaster(3, kVt1), 1, 3);
   fr::PlannerTestRules msRules;
   msRules.msInter = 3;
-  fr::PlannerTestOracle msChecker(design, msRules);
+  fr::TestRepairOracle msChecker(design, msRules);
   const auto msResult = msChecker.checkPlaceWithOverlay(baselineRequest(design, 100, 2));
   EXPECT_EQ(msResult.violations.size(), 1u);
   EXPECT_TRUE(msResult.violations[0].kind == fr::ViolationKind::MinSpacing);
@@ -561,7 +561,7 @@ void testCheckerGuardRegionFilter()
 
   fr::PlannerTestRules rules;
   rules.msIntra = 3;
-  fr::PlannerTestOracle checker(f.design, rules);
+  fr::TestRepairOracle checker(f.design, rules);
 
   auto request = baselineRequest(f.design, 100, 1);
   request.guardRegion = fr::Region{fr::XInterval{0, 8}, 0, 0};
@@ -578,7 +578,7 @@ void testCheckerTargetOverrideSeedsViolation()
   // creates a VT2/VT2 inter-row overlap of exactly 1 < 2 -> the violation
   // appears only AFTER the target override. This is the "checker rebuilds
   // context from targetPlace" contract.
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 16)
       .place(100, fillerMaster(8, kVt1), 0, 0)
       .place(101, fillerMaster(2, kVt1), 0, 8)
@@ -594,7 +594,7 @@ void testCheckerTargetOverrideSeedsViolation()
 
   fr::PlannerTestRules rules;
   rules.mwInter = 2;
-  fr::PlannerTestOracle checker(design, rules);
+  fr::TestRepairOracle checker(design, rules);
 
   // Before the change (target master == placed master): VT2 filler 203 has
   // no same-VT neighbor shape -> clean.
@@ -781,9 +781,9 @@ void testRelatedness()
 //   ids:   100     101     102*    103          (* = anchor std cell)
 // Row 1: (1,3,0) (1,3,0) (1,3,0) (2,2,0) (1,2,0) (1,3,0)
 //   ids:   200     201     202     203     204     205
-fr::PlannerTestDataSource makeTwoRowDesign()
+fr::TestPlacementView makeTwoRowDesign()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 16)
       .place(100, fillerMaster(8, kVt1), 0, 0)
       .place(101, fillerMaster(2, kVt1), 0, 8)
@@ -801,7 +801,7 @@ fr::PlannerTestDataSource makeTwoRowDesign()
 
 void testWindowL0()
 {
-  fr::PlannerTestDataSource design = makeTwoRowDesign();
+  fr::TestPlacementView design = makeTwoRowDesign();
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
   request.targetPlace.masterId = cellMaster(kVt2);  // the opto change
@@ -841,7 +841,7 @@ void testWindowL0()
 
 void testWindowL0ExactMembership()
 {
-  fr::PlannerTestDataSource design = makeTwoRowDesign();
+  fr::TestPlacementView design = makeTwoRowDesign();
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
   request.targetPlace.masterId = cellMaster(kVt2);
@@ -882,7 +882,7 @@ void testWindowBridgeConditionsEach()
   // Vt Type: {1,2} | Widths: {2,4} | cell type: 1=std, 0=filler
   // Three sparse sub-layouts isolate left-touch, right-touch, and adjacent-row
   // overlap with the widened anchor span.
-  const auto makeWindow = [](fr::PlannerTestDataSource& design,
+  const auto makeWindow = [](fr::TestPlacementView& design,
                              fr::InstanceId anchor,
                              fr::XInterval footprint) {
     fr::FillerRepairRequest request;
@@ -902,21 +902,21 @@ void testWindowBridgeConditionsEach()
                            fr::DebugLog(verbose()));
   };
 
-  fr::PlannerTestDataSource left = makeLibrary();
+  fr::TestPlacementView left = makeLibrary();
   left.addRow(0, 0, 8)
       .place(10, fillerMaster(2, kVt1), 0, 2)
       .place(11, cellMaster(kVt2), 0, 4);
   const auto leftWindow = makeWindow(left, 11, {4, 5});
   EXPECT_TRUE(leftWindow.containsEditable(10));
 
-  fr::PlannerTestDataSource right = makeLibrary();
+  fr::TestPlacementView right = makeLibrary();
   right.addRow(0, 0, 8)
       .place(20, cellMaster(kVt2), 0, 0)
       .place(21, fillerMaster(2, kVt1), 0, 4);
   const auto rightWindow = makeWindow(right, 20, {0, 1});
   EXPECT_TRUE(rightWindow.containsEditable(21));
 
-  fr::PlannerTestDataSource adjacent = makeLibrary();
+  fr::TestPlacementView adjacent = makeLibrary();
   adjacent.addRow(0, 0, 10)
       .place(30, fillerMaster(2, kVt1), 0, 2)
       .place(31, fillerMaster(2, kVt1), 0, 0)
@@ -931,7 +931,7 @@ void testWindowAtDesignEdges()
 {
   // Vt Type: {1,2} | Widths: {4} | cell type: 1=std, 0=filler
   // Anchors sit at bottom/left and top/right design boundaries.
-  fr::PlannerTestDataSource bottom = makeLibrary();
+  fr::TestPlacementView bottom = makeLibrary();
   bottom.addRow(0, 0, 8)
       .place(100, cellMaster(kVt2), 0, 0)
       .place(101, fillerMaster(4, kVt1), 0, 4)
@@ -955,7 +955,7 @@ void testWindowAtDesignEdges()
   EXPECT_EQ(bottomWindow.guardRegion.rowHi, 2);
   EXPECT_TRUE(bottomWindow.guardRegion.x.xl >= 0);
 
-  fr::PlannerTestDataSource top = makeLibrary();
+  fr::TestPlacementView top = makeLibrary();
   top.addRow(0, 0, 8)
       .place(400, fillerMaster(4, kVt1), 0, 4)
       .addRow(1, 0, 8)
@@ -982,7 +982,7 @@ void testWindowAtDesignEdges()
 
 void testWindowAdaptiveAddsKOnBlockingSide()
 {
-  fr::PlannerTestDataSource design = makeTwoRowDesign();
+  fr::TestPlacementView design = makeTwoRowDesign();
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
 
@@ -1007,7 +1007,7 @@ void testWindowAdaptiveAddsKOnBlockingSide()
   // If the chosen side is blocked by a non-filler, the opposite side gets one
   // deterministic chance. This preserves focused growth without treating a
   // misleading residual violation as proof that the other side is irrelevant.
-  fr::PlannerTestDataSource fallback = makeLibrary();
+  fr::TestPlacementView fallback = makeLibrary();
   fallback.addRow(0, 0, 12)
       .place(300, cellMaster(kVt1), 0, 0)
       .place(301, cellMaster(kVt2), 0, 4)
@@ -1038,7 +1038,7 @@ void testWindowAdaptiveAddsKOnBlockingSide()
 
 void testWindowAdaptiveCoupledRowsAndFixedBoundary()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20)
       .place(100, fillerMaster(8, kVt1), 0, 0)
       .place(101, fillerMaster(4, kVt1), 0, 8)
@@ -1087,7 +1087,7 @@ void testWindowAdaptiveCoupledRowsAndFixedBoundary()
 
 void testGuardRegionTwoCellRing()
 {
-  fr::PlannerTestDataSource design = makeTwoRowDesign();
+  fr::TestPlacementView design = makeTwoRowDesign();
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
 
@@ -1122,17 +1122,17 @@ void testPlannerNoEditableFillerZeroCalls()
   // returns no solution with ZERO checker calls -- because the search finds
   // no editable filler, never via an early abort (V2.1 #6 dropped the
   // ring-based fast-fail; the hint itself was later removed as noise).
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 16)
       .place(100, cellMaster(kVt1), 0, 0)
       .place(101, cellMaster(kVt1), 0, 4)
       .place(102, cellMaster(kVt2), 0, 8)
       .place(103, cellMaster(kVt1), 0, 12);
 
-  fr::PlannerTestOracle checker(design, {});
+  fr::TestRepairOracle checker(design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
@@ -1146,10 +1146,10 @@ void testPlannerNoEditableFillerZeroCalls()
   EXPECT_EQ(checker.requestCount(), 0);  // no editable filler -> no calls
 }
 
-class ReentrantChecker : public fr::PlannerOracle
+class ReentrantChecker : public fr::RepairOracle
 {
  public:
-  fr::internal::FillerRepairPlanner* planner = nullptr;
+  fr::internal::RepairPlanner* planner = nullptr;
   const fr::FillerRepairRequest* request = nullptr;
   fr::Violation original;
   fr::FillerRepairResult inner;
@@ -1187,7 +1187,7 @@ void testPlannerReentrantRepairRefused()
   // Spec 3.3: the overlay API is a pure query; a checker calling back into
   // repair() on the same planner gets a fatal ReentrantRepair result, and
   // the outer repair completes normally.
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 12)
       .place(100, cellMaster(kVt1), 0, 0)
       .place(140, fillerMaster(4, kVt1), 0, 4)
@@ -1204,7 +1204,7 @@ void testPlannerReentrantRepairRefused()
   checker.original = original;
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
   checker.planner = &planner;
   checker.request = &request;
 
@@ -1223,10 +1223,10 @@ void testPlannerReentrantRepairRefused()
 void testPlannerEmptySnapshotIsSuccess()
 {
   RowFixture f = makeCoveredRow();
-  fr::PlannerTestOracle checker(f.design, {});
+  fr::TestRepairOracle checker(f.design, {});
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(f.design, checker, config);
+  fr::internal::RepairPlanner planner(f.design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(f.design, f.anchor);
@@ -1241,7 +1241,7 @@ void testPlannerEmptySnapshotIsSuccess()
 
 void testSwapGeneratorBasic()
 {
-  fr::PlannerTestDataSource design = makeTwoRowDesign();
+  fr::TestPlacementView design = makeTwoRowDesign();
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
   request.targetPlace.masterId = cellMaster(kVt2);
@@ -1284,7 +1284,7 @@ void testSwapGeneratorBasic()
 void testSwapGeneratorNoUsableMaster()
 {
   // A width-5 filler exists in exactly one VT: no same-size replacement.
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addMaster(51, 5, 1, /*isFiller=*/true, kVt1);
   design.addRow(0, 0, 5).place(100, 51, 0, 0);
   fr::RepairWindow window;
@@ -1302,7 +1302,7 @@ void testSwapGeneratorNoUsableMaster()
   EXPECT_TRUE(sawNoUsable);
 }
 
-class MixedValidityPlannerDataSource : public fr::PlannerTestDataSource
+class MixedValidityPlacementView : public fr::TestPlacementView
 {
  public:
   fr::MasterCandidateResult getUsableMasterCandidates(
@@ -1319,7 +1319,7 @@ void testSwapgenRejectedCandidateDiag()
 {
   // Vt Type: 1 | Widths: {2} | cell type: 0=filler
   // Provider returns one valid width-2 and one invalid width-4 replacement.
-  MixedValidityPlannerDataSource design;
+  MixedValidityPlacementView design;
   design.setSiteWidth(1)
       .addMaster(fillerMaster(2, kVt1), 2, 1, true, kVt1)
       .addMaster(fillerMaster(2, kVt2), 2, 1, true, kVt2)
@@ -1352,7 +1352,7 @@ void testSwapgenRejectedCandidateDiag()
 // The checker itself produces the initial snapshot, like the real flow.
 struct ScenarioA
 {
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   fr::PlannerTestRules rules;
   fr::FillerRepairRequest request;
 };
@@ -1365,7 +1365,7 @@ ScenarioA makeScenarioA()
   sc.request.targetPlace = anchorPlace(sc.design, 102);
   sc.request.targetPlace.masterId = cellMaster(kVt2);  // the opto change
 
-  fr::PlannerTestOracle snapshotChecker(sc.design, sc.rules);
+  fr::TestRepairOracle snapshotChecker(sc.design, sc.rules);
   auto initial = baselineRequest(sc.design, 102, 0);
   initial.targetPlace.masterId = cellMaster(kVt2);
   sc.request.violations =
@@ -1409,7 +1409,7 @@ void testRankerFillerKeyIsolated()
 {
   // Vt Type: 1 | Widths: {2,4,8} | cell type: 0=filler
   // Sparse rows isolate direct, bridge, width, x, and row tie-break keys.
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(1, 0, 120)
       .place(700, fillerMaster(8, kVt1), 1, 100)  // direct
       .place(701, fillerMaster(8, kVt1), 1, 80)   // bridge
@@ -1448,7 +1448,7 @@ void testRankerDomainOrderIsolated()
 {
   // Vt Type: {1,2,3,4} | Widths: {2,4} | cell type: 1=std, 0=filler
   // VT4 filler has VT1 neighbors while the changed anchor master is VT2.
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addMaster(fillerMaster(2, 4), 2, 1, /*isFiller=*/true, 4);
   design.addRow(0, 0, 12)
       .place(800, cellMaster(kVt1), 0, 0)
@@ -1489,7 +1489,7 @@ void testRankerMajorityPerBand()
   // votes); a row +-1 neighbor shares only the facing band pair (1 vote).
   // Per-cell counting ties kVt1/kVt2 at 2 cells each and picks kVt1;
   // per-band counting picks kVt2 (4 band votes vs 2).
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addMaster(fillerMaster(2, 4), 2, 1, /*isFiller=*/true, 4);
   design.addRow(0, 0, 12).addRow(1, 0, 12).addRow(2, 0, 12);
   design.place(900, cellMaster(kVt2), 1, 0)   // same row, abuts at x=4
@@ -1526,7 +1526,7 @@ void testRankerMajoritySkipsMissingMaster()
   // crash the majority vote. The zero-width ghost abuts the filler exactly
   // at its left edge (span [4,4) -> xh == filler.xl), which is the shape
   // that dereferenced a null MasterInfo before the guard.
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addMaster(fillerMaster(2, 4), 2, 1, /*isFiller=*/true, 4);
   design.addRow(0, 0, 12)
       .place(800, cellMaster(kVt1), 0, 0)
@@ -1560,7 +1560,7 @@ void testCandidatesBandPolarityLayoutMustMatch()
   // and orientation, so a candidate whose R0-frame bottom band has the
   // opposite polarity would land every band on the wrong track -- the
   // provider must not offer it (the checker would reject the overlay).
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   design.setSiteWidth(1);
   design.addMaster(10, 2, 1, /*isFiller=*/true, kVt1, fr::BandPolarity::N)
       .addMaster(11, 2, 1, /*isFiller=*/true, kVt2, fr::BandPolarity::N)
@@ -1579,7 +1579,7 @@ void testCandidatesPolarityOnlyFilterDiagnosed()
   // When every size/VT-compatible replacement is dropped ONLY by the
   // polarity-layout filter, the result must say so (broken polarity
   // metadata would otherwise hide behind a generic NoUsableMaster).
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   design.setSiteWidth(1);
   design.addMaster(10, 2, 1, /*isFiller=*/true, kVt1, fr::BandPolarity::N)
       .addMaster(12, 2, 1, /*isFiller=*/true, kVt3, fr::BandPolarity::P);
@@ -1594,11 +1594,11 @@ void testCandidatesPolarityOnlyFilterDiagnosed()
   EXPECT_TRUE(sawPolarity);
 }
 
-void testPlannerTestDataSourceCachesFollowMutation()
+void testTestPlacementViewCachesFollowMutation()
 {
   // The reference-returning queries are served from caches; every mutator
   // must invalidate them (this locks the dirty-flag contract).
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 8).place(100, cellMaster(kVt1), 0, 0);
   EXPECT_EQ(design.instancesInRow(0).size(), 1u);
   design.place(101, fillerMaster(4, kVt1), 0, 4);
@@ -1639,7 +1639,7 @@ void testSyntheticBottomPolarityDerived()
   EXPECT_TRUE(nBottom->bottomBandPolarity == fr::BandPolarity::N);
   EXPECT_TRUE(pBottom->bottomBandPolarity == fr::BandPolarity::P);
 
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   design.setSiteWidth(1);
   provider.registerInto(design);
   EXPECT_TRUE(design.masterInfo(500) != nullptr
@@ -1749,10 +1749,10 @@ void testEnumerationFillerDomainNotCrowdedOut()
 void testPlannerSolvesSingleSwap()
 {
   ScenarioA sc = makeScenarioA();
-  fr::PlannerTestOracle checker(sc.design, sc.rules);
+  fr::TestRepairOracle checker(sc.design, sc.rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(sc.design, checker, config);
+  fr::internal::RepairPlanner planner(sc.design, checker, config);
 
   const auto result = planner.repair(sc.request);
   EXPECT_TRUE(result.hasSolution);
@@ -1764,8 +1764,8 @@ void testPlannerSolvesSingleSwap()
   EXPECT_TRUE(checker.requestCount() <= 1 + config.batchSize);
 
   // Determinism: same input -> identical outcome and identical call count.
-  fr::PlannerTestOracle checker2(sc.design, sc.rules);
-  fr::internal::FillerRepairPlanner planner2(sc.design, checker2, config);
+  fr::TestRepairOracle checker2(sc.design, sc.rules);
+  fr::internal::RepairPlanner planner2(sc.design, checker2, config);
   const auto result2 = planner2.repair(sc.request);
   EXPECT_TRUE(result2.hasSolution);
   EXPECT_EQ(result2.changes.size(), result.changes.size());
@@ -1785,7 +1785,7 @@ void testPlannerSolvesSingleSwap()
 //   ids:   102*    110     111     112      113     (* = anchor std cell)
 void testPlannerSolvesPairNonMonotone()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 16)
       .place(102, cellMaster(kVt2), 0, 0)    // anchor (already at new VT)
       .place(110, fillerMaster(2, kVt1), 0, 4)
@@ -1797,16 +1797,16 @@ void testPlannerSolvesPairNonMonotone()
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
-  fr::PlannerTestOracle snapshotChecker(design, rules);
+  fr::TestRepairOracle snapshotChecker(design, rules);
   request.violations =
       snapshotChecker.checkPlaceWithOverlay(baselineRequest(design, 102, 0))
           .violations;
   EXPECT_EQ(request.violations.size(), 2u);  // VT2 MS + VT1 MS
 
-  fr::PlannerTestOracle checker(design, rules);
+  fr::TestRepairOracle checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   const auto result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
@@ -1823,7 +1823,7 @@ void testPlannerSolvesPairNonMonotone()
 // A protocol-honest oracle for complex search-order tests. Baseline and every
 // partial candidate retain the original violation multiset; an overlay becomes
 // clean only after it contains every required (instance, master) assignment.
-class RequiredChangesChecker : public fr::PlannerOracle
+class RequiredChangesChecker : public fr::RepairOracle
 {
  public:
   std::vector<fr::Violation> originals;
@@ -1876,7 +1876,7 @@ class RequiredChangesChecker : public fr::PlannerOracle
 
 struct ComplexSearchFixture
 {
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   fr::FillerRepairRequest request;
 };
 
@@ -1955,7 +1955,7 @@ void testPlannerComplexRankedPairFast()
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(
+  fr::internal::RepairPlanner planner(
       fixture.design, checker, config);
 
   const fr::FillerRepairResult result = planner.repair(fixture.request);
@@ -1980,7 +1980,7 @@ void testPlannerComplexRankedPairFast()
   RequiredChangesChecker checkerAgain;
   checkerAgain.originals = fixture.request.violations;
   checkerAgain.required = checker.required;
-  fr::internal::FillerRepairPlanner plannerAgain(
+  fr::internal::RepairPlanner plannerAgain(
       fixture.design, checkerAgain, config);
   const fr::FillerRepairResult again = plannerAgain.repair(fixture.request);
   EXPECT_TRUE(again.hasSolution);
@@ -2011,7 +2011,7 @@ void testPlannerComplexThirdVtStillSucceeds()
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(
+  fr::internal::RepairPlanner planner(
       fixture.design, checker, config);
 
   const fr::FillerRepairResult result = planner.repair(fixture.request);
@@ -2033,7 +2033,7 @@ void testPlannerComplexThirdVtStillSucceeds()
 // contains only the anchor-caused violation.
 void testPlannerIgnoresUnrelatedHaloViolation()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 16)
       .place(130, fillerMaster(3, kVt3), 0, 0)
       .place(131, fillerMaster(2, kVt1), 0, 3)
@@ -2061,7 +2061,7 @@ void testPlannerIgnoresUnrelatedHaloViolation()
   // captures only the anchor-caused MW and excludes the far VT3 pre-existing
   // violation at x=[2,3). That pre-existing MW then appears only in the planner's
   // wider baseline -- exactly the unrelated-halo case under test.
-  fr::PlannerTestOracle snapshotChecker(design, rules);
+  fr::TestRepairOracle snapshotChecker(design, rules);
   auto snapReq = baselineRequest(design, 102, 0);
   snapReq.targetPlace.masterId = cellMaster(kVt2);  // the opto change
   snapReq.guardRegion = fr::Region{fr::XInterval{8, 16}, 0, 1};
@@ -2069,10 +2069,10 @@ void testPlannerIgnoresUnrelatedHaloViolation()
       snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
   EXPECT_EQ(request.violations.size(), 1u);  // only the anchor-caused MW
 
-  fr::PlannerTestOracle checker(design, rules);
+  fr::TestRepairOracle checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   const auto result = planner.repair(request);
   // The pre-existing VT3 MW sits in the baseline of the same guard region;
@@ -2087,7 +2087,7 @@ void testPlannerIgnoresUnrelatedHaloViolation()
 // and L1 triggers the expansion cutoff (same editable set).
 void testPlannerNoSolutionDefinitive()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 8)
       .place(102, cellMaster(kVt2), 0, 0)  // anchor
       .place(120, fillerMaster(2, kVt1), 0, 4)
@@ -2097,16 +2097,16 @@ void testPlannerNoSolutionDefinitive()
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
-  fr::PlannerTestOracle snapshotChecker(design, rules);
+  fr::TestRepairOracle snapshotChecker(design, rules);
   request.violations =
       snapshotChecker.checkPlaceWithOverlay(baselineRequest(design, 102, 0))
           .violations;
   EXPECT_TRUE(!request.violations.empty());
 
-  fr::PlannerTestOracle checker(design, rules);
+  fr::TestRepairOracle checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   const auto result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
@@ -2133,7 +2133,7 @@ void testPlannerNoSolutionDefinitive()
 void testGateCacheSingleEvaluation()
 {
   ScenarioA sc = makeScenarioA();
-  fr::PlannerTestOracle checker(sc.design, sc.rules);
+  fr::TestRepairOracle checker(sc.design, sc.rules);
   fr::RepairConfig config;
   fr::DebugLog log(verbose());
   fr::OracleGate gate(sc.design, checker, sc.request.targetPlace, sc.request.violations,
@@ -2157,10 +2157,10 @@ void testGateCacheSingleEvaluation()
 
 // A checker that violates the requestId echo protocol must abort the repair
 // with CheckerProtocolError instead of producing a result.
-class MisbehavingChecker : public fr::PlannerOracle
+class MisbehavingChecker : public fr::RepairOracle
 {
  public:
-  explicit MisbehavingChecker(fr::PlannerTestOracle& inner) : inner_(inner) {}
+  explicit MisbehavingChecker(fr::TestRepairOracle& inner) : inner_(inner) {}
   fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& request) override
   {
     return inner_.checkPlaceWithOverlay(request);  // baseline stays honest
@@ -2175,17 +2175,17 @@ class MisbehavingChecker : public fr::PlannerOracle
     return results;
   }
  private:
-  fr::PlannerTestOracle& inner_;
+  fr::TestRepairOracle& inner_;
 };
 
 void testPlannerDetectsProtocolError()
 {
   ScenarioA sc = makeScenarioA();
-  fr::PlannerTestOracle inner(sc.design, sc.rules);
+  fr::TestRepairOracle inner(sc.design, sc.rules);
   MisbehavingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(sc.design, checker, config);
+  fr::internal::RepairPlanner planner(sc.design, checker, config);
 
   const auto result = planner.repair(sc.request);
   EXPECT_TRUE(!result.hasSolution);
@@ -2199,10 +2199,10 @@ void testPlannerDetectsProtocolError()
 
 // Batch result order must not matter: a checker returning results reversed
 // (with honest ids) yields the identical solution.
-class ReversingChecker : public fr::PlannerOracle
+class ReversingChecker : public fr::RepairOracle
 {
  public:
-  explicit ReversingChecker(fr::PlannerTestOracle& inner) : inner_(inner) {}
+  explicit ReversingChecker(fr::TestRepairOracle& inner) : inner_(inner) {}
   fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& request) override
   {
     return inner_.checkPlaceWithOverlay(request);
@@ -2215,17 +2215,17 @@ class ReversingChecker : public fr::PlannerOracle
     return results;
   }
  private:
-  fr::PlannerTestOracle& inner_;
+  fr::TestRepairOracle& inner_;
 };
 
 void testPlannerOrderIndependentBatches()
 {
   ScenarioA sc = makeScenarioA();
-  fr::PlannerTestOracle inner(sc.design, sc.rules);
+  fr::TestRepairOracle inner(sc.design, sc.rules);
   ReversingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(sc.design, checker, config);
+  fr::internal::RepairPlanner planner(sc.design, checker, config);
 
   const auto result = planner.repair(sc.request);
   EXPECT_TRUE(result.hasSolution);
@@ -2263,10 +2263,10 @@ bool sameDiagnostics(const std::vector<fr::Diagnostic>& a,
   return true;
 }
 
-class RecordingChecker : public fr::PlannerOracle
+class RecordingChecker : public fr::RepairOracle
 {
  public:
-  explicit RecordingChecker(fr::PlannerOracle& inner) : inner_(inner) {}
+  explicit RecordingChecker(fr::RepairOracle& inner) : inner_(inner) {}
 
   fr::OracleResult checkPlaceWithOverlay(
       const fr::OracleRequest& request) override
@@ -2285,25 +2285,25 @@ class RecordingChecker : public fr::PlannerOracle
   std::vector<fr::OracleRequest> requests;
 
  private:
-  fr::PlannerOracle& inner_;
+  fr::RepairOracle& inner_;
 };
 
 void testPlannerBatchSizeInvariance()
 {
   ScenarioA sc = makeScenarioA();
 
-  fr::PlannerTestOracle checkerOne(sc.design, sc.rules);
+  fr::TestRepairOracle checkerOne(sc.design, sc.rules);
   fr::RepairConfig one;
   one.batchSize = 1;
   one.verbose = verbose();
-  fr::internal::FillerRepairPlanner plannerOne(sc.design, checkerOne, one);
+  fr::internal::RepairPlanner plannerOne(sc.design, checkerOne, one);
   const auto resultOne = plannerOne.repair(sc.request);
 
-  fr::PlannerTestOracle checkerMany(sc.design, sc.rules);
+  fr::TestRepairOracle checkerMany(sc.design, sc.rules);
   fr::RepairConfig many;
   many.batchSize = 32;
   many.verbose = verbose();
-  fr::internal::FillerRepairPlanner plannerMany(sc.design, checkerMany, many);
+  fr::internal::RepairPlanner plannerMany(sc.design, checkerMany, many);
   const auto resultMany = plannerMany.repair(sc.request);
 
   EXPECT_TRUE(resultOne.hasSolution == resultMany.hasSolution);
@@ -2317,12 +2317,12 @@ void testPlannerDeterminismFullTranscript()
   config.batchSize = 3;
   config.verbose = verbose();
 
-  fr::PlannerTestOracle checkerA(sc.design, sc.rules);
-  fr::internal::FillerRepairPlanner plannerA(sc.design, checkerA, config);
+  fr::TestRepairOracle checkerA(sc.design, sc.rules);
+  fr::internal::RepairPlanner plannerA(sc.design, checkerA, config);
   const auto resultA = plannerA.repair(sc.request);
 
-  fr::PlannerTestOracle checkerB(sc.design, sc.rules);
-  fr::internal::FillerRepairPlanner plannerB(sc.design, checkerB, config);
+  fr::TestRepairOracle checkerB(sc.design, sc.rules);
+  fr::internal::RepairPlanner plannerB(sc.design, checkerB, config);
   const auto resultB = plannerB.repair(sc.request);
 
   EXPECT_TRUE(resultA.hasSolution == resultB.hasSolution);
@@ -2349,11 +2349,11 @@ void testPlannerNeverEditsGuardOnly()
   EXPECT_TRUE(l0.guardRegion.x.overlaps(fr::instanceSpan(sc.design, *sc.design.instance(100))));
   EXPECT_TRUE(l0.guardRegion.x.overlaps(fr::instanceSpan(sc.design, *sc.design.instance(200))));
 
-  fr::PlannerTestOracle inner(sc.design, sc.rules);
+  fr::TestRepairOracle inner(sc.design, sc.rules);
   RecordingChecker checker(inner);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(sc.design, checker, config);
+  fr::internal::RepairPlanner planner(sc.design, checker, config);
   const auto result = planner.repair(sc.request);
 
   EXPECT_TRUE(result.hasSolution);
@@ -2371,7 +2371,7 @@ void testPlannerNeverEditsGuardOnly()
 
 // Scripted checker: fixed violation sets per overlay key, honest protocol.
 // Lets us hit each delta-classification branch exactly (spec 6.8).
-class ScriptedChecker : public fr::PlannerOracle
+class ScriptedChecker : public fr::RepairOracle
 {
  public:
   std::map<std::string, std::vector<fr::Violation>> byKey;
@@ -2416,7 +2416,7 @@ class ScriptedChecker : public fr::PlannerOracle
   }
 };
 
-class ResultScriptedChecker : public fr::PlannerOracle
+class ResultScriptedChecker : public fr::RepairOracle
 {
  public:
   std::map<std::string, fr::OracleResult> byKey;
@@ -2478,7 +2478,7 @@ bool hasDiagCode(const std::vector<fr::Diagnostic>& diagnostics,
 // an unrelated pre-existing-style halo violation does not block.
 void testGateDeltaClassificationBranches()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20)
       .place(500, fillerMaster(2, kVt1), 0, 4)
       .place(501, fillerMaster(2, kVt1), 0, 14);
@@ -2538,7 +2538,7 @@ void testGateDeltaClassificationBranches()
 // for any candidate overlay; the baseline honestly reproduces the original.
 // This is the shape the real checker returns for a blocking overlap / off-grid
 // / polarity mismatch, which the fake checker never produces.
-class IllegalEmptyChecker : public fr::PlannerOracle
+class IllegalEmptyChecker : public fr::RepairOracle
 {
  public:
   fr::Violation original;
@@ -2570,7 +2570,7 @@ class IllegalEmptyChecker : public fr::PlannerOracle
 // must be rejected, not accepted as clean just because no violation is listed.
 void testGateRejectsUnexplainedIllegal()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
@@ -2602,7 +2602,7 @@ void testGateRejectsUnexplainedIllegal()
 // not silently treat "not observed" as "repaired".
 void testGateBaselineMismatchAbortsSearch()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
@@ -2634,7 +2634,7 @@ void testGateBaselineMismatchAbortsSearch()
 // the second H is genuinely new (here related-in-halo -> reject).
 void testGateMultisetNewViolationNotAbsorbed()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20)
       .place(500, fillerMaster(2, kVt1), 0, 4)
       .place(501, fillerMaster(2, kVt1), 0, 14);
@@ -2670,7 +2670,7 @@ void testGateMultisetNewViolationNotAbsorbed()
 // as related (and reject), not mislabeled unrelated and let through.
 void testGatePerViolationRuleDistance()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
   const fr::Violation O = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
@@ -2706,7 +2706,7 @@ void testGatePerViolationRuleDistance()
 // A checker for which no overlay is ever clean: it returns the original
 // violation for the baseline AND for every candidate. Lets an planner test
 // drive the window/definitive control flow without the fake rule model.
-class AlwaysUnsolvedChecker : public fr::PlannerOracle
+class AlwaysUnsolvedChecker : public fr::RepairOracle
 {
  public:
   fr::Violation original;
@@ -2734,7 +2734,7 @@ void testPlannerBudgetCeiling()
 {
   // Vt Type: {1,2} | Widths: {2,4} | cell type: 1=std, 0=filler
   // One editable filler has exactly two options: baseline + 2 == budget 3.
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 6)
       .place(100, cellMaster(kVt2), 0, 0)
       .place(140, fillerMaster(2, kVt1), 0, 4);
@@ -2757,7 +2757,7 @@ void testPlannerBudgetCeiling()
   fr::RepairConfig config;
   config.checkerCallBudgetPerWindow = 3;  // baseline + exact two-option space
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   const auto result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
@@ -2774,7 +2774,7 @@ void testPlannerBudgetCeiling()
 // Scripted oracle for adaptive-L1: every overlay remains blocked until it
 // changes `solutionInstance`. This isolates window-growth control flow from
 // the fake DRC model while preserving the real baseline-delta protocol.
-class AdaptiveSolutionChecker : public fr::PlannerOracle
+class AdaptiveSolutionChecker : public fr::RepairOracle
 {
  public:
   fr::Violation original;
@@ -2815,7 +2815,7 @@ void testPlannerAdaptiveSolvesBeyondRing()
   // Vt Type: {1,2} | Widths: {2,4} | cell type: 1=std, 0=filler
   // The violation ring covers three std cells; L0 starts at filler 142 and
   // adaptive-L1 reaches the oracle-clean filler 141.
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 22)
       .place(100, cellMaster(kVt1), 0, 0)
       .place(101, cellMaster(kVt1), 0, 4)
@@ -2837,7 +2837,7 @@ void testPlannerAdaptiveSolvesBeyondRing()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   const auto result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
@@ -2856,7 +2856,7 @@ void testPlannerAdaptiveSolvesBeyondRing()
 
 void testPlannerAdaptiveL1FindsFarFiller()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20)
       .place(100, fillerMaster(4, kVt1), 0, 0)
       .place(101, fillerMaster(4, kVt1), 0, 4)
@@ -2889,7 +2889,7 @@ void testPlannerAdaptiveL1FindsFarFiller()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   const fr::FillerRepairResult result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
@@ -2910,7 +2910,7 @@ void testPlannerAdaptiveL1FindsFarFiller()
 // partial changes.
 void testPlannerAdaptiveLevelCapTruncates()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20)
       .place(100, fillerMaster(4, kVt1), 0, 0)
       .place(101, fillerMaster(4, kVt1), 0, 4)
@@ -2944,7 +2944,7 @@ void testPlannerAdaptiveLevelCapTruncates()
   config.adaptiveStepFillers = 1;
   config.maxAdaptiveLevels = 0;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   const fr::FillerRepairResult result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
@@ -2965,7 +2965,7 @@ void testPlannerAdaptiveLevelCapTruncates()
 
 void testPlannerAdaptiveContinuesPastUnchangedBlocking()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20)
       .place(100, fillerMaster(4, kVt1), 0, 0)
       .place(101, fillerMaster(4, kVt1), 0, 4)
@@ -2996,7 +2996,7 @@ void testPlannerAdaptiveContinuesPastUnchangedBlocking()
   fr::RepairConfig config;
   config.adaptiveStepFillers = 1;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   const fr::FillerRepairResult result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
@@ -3024,7 +3024,7 @@ void testPlannerAdaptiveContinuesPastUnchangedBlocking()
 // completeness and would have mislabeled it definitive.
 void testPlannerDefinitiveReflectsLastWindow()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 18)
       .place(102, cellMaster(kVt2), 0, 0)   // anchor [0,4)
       .place(140, fillerMaster(2, kVt1), 0, 4)   // touches anchor -> in L0
@@ -3056,7 +3056,7 @@ void testPlannerDefinitiveReflectsLastWindow()
   // L0 (1 filler, space 2) fits; adaptive step (7 fillers) far exceeds 50.
   config.checkerCallBudgetPerWindow = 50;
   config.adaptiveStepFillers = 6;
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   const auto result = planner.repair(request);
   EXPECT_TRUE(!result.hasSolution);
@@ -3074,7 +3074,7 @@ void testPlannerDefinitiveReflectsLastWindow()
 
 void testGateBaselineUnexpectedInWindowAborts()
 {
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   const fr::Violation extra = makeViolation(
@@ -3100,7 +3100,7 @@ void testGateBaselineUnexpectedInWindowAborts()
 
 void testGateBaselineHaloExtraAllowed()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
@@ -3131,7 +3131,7 @@ void testGateBaselineHaloExtraAllowed()
 
 void testGateBaselineOutsideGuardOriginalSkipped()
 {
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   const fr::Violation inGuard = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   const fr::Violation outsideGuard = makeViolation(
@@ -3157,7 +3157,7 @@ void testGateBaselineOutsideGuardOriginalSkipped()
 
 void testGateResidualOneToOne()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
@@ -3187,7 +3187,7 @@ void testGateResidualOneToOne()
 
 void testGateBatchExtraResultRejected()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
@@ -3219,7 +3219,7 @@ void testGateBatchExtraResultRejected()
 
 void testGateSingleWrongEchoOnBaseline()
 {
-  fr::PlannerTestDataSource design;
+  fr::TestPlacementView design;
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   ResultScriptedChecker checker;
@@ -3244,7 +3244,7 @@ void testGateSingleWrongEchoOnBaseline()
 
 void testGateStatusNotCheckedCarriesOn()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20)
       .place(500, fillerMaster(2, kVt1), 0, 4)
       .place(501, fillerMaster(2, kVt1), 0, 8);
@@ -3284,7 +3284,7 @@ void testGateStatusNotCheckedCarriesOn()
 
 void testGateFatalDiagMakesUnusable()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
@@ -3319,7 +3319,7 @@ void testGateFatalDiagMakesUnusable()
 
 void testGateNewViolationNoRowsGoesHalo()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
   const fr::Violation original = makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
@@ -3436,7 +3436,7 @@ void testRuleDistanceFallback()
   EXPECT_EQ(fr::estimateRuleDistance({zero, smaller}, 3), 5);
 }
 
-fr::FillerDomain makeDomain(const fr::PlannerTestDataSource& design,
+fr::FillerDomain makeDomain(const fr::TestPlacementView& design,
                             fr::InstanceId id,
                             std::initializer_list<fr::MasterId> targets)
 {
@@ -3450,7 +3450,7 @@ fr::FillerDomain makeDomain(const fr::PlannerTestDataSource& design,
 
 void testEnumerateCompleteBudgetBoundary()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 4)
       .place(500, fillerMaster(2, kVt1), 0, 0)
       .place(501, fillerMaster(2, kVt1), 0, 2);
@@ -3477,7 +3477,7 @@ void testEnumerateCompleteBudgetBoundary()
 
 void testEnumerateOverflowClamp()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   for (int i = 0; i < 40; ++i) {
     design.place(700 + i, fillerMaster(2, kVt1), 0, i * 2);
   }
@@ -3496,7 +3496,7 @@ void testEnumerateOverflowClamp()
 
 void testEnumerateSize3CapAndProducts()
 {
-  fr::PlannerTestDataSource design = makeLibrary();
+  fr::TestPlacementView design = makeLibrary();
   for (int i = 0; i < 5; ++i) {
     design.place(800 + i, fillerMaster(2, kVt1), 0, i * 2);
   }
@@ -3553,9 +3553,9 @@ const std::vector<std::vector<std::tuple<int, int, int>>> kRows = {
 };
 
 // Instance id = row*1000 + column index. Std cells: 1008,1011,2004,2011.
-fr::PlannerTestDataSource build()
+fr::TestPlacementView build()
 {
-  fr::PlannerTestDataSource d;
+  fr::TestPlacementView d;
   d.setSiteWidth(1);
   for (const int w : {2, 3, 4, 8}) {
     for (const int vt : {0, 1}) {
@@ -3584,7 +3584,7 @@ fr::PlannerTestDataSource build()
 // (1011); the window follows the violation footprint to reach the fix.
 void testPlannerUserGridMwMs1()
 {
-  fr::PlannerTestDataSource design = grid::build();
+  fr::TestPlacementView design = grid::build();
   fr::PlannerTestRules rules;  // MW=MS=1 on all four rule classes
   rules.mwIntra = 1;
   rules.msIntra = 1;
@@ -3597,7 +3597,7 @@ void testPlannerUserGridMwMs1()
   anchor.rowId = 1;
   anchor.x = 36;
 
-  fr::PlannerTestOracle snapshotChecker(design, rules);
+  fr::TestRepairOracle snapshotChecker(design, rules);
   fr::OracleRequest snapReq;
   snapReq.requestId = 0;
   snapReq.targetPlace = anchor;
@@ -3605,10 +3605,10 @@ void testPlannerUserGridMwMs1()
   const auto snapshot = snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
   EXPECT_EQ(snapshot.size(), 2u);  // two corner-touch inter-row MS at [49,50)
 
-  fr::PlannerTestOracle checker(design, rules);
+  fr::TestRepairOracle checker(design, rules);
   fr::RepairConfig config;
   config.verbose = verbose();
-  fr::internal::FillerRepairPlanner planner(design, checker, config);
+  fr::internal::RepairPlanner planner(design, checker, config);
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchor;
@@ -3627,8 +3627,8 @@ void testPlannerUserGridMwMs1()
   EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), grid::filler(4, 0));
 
   // Same input -> identical result (planner determinism).
-  fr::PlannerTestOracle checker2(design, rules);
-  fr::internal::FillerRepairPlanner planner2(design, checker2, config);
+  fr::TestRepairOracle checker2(design, rules);
+  fr::internal::RepairPlanner planner2(design, checker2, config);
   const auto result2 = planner2.repair(request);
   EXPECT_TRUE(result2.hasSolution);
   EXPECT_EQ(result2.changes.size(), 1u);
@@ -3688,7 +3688,7 @@ void registerPlannerTests()
       {"candidates_polarity_only_filter_diagnosed",
        testCandidatesPolarityOnlyFilterDiagnosed},
       {"planner_data_source_caches_follow_mutation",
-       testPlannerTestDataSourceCachesFollowMutation},
+       testTestPlacementViewCachesFollowMutation},
       {"synthetic_bottom_polarity_derived",
        testSyntheticBottomPolarityDerived},
       {"enumeration_order_and_completeness", testEnumerationOrderAndCompleteness},
@@ -3749,7 +3749,7 @@ void registerPlannerTests()
 
   for (const Test& test : tests) {
     ::testing::RegisterTest(
-        "FillerRepairPlanner", test.name, nullptr, nullptr, __FILE__, __LINE__,
+        "RepairPlanner", test.name, nullptr, nullptr, __FILE__, __LINE__,
         [fn = test.fn]() -> ::testing::Test* { return new PlannerTest(fn); });
   }
 }

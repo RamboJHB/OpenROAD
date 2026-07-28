@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "FillerRepairPlanner.h"
+#include "RepairPlanner.h"
 #include "infrastructure/Grid.h"
 #include "infrastructure/Objects.h"
 #include "infrastructure/fillerSetting.h"
@@ -23,8 +23,8 @@
 namespace dpl2 {
 namespace fillerRepair {
 
-class FillerRepairEngine::Impl final : private PlannerDataSource,
-                                       private PlannerOracle
+class FillerRepairEngine::Impl final : private PlacementView,
+                                       private RepairOracle
 {
  public:
   Impl(Grid* grid, Network* network);
@@ -1497,7 +1497,7 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   FillerRepairRequest request;
   request.targetPlace = target;
   request.violations = snapshot.violations;
-  internal::FillerRepairPlanner planner(*this, *this, config_.repair);
+  internal::RepairPlanner planner(*this, *this, config_.repair);
   const FillerRepairResult planned = planner.repair(request);
 
   result.hasSolution = planned.hasSolution;

@@ -1,10 +1,16 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Filler-repair planner: the complete deterministic search pipeline
-// (spec sections 3.2 / 5.4 / 6.2-6.9), merged into one module:
+// The deterministic search pipeline (spec 3.2 / 5.4 / 6.2-6.9), in the order
+// a repair flows through it:
 //   swap model -> violation signatures -> repair window -> ranking ->
 //   subset enumeration -> oracle gate -> pipeline driver.
+//
+// These stages only make sense together -- each consumes the previous one's
+// output -- so they share a module. The two things that are NOT stages live
+// on their own because the runtime engine implements them: PlacementView
+// (data in) and RepairOracle (legality out).
+//
 // The planner owns no state between repair() calls and never mutates the
 // design; the final checker stays the only legality oracle.
 
@@ -17,8 +23,10 @@
 #include <string>
 #include <vector>
 
-#include "PlannerDataSource.h"
-#include "Types.h"
+#include "Debug.h"
+#include "PlacementView.h"
+#include "RepairOracle.h"
+#include "RepairTypes.h"
 
 namespace dpl2::fillerRepair {
 
@@ -63,7 +71,7 @@ using Overlay = std::vector<Swap>;
 // be a placed filler and the new master a same-width/same-height filler
 // master different from the current one. On failure *error (if given)
 // receives the reason.
-std::optional<Swap> makeSwap(const PlannerDataSource& view,
+std::optional<Swap> makeSwap(const PlacementView& view,
                              InstanceId instanceId,
                              MasterId newMasterId,
                              std::string* error = nullptr);
@@ -74,7 +82,7 @@ std::string canonicalKey(const Overlay& overlay);
 
 // Wire conversion, deterministic order (sorted by instanceId).
 ipl::FillerChanges toFillerChanges(const Overlay& overlay,
-                                   const PlannerDataSource& dataSource);
+                                   const PlacementView& dataSource);
 
 struct SwapGenerationResult
 {
@@ -88,7 +96,7 @@ struct SwapGenerationResult
 
 SwapGenerationResult generateSwaps(
     const RepairWindow& window,
-    const PlannerDataSource& view,
+    const PlacementView& view,
     const DebugLog& log);
 
 // --- violation signatures / relatedness (spec 6.2) -------------------------
@@ -114,7 +122,7 @@ struct NormalizedViolation
 // violation (signature summary -> derived footprint).
 std::vector<NormalizedViolation> normalizeViolations(
     const FillerRepairRequest& request,
-    const PlannerDataSource& view,
+    const PlacementView& view,
     const DebugLog& log);
 
 // Pinned signature match across two checker snapshots (see file header).
@@ -165,7 +173,7 @@ struct RepairWindow
 RepairWindow buildWindow(int level,
                          const TargetPlace& anchor,
                          const std::vector<NormalizedViolation>& violations,
-                         const PlannerDataSource& view,
+                         const PlacementView& view,
                          DbCoord ruleDistance,
                          const DebugLog& log);
 
@@ -178,7 +186,7 @@ RepairWindow buildWindow(int level,
 RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                   const TargetPlace& anchor,
                                   const std::vector<Violation>& blocking,
-                                  const PlannerDataSource& view,
+                                  const PlacementView& view,
                                   int fillersPerRow,
                                   const DebugLog& log);
 
@@ -197,7 +205,7 @@ std::vector<FillerDomain> rankFillers(
     const TargetPlace& anchor,
     const std::vector<NormalizedViolation>& violations,
     const RepairWindow& window,
-    const PlannerDataSource& view,
+    const PlacementView& view,
     const DebugLog& log);
 
 // --- subset enumeration (spec 6.7, V2.1 #9/#10) ----------------------------
@@ -214,55 +222,6 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
                                   const DebugLog& log);
 
 // --- oracle gate: baseline-delta accept (spec 6.8, 4.2) --------------------
-
-// Planner-internal oracle protocol. These types live with their sole owner
-// instead of the shared model in Types.h. Runtime callers never see an oracle
-// request id or status; FillerRepairEngine translates final-checker results at
-// this boundary while the FillerChanges payload remains unchanged.
-using OracleRequestId = int32_t;
-
-struct OracleRequest
-{
-  OracleRequestId requestId = -1;  // planner-generated, unique per batch
-  TargetPlace targetPlace;
-  Region guardRegion;  // repair window expanded by a two-cell guard halo
-  ipl::FillerChanges fillerChanges;  // one atomic overlay candidate
-};
-
-enum class OracleStatus
-{
-  Checked,
-  InvalidOverlay,
-  CheckerError
-};
-
-struct OracleResult
-{
-  OracleRequestId requestId = -1;  // must echo OracleRequest.requestId
-  OracleStatus status = OracleStatus::CheckerError;
-  bool isLegal = false;  // meaningful only when status == Checked
-  std::vector<Violation> violations;
-  std::vector<Diagnostic> diagnostics;
-};
-
-// Runtime and test implementations provide the oracle. The interface is not
-// a second DRC checker: the final ImplantLayerChecker remains the sole source
-// of legality.
-class PlannerOracle
-{
- public:
-  virtual ~PlannerOracle() = default;
-
-  virtual OracleResult checkPlaceWithOverlay(const OracleRequest& request) = 0;
-  virtual std::vector<OracleResult> checkPlaceWithOverlays(
-      const std::vector<OracleRequest>& requests) = 0;
-};
-
-inline bool isOracleSnapshotClean(const OracleResult& result)
-{
-  return result.status == OracleStatus::Checked && result.isLegal
-         && result.violations.empty();
-}
 
 // Delta classification of one checker result against the baseline.
 struct DeltaSummary
@@ -282,8 +241,8 @@ struct DeltaSummary
 class OracleGate
 {
  public:
-  OracleGate(const PlannerDataSource& dataSource,
-             PlannerOracle& oracle,
+  OracleGate(const PlacementView& dataSource,
+             RepairOracle& oracle,
              const TargetPlace& anchor,
              const std::vector<Violation>& originals,
              DbCoord siteWidth,
@@ -339,8 +298,8 @@ class OracleGate
   // returns false when the snapshot is stale/inconsistent.
   bool checkBaselineConsistency(const RepairWindow& window);
 
-  const PlannerDataSource& data_source_;
-  PlannerOracle& oracle_;
+  const PlacementView& data_source_;
+  RepairOracle& oracle_;
   const TargetPlace& anchor_;
   const std::vector<Violation>& originals_;
   DbCoord site_width_;
@@ -361,18 +320,18 @@ class OracleGate
 
 namespace internal {
 
-class FillerRepairPlanner
+class RepairPlanner
 {
  public:
-  FillerRepairPlanner(const PlannerDataSource& view,
-                      PlannerOracle& oracle,
+  RepairPlanner(const PlacementView& view,
+                      RepairOracle& oracle,
                       RepairConfig config = {});
 
   FillerRepairResult repair(const FillerRepairRequest& request);
 
  private:
-  const PlannerDataSource& view_;
-  PlannerOracle& oracle_;
+  const PlacementView& view_;
+  RepairOracle& oracle_;
   RepairConfig config_;
   DebugLog log_;
   // Guards spec 3.3's no-reentrancy contract AND flags concurrent use of one

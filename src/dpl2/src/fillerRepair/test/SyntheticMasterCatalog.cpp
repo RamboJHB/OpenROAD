@@ -175,7 +175,7 @@ std::vector<MasterDescription> SyntheticMasterCatalog::describeMasters(
   return result;
 }
 
-void SyntheticMasterCatalog::registerInto(PlannerTestDataSource& design) const
+void SyntheticMasterCatalog::registerInto(TestPlacementView& design) const
 {
   std::vector<MasterId> fillerIds;
   for (const auto& [id, d] : described_) {

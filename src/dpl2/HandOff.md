@@ -40,7 +40,7 @@ bool updateFillerRepair(PhysDesMgr* desMgr,
 The checker-owned engine borrows Grid/Network and its `Impl` privately owns an
 oracle checker, immutable planner snapshot and oracle calls. It does not import hierarchy cells or repaint a
 second Grid. The pure search pipeline is
-`internal::FillerRepairPlanner`. Initial `initFillerRepair()` must succeed before
+`internal::RepairPlanner`. Initial `initFillerRepair()` must succeed before
 use: until it does, precheck and repair fail closed
 (`precheck_not_initialized` / `engine_not_initialized`).
 
@@ -318,7 +318,7 @@ optional planner debug logging is disabled.
   `Layer::TechLayerId`; it joins `PhysLibCell` shapes to checker layers by
   `TechLayerRelativeID`, not by a repeated layer-name lookup.
 - `Types.h` remains a standalone bottom-level model header. Oracle-only
-  `OracleRequest`/`OracleResult`/`OracleStatus` and `PlannerOracle` live in
+  `OracleRequest`/`OracleResult`/`OracleStatus` and `RepairOracle` live in
   `OracleGate.h`; the public `RepairOutcome` remains in `FillerRepairEngine.h`.
   This avoids a second wire format and keeps Engine/Planner/Oracle dependencies
   one-way.

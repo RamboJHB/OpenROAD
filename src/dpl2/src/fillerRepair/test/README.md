@@ -5,7 +5,7 @@ This directory moves with `fillerRepair/` and contains 153 portable tests:
 No source below this directory includes the repository's fake UDM tree or
 depends on its `E2ETestProvider`.
 
-The same-level `FillerRepairPlannerTest.cpp`, `PlannerTestDataSource.h`,
+The same-level `RepairPlannerTest.cpp`, `TestPlacementView.h`,
 `PlannerTestOracle.*` and `SyntheticMasterCatalog.*` sources own all planner,
 window, ranker, subset-search and OracleGate cases. They compile against the
 destination's real wire types but construct no UDM
@@ -17,7 +17,7 @@ objects.
   five target-local filler:std-cell ratios, local-ratio invariants, plus
   target-related detection when a changed neighbor is outside the guard;
 - 33 end-to-end cases that pass checker snapshots to
-  `internal::FillerRepairPlanner`, apply its returned overlay to the final
+  `internal::RepairPlanner`, apply its returned overlay to the final
   checker, and cover clean/repair/failure, deterministic batching, candidate
   and budget boundaries, third-VT reachability, baseline consistency,
   same-size changes, new-violation rejection and multi-swap minimum width. The
@@ -29,7 +29,7 @@ objects.
   triple overlap and touching legal spans.
 
 The E2E source uses no fake checker, fake placement view or fake UDM data. The
-small `PortablePlannerDataSource` in the source is only the planner projection
+small `PortablePlacementView` in the source is only the planner projection
 of the same `ImplantInput` owned by `ImplantLayerCheckerHelper`.
 Every width/spacing path runs at exact target-local-window ratios of 50:50,
 30:70, 20:80, 10:90 and 5:95 while preserving implant geometry and the

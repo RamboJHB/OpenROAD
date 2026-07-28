@@ -13,7 +13,7 @@
 
 #include "drc/ImplantLayerChecker.h"
 #include "drc/ImplantLayerCheckerHelper.h"
-#include "fillerRepair/FillerRepairPlanner.h"
+#include "fillerRepair/RepairPlanner.h"
 
 namespace dpl2 {
 namespace ipl {
@@ -727,10 +727,10 @@ fr::VtId toPlannerVt(Layer::Vt vt)
 // checker's official test helper.  It deliberately implements only the pure
 // planner boundary: no UDM session, DEF/LEF reader, or database mutation is
 // required to exercise planner -> overlay checker end to end.
-class PortablePlannerDataSource final : public fr::PlannerDataSource
+class PortablePlacementView final : public fr::PlacementView
 {
  public:
-  explicit PortablePlannerDataSource(
+  explicit PortablePlacementView(
       const ImplantInput& input,
       std::optional<std::vector<fr::MasterId>> configuredFillers = std::nullopt)
       : site_width_(input.siteWidth)
@@ -854,10 +854,10 @@ class PortablePlannerDataSource final : public fr::PlannerDataSource
   std::vector<fr::MasterId> filler_master_ids_;
 };
 
-class PortableCheckerOracle final : public fr::PlannerOracle
+class PortableCheckerOracle final : public fr::RepairOracle
 {
  public:
-  PortableCheckerOracle(const PortablePlannerDataSource& view,
+  PortableCheckerOracle(const PortablePlacementView& view,
                         const ImplantLayerChecker& checker)
       : view_(view), checker_(checker)
   {
@@ -977,7 +977,7 @@ class PortableCheckerOracle final : public fr::PlannerOracle
     return result;
   }
 
-  const PortablePlannerDataSource& view_;
+  const PortablePlacementView& view_;
   const ImplantLayerChecker& checker_;
   int request_count_ = 0;
   int batch_count_ = 0;
@@ -1084,7 +1084,7 @@ class PlannerCheckerFixture
     checker_ = std::make_unique<ImplantLayerChecker>(helper_.getGrid(),
                                                      helper_.getNetwork());
     helper_.initChecker(*checker_);
-    view_ = std::make_unique<PortablePlannerDataSource>(
+    view_ = std::make_unique<PortablePlacementView>(
         input_, std::move(configuredFillers));
     oracle_ = std::make_unique<PortableCheckerOracle>(*view_, *checker_);
   }
@@ -1094,7 +1094,7 @@ class PlannerCheckerFixture
     return checker_->getDiags();
   }
 
-  const PortablePlannerDataSource& view() const { return *view_; }
+  const PortablePlacementView& view() const { return *view_; }
   PortableCheckerOracle& oracle() { return *oracle_; }
 
   fr::OracleResult baseline(RowId rowId,
@@ -1112,7 +1112,7 @@ class PlannerCheckerFixture
                                 fr::RepairConfig config = {},
                                 MasterId targetMaster = C1_MASTER)
   {
-    fr::internal::FillerRepairPlanner planner(*view_, *oracle_, config);
+    fr::internal::RepairPlanner planner(*view_, *oracle_, config);
     return planner.repair(fr::FillerRepairRequest{
         plannerTarget(rowId, colId, targetMaster), violations});
   }
@@ -1152,7 +1152,7 @@ class PlannerCheckerFixture
   std::vector<PlacedInst> before_;
   ImplantLayerCheckerHelper helper_;
   std::unique_ptr<ImplantLayerChecker> checker_;
-  std::unique_ptr<PortablePlannerDataSource> view_;
+  std::unique_ptr<PortablePlacementView> view_;
   std::unique_ptr<PortableCheckerOracle> oracle_;
 };
 
@@ -1169,7 +1169,7 @@ void expectPlannerRepairsWithFinalChecker(RowId rowId,
   helper.initChecker(checker);
   ASSERT_TRUE(checker.getDiags().empty());
 
-  PortablePlannerDataSource view(immutableInput);
+  PortablePlacementView view(immutableInput);
   PortableCheckerOracle oracle(view, checker);
   const fr::TargetPlace target = plannerTarget(rowId, colId);
   const fr::Region snapshot = snapshotRegion(rowId, colId);
@@ -1180,7 +1180,7 @@ void expectPlannerRepairsWithFinalChecker(RowId rowId,
   ASSERT_FALSE(baseline.isLegal);
   ASSERT_FALSE(baseline.violations.empty());
 
-  fr::internal::FillerRepairPlanner planner(view, oracle);
+  fr::internal::RepairPlanner planner(view, oracle);
   const fr::FillerRepairResult repaired
       = planner.repair(fr::FillerRepairRequest{target, baseline.violations});
   ASSERT_TRUE(repaired.hasSolution) << plannerDiagnostics(repaired);

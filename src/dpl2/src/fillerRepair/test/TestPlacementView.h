@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// In-memory PlannerDataSource for unit tests.
+// In-memory PlacementView for unit tests.
 //
-// A PlannerTestDataSource is built fluently:
+// A TestPlacementView is built fluently:
 //   design.setSiteWidth(1)
 //         .addMaster(41, /*w=*/4, /*h=*/1, /*filler=*/true, /*vt=*/1)
 //         .addRow(0, 0, 16)
@@ -11,7 +11,7 @@
 // It is deliberately dumb: no legality checks on construction, so tests can
 // build broken layouts (gaps, overlaps) for the pre-check cases.
 //
-// PlannerDataSource's reference-returning queries are served from caches that
+// PlacementView's reference-returning queries are served from caches that
 // every mutator invalidates and the next query rebuilds. Unlike runtime
 // views this object stays mutable, so it is SINGLE-THREADED by design
 // (tests only) -- the thread-safety contract lives with the runtime engine.
@@ -23,20 +23,20 @@
 #include <utility>
 #include <vector>
 
-#include "fillerRepair/PlannerDataSource.h"
+#include "fillerRepair/PlacementView.h"
 
 namespace dpl2::fillerRepair {
 
-class PlannerTestDataSource : public PlannerDataSource
+class TestPlacementView : public PlacementView
 {
  public:
-  PlannerTestDataSource& setSiteWidth(DbCoord w)
+  TestPlacementView& setSiteWidth(DbCoord w)
   {
     site_width_ = w;
     return *this;
   }
 
-  PlannerTestDataSource& addMaster(MasterId id, DbCoord width, DbCoord height, bool isFiller, VtId vt,
+  TestPlacementView& addMaster(MasterId id, DbCoord width, DbCoord height, bool isFiller, VtId vt,
                         BandPolarity bottomBandPolarity = BandPolarity::N)
   {
     masters_[id] = MasterInfo{id, width, height, isFiller, vt, bottomBandPolarity};
@@ -44,14 +44,14 @@ class PlannerTestDataSource : public PlannerDataSource
     return *this;
   }
 
-  PlannerTestDataSource& addRow(RowId id, DbCoord xl, DbCoord xh)
+  TestPlacementView& addRow(RowId id, DbCoord xl, DbCoord xh)
   {
     row_spans_[id] = XInterval{xl, xh};
     caches_dirty_ = true;
     return *this;
   }
 
-  PlannerTestDataSource& place(InstanceId id, MasterId masterId, RowId rowId, DbCoord x,
+  TestPlacementView& place(InstanceId id, MasterId masterId, RowId rowId, DbCoord x,
                     Orient orient = Orient::R0)
   {
     const auto it = masters_.find(masterId);
@@ -61,14 +61,14 @@ class PlannerTestDataSource : public PlannerDataSource
     return *this;
   }
 
-  PlannerTestDataSource& remove(InstanceId id)
+  TestPlacementView& remove(InstanceId id)
   {
     instances_.erase(id);
     caches_dirty_ = true;
     return *this;
   }
 
-  PlannerTestDataSource& setFillerMasterIds(std::vector<MasterId> ids)
+  TestPlacementView& setFillerMasterIds(std::vector<MasterId> ids)
   {
     configured_fillers_ = std::move(ids);
     have_configured_fillers_ = true;
@@ -76,7 +76,7 @@ class PlannerTestDataSource : public PlannerDataSource
     return *this;
   }
 
-  // PlannerDataSource -----------------------------------------------------------
+  // PlacementView -----------------------------------------------------------
 
   const std::vector<RowId>& rows() const override
   {

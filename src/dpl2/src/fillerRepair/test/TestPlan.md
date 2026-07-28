@@ -52,7 +52,7 @@ checker/engine matrix additionally exercises engine metadata extraction through
 The portable planner suite also pins `RepairConfig::maxAdaptiveLevels`:
 reaching the cap ends a no-solution search with the TRUNCATED verdict (never
 "definitive") and empty changes
-(`planner.FillerRepairPlanner.planner_adaptive_level_cap_truncates`).
+(`planner.RepairPlanner.planner_adaptive_level_cap_truncates`).
 
 Each dense fixture has eight rows and 200 sites per row. A density window spans
 20 columns and every valid target row +/-1: 40 sites for the boundary-row
@@ -94,7 +94,7 @@ source fallback.
 
 The 82 planner tests and their database-free doubles are same-level sources under
 `fillerRepair/test/` and move with the feature. The planner suite directly validates the internal
-`PlannerOracle` protocol, including missing, duplicate, unknown and extra
+`RepairOracle` protocol, including missing, duplicate, unknown and extra
 `OracleResult` records; every batch-cardinality mismatch fails closed.
 
 Only the 101 fake-UDM checker/engine cases, compatibility headers and runtime provider

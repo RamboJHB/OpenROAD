@@ -1,26 +1,24 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Shared base types for the filler VT overlay repair planner.
+// Leaf data model for filler VT overlay repair: ids, geometry, the violation
+// model, diagnostics and the planner entry/exit records. No behavior beyond
+// trivial accessors, and no dependency on the two seams (PlacementView,
+// RepairOracle) or on the search pipeline -- everything else includes this.
 //
-// The planner is a deterministic, non-mutating component (spec section 3.1): it
-// depends only on PlannerDataSource plus the planner-internal oracle protocol in
-// OracleGate.h. The change record is the infrastructure-owned
-// dpl2::FillerCellRecord; checker APIs group records as ipl::FillerChanges.
-// Test builds provide the same UDM ID/value types through their test-only UDM
-// shim.
+// The change record is the infrastructure-owned dpl2::FillerCellRecord;
+// checker APIs group records as ipl::FillerChanges. Test builds provide the
+// same UDM ID/value types through their test-only UDM shim.
 //
 // Conventions:
 //  - All x coordinates are DBU. Site alignment comes from
-//    PlannerDataSource::siteWidth().
+//    PlacementView::siteWidth().
 //  - All intervals are half-open [xl, xh).
 //  - Row ranges in Region are inclusive [rowLo, rowHi].
 
 #pragma once
 
 #include <cstdint>
-#include <cstdio>
-#include <sstream>
 #include <optional>
 #include <string>
 #include <utility>
@@ -122,24 +120,6 @@ inline Diagnostic makeDiag(Severity severity, std::string code, std::string mess
   return Diagnostic{severity, std::move(code), std::move(message)};
 }
 
-// --- Infrastructure candidate query ---------------------------------------
-
-struct MasterCandidateRequest
-{
-  InstanceId fillerInstanceId = 0;
-};
-
-struct MasterCandidate
-{
-  MasterId masterId = 0;
-};
-
-struct MasterCandidateResult
-{
-  std::vector<MasterCandidate> candidates;
-  std::vector<Diagnostic> diagnostics;
-};
-
 // --- Shared planner model (spec sections 5.1 / 5.2) -------------------------
 
 // Anchor: the std cell changed by upstream opto/ECO. Not a repair window.
@@ -229,50 +209,6 @@ struct FillerRepairResult
   bool hasSolution = false;
   ipl::FillerChanges changes;
   std::vector<Diagnostic> diagnostics;
-};
-
-// --- debug log (merged from Log.h) ---------------------------------------
-// Contract for messages: each line states cause -> effect so a transcript
-// reads as a decision chain. Output goes to stdout with a "[fr][stage]"
-// prefix and is fully disabled by default.
-
-// Builds a string from stream-printable parts: cat("row=", 3, " x=", 17).
-template <typename... Parts>
-std::string cat(Parts&&... parts)
-{
-  std::ostringstream os;
-  (os << ... << parts);
-  return os.str();
-}
-
-inline std::string show(const XInterval& iv)
-{
-  return cat('[', iv.xl, ',', iv.xh, ')');
-}
-
-inline std::string show(const Region& r)
-{
-  return cat(show(r.x), " rows[", r.rowLo, ',', r.rowHi, ']');
-}
-
-class DebugLog
-{
- public:
-  explicit DebugLog(bool enabled = false) : enabled_(enabled) {}
-
-  bool enabled() const { return enabled_; }
-  void setEnabled(bool enabled) { enabled_ = enabled; }
-
-  void msg(const char* stage, const std::string& text) const
-  {
-    if (enabled_) {
-      std::printf("[fr][%s] %s\n", stage, text.c_str());
-      std::fflush(stdout);
-    }
-  }
-
- private:
-  bool enabled_;
 };
 
 }  // namespace dpl2::fillerRepair

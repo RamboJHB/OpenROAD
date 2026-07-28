@@ -1,25 +1,44 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Read-only placement/DB view consumed by the repair planner.
+// The planner's read-only view of the placement: the first of the two seams
+// the runtime engine implements (the other is RepairOracle).
 //
-// This is the planner's only window into the infrastructure database. The
-// FillerRepairEngine::Impl implements this contract over its UDM snapshot.
-// The planner never mutates the design; commit stays with the infrastructure.
+// It answers "what is placed where, and which masters may replace a filler" --
+// nothing else. The planner never mutates the design; commit stays with the
+// infrastructure owner.
 //
-// Thread model: after initialization the runtime engine snapshot is immutable. All
-// const methods must be safe for CONCURRENT readers (any
-// internal lazy cache must synchronize itself), and returned references stay
-// valid for the view's lifetime. Test implementations may use mutable builders
-// but are test-only.
+// Thread model: after initialization the runtime snapshot is immutable, so all
+// const methods must be safe for CONCURRENT readers (any internal lazy cache
+// must synchronize itself) and returned references stay valid for the view's
+// lifetime. Test implementations may use mutable builders but are test-only.
 
 #pragma once
 
 #include <vector>
 
-#include "Types.h"
+#include "Debug.h"
+#include "RepairTypes.h"
 
 namespace dpl2::fillerRepair {
+
+// --- Infrastructure candidate query ---------------------------------------
+
+struct MasterCandidateRequest
+{
+  InstanceId fillerInstanceId = 0;
+};
+
+struct MasterCandidate
+{
+  MasterId masterId = 0;
+};
+
+struct MasterCandidateResult
+{
+  std::vector<MasterCandidate> candidates;
+  std::vector<Diagnostic> diagnostics;
+};
 
 struct MasterInfo
 {
@@ -49,10 +68,10 @@ struct PlacedInstance
   bool isFiller = false;
 };
 
-class PlannerDataSource
+class PlacementView
 {
  public:
-  virtual ~PlannerDataSource() = default;
+  virtual ~PlacementView() = default;
 
   // Sorted ascending. The reference stays valid for the data source's lifetime;
   // window building and guard clamping call this on every step, so
@@ -90,7 +109,7 @@ class PlannerDataSource
 };
 
 // Occupied x span of a placed instance (width comes from its master).
-inline XInterval instanceSpan(const PlannerDataSource& view, const PlacedInstance& inst)
+inline XInterval instanceSpan(const PlacementView& view, const PlacedInstance& inst)
 {
   const MasterInfo* master = view.masterInfo(inst.masterId);
   const DbCoord width = master != nullptr ? master->width : 0;
@@ -106,7 +125,7 @@ inline XInterval instanceSpan(const PlannerDataSource& view, const PlacedInstanc
 
 // First index whose right edge lies strictly right of `bound` (the first
 // instance not entirely to the left of it).
-inline int firstRightEdgeAfter(const PlannerDataSource& view,
+inline int firstRightEdgeAfter(const PlacementView& view,
                                const std::vector<PlacedInstance>& all,
                                DbCoord bound)
 {
@@ -138,15 +157,15 @@ inline int firstStartAtOrAfter(const std::vector<PlacedInstance>& all,
   return lo;
 }
 
-// --- inline implementations (merged from PlannerDataSource.cpp) ---------
+// --- inline implementations (merged from PlacementView.cpp) ---------
 
-inline const std::vector<PlacedInstance>& PlannerDataSource::emptyInstances()
+inline const std::vector<PlacedInstance>& PlacementView::emptyInstances()
 {
   static const std::vector<PlacedInstance> kEmpty;
   return kEmpty;
 }
 
-inline MasterCandidateResult PlannerDataSource::getUsableMasterCandidates(
+inline MasterCandidateResult PlacementView::getUsableMasterCandidates(
     const MasterCandidateRequest& request) const
 {
   MasterCandidateResult result;

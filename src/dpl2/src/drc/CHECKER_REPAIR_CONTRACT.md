@@ -76,7 +76,7 @@ all carry the same `ipl::FillerChanges` containing
 `dpl2::FillerCellRecord` records.
 
 The planner-only protocol is owned by `OracleGate.h` and is named
-`PlannerOracle` plus `OracleRequest`/`OracleResult`/`OracleStatus`; these names
+`RepairOracle` plus `OracleRequest`/`OracleResult`/`OracleStatus`; these names
 are intentionally distinct from final-checker `ImplantLayerChecker` and
 `ipl::CheckResult`. Shared planner geometry/model types remain in standalone
 `Types.h`. Shared edit records remain in `infrastructure/Objects.h`; checker
@@ -85,7 +85,7 @@ source owns only its vector alias and API. Checker DRC behavior is unchanged.
 ## 2026-07-19 fillerRepair wire simplification
 
 No checker source or DRC behavior changed. fillerRepair removed its private,
-reduced change-record representation. `PlannerDataSource` now materializes the
+reduced change-record representation. `PlacementView` now materializes the
 exact infrastructure-owned `FillerCellRecord` above when an overlay is created; the engine
 passes that record unchanged to `checkPlaceWithOverlays()` and returns the
 accepted records unchanged to opto. This pins all three boundaries to
@@ -215,7 +215,7 @@ engine.
 All portable final-checker calls/assertions live in
 `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`. They construct dense
 `ImplantInput` directly through `ImplantLayerCheckerHelper` and exercise the
-final checker plus `FillerRepairPlanner`; no destination fixture provider or
+final checker plus `RepairPlanner`; no destination fixture provider or
 DEF/LEF reader is required. The 82 database-free planner tests and their
 synthetic doubles are same-level sources under `fillerRepair/test` and migrate with the
 feature. Runtime engine coverage, UDM-compatible test data and its provider

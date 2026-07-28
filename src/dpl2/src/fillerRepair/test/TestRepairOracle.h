@@ -31,8 +31,8 @@
 #include <map>
 #include <vector>
 
-#include "fillerRepair/FillerRepairPlanner.h"
-#include "PlannerTestDataSource.h"
+#include "fillerRepair/RepairPlanner.h"
+#include "TestPlacementView.h"
 
 namespace dpl2::fillerRepair {
 
@@ -44,10 +44,10 @@ struct PlannerTestRules
   DbCoord msInter = 0;
 };
 
-class PlannerTestOracle : public PlannerOracle
+class TestRepairOracle : public RepairOracle
 {
  public:
-  PlannerTestOracle(const PlannerTestDataSource& design, PlannerTestRules rules)
+  TestRepairOracle(const TestPlacementView& design, PlannerTestRules rules)
       : design_(design), rules_(rules)
   {
   }
@@ -80,7 +80,7 @@ class PlannerTestOracle : public PlannerOracle
                              const OracleRequest& request,
                              const std::map<InstanceId, MasterId>& overlay) const;
 
-  const PlannerTestDataSource& design_;
+  const TestPlacementView& design_;
   PlannerTestRules rules_;
   int request_count_ = 0;
   int batch_count_ = 0;

@@ -31,9 +31,9 @@
 #include <string>
 #include <vector>
 
-#include "fillerRepair/Types.h"
-#include "fillerRepair/PlannerDataSource.h"
-#include "PlannerTestDataSource.h"
+#include "fillerRepair/RepairTypes.h"
+#include "fillerRepair/PlacementView.h"
+#include "TestPlacementView.h"
 
 namespace dpl2::fillerRepair {
 
@@ -112,10 +112,10 @@ class SyntheticMasterCatalog
   // ascending master id. Non-filler input / no replacement -> diagnostics,
   // never an error.
 
-  // Sync every usable master into a PlannerTestDataSource so the planner data
+  // Sync every usable master into a TestPlacementView so the planner data
   // source and this catalog agree on width/height/vt (the planner validates each
   // candidate against view.masterInfo when constructing Swaps).
-  void registerInto(PlannerTestDataSource& design) const;
+  void registerInto(TestPlacementView& design) const;
 
   // Appendix-A library: F_FILL{8,4,3,2}_63S6T9{R,L,UL}_1 on layers
   // {VTS,VTL,VTUL}_{N,P}, widths in sites * siteWidth. Suffix mapping
