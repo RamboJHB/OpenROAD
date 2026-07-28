@@ -1,114 +1,81 @@
-cmake_minimum_required(VERSION 3.20)
+# SPDX-License-Identifier: BSD-3-Clause
+# Copyright (c) 2026, The OpenROAD Authors
+#
+# Portable fillerRepair tests. Added by ../CMakeLists.txt when
+# DPL2_FILLER_REPAIR_BUILD_TESTS is ON, so it links the module's targets
+# instead of re-listing its sources.
+#
+# Standalone (destination) use:
+#   cmake -S <...>/src/fillerRepair -B build \
+#         -DDPL2_FILLER_REPAIR_BUILD_TESTS=ON
+#   cmake --build build && ctest --test-dir build
+#
+# Point the payload at a destination's headers/libraries by defining
+# dpl2_filler_repair_deps first; supply the infrastructure/checker
+# implementation through DPL2_RUNTIME_LIBRARIES so it is linked once instead
+# of recompiled here.
 
-project(dpl2_filler_repair_tests LANGUAGES CXX)
-
-if(POLICY CMP0167)
-  cmake_policy(SET CMP0167 NEW)
-endif()
-
-include(CTest)
 include(GoogleTest)
 
-option(DPL2_ENABLE_ASAN "Build tests with AddressSanitizer" OFF)
-set(DPL2_SOURCE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../.." CACHE PATH
-    "Directory containing fillerRepair/, infrastructure/ and drc/")
-set(DPL2_DPL2_INCLUDE_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../include" CACHE PATH
-    "Directory containing dpl2/DePlace.h")
-set(DPL2_UDM_INCLUDE_DIRS "" CACHE STRING
-    "Destination UDM include directories")
-set(DPL2_UDM_LIBRARIES "" CACHE STRING
-    "Destination UDM libraries or CMake targets")
-set(DPL2_RUNTIME_LIBRARIES "" CACHE STRING
-    "Destination targets owning the existing dpl2 infrastructure/checker")
-
-find_package(GTest REQUIRED)
-find_package(Boost REQUIRED)
-find_package(TBB REQUIRED)
-include("${CMAKE_CURRENT_LIST_DIR}/../sources.cmake")
-
-# Database-free planner tests. The test doubles consume the same final wire
-# types as the checker but do not include a fake UDM fixture or provider.
-add_executable(
-  dpl2_filler_repair_planner_test
-  ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-  ${DPL2_FILLER_REPAIR_PORTABLE_PLANNER_TEST_SOURCES})
-target_compile_features(dpl2_filler_repair_planner_test PRIVATE cxx_std_17)
-target_compile_options(
-  dpl2_filler_repair_planner_test PRIVATE -Wall -Wextra -Werror)
-target_include_directories(
-  dpl2_filler_repair_planner_test
-  PRIVATE
-    "${DPL2_SOURCE_ROOT}"
-    "${DPL2_DPL2_INCLUDE_ROOT}"
-    ${DPL2_UDM_INCLUDE_DIRS})
-target_include_directories(
-  dpl2_filler_repair_planner_test SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
-target_link_libraries(
-  dpl2_filler_repair_planner_test
-  PRIVATE GTest::gtest_main ${DPL2_UDM_LIBRARIES})
-
-if(DPL2_ENABLE_ASAN)
-  target_compile_options(
-    dpl2_filler_repair_planner_test
-    PRIVATE -fsanitize=address -fno-omit-frame-pointer)
-  target_link_options(
-    dpl2_filler_repair_planner_test
-    PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+if(NOT DEFINED DPL2_RUNTIME_LIBRARIES)
+  set(DPL2_RUNTIME_LIBRARIES "" CACHE STRING
+      "Destination targets owning the existing dpl2 infrastructure/checker")
 endif()
 
+if(NOT TARGET GTest::gtest_main)
+  find_package(GTest REQUIRED)
+endif()
+
+set(DPL2_SRC_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
+
+# Database-free planner tests. The doubles implement the two seams
+# (PlacementView, RepairOracle) without any UDM fixture or provider.
+add_executable(
+  dpl2_filler_repair_planner_test
+  TestRepairOracle.cpp
+  SyntheticMasterCatalog.cpp
+  RepairPlannerTest.cpp)
+target_link_libraries(
+  dpl2_filler_repair_planner_test
+  PRIVATE GTest::gtest_main dpl2::fillerRepairPlanner)
+target_compile_options(
+  dpl2_filler_repair_planner_test PRIVATE -Wall -Wextra)
 gtest_discover_tests(
   dpl2_filler_repair_planner_test
   TEST_PREFIX "planner."
   DISCOVERY_TIMEOUT 30)
 
-# Prefer the destination's existing runtime targets so its exact infrastructure
-# and checker implementation are linked once. With no target supplied, compile
-# the sibling sources as a standalone fallback.
+# Real-checker E2E. Prefer the destination's own infrastructure/checker
+# targets; with none supplied, compile the sibling sources as a fallback so
+# the suite still runs standalone.
 set(DPL2_CHECKER_HELPER_SOURCES
-    "${DPL2_SOURCE_ROOT}/drc/ImplantLayerCheckerHelper.cpp")
+    "${DPL2_SRC_ROOT}/drc/ImplantLayerCheckerHelper.cpp")
 if(NOT DPL2_RUNTIME_LIBRARIES)
   list(PREPEND DPL2_CHECKER_HELPER_SOURCES
-      "${DPL2_SOURCE_ROOT}/infrastructure/Grid.cpp"
-      "${DPL2_SOURCE_ROOT}/infrastructure/Object.cpp"
-      "${DPL2_SOURCE_ROOT}/infrastructure/network.cpp"
-      "${DPL2_SOURCE_ROOT}/infrastructure/architecture.cpp"
-      "${DPL2_SOURCE_ROOT}/infrastructure/Padding.cpp"
-      "${DPL2_SOURCE_ROOT}/infrastructure/fillerSetting.cpp"
-      "${DPL2_SOURCE_ROOT}/drc/ImplantLayerChecker.cpp")
+      "${DPL2_SRC_ROOT}/infrastructure/Grid.cpp"
+      "${DPL2_SRC_ROOT}/infrastructure/Object.cpp"
+      "${DPL2_SRC_ROOT}/infrastructure/network.cpp"
+      "${DPL2_SRC_ROOT}/infrastructure/architecture.cpp"
+      "${DPL2_SRC_ROOT}/infrastructure/Padding.cpp"
+      "${DPL2_SRC_ROOT}/infrastructure/fillerSetting.cpp"
+      "${DPL2_SRC_ROOT}/drc/util.cpp"
+      "${DPL2_SRC_ROOT}/drc/ImplantLayerChecker.cpp")
 endif()
 
 add_executable(
   dpl2_filler_repair_checker_e2e
   ${DPL2_CHECKER_HELPER_SOURCES}
-  ${DPL2_FILLER_REPAIR_SOURCES}
-  ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
-
-target_compile_features(dpl2_filler_repair_checker_e2e PRIVATE cxx_std_20)
-target_compile_options(
-  dpl2_filler_repair_checker_e2e PRIVATE -Wall -Wextra -Werror)
-target_include_directories(
-  dpl2_filler_repair_checker_e2e
-  PRIVATE
-    "${DPL2_SOURCE_ROOT}"
-    "${DPL2_DPL2_INCLUDE_ROOT}"
-    ${DPL2_UDM_INCLUDE_DIRS})
-target_include_directories(
-  dpl2_filler_repair_checker_e2e SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
+  FillerRepairCheckerE2ETest.cpp)
 target_link_libraries(
   dpl2_filler_repair_checker_e2e
-  PRIVATE GTest::gtest_main TBB::tbb ${DPL2_RUNTIME_LIBRARIES}
-          ${DPL2_UDM_LIBRARIES})
-
-if(DPL2_ENABLE_ASAN)
-  target_compile_options(
-    dpl2_filler_repair_checker_e2e
-    PRIVATE -fsanitize=address -fno-omit-frame-pointer)
-  target_link_options(
-    dpl2_filler_repair_checker_e2e
-    PRIVATE -fsanitize=address -fno-omit-frame-pointer)
-endif()
-
+  PRIVATE GTest::gtest_main dpl2::fillerRepair ${DPL2_RUNTIME_LIBRARIES})
+# Delivered infrastructure/checker sources compile here as-is; their warnings
+# belong to their owners and must not fail this build.
+target_compile_options(
+  dpl2_filler_repair_checker_e2e PRIVATE -Wall -Wextra)
+target_include_directories(
+  dpl2_filler_repair_checker_e2e PRIVATE "${DPL2_SRC_ROOT}/infrastructure")
 gtest_discover_tests(
   dpl2_filler_repair_checker_e2e
-  TEST_PREFIX "filler-repair-checker."
+  TEST_PREFIX "portable-e2e."
   DISCOVERY_TIMEOUT 30)

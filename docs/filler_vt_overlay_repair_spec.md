@@ -295,10 +295,13 @@ fail-closed,必须在 infrastructure 同步后成功 update 才能继续查询�
   目的地实现 UDM fixture/provider。
 - 101 个 checker/engine cases、fake UDM include
   tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
-- runtime 与 portable test 编译清单唯一定义在
-  `src/dpl2/src/fillerRepair/sources.cmake`
-  (`DPL2_FILLER_REPAIR_SOURCES`);test harness 与移植目的地共用,
-  不允许手抄文件列表。
+- runtime 与 portable test 的编译由模块自己的
+  `src/dpl2/src/fillerRepair/CMakeLists.txt` 拥有:对外只暴露
+  `dpl2::fillerRepair`(完整 payload,C++20)与 `dpl2::fillerRepairPlanner`
+  (纯 search pipeline,C++17)两个 target;目的地 `add_subdirectory` 后
+  link target 即可,不允许手抄文件列表。模块对外部的全部依赖(UDM、
+  infrastructure、checker、sanitizer flags)只经由一个 interface target
+  `dpl2_filler_repair_deps` 传入。
 
 
 ## 4. 核心操作:Swap(本阶段唯一操作)
@@ -1094,8 +1097,8 @@ gate 语义:
   oracle checker/snapshot;configured filler init-time 注册、late request master
   validate-then-rebuild;repair internal precheck 与原子 snapshot update;
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
-  编译清单唯一定义在
-  `src/dpl2/src/fillerRepair/sources.cmake`。
+  编译由模块自己的 `src/dpl2/src/fillerRepair/CMakeLists.txt` 拥有
+  (target `dpl2::fillerRepair` / `dpl2::fillerRepairPlanner`)。
 - 82 个 planner unit tests、71 个 portable checker/planner/precheck cases 与 101 个
   fake-UDM checker/engine tests 全为 GoogleTest;
   82 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,

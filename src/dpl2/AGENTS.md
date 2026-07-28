@@ -19,7 +19,7 @@ The V2.1 swap-only planner and real-UDM runtime E2E package are complete.
 | Runtime API | caller owns one `ImplantLayerChecker`; it owns the engine, calls it from `check()`, and exposes precheck/update plus the last `FillerChanges` |
 | Portable tests | 153 GoogleTests: 82 planner cases plus 71 final-checker/planner/precheck E2E cases; no destination fixture provider |
 | Local regression | 101 fake-UDM checker/engine cases; repository CTest total 254 |
-| CMake | `fillerRepair/sources.cmake` exports runtime/planner/precheck/test source sets; the standalone test CMake accepts destination UDM include/link inputs |
+| CMake | `fillerRepair/CMakeLists.txt` owns the module's targets (`dpl2::fillerRepair`, `dpl2::fillerRepairPlanner`); all external dependencies arrive through the single `dpl2_filler_repair_deps` interface target, with a cache-variable fallback for standalone use |
 
 ## Fixed decisions
 
@@ -120,6 +120,6 @@ discovery and CTest; this disables only incompatible libc++ container annotation
   or compatibility edit in `CHECKER_REPAIR_CONTRACT.md`.
 - Do not add another runtime abstraction beside the checker-owned engine.
 - Add/remove runtime or portable test sources only via
-  `src/dpl2/src/fillerRepair/sources.cmake`.
+  `src/dpl2/src/fillerRepair/CMakeLists.txt` and its `test/` subdirectory.
 - Run planner and E2E normal + ASan before commit.
 - Keep changes in `src/dpl2/` and the authoritative spec unless scope expands.

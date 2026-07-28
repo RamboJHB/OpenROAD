@@ -24,7 +24,6 @@ find_package(Boost REQUIRED)
 find_package(TBB REQUIRED)
 
 set(DPL2_SRC "${CMAKE_CURRENT_LIST_DIR}/../src")
-include("${DPL2_SRC}/fillerRepair/sources.cmake")
 
 # This interface target is the only fake/real UDM switch. Runtime sources
 # contain no fake include, compile definition, or conditional code. The fake
@@ -69,24 +68,6 @@ function(dpl2_configure_test target standard strictness)
   endif()
 endfunction()
 
-add_executable(
-  dpl2_filler_repair_planner_test
-  ${DPL2_FILLER_REPAIR_PLANNER_SOURCES}
-  ${DPL2_FILLER_REPAIR_PORTABLE_PLANNER_TEST_SOURCES})
-target_include_directories(
-  dpl2_filler_repair_planner_test
-  PRIVATE "${DPL2_SRC}" "${DPL2_SRC}/infrastructure"
-          "${CMAKE_CURRENT_LIST_DIR}/../include")
-target_include_directories(
-  dpl2_filler_repair_planner_test SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
-target_link_libraries(
-  dpl2_filler_repair_planner_test PRIVATE GTest::gtest_main dpl2_test_udm)
-dpl2_configure_test(dpl2_filler_repair_planner_test 17 strict)
-gtest_discover_tests(
-  dpl2_filler_repair_planner_test
-  TEST_PREFIX "planner."
-  DISCOVERY_TIMEOUT 30)
-
 # Supplied infrastructure/checker sources are compiled exactly as delivered by
 # dpl2; only UDM headers/linkage come through dpl2_test_udm. The shared ones
 # live in the dpl2_fr_chain_common object library below; the two sources that
@@ -111,13 +92,29 @@ function(dpl2_configure_chain_target target strictness)
   dpl2_configure_test(${target} 20 ${strictness})
 endfunction()
 
-# Shared OBJECT libraries: every C++20 consumer below used to list these same
-# sources, so each one was compiled once per executable with identical flags
-# (the runtime engine and the whole infra/checker chain, twice). Compiling them
-# once here and linking the objects keeps the source lists in sources.cmake
-# authoritative while removing the duplicate work. Object libraries carry the
-# same flags via dpl2_configure_chain_target, and each consumer still applies
-# it to itself, so include dirs, -Werror and ASan are unchanged.
+# Everything the fillerRepair payload needs from outside itself: headers for
+# UDM/infrastructure/checker, the libraries behind them, and the sanitizer
+# flags. src/fillerRepair/CMakeLists.txt picks this up and needs nothing else
+# from us, which is the same handshake a destination gets.
+add_library(dpl2_filler_repair_deps INTERFACE)
+target_include_directories(
+  dpl2_filler_repair_deps
+  INTERFACE "${DPL2_SRC}" "${DPL2_SRC}/infrastructure"
+            "${CMAKE_CURRENT_LIST_DIR}/../include")
+target_include_directories(
+  dpl2_filler_repair_deps SYSTEM INTERFACE ${Boost_INCLUDE_DIRS})
+target_link_libraries(dpl2_filler_repair_deps INTERFACE dpl2_test_udm TBB::tbb)
+if(DPL2_ENABLE_ASAN)
+  target_compile_options(
+    dpl2_filler_repair_deps INTERFACE -fsanitize=address
+                                      -fno-omit-frame-pointer)
+  target_link_options(
+    dpl2_filler_repair_deps INTERFACE -fsanitize=address
+                                      -fno-omit-frame-pointer)
+endif()
+
+# Delivered infrastructure/checker sources, compiled once and shared by the
+# executables below.
 add_library(dpl2_fr_chain_common OBJECT
     "${DPL2_SRC}/infrastructure/Grid.cpp"
     "${DPL2_SRC}/infrastructure/Object.cpp"
@@ -128,9 +125,13 @@ add_library(dpl2_fr_chain_common OBJECT
     "${DPL2_SRC}/drc/ImplantLayerChecker.cpp")
 dpl2_configure_chain_target(dpl2_fr_chain_common delivered)
 
-# The complete migration payload, exactly as sources.cmake defines it.
-add_library(dpl2_fr_runtime_obj OBJECT ${DPL2_FILLER_REPAIR_SOURCES})
-dpl2_configure_chain_target(dpl2_fr_runtime_obj strict)
+# The payload builds itself and its portable tests from its own CMakeLists;
+# we never list its files. Handing it our already-compiled infra/checker
+# objects is exactly what a destination does with DPL2_RUNTIME_LIBRARIES, so
+# the portable executables are defined once and used by both.
+set(DPL2_FILLER_REPAIR_BUILD_TESTS ON)
+set(DPL2_RUNTIME_LIBRARIES dpl2_fr_chain_common)
+add_subdirectory("${DPL2_SRC}/fillerRepair" fillerRepair)
 
 # --- Targets defined ONCE for both UDM modes -------------------------------
 #
@@ -148,22 +149,6 @@ dpl2_configure_chain_target(dpl2_fr_runtime_obj strict)
 # real UDM. Note a STATIC compile-check library would NOT have caught it --
 # archives do not resolve symbols; only linking an executable does.
 
-# Migration gate: the portable planner+engine wired to the final checker
-# through ImplantLayerCheckerHelper. Its data is ImplantInput, not a fake or
-# destination-specific provider, so it compiles, links and RUNS in both modes.
-add_executable(
-  dpl2_filler_repair_checker_e2e
-  "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp"
-  ${DPL2_FILLER_REPAIR_PORTABLE_E2E_SOURCE})
-target_link_libraries(
-  dpl2_filler_repair_checker_e2e PRIVATE GTest::gtest_main
-  dpl2_fr_chain_common dpl2_fr_runtime_obj)
-dpl2_configure_chain_target(dpl2_filler_repair_checker_e2e strict)
-gtest_discover_tests(
-  dpl2_filler_repair_checker_e2e
-  TEST_PREFIX "portable-e2e."
-  DISCOVERY_TIMEOUT 30)
-
 # architecture.cpp is supplied infrastructure that no test entry point pulls
 # in; this keeps it in the compile gate for both modes.
 add_library(
@@ -171,7 +156,7 @@ add_library(
   "${DPL2_SRC}/infrastructure/architecture.cpp")
 target_link_libraries(
   dpl2_filler_repair_compile_check PRIVATE
-  dpl2_fr_chain_common dpl2_fr_runtime_obj)
+  dpl2_fr_chain_common dpl2::fillerRepair)
 dpl2_configure_chain_target(dpl2_filler_repair_compile_check delivered)
 
 # --- Fake-UDM only ---------------------------------------------------------
@@ -186,7 +171,7 @@ if(DPL2_TEST_USE_FAKE_UDM)
     "${CMAKE_CURRENT_LIST_DIR}/local/FakeUdmE2ETestProvider.cpp")
   target_link_libraries(dpl2_filler_repair_e2e PRIVATE
     GTest::gtest_main
-    dpl2_fr_chain_common dpl2_fr_runtime_obj)
+    dpl2_fr_chain_common dpl2::fillerRepair)
   dpl2_configure_chain_target(dpl2_filler_repair_e2e strict)
   gtest_discover_tests(
     dpl2_filler_repair_e2e

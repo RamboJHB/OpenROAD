@@ -167,33 +167,46 @@ Integration files:
 Runtime wiring (their CMake, 2 lines):
 
 ```cmake
-include(<srcroot>/fillerRepair/sources.cmake)
-target_sources(<owning-target> PRIVATE ${DPL2_FILLER_REPAIR_SOURCES})
+add_subdirectory(<srcroot>/fillerRepair fillerRepair)
+target_link_libraries(<owning-target> PRIVATE dpl2::fillerRepair)
 ```
 
-`<owning-target>` is the target that already compiles Grid/Network/checker,
-so its UDM include paths and libraries apply to our sources unchanged. The
-only modifications that may be needed on their side:
+The module owns its own targets, so the destination never names our source
+files. `dpl2::fillerRepair` is an OBJECT library built at C++20;
+`dpl2::fillerRepairPlanner` is the same search pipeline alone at C++17 -- the
+portability gate, useful if their placer is older than C++20.
 
-- the common source root must be on the include path (theirs already is if
-  `infrastructure/...`-style includes work today);
-- C++17 or newer for the runtime sources (the harness builds them at 17
-  for the planner and 20 for the chain).
+Everything the payload needs from outside arrives through ONE interface
+target, `dpl2_filler_repair_deps`. Define it before `add_subdirectory` to
+point us at the destination's headers and libraries:
+
+```cmake
+add_library(dpl2_filler_repair_deps INTERFACE)
+target_link_libraries(dpl2_filler_repair_deps INTERFACE <udm> <infra/checker>)
+```
+
+If they do not define it, the module falls back to the in-tree layout plus
+the `DPL2_UDM_INCLUDE_DIRS` / `DPL2_UDM_LIBRARIES` cache variables. Either
+way the only requirement on their side is that the common source root is on
+the include path (already true if `infrastructure/...`-style includes work
+today).
 
 The reused-infrastructure boundary requires the APIs already present in this
 branch: `DePlace::getGrid()`, `getNetwork()`, `getDesMgr()` and idempotent
 `Network::addMaster(...)`. No RepairInfrastructure, batch Node refresh, leaf
 traversal or placement importer is copied into runtime.
 
-Do not hand-copy file names -- both runtime and test CMake include the same
-`sources.cmake`. Do not add `fillerRepair/test/*` to a runtime target.
+Do not hand-copy file names -- runtime and tests are both built from the
+module's own `CMakeLists.txt`. The tests are a subdirectory gated on
+`DPL2_FILLER_REPAIR_BUILD_TESTS`, so they never reach a runtime target.
 The migrated E2E uses real Grid/Network/checker code and helper-built data.
 
 Portable test wiring in the destination environment:
 
 ```sh
 # Planner tests plus runtime engine + planner + final checker/helper E2E:
-cmake -S <srcroot>/fillerRepair/test -B build-e2e \
+cmake -S <srcroot>/fillerRepair -B build-e2e \
+  -DDPL2_FILLER_REPAIR_BUILD_TESTS=ON \
   -DDPL2_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
   -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>' \
   -DDPL2_UDM_LIBRARIES='<real UDM libs/targets>'
@@ -201,10 +214,10 @@ cmake --build build-e2e
 ctest --test-dir build-e2e --output-on-failure
 ```
 
-The standalone CMake builds one pure-planner target from the planner source
-list. Its E2E target always consumes `${DPL2_FILLER_REPAIR_SOURCES}`, so it
-compiles and links `FillerRepairEngine.cpp` against the destination headers.
-`DPL2_RUNTIME_LIBRARIES` should name the existing
+The planner executable links `dpl2::fillerRepairPlanner` and the E2E links
+`dpl2::fillerRepair`, so the tests exercise exactly the targets the runtime
+consumes -- including linking `FillerRepairEngine.cpp` against the
+destination headers. `DPL2_RUNTIME_LIBRARIES` should name the existing
 dpl2/checker owning targets; if omitted, the fallback compiles the adjacent
 supplied infrastructure/checker sources.
 
@@ -303,7 +316,8 @@ optional planner debug logging is disabled.
 - The supplied PhysDesMgr must be the UDM Session current design because the
   final checker constructor reads Session; init validates and fails closed on
   mismatch. The UDM design/library objects must outlive the engine.
-- Destination build must consume `sources.cmake` and the checker entry patch;
+- Destination build must add the module directory and link `dpl2::fillerRepair`,
+  plus take the checker entry patch;
   no repair-specific infrastructure refresh file or API is part of the
   delivery.
 - Destination verification still depends on its UDM include directories and

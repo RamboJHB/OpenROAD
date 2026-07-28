@@ -66,7 +66,8 @@ nothing else, which is what keeps it database-free and portable.
 | `RepairPlanner.h/.cpp` | the search pipeline in flow order: swap model → violation signatures → L0/adaptive window → ranking → subset enumeration → oracle gate → driver, plus `RepairConfig` |
 | `RepairTypes.h` | leaf data model: ids, geometry, violations, diagnostics, entry/exit records. Depends on nothing in the module |
 | `Debug.h` | `[fr][stage]` transcript (`cat`, `show`, `DebugLog`) |
-| `sources.cmake` | source-of-truth lists for the runtime payload and portable tests |
+| `CMakeLists.txt` | the module's own targets — `dpl2::fillerRepair` (payload, C++20) and `dpl2::fillerRepairPlanner` (pure pipeline, C++17); a destination adds the directory and links a target rather than listing sources |
+| `test/CMakeLists.txt` | the portable tests, added when `DPL2_FILLER_REPAIR_BUILD_TESTS=ON` |
 | `test/RepairPlannerTest.cpp` + `TestPlacementView.h`, `TestRepairOracle.*`, `SyntheticMasterCatalog.*` | 82 portable database-free planner unit tests (the doubles implement the two seams) |
 | `test/FillerRepairCheckerE2ETest.cpp` | 59 portable real-checker and planner-to-checker cases (see the fixture model below) |
 
@@ -97,6 +98,38 @@ breaking any of them silently changes what the cases test:
   the sub-minimum gap.
 - **Min width still applies** to every run, so a scenario's runs must stay at
   or above `MIN_RULE` while the gap between them stays below it.
+
+## Build
+
+The module owns its targets, so a destination never spells out our file
+names and the two builds cannot drift:
+
+```cmake
+# point the payload at your headers/libraries, then add it
+add_library(dpl2_filler_repair_deps INTERFACE)
+target_link_libraries(dpl2_filler_repair_deps INTERFACE <udm> <infra/checker>)
+add_subdirectory(<srcroot>/fillerRepair fillerRepair)
+target_link_libraries(<owning-target> PRIVATE dpl2::fillerRepair)
+```
+
+`dpl2_filler_repair_deps` is the single external seam: UDM, dpl2
+infrastructure, the implant checker, and any global flags (sanitizers) arrive
+through it. Defining it is optional — without it the module falls back to the
+in-tree layout plus the `DPL2_UDM_INCLUDE_DIRS` / `DPL2_UDM_LIBRARIES` cache
+variables, which is what makes the standalone run below work.
+
+The portable tests build from the same targets:
+
+```sh
+cmake -S <srcroot>/fillerRepair -B build -DDPL2_FILLER_REPAIR_BUILD_TESTS=ON \
+      -DDPL2_UDM_INCLUDE_DIRS='<real UDM include dirs>' \
+      -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>'
+cmake --build build && ctest --test-dir build
+```
+
+With `DPL2_RUNTIME_LIBRARIES` empty the E2E compiles the sibling
+infrastructure/checker sources itself, so the suite still runs before any
+destination wiring exists.
 
 ## Verification
 
