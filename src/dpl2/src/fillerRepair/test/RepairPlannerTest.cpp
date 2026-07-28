@@ -170,12 +170,29 @@ void testCanonicalKeyOrderIndependent()
   RowFixture f = makeCoveredRow();
   auto m1 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt2));
   auto m2 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
+  const fr::Region guard{fr::XInterval{0, 40}, 0, 0};
 
-  EXPECT_TRUE(fr::canonicalKey({m1, m2}) == fr::canonicalKey({m2, m1}));
-  EXPECT_TRUE(fr::canonicalKey({m1}) != fr::canonicalKey({m1, m2}));
+  EXPECT_TRUE(fr::overlayKey(guard, {m1, m2})
+              == fr::overlayKey(guard, {m2, m1}));
+  EXPECT_TRUE(fr::overlayKey(guard, {m1}) != fr::overlayKey(guard, {m1, m2}));
   // Same instance, different target master => different overlay.
   auto m1b = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3));
-  EXPECT_TRUE(fr::canonicalKey({m1}) != fr::canonicalKey({m1b}));
+  EXPECT_TRUE(fr::overlayKey(guard, {m1}) != fr::overlayKey(guard, {m1b}));
+  // A duplicate swap is the same physical question, not a second one.
+  EXPECT_TRUE(fr::overlayKey(guard, {m1, m1}) == fr::overlayKey(guard, {m1}));
+
+  // Equal keys must hash equal, or the cache would issue duplicate checker
+  // calls for overlays it already answered.
+  const fr::OverlayKeyHash hash;
+  EXPECT_EQ(hash(fr::overlayKey(guard, {m1, m2})),
+            hash(fr::overlayKey(guard, {m2, m1})));
+
+  // The guard is part of the identity: the same overlay under a different
+  // guard is a different checker question.
+  const fr::Region wider{fr::XInterval{0, 48}, 0, 0};
+  EXPECT_TRUE(fr::overlayKey(guard, {m1}) != fr::overlayKey(wider, {m1}));
+  const fr::Region taller{fr::XInterval{0, 40}, 0, 1};
+  EXPECT_TRUE(fr::overlayKey(guard, {m1}) != fr::overlayKey(taller, {m1}));
 }
 
 void testWireConversion()
@@ -2962,6 +2979,70 @@ void testPlannerAdaptiveLevelCapTruncates()
   EXPECT_TRUE(sawTruncated);
 }
 
+// The gate holds a pointer to the baseline result INSIDE its answer cache
+// while hundreds of later answers are inserted around it. That is only sound
+// because the cache is node-based; swapping in a container that moves its
+// elements would leave every classification reading freed memory. This drives
+// enough distinct candidates through one window to force several rehashes,
+// so the invariant is exercised rather than assumed (ASan turns a regression
+// into a failure rather than a wrong answer).
+void testGateBaselineSurvivesCacheGrowth()
+{
+  fr::TestPlacementView design = makeLibrary();
+  // One long row of editable fillers: the enumeration space is large enough
+  // that the cache far outgrows its initial bucket count.
+  constexpr int kFillers = 40;
+  const fr::DbCoord span = 8 + 2 * kFillers;
+  design.addRow(0, 0, span);
+  design.place(1, cellMaster(kVt2), 0, 0);
+  design.place(2, cellMaster(kVt2), 0, 4);
+  for (int i = 0; i < kFillers; ++i) {
+    design.place(100 + i, fillerMaster(2, kVt1), 0, 8 + 2 * i);
+  }
+
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {8, 12});
+  fr::ViolationParticipant participant;
+  participant.instanceId = 100;
+  participant.masterId = fillerMaster(2, kVt1);
+  participant.rowId = 0;
+  participant.xRange = {8, 10};
+  participant.isFiller = true;
+  original.participants = {participant};
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 2);
+  request.violations = {original};
+
+  // Only the LAST filler solves it, so the search evaluates the whole space
+  // (and grows the cache) with the baseline pointer live throughout.
+  AdaptiveSolutionChecker checker;
+  checker.original = original;
+  checker.solutionInstance = 100 + kFillers - 1;
+  fr::RepairConfig config;
+  config.checkerCallBudgetPerRepair = 0;  // let the space be searched
+  config.verbose = verbose();
+  fr::internal::RepairPlanner planner(design, checker, config);
+
+  const fr::FillerRepairResult result = planner.repair(request);
+
+  // Whatever the outcome, every classification read a live baseline: the
+  // diagnostics report a request count far past the initial bucket count.
+  int requests = 0;
+  for (const fr::Diagnostic& diagnostic : result.diagnostics) {
+    const auto at = diagnostic.message.find("checker requests=");
+    if (at != std::string::npos) {
+      requests = std::atoi(diagnostic.message.c_str() + at
+                           + std::string("checker requests=").size());
+    }
+  }
+  EXPECT_TRUE(requests > 200);
+}
+
 // The per-repair ceiling bounds the whole search, not one window: with the
 // level cap alone the worst case is maxAdaptiveLevels windows each spending a
 // full per-window budget.
@@ -3830,6 +3911,8 @@ void registerPlannerTests()
        testPlannerAdaptiveL1FindsFarFiller},
       {"planner_adaptive_level_cap_truncates",
        testPlannerAdaptiveLevelCapTruncates},
+      {"gate_baseline_survives_cache_growth",
+       testGateBaselineSurvivesCacheGrowth},
       {"planner_per_repair_budget_truncates",
        testPlannerPerRepairBudgetTruncates},
       {"planner_per_repair_budget_disabled_still_solves",

@@ -34,6 +34,16 @@ adaptive level, so the worst case is not `maxAdaptiveLevels` full windows.
 Reaching either ends the search with the existing *truncated* semantics --
 never a wrong answer, only a bounded give-up.
 
+**Overlay identity is a value, not a string.** Two candidates are the same
+checker question when they propose the same `(instance -> new master)` set
+under the same guard; `OverlayKey` is that identity, and `OracleGate::resolve`
+hands its answers straight back to the search so one lookup serves both. The
+cache is a `std::unordered_map`, chosen node-based on purpose: the gate holds
+a pointer to the baseline result inside it while hundreds of later answers are
+inserted around it (`gate_baseline_survives_cache_growth` covers that
+invariant). It is never iterated -- only `find`/`emplace`/`size` -- so bucket
+order cannot reach search order.
+
 The engine's only placement gate is **regional**: repair refuses to run on a
 gap/overlap inside the rows it can edit (legal spans derived from Grid pixels
 lazily, per row). Whole-design placement legality is infrastructure's own
@@ -98,6 +108,11 @@ loop use the deferred form -- `log.msg(stage, [&] { return cat(...); })` or a
 surrounding `if (log.enabled())` block -- and a silenced transcript costs
 nothing there.
 
+Lines are written with normal stdio buffering and **no per-line flush**: line
+buffered on a terminal (interactive debugging still sees each line as it
+happens), block buffered when redirected. On the worst-case measurement below
+the flush alone was half the transcript's cost.
+
 ## Portable fixture model
 
 The portable checker fixtures encode four invariants of the current checker;
@@ -152,9 +167,29 @@ destination wiring exists.
 
 ## Verification
 
-- portable planner: 84 cases; portable checker E2E: 59 cases (both compile,
+- portable planner: 85 cases; portable checker E2E: 59 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
 - repository-local fake-UDM engine regression: 74 cases under
   `src/dpl2/test/local/`.
-- 2026-07-28 full local suite: 217/217 normal and ASan; migration gate
-  143/143 normal and ASan; standalone module build 143/143.
+- 2026-07-28 full local suite: 218/218 normal and ASan; migration gate
+  144/144 normal and ASan; standalone module build 144/144.
+
+### Search cost
+
+Worst case measured on the no-solution path (120 editable fillers, every
+adaptive level searched to the caps, per-repair budget disabled, oracle cost
+excluded), gcc 13 `-O2`:
+
+| | ms per repair | oracle calls |
+|---|---|---|
+| before | 66.7 | 312 660 |
+| after | 23.9 | 312 660 |
+
+**2.8x**, with an identical oracle-call count — the work removed was overhead,
+not search. It came from three places: the per-candidate cache key no longer
+builds a formatted string (it was one `ostringstream` per swap), signature
+comparison no longer allocates two sorted row vectors per call, and batch
+results are moved into the cache instead of deep-copied.
+
+With the transcript on (the default) the same case costs 30.9 ms rather than
+40.3 ms, after dropping the per-line flush.

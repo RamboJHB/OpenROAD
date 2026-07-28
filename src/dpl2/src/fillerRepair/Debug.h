@@ -60,8 +60,13 @@ class DebugLog
   void msg(const char* stage, const std::string& text) const
   {
     if (enabled_) {
-      std::printf("[fr][%s] %s\n", stage, text.c_str());
-      std::fflush(stdout);
+      // No explicit flush: the transcript is on by default, and a flush per
+      // line is a syscall per line on a path that emits thousands. Normal
+      // stdio buffering already gives the behaviour each use wants -- line
+      // buffered on a terminal (interactive debugging sees each line as it
+      // happens), block buffered when redirected to a file (bulk runs pay
+      // almost nothing).
+      std::fprintf(stdout, "[fr][%s] %s\n", stage, text.c_str());
     }
   }
 

@@ -17,10 +17,13 @@
 #pragma once
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <map>
 #include <optional>
 #include <string>
+#include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <fillerRepair/Debug.h>
@@ -83,9 +86,36 @@ std::optional<Swap> makeSwap(const PlacementView& view,
                              MasterId newMasterId,
                              std::string* error = nullptr);
 
-// Checker-call cache key: sorted_unique((instanceId, newMasterId)) serialized
-// to a string. Order-independent.
-std::string canonicalKey(const Overlay& overlay);
+// --- Overlay identity ------------------------------------------------------
+//
+// Two candidates are the SAME checker question when they propose the same
+// (instance -> new master) set under the same guard: overlay order and
+// duplicate swaps must never buy a second checker call. That identity is a
+// value, not a serialized string -- the search asks it once per candidate per
+// batch, so building it must not allocate a stream or a formatted key.
+struct OverlayKey
+{
+  DbCoord guardXl = 0;
+  DbCoord guardXh = 0;
+  RowId guardRowLo = 0;
+  RowId guardRowHi = 0;
+  std::vector<std::pair<InstanceId, MasterId>> swaps;  // sorted, unique
+
+  bool operator==(const OverlayKey& other) const
+  {
+    return guardXl == other.guardXl && guardXh == other.guardXh
+           && guardRowLo == other.guardRowLo && guardRowHi == other.guardRowHi
+           && swaps == other.swaps;
+  }
+  bool operator!=(const OverlayKey& other) const { return !(*this == other); }
+};
+
+struct OverlayKeyHash
+{
+  std::size_t operator()(const OverlayKey& key) const;
+};
+
+OverlayKey overlayKey(const Region& guard, const Overlay& overlay);
 
 // Wire conversion, deterministic order (sorted by instanceId).
 ipl::FillerChanges toFillerChanges(const Overlay& overlay,
@@ -291,12 +321,17 @@ class OracleGate
   const std::vector<Diagnostic>& diagnostics() const { return diagnostics_; }
 
  private:
-  std::string cacheKey(const Region& guard, const Overlay& overlay) const;
-  // nullptr on protocol error / budget exhaustion (flags set accordingly).
-  const OracleResult* resolve(const std::vector<Overlay>& chunk,
-                              const Region& guard,
-                              int& budget,
-                              bool& protocolError);
+  // Answers one batch of candidates. `keys` are their identities, built once
+  // by the caller. `out` receives one entry per candidate: the cached or
+  // freshly received result, or nullptr when budget stopped it from being
+  // evaluated -- so the caller never repeats the cache lookup this already
+  // did. Returns false on a batch protocol error (diagnostics pushed).
+  bool resolve(const Overlay* chunk,
+               const OverlayKey* keys,
+               std::size_t count,
+               const Region& guard,
+               int& budget,
+               std::vector<const OracleResult*>& out);
   DeltaSummary classify(const OracleResult& result,
                         const Overlay& overlay,
                         const RepairWindow& window) const;
@@ -314,7 +349,9 @@ class OracleGate
   const RepairConfig& config_;
   const DebugLog& log_;
 
-  std::map<std::string, OracleResult> cache_;
+  // Node-based, so `baseline_` stays valid across rehashes. Never iterated:
+  // only find/emplace/size, so bucket order cannot affect search order.
+  std::unordered_map<OverlayKey, OracleResult, OverlayKeyHash> cache_;
   const OracleResult* baseline_ = nullptr;  // points into cache_
   OracleRequestId next_request_id_ = 0;
   int requests_sent_ = 0;

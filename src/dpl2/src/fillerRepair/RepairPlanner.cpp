@@ -61,20 +61,43 @@ std::optional<Swap> makeSwap(const PlacementView& view,
   return swap;
 }
 
-std::string canonicalKey(const Overlay& overlay)
+std::size_t OverlayKeyHash::operator()(const OverlayKey& key) const
 {
-  std::vector<std::pair<InstanceId, MasterId>> pairs;
-  pairs.reserve(overlay.size());
-  for (const Swap& swap : overlay) {
-    pairs.emplace_back(swap.instanceId, swap.newMasterId);
+  // FNV-1a over the key's integer fields. The swap list is already sorted and
+  // deduplicated, so equal overlays hash equal regardless of enumeration
+  // order.
+  std::size_t hash = 1469598103934665603ULL;
+  const auto mix = [&hash](std::int64_t value) {
+    hash ^= static_cast<std::size_t>(value);
+    hash *= 1099511628211ULL;
+  };
+  mix(key.guardXl);
+  mix(key.guardXh);
+  mix(key.guardRowLo);
+  mix(key.guardRowHi);
+  for (const auto& [instanceId, masterId] : key.swaps) {
+    mix(instanceId);
+    mix(masterId);
   }
-  std::sort(pairs.begin(), pairs.end());
-  pairs.erase(std::unique(pairs.begin(), pairs.end()), pairs.end());
+  return hash;
+}
 
-  std::string key;
-  for (const auto& [instanceId, masterId] : pairs) {
-    key += cat('i', instanceId, 'm', masterId, '|');
+OverlayKey overlayKey(const Region& guard, const Overlay& overlay)
+{
+  // The guard is part of the identity: the same overlay under a different
+  // guard is a different checker question.
+  OverlayKey key;
+  key.guardXl = guard.x.xl;
+  key.guardXh = guard.x.xh;
+  key.guardRowLo = guard.rowLo;
+  key.guardRowHi = guard.rowHi;
+  key.swaps.reserve(overlay.size());
+  for (const Swap& swap : overlay) {
+    key.swaps.emplace_back(swap.instanceId, swap.newMasterId);
   }
+  std::sort(key.swaps.begin(), key.swaps.end());
+  key.swaps.erase(std::unique(key.swaps.begin(), key.swaps.end()),
+                  key.swaps.end());
   return key;
 }
 
@@ -182,6 +205,26 @@ std::vector<RowId> sortedUniqueRows(const std::vector<RowId>& rows)
   return result;
 }
 
+// Set equality of two row lists, ignoring order and duplicates -- the same
+// question `sortedUniqueRows(a) == sortedUniqueRows(b)` answers, without
+// materializing either side. Signature comparison runs once per candidate per
+// violation, so allocating here allocates on the hottest loop of the search.
+// Quadratic on purpose: a violation couples a handful of rows, and for those
+// sizes a linear scan beats sorting, let alone two heap allocations.
+bool sameRowSet(const std::vector<RowId>& a, const std::vector<RowId>& b)
+{
+  const auto coveredBy = [](const std::vector<RowId>& lhs,
+                            const std::vector<RowId>& rhs) {
+    for (const RowId row : lhs) {
+      if (std::find(rhs.begin(), rhs.end(), row) == rhs.end()) {
+        return false;
+      }
+    }
+    return true;
+  };
+  return coveredBy(a, b) && coveredBy(b, a);
+}
+
 const char* kindName(ViolationKind kind)
 {
   return kind == ViolationKind::MinWidth ? "MW" : "MS";
@@ -285,7 +328,7 @@ bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth)
   if (a.primaryLayer != b.primaryLayer || a.secondaryLayer != b.secondaryLayer) {
     return false;
   }
-  if (sortedUniqueRows(a.rowIds) != sortedUniqueRows(b.rowIds)) {
+  if (!sameRowSet(a.rowIds, b.rowIds)) {
     return false;
   }
 
@@ -910,9 +953,14 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   Overlay current;         // one option per chosen filler, filler-rank order
   bool budgetHit = false;
 
+  // Both recursions pass themselves as `self` rather than going through
+  // std::function: this is the innermost loop of enumeration (millions of
+  // calls on a wide window), and type erasure there costs an indirect call
+  // per step for no benefit.
+
   // Cartesian product over the chosen fillers' domains, last filler's option
   // varying fastest, so the all-first-choice assignment (anchor-follow) leads.
-  const std::function<void(size_t)> emitProducts = [&](size_t k) {
+  const auto emitProducts = [&](const auto& self, size_t k) -> void {
     if (budgetHit) {
       return;
     }
@@ -925,7 +973,7 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
     }
     for (const Swap& option : ranked[combo[k]].options) {
       current.push_back(option);
-      emitProducts(k + 1);
+      self(self, k + 1);
       current.pop_back();
       if (budgetHit) {
         return;
@@ -934,17 +982,18 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   };
 
   // Lexicographic filler combinations of `size` within the rank prefix `cap`.
-  const std::function<void(int, int, int)> choose = [&](int size, int from, int cap) {
+  const auto choose =
+      [&](const auto& self, int size, int from, int cap) -> void {
     if (budgetHit) {
       return;
     }
     if (static_cast<int>(combo.size()) == size) {
-      emitProducts(0);
+      emitProducts(emitProducts, 0);
       return;
     }
     for (int i = from; i < cap; ++i) {
       combo.push_back(i);
-      choose(size, i + 1, cap);
+      self(self, size, i + 1, cap);
       combo.pop_back();
       if (budgetHit) {
         return;
@@ -955,7 +1004,7 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   for (int size = 1; size <= maxSize && !budgetHit; ++size) {
     const size_t before = plan.overlays.size();
     const int cap = memberCap(size);
-    choose(size, 0, cap);
+    choose(choose, size, 0, cap);
     // Per-size accounting makes it obvious when a large-window member cap or
     // the checker budget, rather than the legality oracle, removed candidates.
     log.msg("enumerate",
@@ -1041,18 +1090,10 @@ OracleGate::OracleGate(const PlacementView& dataSource,
 {
 }
 
-std::string OracleGate::cacheKey(const Region& guard, const Overlay& overlay) const
-{
-  // Guard region is part of the key: the same overlay under a different
-  // guard is a different checker question.
-  return cat('g', guard.x.xl, ':', guard.x.xh, ':', guard.rowLo, ':',
-             guard.rowHi, '|', canonicalKey(overlay));
-}
-
 bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
 {
   const Region& guard = window.guardRegion;
-  const std::string key = cacheKey(guard, {});
+  const OverlayKey key = overlayKey(guard, {});  // empty overlay = baseline
   auto it = cache_.find(key);
   if (it != cache_.end()) {
     ++cache_hits_;
@@ -1248,97 +1289,112 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   return summary;
 }
 
-const OracleResult* OracleGate::resolve(const std::vector<Overlay>& chunk,
-                                        const Region& guard,
-                                        int& budget,
-                                        bool& protocolError)
+bool OracleGate::resolve(const Overlay* chunk,
+                         const OverlayKey* chunkKeys,
+                         std::size_t count,
+                         const Region& guard,
+                         int& budget,
+                         std::vector<const OracleResult*>& out)
 {
-  // Send everything in the chunk that is not cached yet as one batch.
+  out.assign(count, nullptr);
+
+  // Send everything in the chunk that is not cached yet as one batch. The
+  // single lookup per candidate here is the only one the search needs: hits
+  // land in `out` directly, misses are filled in from the batch below.
   std::vector<OracleRequest> requests;
-  std::vector<std::string> keys;
+  std::vector<std::size_t> pending;  // chunk indices, parallel to `requests`
   int cachedInChunk = 0;
   int skippedForBudget = 0;
   const int budgetBefore = budget;
-  for (const Overlay& overlay : chunk) {
-    const std::string key = cacheKey(guard, overlay);
-    const bool cached = cache_.count(key) > 0;
-    if (cached || budget <= 0) {
-      if (cached) {
-        ++cache_hits_;
-        ++cachedInChunk;
-      } else {
-        ++skippedForBudget;
-      }
+  for (std::size_t index = 0; index < count; ++index) {
+    const auto cached = cache_.find(chunkKeys[index]);
+    if (cached != cache_.end()) {
+      ++cache_hits_;
+      ++cachedInChunk;
+      out[index] = &cached->second;
+      continue;
+    }
+    if (budget <= 0) {
+      ++skippedForBudget;  // stays nullptr: not evaluated
       continue;
     }
     OracleRequest request;
     request.requestId = next_request_id_++;
     request.targetPlace = anchor_;
     request.guardRegion = guard;
-    request.fillerChanges = toFillerChanges(overlay, data_source_);
+    request.fillerChanges = toFillerChanges(chunk[index], data_source_);
     requests.push_back(std::move(request));
-    keys.push_back(key);
+    pending.push_back(index);
     --budget;
   }
-  if (!requests.empty()) {
-    log_.msg("gate",
-             cat("batch send: chunk=", chunk.size(), " uncached=",
-                 requests.size(), " cached=", cachedInChunk,
-                 " skippedForBudget=", skippedForBudget, " guard=",
-                 show(guard), " budget ", budgetBefore, " -> ", budget));
-    const std::vector<OracleResult> results =
-        oracle_.checkPlaceWithOverlays(requests);
-    ++batches_sent_;
-    requests_sent_ += static_cast<int>(requests.size());
+  if (requests.empty()) {
+    log_.msg("gate", [&] {
+      return cat("batch avoided: chunk=", count, " cached=", cachedInChunk,
+                 " skippedForBudget=", skippedForBudget);
+    });
+    return true;
+  }
 
-    // Protocol validation: one result per request, ids echo exactly once,
-    // no unknown ids. Order must NOT matter -- map back by id.
-    if (results.size() != requests.size()) {
+  log_.msg("gate", [&] {
+    return cat("batch send: chunk=", count, " uncached=", requests.size(),
+               " cached=", cachedInChunk,
+               " skippedForBudget=", skippedForBudget, " guard=", show(guard),
+               " budget ", budgetBefore, " -> ", budget);
+  });
+  std::vector<OracleResult> results =
+      oracle_.checkPlaceWithOverlays(requests);
+  ++batches_sent_;
+  requests_sent_ += static_cast<int>(requests.size());
+
+  // Protocol validation: one result per request, ids echo exactly once, no
+  // unknown ids. Order must NOT matter -- map back by id.
+  if (results.size() != requests.size()) {
+    diagnostics_.push_back(makeDiag(
+        Severity::Fatal, "CheckerProtocolError",
+        cat("batch returned ", results.size(), " result(s) for ",
+            requests.size(), " request(s)")));
+    log_.msg("gate",
+             cat("batch protocol error: results=", results.size(),
+                 " requests=", requests.size()));
+    return false;
+  }
+  // Non-const: each id is validated to appear exactly once, so the result it
+  // names is MOVED into the cache rather than deep-copied (a result carries
+  // its violation and diagnostic vectors).
+  std::map<OracleRequestId, OracleResult*> byId;
+  for (OracleResult& result : results) {
+    if (!byId.emplace(result.requestId, &result).second) {
       diagnostics_.push_back(makeDiag(
           Severity::Fatal, "CheckerProtocolError",
-          cat("batch returned ", results.size(), " result(s) for ",
-              requests.size(), " request(s)")));
-      protocolError = true;
+          cat("duplicate requestId ", result.requestId)));
       log_.msg("gate",
-               cat("batch protocol error: results=", results.size(),
-                   " requests=", requests.size()));
-      return nullptr;
+               cat("batch protocol error: duplicate id=", result.requestId));
+      return false;
     }
-    std::map<OracleRequestId, const OracleResult*> byId;
-    for (const OracleResult& result : results) {
-      if (!byId.emplace(result.requestId, &result).second) {
-        diagnostics_.push_back(makeDiag(Severity::Fatal, "CheckerProtocolError",
-                                        cat("duplicate requestId ", result.requestId)));
-        protocolError = true;
-        log_.msg("gate",
-                 cat("batch protocol error: duplicate id=", result.requestId));
-        return nullptr;
-      }
-    }
-    for (size_t i = 0; i < requests.size(); ++i) {
-      const auto it = byId.find(requests[i].requestId);
-      if (it == byId.end()) {
-        diagnostics_.push_back(makeDiag(Severity::Fatal, "CheckerProtocolError",
-                                        cat("missing result for requestId ",
-                                            requests[i].requestId)));
-        protocolError = true;
-        log_.msg("gate",
-                 cat("batch protocol error: missing id=",
-                     requests[i].requestId));
-        return nullptr;
-      }
-      cache_.emplace(keys[i], *it->second);
-    }
-    log_.msg("gate",
-             cat("batch recv: results=", results.size(), " cacheSize=",
-                 cache_.size(), " requestsTotal=", requests_sent_,
-                 " batchesTotal=", batches_sent_));
-  } else {
-    log_.msg("gate",
-             cat("batch avoided: chunk=", chunk.size(), " cached=",
-                 cachedInChunk, " skippedForBudget=", skippedForBudget));
   }
-  return baseline_;  // non-null marker; per-overlay lookup goes via cache_
+  for (std::size_t i = 0; i < requests.size(); ++i) {
+    const auto it = byId.find(requests[i].requestId);
+    if (it == byId.end()) {
+      diagnostics_.push_back(makeDiag(
+          Severity::Fatal, "CheckerProtocolError",
+          cat("missing result for requestId ", requests[i].requestId)));
+      log_.msg("gate",
+               cat("batch protocol error: missing id=",
+                   requests[i].requestId));
+      return false;
+    }
+    const std::size_t index = pending[i];
+    out[index] =
+        &cache_.emplace(chunkKeys[index], std::move(*it->second))
+             .first->second;
+  }
+  log_.msg("gate", [&] {
+    return cat("batch recv: results=", results.size(),
+               " cacheSize=", cache_.size(),
+               " requestsTotal=", requests_sent_,
+               " batchesTotal=", batches_sent_);
+  });
+  return true;
 }
 
 OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidates,
@@ -1353,26 +1409,34 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
                show(window.area()), " guard=", show(guard)));
 
   size_t next = 0;
+  std::vector<OverlayKey> chunkKeys;          // reused across chunks
+  std::vector<const OracleResult*> answers;   // ditto
   while (next < candidates.size()) {
     const size_t chunkEnd =
         std::min(candidates.size(),
                  next + static_cast<size_t>(config_.batchSize));
-    const std::vector<Overlay> chunk(candidates.begin() + next,
-                                     candidates.begin() + chunkEnd);
-    bool protocolError = false;
-    if (resolve(chunk, guard, budget, protocolError) == nullptr && protocolError) {
+    const size_t count = chunkEnd - next;
+    // Identity is built ONCE per candidate, and resolve() hands back the
+    // answers so this loop never repeats its cache lookup.
+    chunkKeys.clear();
+    chunkKeys.reserve(count);
+    for (size_t i = next; i < chunkEnd; ++i) {
+      chunkKeys.push_back(overlayKey(guard, candidates[i]));
+    }
+    if (!resolve(&candidates[next], chunkKeys.data(), count, guard, budget,
+                 answers)) {
       sr.protocolError = true;
       return sr;
     }
 
     // Evaluate the chunk in enumeration order; first delta-clean wins.
     for (size_t i = next; i < chunkEnd; ++i) {
-      const auto it = cache_.find(cacheKey(guard, candidates[i]));
-      if (it == cache_.end()) {
+      const OracleResult* answer = answers[i - next];
+      if (answer == nullptr) {
         sr.budgetExhausted = true;  // was not evaluated: out of budget
         continue;
       }
-      const DeltaSummary summary = classify(it->second, candidates[i], window);
+      const DeltaSummary summary = classify(*answer, candidates[i], window);
       if (summary.clean) {
         sr.foundClean = true;
         sr.cleanOverlay = candidates[i];
