@@ -137,10 +137,48 @@ concept — which filler masters may be *offered* as replacements.
   `Rect getBoundingBox(Rect, int rings = 3) const`.
 - `#include <tbb/task_arena.h>` — `tbb::task_arena` was used without it.
 
-### `infrastructure/network.h` / `.cpp`, `Object.cpp`
+### `infrastructure/network.cpp`, `Object.cpp`
 
-Compile fixes (`id` → `idx`; `unique_ptr<Node*>` / `inst_to_node_idx__`
-typos; `clearEdgeS`) and the shared-predicate switch above.
+`Object.cpp` routes `Master::isFiller()` through the shared predicate above.
+
+`network.cpp`: **`updateNode` restores `setOrient(inst.getOrient())`**, which
+the 2026-07-28 destination update replaced with a hard-coded
+`PhysOrientationE::R0`. `DePlace::isLegal` calls `updateNode` immediately
+before `checkDRC`, so forcing R0 makes every implant check on an MX-placed row
+— odd rows, by the band-polarity model — evaluate the wrong band track. It
+also outlives the check: `isLegal` restores the master afterwards but not the
+orientation, so the Node keeps a wrong orientation in shared Network state.
+
+Three earlier `network.h`/`.cpp` compile fixes (`id` → `idx`,
+`unique_ptr<Node*>` / `inst_to_node_idx__`, `clearEdgeS`) are **no longer
+needed** — the destination update fixed them upstream.
+
+### Open items on the destination side
+
+Not patched here; they belong to the integration owner.
+
+| | |
+|---|---|
+| `network.h` shipped with line numbers pasted into every line, so it is not valid C++ | fixed locally; confirm the source file |
+| `Network::addNode` classifies with `isCoreFiller()` alone while `Master::isFiller()` is `isCoreFiller() \|\| isPadFiller()` | the two disagree on pad fillers — pick one predicate |
+| `updateNode` no longer sets the node type | stale after a master swap that changes filler-ness |
+| `network.h` dropped `#include <memory>` while still using `std::unique_ptr` | currently resolves transitively |
+| `PlacementDRC.h` includes `<dpl2/DRCChecker.h>`; the header is at `drc/DRCChecker.h` | does not compile as shipped |
+| `PlacementDRC.h` declares `const eUNL::PhysOrientation&`; `DRCChecker` and `ImplantLayerChecker` use `eUTL::PhysOrientation` | namespace mismatch on the call into our checker |
+| `initPlacementDRC()` is declared but never defined, `drc_engine_` is never constructed, and nothing calls `PlacementDRC::addChecker` | `DePlace::isLegal` cannot reach any checker; with an empty `checkers_` it would report every candidate legal |
+| `DRCCheckerType` has no implant entry (`EdgeSpacing`, `BlockedLayers`, `Padding`, `OneSiteGap`) | no key to register `ImplantLayerChecker` under |
+
+### What fillerRepair adapted to, without patching
+
+`Network::addMaster` lost its two-argument overload and its third parameter
+became `const EdgeTypeTable*`. Our three call sites pass an **empty table**:
+`EdgeTypeTable` lives in `Objects.h`, which the repair-only link target
+already has, so the reason the overload existed (keeping `PlacementDRC` out of
+that target) is gone. `addMaster` dereferences the table before any null
+check, so `nullptr` is not an option; an empty one returns right after the
+geometry the implant oracle reads. This is a fallback path — on the production
+route `DePlace` registers the master WITH the real edge table before `check()`
+runs, so a Master decorated by us never reaches placement DRC.
 
 ### `DePlace`
 
