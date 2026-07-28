@@ -49,7 +49,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
     RepairConfig repair;
     DbCoord snapshotHaloX = 0;
     int snapshotHaloRows = 1;
-    bool verbose = false;
+    bool verbose = debugLoggingDefault();
   };
 
   void buildPlannerData();
@@ -150,7 +150,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
   // whole grid at init was pure startup cost).
   mutable std::map<RowId, std::vector<XInterval>> legal_spans_;
   const std::vector<XInterval>& legalSpansForRow(RowId rowId) const;
-  bool debug_logging_ = false;
+  bool debug_logging_ = debugLoggingDefault();
   bool initialized_ = false;
   bool init_attempted_ = false;
   std::atomic<bool> repair_active_{false};
@@ -672,6 +672,20 @@ void FillerRepairEngine::Impl::buildPlannerData()
         maxPlacedInstance = slot->id;
         maxPlacedMaster = slot->masterId;
       }
+    }
+
+    // The raw TechLayer width/spacing above is NOT the checker's full reach:
+    // it also builds LEF58 width/spacing rules whose minValue can exceed both.
+    // getMaxRuleValue() is that true maximum, in sites. Taking it in keeps the
+    // guard at least as wide as the neighbourhood the checker will scan --
+    // a guard narrower than the rule reach truncates the checker's snapshot
+    // and can fabricate a min-width violation at the guard edge.
+    const DbCoord checkerReach =
+        static_cast<DbCoord>(checker->getMaxRuleValue()) * site_width_;
+    if (checkerReach > maxRule) {
+      maxRule = checkerReach;
+      maxRuleLayer = "<checker maxRuleValue>";
+      maxRuleKind = "CHECKER_REACH";
     }
 
     const bool placedWidthWins = maxPlacedWidth > maxRule;
@@ -1526,7 +1540,7 @@ ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
 }  // namespace
 
 FillerRepairEngine::Impl::Impl(Grid* grid, Network* network)
-    : grid_(grid), network_(network), log_(false)
+    : grid_(grid), network_(network), log_(debugLoggingDefault())
 {
 }
 

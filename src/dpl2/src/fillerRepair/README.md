@@ -72,9 +72,11 @@ nothing else, which is what keeps it database-free and portable.
 
 ## Debug transcript
 
-`FR_VERBOSE=1` enables the deterministic `[fr][stage]` transcript on the
-checker's lazily-created engine; planner tests use the same variable. Logging
-never changes search order or acceptance.
+The deterministic `[fr][stage]` transcript is **on by default**, so a
+production run leaves a diagnosable trail without a rebuild or a rerun. Set
+`FR_VERBOSE=0` to silence it (any other value, or unset, keeps it on); the
+same variable governs the planner tests. Logging never changes search order
+or acceptance.
 
 ## Portable fixture model
 

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include <drc/ImplantLayerChecker.h>
+#include <fillerRepair/Debug.h>
 
 namespace dpl2 {
 
@@ -38,9 +39,10 @@ class FillerRepairEngine
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
-  // Enables the [fr][stage] decision transcript. Disabled by default; the
-  // switch changes diagnostics output only and never changes search order or
-  // acceptance. Configure it outside concurrent precheck()/repair() calls.
+  // Enables the [fr][stage] decision transcript. ENABLED by default (set
+  // FR_VERBOSE=0 to silence); the switch changes diagnostics output only and
+  // never changes search order or acceptance. Configure it outside
+  // concurrent repair() calls.
   void setDebugLogging(bool enabled);
 
   // Binds the existing infrastructure to one design and registers configured
@@ -73,7 +75,7 @@ class FillerRepairEngine
   class Impl;
   Grid* grid_ = nullptr;
   Network* network_ = nullptr;
-  bool debug_logging_ = false;
+  bool debug_logging_ = debugLoggingDefault();
   std::unique_ptr<Impl> impl_;
 };
 

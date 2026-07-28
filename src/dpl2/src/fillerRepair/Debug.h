@@ -6,12 +6,15 @@
 // Each line states cause -> effect so a captured transcript reads as a
 // decision chain ("window L0 -> baseline -> candidate"), including the
 // concrete data that changed. Output goes to stdout with a "[fr][stage]"
-// prefix and is disabled by default; enabling it never changes search order
+// prefix. It is ENABLED by default so a production run leaves a diagnosable
+// trail; set FR_VERBOSE=0 to silence it. Logging never changes search order
 // or acceptance.
 
 #pragma once
 
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <sstream>
 #include <string>
 
@@ -38,10 +41,17 @@ inline std::string show(const Region& r)
   return cat(show(r.x), " rows[", r.rowLo, ',', r.rowHi, ']');
 }
 
+// Honours FR_VERBOSE: unset -> on, "0" -> off, anything else -> on.
+inline bool debugLoggingDefault()
+{
+  const char* env = std::getenv("FR_VERBOSE");
+  return env == nullptr || std::strcmp(env, "0") != 0;
+}
+
 class DebugLog
 {
  public:
-  explicit DebugLog(bool enabled = false) : enabled_(enabled) {}
+  explicit DebugLog(bool enabled = true) : enabled_(enabled) {}
 
   bool enabled() const { return enabled_; }
   void setEnabled(bool enabled) { enabled_ = enabled; }

@@ -47,7 +47,7 @@ struct RepairConfig
   // Reaching the cap ends the search with the existing "truncated"
   // semantics -- never a wrong answer, only a bounded give-up.
   int maxAdaptiveLevels = 32;
-  bool verbose = false;           // enables the [fr] debug transcript
+  bool verbose = true;            // [fr] transcript; FR_VERBOSE=0 silences
 };
 
 // --- Swap: the atomic operation (spec section 4) ---------------------------

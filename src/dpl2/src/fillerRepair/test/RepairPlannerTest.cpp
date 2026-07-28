@@ -57,8 +57,7 @@ class PlannerTest final : public ::testing::Test
 
 bool verbose()
 {
-  const char* env = std::getenv("FR_VERBOSE");
-  return env != nullptr && std::strcmp(env, "0") != 0;
+  return fr::debugLoggingDefault();
 }
 
 // --- Fixtures ---------------------------------------------------------------

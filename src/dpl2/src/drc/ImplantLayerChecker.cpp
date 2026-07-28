@@ -809,8 +809,6 @@ bool ImplantLayerChecker::repairFillers(const CheckRequest& request,
         }
         auto engine = std::make_unique<fillerRepair::FillerRepairEngine>(
             grid_, network_);
-        // Debug transcript switch; no effect on search or acceptance.
-        engine->setDebugLogging(std::getenv("FR_VERBOSE") != nullptr);
         if (!engine->init(desMgr_, *setting)) {
             repairEngineFailed_ = true;
             return false;
