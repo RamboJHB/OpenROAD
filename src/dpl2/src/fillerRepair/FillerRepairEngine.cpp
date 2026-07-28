@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "FillerRepairEngine.h"
+#include <fillerRepair/FillerRepairEngine.h>
 
 #include <algorithm>
 #include <atomic>
@@ -14,11 +14,11 @@
 #include <utility>
 #include <vector>
 
-#include "RepairPlanner.h"
-#include "infrastructure/Grid.h"
-#include "infrastructure/Objects.h"
-#include "infrastructure/fillerSetting.h"
-#include "infrastructure/network.h"
+#include <fillerRepair/RepairPlanner.h>
+#include <infrastructure/Grid.h>
+#include <infrastructure/Objects.h>
+#include <infrastructure/fillerSetting.h>
+#include <infrastructure/network.h>
 
 namespace dpl2 {
 namespace fillerRepair {
@@ -206,14 +206,6 @@ bool supportedOrientation(eUTL::PhysOrientation orientation)
          || orientation == eUTL::PhysOrientationE::MY;
 }
 
-// Used only to reject an obviously non-standard target replacement. Filler
-// authority itself is explicit: Node::isFiller() for placed instances and the
-// fillerSetting allow-list for replacement candidates.
-bool hasUdmFillerType(const eLIB::PhysLibCell& cell)
-{
-  return cell.getType().isCoreFiller() || cell.getType().isPadFiller();
-}
-
 std::string masterDebug(const eLIB::PhysLibCell& cell)
 {
   const eLIB::PhysMacroType& type = cell.getType();
@@ -231,7 +223,7 @@ std::string masterDebug(const eLIB::PhysLibCell& cell)
 bool isStandardCellMaster(const eLIB::PhysLibCell& cell)
 {
   return cell.getType().isCore() && !cell.getType().isBlock()
-         && !hasUdmFillerType(cell);
+         && !isFillerMaster(cell);
 }
 
 ViolationKind toKind(ipl::RuleSource source)
@@ -439,16 +431,6 @@ void FillerRepairEngine::Impl::buildPlannerData()
                ? std::max<DbCoord>((height + row_height_ - 1) / row_height_, 1)
                : 1;
   };
-  const auto isConfiguredFiller =
-      [&fillerMasters](eLIB::LibCellID libCellId) {
-        return std::any_of(
-            fillerMasters.begin(), fillerMasters.end(),
-            [libCellId](const eLIB::PhysLibCell* candidate) {
-              return candidate != nullptr
-                     && candidate->getLibCellId() == libCellId;
-            });
-      };
-
   // --- implant metadata: VT family / band polarity per master, derived from
   // the master's implant shapes exactly like the checker (layer identity via
   // the checker's TechLayerRelativeID, band anchored at the bottommost
@@ -481,9 +463,10 @@ void FillerRepairEngine::Impl::buildPlannerData()
     info.id = id;
     info.width = cell->getWidth().getStorage();
     info.height = heightInRows(cell->getHeight().getStorage());
-    // Replacement masters have no Node. The configured allow-list is their
-    // sole filler authority; UDM macro type is intentionally not consulted.
-    info.isFiller = isConfiguredFiller(cell->getLibCellId());
+    // One filler authority (infrastructure). The configured allow-list is a
+    // separate concept -- which filler masters may be OFFERED as
+    // replacements -- and lives in filler_master_ids_.
+    info.isFiller = nm->isFiller();
 
     // VT/polarity from implant RECT shapes (R0 frame).
     DbCoord bottomYl = 0;
@@ -608,14 +591,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
     if (masterInfo(masterId) == nullptr) {
       continue;  // trusted Network: master tables are built from it above
     }
-    MasterInfo& info = *masters_[static_cast<size_t>(masterId)];
+    const MasterInfo& info = *masters_[static_cast<size_t>(masterId)];
     const bool isFiller = node->isFiller();
-    if (isFiller) {
-      // A placed filler master may be guard-only and absent from the
-      // replacement allow-list. Preserve it as filler planner metadata while
-      // keeping filler_master_ids_ restricted to configured candidates.
-      info.isFiller = true;
-    }
 
     const InstanceId id = static_cast<InstanceId>(node->getId());
     PlacedInstance placed{id,

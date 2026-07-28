@@ -309,13 +309,10 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
   const PhysCell& inst = desMgr->getPhysCell(cellId);
   ndi.setId(id);
   ndi.setDbInst(cellId);
-  // Filler predicate must match ImplantLayerChecker::initFromUDM's
-  // MasterInput.isFiller (isCoreFiller || isPadFiller) -- FillerRepairEngine
-  // cross-checks the two flags per instance.
-  ndi.setType(inst.getPhysMaster().getType().isCoreFiller()
-                      || inst.getPhysMaster().getType().isPadFiller()
-                  ? Node::FILLER
-                  : Node::CELL);
+  // [fillerRepair-fix] One shared predicate (Objects.h) instead of an
+  // open-coded copy, so node classification, Master::isFiller() and
+  // fillerRepair can never disagree.
+  ndi.setType(isFillerMaster(inst.getPhysMaster()) ? Node::FILLER : Node::CELL);
   auto master = getMaster(inst.getPhysMaster().getLibCellId());
   ndi.setMaster(master);
   ndi.setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);

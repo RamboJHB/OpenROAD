@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-#include "SyntheticMasterCatalog.h"
+#include <fillerRepair/test/SyntheticMasterCatalog.h>
 
 #include <algorithm>
 #include <utility>

@@ -15,7 +15,7 @@
 #include <sstream>
 #include <string>
 
-#include "RepairTypes.h"
+#include <fillerRepair/RepairTypes.h>
 
 namespace dpl2::fillerRepair {
 

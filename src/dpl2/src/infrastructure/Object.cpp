@@ -140,6 +140,11 @@ bool Node::isFiller() const
 {
   return (type_ == FILLER);
 }
+// [fillerRepair-fix] see Objects.h: shares the one filler predicate.
+bool Master::isFiller() const
+{
+  return phys_lib_cell_ != nullptr && isFillerMaster(*phys_lib_cell_);
+}
 bool Node::isStdCell() const
 {
   if (master_ && master_->getPhysLibCell()) {

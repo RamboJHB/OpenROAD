@@ -17,8 +17,8 @@
 
 #include <vector>
 
-#include "Debug.h"
-#include "RepairTypes.h"
+#include <fillerRepair/Debug.h>
+#include <fillerRepair/RepairTypes.h>
 
 namespace dpl2::fillerRepair {
 

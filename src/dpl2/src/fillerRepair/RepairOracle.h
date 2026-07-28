@@ -14,7 +14,7 @@
 #include <cstdint>
 #include <vector>
 
-#include "RepairTypes.h"
+#include <fillerRepair/RepairTypes.h>
 
 namespace dpl2::fillerRepair {
 

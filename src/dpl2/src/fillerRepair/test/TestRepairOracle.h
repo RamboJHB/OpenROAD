@@ -31,8 +31,8 @@
 #include <map>
 #include <vector>
 
-#include "fillerRepair/RepairPlanner.h"
-#include "TestPlacementView.h"
+#include <fillerRepair/RepairPlanner.h>
+#include <fillerRepair/test/TestPlacementView.h>
 
 namespace dpl2::fillerRepair {
 

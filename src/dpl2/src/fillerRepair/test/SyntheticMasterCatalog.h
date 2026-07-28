@@ -31,9 +31,9 @@
 #include <string>
 #include <vector>
 
-#include "fillerRepair/RepairTypes.h"
-#include "fillerRepair/PlacementView.h"
-#include "TestPlacementView.h"
+#include <fillerRepair/RepairTypes.h>
+#include <fillerRepair/PlacementView.h>
+#include <fillerRepair/test/TestPlacementView.h>
 
 namespace dpl2::fillerRepair {
 

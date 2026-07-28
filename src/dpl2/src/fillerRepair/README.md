@@ -29,9 +29,18 @@ Infrastructure data is **trusted as-is**: RowId is the Grid row, x is
 core-left-relative (the same frame the checker's `CheckRequest` uses), and the
 engine performs no Network↔UDM cross-validation — with lazy init it typically
 runs mid-check, while the candidate Node already carries its proposed master
-ahead of the pending UDM commit. UDM master type is the filler authority
-(Network and checker agree by construction); `fillerSetting` remains the
-replacement-candidate allow list.
+ahead of the pending UDM commit.
+
+**One filler authority.** `dpl2::isFillerMaster()` (infrastructure
+`Objects.h`) is the single predicate: `Network::addNode` classifies nodes with
+it, `Node::isFiller()` / `Master::isFiller()` report it, and fillerRepair asks
+those two rather than re-deriving anything from UDM macro flags.
+`fillerSetting` is a separate concept -- which filler masters may be *offered*
+as replacements -- and stays in the engine's `filler_master_ids_` allow list.
+
+**Includes** use angle brackets throughout, resolved from the `src/` root
+(`<fillerRepair/RepairPlanner.h>`, `<infrastructure/Grid.h>`), matching the
+delivered infrastructure/checker sources.
 
 ## Main files
 

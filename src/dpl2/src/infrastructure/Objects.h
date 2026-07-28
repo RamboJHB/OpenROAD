@@ -36,10 +36,21 @@ class MasterEdge
   Rect bbox_;
 };
 
+// [fillerRepair-fix] Single filler authority for the whole flow: Network node
+// classification, Master::isFiller() and fillerRepair all call this, so the
+// predicate cannot drift between them.
+inline bool isFillerMaster(const PhysLibCell& cell)
+{
+  return cell.getType().isCoreFiller() || cell.getType().isPadFiller();
+}
+
 class Master
 {
  public:
   bool isMultiRow() const;
+  // [fillerRepair-fix] Master-level counterpart of Node::isFiller(), for
+  // replacement candidates that have no placed instance.
+  bool isFiller() const;
   const std::vector<MasterEdge>& getEdges() const;
   void setMultiRow(bool in);
   void addEdge(const MasterEdge& edge);

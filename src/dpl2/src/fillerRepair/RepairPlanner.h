@@ -23,10 +23,10 @@
 #include <string>
 #include <vector>
 
-#include "Debug.h"
-#include "PlacementView.h"
-#include "RepairOracle.h"
-#include "RepairTypes.h"
+#include <fillerRepair/Debug.h>
+#include <fillerRepair/PlacementView.h>
+#include <fillerRepair/RepairOracle.h>
+#include <fillerRepair/RepairTypes.h>
 
 namespace dpl2::fillerRepair {
 

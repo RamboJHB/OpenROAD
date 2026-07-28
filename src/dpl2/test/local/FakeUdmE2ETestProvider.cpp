@@ -11,9 +11,9 @@
 #include <memory>
 
 #include "fake_udm.h"
-#include "infrastructure/Grid.h"
-#include "infrastructure/Padding.h"
-#include "infrastructure/network.h"
+#include <infrastructure/Grid.h>
+#include <infrastructure/Padding.h>
+#include <infrastructure/network.h>
 
 namespace dpl2::fillerRepair::test {
 namespace {

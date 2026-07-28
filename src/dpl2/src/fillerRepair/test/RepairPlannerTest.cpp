@@ -17,10 +17,10 @@
 
 #include <gtest/gtest.h>
 
-#include "fillerRepair/RepairPlanner.h"
-#include "TestPlacementView.h"
-#include "TestRepairOracle.h"
-#include "SyntheticMasterCatalog.h"
+#include <fillerRepair/RepairPlanner.h>
+#include <fillerRepair/test/TestPlacementView.h>
+#include <fillerRepair/test/TestRepairOracle.h>
+#include <fillerRepair/test/SyntheticMasterCatalog.h>
 
 namespace fr = dpl2::fillerRepair;
 

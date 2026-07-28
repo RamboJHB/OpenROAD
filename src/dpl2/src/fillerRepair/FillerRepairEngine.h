@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-#include "drc/ImplantLayerChecker.h"
+#include <drc/ImplantLayerChecker.h>
 
 namespace dpl2 {
 
