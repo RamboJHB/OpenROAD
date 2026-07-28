@@ -31,6 +31,28 @@ engine performs no Network↔UDM cross-validation — with lazy init it typicall
 runs mid-check, while the candidate Node already carries its proposed master
 ahead of the pending UDM commit.
 
+## Neighbourhood expansion (`expandByCellRing`)
+
+A second public entry, independent of repair: DePlace hands in a `Rect` and
+gets back the bounding rectangle of that region grown by N **cells** on the
+left and right and N **rows** up and down (default 3).
+
+```cpp
+::Rect grown = engine.expandByCellRing(region);        // 3 rings
+::Rect tight = engine.expandByCellRing(region, 1);     // 1 ring
+```
+
+Rings are counted in cells, not sites or DBU. Selection is by index into the
+row's x-sorted instance list, so **a std cell is a ring member like any other
+and never stops the walk** — the same `instancesInRing` primitive the repair
+guard uses. Rows and columns clamp at the core edges, so the result never
+leaves the placeable area, and the output always snaps outward to whole cells
+and whole rows.
+
+Coordinates are **core-relative DBU** — the frame `Grid::gridX(DbuX)` and
+`Node::getLeft()` use. `init()` must have succeeded; otherwise the input is
+returned unchanged (with a transcript line saying so).
+
 **One filler authority.** `dpl2::isFillerMaster()` (infrastructure
 `Objects.h`) is the single predicate: `Network::addNode` classifies nodes with
 it, `Node::isFiller()` / `Master::isFiller()` report it, and fillerRepair asks

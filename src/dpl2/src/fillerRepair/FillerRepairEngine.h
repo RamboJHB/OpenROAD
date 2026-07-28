@@ -65,6 +65,21 @@ class FillerRepairEngine
   // from the exact CheckRequest built by ImplantLayerChecker::check().
   RepairOutcome repair(const ipl::CheckRequest& request);
 
+  // Grows `region` outward by `rings` whole placed cells on the left and
+  // right and by `rings` rows above and below, and returns the bounding
+  // rectangle of that neighbourhood.
+  //
+  // Rings are counted in CELLS, not sites or DBU: each step takes the next
+  // placed instance regardless of its kind, so a std cell is a ring member
+  // like any other and never stops the growth. Rows and columns clamp at the
+  // core edges, so the result never leaves the placeable area.
+  //
+  // Coordinates are CORE-RELATIVE DBU -- the frame Grid::gridX(DbuX) and
+  // Node::getLeft() use. Subtract/add Grid::getCore() origin to convert.
+  //
+  // init() must have succeeded; otherwise `region` is returned unchanged.
+  ::Rect expandByCellRing(const ::Rect& region, int rings = 3) const;
+
   // Direct entry retained for focused engine tests and callers that already
   // have UDM handles. Normal placement checking enters through
   // ImplantLayerChecker::check().

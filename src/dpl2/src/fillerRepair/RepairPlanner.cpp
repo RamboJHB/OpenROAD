@@ -341,35 +341,6 @@ DbCoord estimateRuleDistance(const std::vector<Violation>& violations,
 
 namespace {
 
-// Instances of one row overlapping `x`, plus up to `ring` whole instances
-// beyond each side. This is the shared "cell ring" primitive for guard
-// regions and the unfixable fast check. The instances overlapping x are the
-// contiguous index range [lo, hi): lo = first whose right edge exceeds x.xl,
-// hi = first that starts at/after x.xh. When nothing overlaps, lo == hi at the
-// gap and the +/- ring extension yields exactly the nearest instances on each
-// side, matching the previous full-row-scan behavior.
-std::vector<PlacedInstance> instancesInRing(const PlacementView& view,
-                                            RowId rowId,
-                                            const XInterval& x,
-                                            int ring)
-{
-  const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
-  std::vector<PlacedInstance> result;
-  const int n = static_cast<int>(all.size());
-  if (n == 0) {
-    return result;
-  }
-
-  const int lo = firstRightEdgeAfter(view, all, x.xl);
-  const int hi = firstStartAtOrAfter(all, x.xh);
-  const int from = std::max(0, lo - ring);
-  const int to = std::min(n, hi + ring);
-  for (int i = from; i < to; ++i) {
-    result.push_back(all[i]);
-  }
-  return result;
-}
-
 std::vector<RowId> clampRows(const PlacementView& view, RowId lo, RowId hi)
 {
   std::vector<RowId> result;
