@@ -2962,6 +2962,113 @@ void testPlannerAdaptiveLevelCapTruncates()
   EXPECT_TRUE(sawTruncated);
 }
 
+// The per-repair ceiling bounds the whole search, not one window: with the
+// level cap alone the worst case is maxAdaptiveLevels windows each spending a
+// full per-window budget.
+void testPlannerPerRepairBudgetTruncates()
+{
+  fr::TestPlacementView design = makeLibrary();
+  design.addRow(0, 0, 20)
+      .place(100, fillerMaster(4, kVt1), 0, 0)
+      .place(101, fillerMaster(4, kVt1), 0, 4)
+      .place(102, cellMaster(kVt2), 0, 8)
+      .place(140, fillerMaster(2, kVt1), 0, 12)
+      .place(141, fillerMaster(2, kVt1), 0, 14)
+      .place(142, fillerMaster(4, kVt1), 0, 16);
+
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {11, 14});
+  fr::ViolationParticipant participant;
+  participant.instanceId = 140;
+  participant.masterId = fillerMaster(2, kVt1);
+  participant.rowId = 0;
+  participant.xRange = {12, 14};
+  participant.isFiller = true;
+  original.participants = {participant};
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  request.violations = {original};
+
+  AdaptiveSolutionChecker checker;
+  checker.original = original;
+  checker.solutionInstance = 141;
+  fr::RepairConfig config;
+  config.adaptiveStepFillers = 1;
+  // One call total: the L0 baseline consumes it, so no overlay is ever
+  // evaluated and the next adaptive level is refused outright.
+  config.checkerCallBudgetPerRepair = 1;
+  config.verbose = verbose();
+  fr::internal::RepairPlanner planner(design, checker, config);
+
+  const fr::FillerRepairResult result = planner.repair(request);
+  EXPECT_TRUE(!result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  bool sawBudget = false;
+  bool sawTruncated = false;
+  for (const fr::Diagnostic& diagnostic : result.diagnostics) {
+    sawBudget |= diagnostic.code == "RepairBudgetExhausted"
+                 && diagnostic.message.find("checkerCallBudgetPerRepair")
+                        != std::string::npos;
+    sawTruncated |= diagnostic.code == "NoCleanOverlay"
+                    && diagnostic.message.find("truncated")
+                           != std::string::npos;
+  }
+  EXPECT_TRUE(sawBudget);
+  EXPECT_TRUE(sawTruncated);
+}
+
+// The same fixture solves once the ceiling allows the search to proceed, so
+// the truncation above is the budget and not the layout.
+void testPlannerPerRepairBudgetDisabledStillSolves()
+{
+  fr::TestPlacementView design = makeLibrary();
+  design.addRow(0, 0, 20)
+      .place(100, fillerMaster(4, kVt1), 0, 0)
+      .place(101, fillerMaster(4, kVt1), 0, 4)
+      .place(102, cellMaster(kVt2), 0, 8)
+      .place(140, fillerMaster(2, kVt1), 0, 12)
+      .place(141, fillerMaster(2, kVt1), 0, 14)
+      .place(142, fillerMaster(4, kVt1), 0, 16);
+
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {11, 14});
+  fr::ViolationParticipant participant;
+  participant.instanceId = 140;
+  participant.masterId = fillerMaster(2, kVt1);
+  participant.rowId = 0;
+  participant.xRange = {12, 14};
+  participant.isFiller = true;
+  original.participants = {participant};
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 102);
+  request.violations = {original};
+
+  AdaptiveSolutionChecker checker;
+  checker.original = original;
+  checker.solutionInstance = 141;
+  fr::RepairConfig config;
+  config.adaptiveStepFillers = 1;
+  config.checkerCallBudgetPerRepair = 0;  // disabled
+  config.verbose = verbose();
+  fr::internal::RepairPlanner planner(design, checker, config);
+
+  const fr::FillerRepairResult result = planner.repair(request);
+  EXPECT_TRUE(result.hasSolution);
+  for (const fr::Diagnostic& diagnostic : result.diagnostics) {
+    EXPECT_TRUE(diagnostic.code != "RepairBudgetExhausted");
+  }
+}
+
 void testPlannerAdaptiveContinuesPastUnchangedBlocking()
 {
   fr::TestPlacementView design = makeLibrary();
@@ -3723,6 +3830,10 @@ void registerPlannerTests()
        testPlannerAdaptiveL1FindsFarFiller},
       {"planner_adaptive_level_cap_truncates",
        testPlannerAdaptiveLevelCapTruncates},
+      {"planner_per_repair_budget_truncates",
+       testPlannerPerRepairBudgetTruncates},
+      {"planner_per_repair_budget_disabled_still_solves",
+       testPlannerPerRepairBudgetDisabledStillSolves},
       {"planner_adaptive_continues_past_unchanged_blocking",
        testPlannerAdaptiveContinuesPastUnchangedBlocking},
       {"gate_baseline_unexpected_inwindow_aborts",

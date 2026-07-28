@@ -28,6 +28,12 @@ struct RepairOutcome
   std::vector<ipl::Diagnostic> diagnostics;
 };
 
+// Why a failing check produced no repair attempt at all. Emitted on the
+// [fr] transcript so a run that silently repairs nothing is diagnosable
+// without a rebuild; the message text stays inside this module rather than
+// in the checker's repair hook.
+void reportRepairUnavailable(const char* reason);
+
 class FillerRepairEngine
 {
  public:

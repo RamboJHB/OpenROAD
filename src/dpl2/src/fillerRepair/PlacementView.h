@@ -8,14 +8,16 @@
 // nothing else. The planner never mutates the design; commit stays with the
 // infrastructure owner.
 //
-// Thread model: after initialization the runtime snapshot is immutable, so all
-// const methods must be safe for CONCURRENT readers (any internal lazy cache
-// must synchronize itself) and returned references stay valid for the view's
-// lifetime. Test implementations may use mutable builders but are test-only.
+// Thread model: ONE repair at a time. The const methods here are not required
+// to be safe for concurrent readers -- the runtime implementation fills lazy
+// per-row caches (legal spans) from inside them, and calls on one
+// engine/checker pair must not overlap in the first place. What const does
+// guarantee is that a call never changes what a later call answers, and that
+// returned references stay valid for the view's lifetime. Test
+// implementations may use mutable builders but are test-only.
 
 #pragma once
 
-#include <algorithm>
 #include <algorithm>
 #include <vector>
 

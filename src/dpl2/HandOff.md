@@ -313,9 +313,12 @@ optional planner debug logging is disabled.
   origin X equal to the core left edge, single contiguous span per row,
   orientations R0/R180/MX/MY. See CHECKER_REPAIR_CONTRACT.md "Row/column
   frames" for why (the checker mixes an iteration frame and a Grid frame).
-- The supplied PhysDesMgr must be the UDM Session current design because the
-  final checker constructor reads Session; init validates and fails closed on
-  mismatch. The UDM design/library objects must outlive the engine.
+- The supplied PhysDesMgr need NOT be the UDM Session current design: the
+  engine constructs its private oracle checker with that exact PhysDesMgr
+  (the `[fillerRepair-fix]` three-argument `ImplantLayerChecker` ctor), so it
+  is self-consistent by construction. The former `active_design_mismatch`
+  fatal existed only because the oracle used to read Session. The UDM
+  design/library objects must still outlive the engine.
 - Destination build must add the module directory and link `dpl2::fillerRepair`,
   plus take the checker entry patch;
   no repair-specific infrastructure refresh file or API is part of the

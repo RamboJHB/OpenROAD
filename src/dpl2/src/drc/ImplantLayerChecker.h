@@ -267,6 +267,12 @@ class ImplantLayerChecker final : public DRCChecker
 {
 public:
     ImplantLayerChecker(Grid* grid, Network* network);
+    // [fillerRepair-fix] Bind to an explicit design instead of the global
+    // Session current design. fillerRepair owns a private oracle checker and
+    // already knows the PhysDesMgr its engine was initialized with; taking it
+    // from Session made that oracle depend on global state it does not
+    // control. Same initialization otherwise.
+    ImplantLayerChecker(Grid* grid, Network* network, PhysDesMgr* desMgr);
     ~ImplantLayerChecker();
 
     bool check(const Node* cell, GridX x, GridY y,
@@ -400,7 +406,10 @@ private:
     PhysDesMgr* desMgr_ = nullptr;
     const fillerSetting* repairSetting_ = nullptr;
     mutable std::unique_ptr<fillerRepair::FillerRepairEngine> repairEngine_;
+    // Structural init failure -- permanent. "Not configured yet" is separate
+    // and retryable; it only suppresses the repeated notice.
     mutable bool repairEngineFailed_ = false;
+    mutable bool repairUnconfiguredReported_ = false;
 
     std::map<eLIB::TechLayerRelativeID, LayerId> techLayerToIdx_;
     std::map<std::string, LayerId> layerNameToIdx_;

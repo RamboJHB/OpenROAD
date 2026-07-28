@@ -203,6 +203,16 @@ ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network)
     }
 }
 
+// [fillerRepair-fix] Explicit-design constructor; see the header.
+ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network,
+    PhysDesMgr* desMgr)
+    : DRCChecker(grid), network_(network)
+{
+    if (grid_ && network_ && desMgr) {
+        init(desMgr);
+    }
+}
+
 ImplantLayerChecker::~ImplantLayerChecker()
 {
 }
@@ -778,6 +788,7 @@ void ImplantLayerChecker::setFillerRepairContext(PhysDesMgr* desMgr,
     repairSetting_ = setting;
     repairEngine_.reset();
     repairEngineFailed_ = false;
+    repairUnconfiguredReported_ = false;
 }
 
 namespace {
@@ -796,7 +807,7 @@ bool ImplantLayerChecker::repairFillers(const CheckRequest& request,
     std::vector<FillerCellRecord>& fcRecord) const
 {
     if (repairEngineFailed_) {
-        return false;  // one failed lazy init fails all later repairs closed
+        return false;  // structural init failure: fail closed from now on
     }
     if (!repairEngine_) {
         const fillerSetting* setting = repairSetting_ != nullptr
@@ -804,15 +815,33 @@ bool ImplantLayerChecker::repairFillers(const CheckRequest& request,
             : (g_fillerSettingProvider != nullptr ? g_fillerSettingProvider()
                                                   : nullptr);
         if (setting == nullptr || desMgr_ == nullptr) {
-            repairEngineFailed_ = true;
+            // NOT a permanent failure: with lazy init this can simply mean
+            // set_filler_option has not run yet at this point in the flow.
+            // Latching the failure flag here would silently skip repair for
+            // the rest of the run even once the configuration arrives, so we
+            // report once and retry on the next failing check (re-reading the
+            // provider costs a pointer call).
+            if (!repairUnconfiguredReported_) {
+                repairUnconfiguredReported_ = true;
+                fillerRepair::reportRepairUnavailable(desMgr_ == nullptr
+                    ? "no PhysDesMgr (checker init has not run)"
+                    : "no fillerSetting (set_filler_option has not run and no"
+                      " setting provider is registered); will retry");
+            }
             return false;
         }
         auto engine = std::make_unique<fillerRepair::FillerRepairEngine>(
             grid_, network_);
         if (!engine->init(desMgr_, *setting)) {
+            // Structural: the data the engine needs is present but unusable.
+            // Retrying would fail identically, so disable repair here.
             repairEngineFailed_ = true;
+            fillerRepair::reportRepairUnavailable(
+                "engine initialization failed; filler repair is disabled for"
+                " this checker (use setFillerRepairContext to reset)");
             return false;
         }
+        repairUnconfiguredReported_ = false;
         repairEngine_ = std::move(engine);
     }
     fillerRepair::RepairOutcome outcome = repairEngine_->repair(request);

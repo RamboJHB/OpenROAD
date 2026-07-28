@@ -435,7 +435,6 @@ void FillerRepairEngine::Impl::buildPlannerData()
   // the master's implant shapes exactly like the checker (layer identity via
   // the checker's TechLayerRelativeID, band anchored at the bottommost
   // implant rect -- the rebuildMasterShapes rule).
-  const eLIB::TechLib& tech = desMgr->getTopTech();
   const auto implantLayerOf =
       [&](eLIB::TechLayerRelativeID relId) -> const ipl::Layer* {
     for (const ipl::Layer& layer : checker->getLayers()) {
@@ -631,34 +630,23 @@ void FillerRepairEngine::Impl::buildPlannerData()
               });
   }
 
-  // --- default snapshot halo: cover both the largest checker rule and two
+  // --- default snapshot halo: cover both the checker's rule reach and two
   // widest placed instances. The latter is a conservative horizontal
   // approximation of the spec's two-cell guard ring.
+  //
+  // Rule reach has exactly ONE source: the checker. `getMaxRuleValue()` is
+  // literally the radius (in sites) of the neighbourhood `getSnapshot` scans,
+  // so a guard at least that wide is the correctness condition -- a narrower
+  // guard truncates the checker's snapshot and can fabricate a min-width
+  // violation at the guard edge.
+  //
+  // We deliberately do NOT re-derive reach from raw TechLayer
+  // width/minSpacing. That was a second, independent derivation of the same
+  // quantity: the checker builds LEF58 rules whose minValue can exceed both
+  // raw values, so the two formulas drifted apart once and would drift again
+  // on the next rule type the checker learns. Any implant width the checker
+  // does not turn into a rule is also a width it never scans for.
   {
-    DbCoord maxRule = 0;
-    std::string maxRuleLayer = "none";
-    std::string maxRuleKind = "none";
-    for (const eLIB::TechLayer& layer : tech.getLayerIter()) {
-      if (!layer.isImplant()) {
-        continue;
-      }
-      const DbCoord width = layer.getWidth().getStorage();
-      const DbCoord spacing = layer.getMinSpacing().getStorage();
-      log_.msg("engine",
-               cat("implant rule input: layer=\"", layer.getName(),
-                   "\" widthRaw=", width, " spacingRaw=", spacing));
-      if (width > maxRule) {
-        maxRule = width;
-        maxRuleLayer = layer.getName();
-        maxRuleKind = "WIDTH";
-      }
-      if (spacing > maxRule) {
-        maxRule = spacing;
-        maxRuleLayer = layer.getName();
-        maxRuleKind = "SPACING";
-      }
-    }
-
     DbCoord maxPlacedWidth = 0;
     InstanceId maxPlacedInstance = -1;
     MasterId maxPlacedMaster = -1;
@@ -674,41 +662,23 @@ void FillerRepairEngine::Impl::buildPlannerData()
       }
     }
 
-    // The raw TechLayer width/spacing above is NOT the checker's full reach:
-    // it also builds LEF58 width/spacing rules whose minValue can exceed both.
-    // getMaxRuleValue() is that true maximum, in sites. Taking it in keeps the
-    // guard at least as wide as the neighbourhood the checker will scan --
-    // a guard narrower than the rule reach truncates the checker's snapshot
-    // and can fabricate a min-width violation at the guard edge.
+    // getMaxRuleValue() is in SITES; everything else here is in DBU. This
+    // multiplication is the only place the two units meet.
+    const int reachSites = checker->getMaxRuleValue();
     const DbCoord checkerReach =
-        static_cast<DbCoord>(checker->getMaxRuleValue()) * site_width_;
-    if (checkerReach > maxRule) {
-      maxRule = checkerReach;
-      maxRuleLayer = "<checker maxRuleValue>";
-      maxRuleKind = "CHECKER_REACH";
-    }
+        static_cast<DbCoord>(reachSites) * site_width_;
 
-    const bool placedWidthWins = maxPlacedWidth > maxRule;
-    const DbCoord haloUnit = std::max(maxRule, maxPlacedWidth);
+    const bool placedWidthWins = maxPlacedWidth > checkerReach;
+    const DbCoord haloUnit = std::max(checkerReach, maxPlacedWidth);
     default_halo_x_ = 2 * haloUnit;
-    if (placedWidthWins) {
-      log_.msg(
-          "engine",
-          cat("default halo source: kind=PLACED_MASTER_WIDTH instance=",
-              maxPlacedInstance, " master=", maxPlacedMaster,
-              " rawValue=", maxPlacedWidth, " ruleCandidate{layer=\"",
-              maxRuleLayer, "\" kind=", maxRuleKind,
-              " rawValue=", maxRule,
-              "} multiplier=2 defaultHaloX=", default_halo_x_));
-    } else {
-      log_.msg(
-          "engine",
-          cat("default halo source: kind=IMPLANT_", maxRuleKind,
-              " layer=\"", maxRuleLayer, "\" rawValue=", maxRule,
-              " placedCandidate{instance=", maxPlacedInstance,
-              " master=", maxPlacedMaster, " rawValue=", maxPlacedWidth,
-              "} multiplier=2 defaultHaloX=", default_halo_x_));
-    }
+    log_.msg(
+        "engine",
+        cat("default halo source: kind=",
+            placedWidthWins ? "PLACED_MASTER_WIDTH" : "CHECKER_RULE_REACH",
+            " checkerReach{sites=", reachSites, " dbu=", checkerReach,
+            "} widestPlaced{instance=", maxPlacedInstance,
+            " master=", maxPlacedMaster, " dbu=", maxPlacedWidth,
+            "} multiplier=2 defaultHaloX=", default_halo_x_));
   }
 
   const auto placedCount = std::count_if(
@@ -1717,21 +1687,12 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " requestedPhysDesMgr=", static_cast<const void*>(desMgr)));
     return false;
   }
-  eUNL::Design* activeDesign
-      = eUNL::Session::getSession().getCurrentDesign();
-  eUNL::PhysDesMgr* activeDesMgr
-      = activeDesign != nullptr ? activeDesign->getPhysDesMgr() : nullptr;
-  if (activeDesign == nullptr || activeDesMgr != desMgr) {
-    failInit("active_design_mismatch",
-             cat("fatal: PhysDesMgr is not the Session current design: "
-                 "activeDesign=",
-                 static_cast<const void*>(activeDesign),
-                 " activePhysDesMgr=",
-                 static_cast<const void*>(activeDesMgr),
-                 " requestedPhysDesMgr=", static_cast<const void*>(desMgr),
-                 " settingDesign=", static_cast<const void*>(settingDesign)));
-    return false;
-  }
+  // There is deliberately no "is this the Session current design?" gate. It
+  // existed only because the private oracle checker used to take its design
+  // from the global Session, so anything but the current design would have
+  // silently scanned the wrong one. The oracle is now constructed with this
+  // exact PhysDesMgr, which makes the engine self-consistent by construction
+  // and leaves no reason to reject a design that is not Session's current.
   if (fillerSettings.getFillerPhysCells().empty()) {
     failInit("empty_filler_allow_list",
              cat("fatal: fillerSetting::getFillerPhysCells() is empty: "
@@ -1809,7 +1770,10 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   config_.verbose = debug_logging_;
   config_.repair.verbose = debug_logging_;
   log_.setEnabled(debug_logging_);
-  checker_ = std::make_unique<ipl::ImplantLayerChecker>(grid_, network_);
+  // Bind the private oracle to the design this engine was initialized with,
+  // not to whatever Session happens to consider current.
+  checker_ =
+      std::make_unique<ipl::ImplantLayerChecker>(grid_, network_, des_mgr_);
   buildPlannerData();
   bool checkerReady = true;
   for (const ipl::Diagnostic& diagnostic : checker_->getDiags()) {
@@ -1841,6 +1805,12 @@ bool FillerRepairEngine::Impl::rebuildOracle()
     oracle_diagnostics_.push_back(toPublicDiagnostic(diagnostic));
   }
   return false;
+}
+
+void reportRepairUnavailable(const char* reason)
+{
+  DebugLog(debugLoggingDefault())
+      .msg("engine", cat("repair unavailable: ", reason));
 }
 
 FillerRepairEngine::FillerRepairEngine(Grid* grid, Network* network)

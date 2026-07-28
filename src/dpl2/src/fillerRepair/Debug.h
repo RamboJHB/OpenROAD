@@ -17,6 +17,7 @@
 #include <cstring>
 #include <sstream>
 #include <string>
+#include <type_traits>
 
 #include <fillerRepair/RepairTypes.h>
 
@@ -61,6 +62,19 @@ class DebugLog
     if (enabled_) {
       std::printf("[fr][%s] %s\n", stage, text.c_str());
       std::fflush(stdout);
+    }
+  }
+
+  // Deferred form for call sites inside loops: msg(stage, [&] { return
+  // cat(...); }). The plain overload above evaluates its argument at the call
+  // site, so a silenced log still pays for every cat() -- here the callable
+  // only runs when the transcript is on.
+  template <typename Fn,
+            typename = std::enable_if_t<std::is_invocable_v<const Fn&>>>
+  void msg(const char* stage, const Fn& make) const
+  {
+    if (enabled_) {
+      msg(stage, std::string(make()));
     }
   }
 

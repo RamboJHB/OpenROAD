@@ -244,8 +244,23 @@ Supersedes the 2026-07-20 checker-entry wiring above where they differ.
   fillerSetting comes from `setFillerRepairContext()` (harnesses) or the
   provider `DePlace` registers via `setFillerRepairSettingProvider()`
   (dependency inversion: the checker never names DePlace, so builds without
-  it still link). A failed lazy init fails closed for the checker's lifetime
-  or until a new context is set.
+  it still link). Two outcomes are distinguished, and they are NOT the same
+  thing:
+  - **not configured yet** (no fillerSetting / no desMgr): with lazy init the
+    first failing check can legitimately precede `set_filler_option`. The
+    check simply returns illegal, a one-time `[fr]` notice is emitted, and
+    the NEXT failing check tries again. Latching this would silently disable
+    repair for the rest of the run once the configuration did arrive.
+  - **structural init failure** (`FillerRepairEngine::init` returned false):
+    the inputs are present but unusable, so retrying would fail identically.
+    Repair is disabled for the checker's lifetime or until
+    `setFillerRepairContext()` sets a new context.
+- [fillerRepair-fix] `ImplantLayerChecker(Grid*, Network*, PhysDesMgr*)`:
+  an additive constructor that binds to an explicit design instead of the
+  global `Session` current design. fillerRepair owns a private oracle checker
+  and already knows the PhysDesMgr its engine was initialized with; taking it
+  from Session made that oracle depend on global state it does not control.
+  The two-argument constructor is unchanged.
 - Global placement precheck is gone from the engine; infrastructure owns
   whole-design placement legality. The engine keeps only the regional
   gap/overlap gate over rows a repair can edit, with per-row legal spans
@@ -266,11 +281,11 @@ Supersedes the 2026-07-20 checker-entry wiring above where they differ.
 
 ## Verified test boundary (2026-07-28)
 
-Portable planner 82 + portable checker E2E 59 build and run in BOTH harness
-modes (fake-UDM and the real-UDM-mode migration gate: 141/141). The fixture
+Portable planner 84 + portable checker E2E 59 build and run in BOTH harness
+modes (fake-UDM and the real-UDM-mode migration gate: 143/143). The fixture
 invariants they depend on -- rule/layer ids as container indices, the
 band-polarity model, the `maxRuleValue_`-sized snapshot window and min width
 -- are documented in `fillerRepair/README.md`; the spacing scenarios were
 re-derived against that window (neighbour run within reach, one editable
 bridge filler across a sub-minimum gap). Local fake-UDM engine regression:
-62 cases. Full local suite 203/203 normal + ASan, gate 141/141 normal + ASan.
+74 cases. Full local suite 217/217 normal + ASan, gate 143/143 normal + ASan.

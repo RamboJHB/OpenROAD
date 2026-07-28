@@ -35,6 +35,13 @@ namespace dpl2::fillerRepair {
 struct RepairConfig
 {
   int checkerCallBudgetPerWindow = 512;  // includes the baseline request
+  // Ceiling on checker calls for ONE repair() across every adaptive level.
+  // Without it the worst case is maxAdaptiveLevels windows each spending a
+  // full per-window budget (32 x 512 = 16384 calls), which is exactly the
+  // path a no-solution case at 100% utilization with sparse fillers takes.
+  // Reaching it ends the search with the existing "truncated" semantics --
+  // never a wrong answer, only a bounded give-up. <= 0 disables the cap.
+  int checkerCallBudgetPerRepair = 2048;
   int batchSize = 32;
   int maxSubsetSize = 4;          // large-window truncation only (spec 6.7)
   int memberCapSize2 = 24;        // N_2

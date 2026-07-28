@@ -20,6 +20,20 @@ if (legal && !fcRecord.empty()) {
 checker.setFillerRepairContext(desMgr, &fillerSetting);
 ```
 
+**One rule-reach authority.** The checker's `getMaxRuleValue()` is literally
+the radius (in sites) of the neighbourhood its `getSnapshot` scans, so the
+engine sizes its guard from that number alone and never re-derives reach from
+raw TechLayer width/spacing. A guard narrower than the reach truncates the
+checker's snapshot and can fabricate a min-width violation at the guard edge;
+two independent derivations of the same quantity is how that happened once
+already.
+
+**Bounded search.** `checkerCallBudgetPerWindow` (512) bounds one window;
+`checkerCallBudgetPerRepair` (2048) bounds the whole `repair()` across every
+adaptive level, so the worst case is not `maxAdaptiveLevels` full windows.
+Reaching either ends the search with the existing *truncated* semantics --
+never a wrong answer, only a bounded give-up.
+
 The engine's only placement gate is **regional**: repair refuses to run on a
 gap/overlap inside the rows it can edit (legal spans derived from Grid pixels
 lazily, per row). Whole-design placement legality is infrastructure's own
@@ -79,6 +93,11 @@ production run leaves a diagnosable trail without a rebuild or a rerun. Set
 same variable governs the planner tests. Logging never changes search order
 or acceptance.
 
+`log.msg(stage, text)` evaluates its argument at the call site, so inside a
+loop use the deferred form -- `log.msg(stage, [&] { return cat(...); })` or a
+surrounding `if (log.enabled())` block -- and a silenced transcript costs
+nothing there.
+
 ## Portable fixture model
 
 The portable checker fixtures encode four invariants of the current checker;
@@ -133,9 +152,9 @@ destination wiring exists.
 
 ## Verification
 
-- portable planner: 82 cases; portable checker E2E: 59 cases (both compile,
+- portable planner: 84 cases; portable checker E2E: 59 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
-- repository-local fake-UDM engine regression: 62 cases under
+- repository-local fake-UDM engine regression: 74 cases under
   `src/dpl2/test/local/`.
-- 2026-07-28 full local suite: 203/203 normal and ASan; migration gate
-  141/141 normal and ASan.
+- 2026-07-28 full local suite: 217/217 normal and ASan; migration gate
+  143/143 normal and ASan; standalone module build 143/143.

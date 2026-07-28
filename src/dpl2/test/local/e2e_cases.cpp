@@ -182,7 +182,10 @@ class EngineHarness
 class CheckerHarness
 {
  public:
-  explicit CheckerHarness(const frt::DesignSetup& setup)
+  // presetContext=false leaves the repair context unset so a test can drive
+  // the production path instead: the registered setting provider.
+  explicit CheckerHarness(const frt::DesignSetup& setup,
+                          bool presetContext = true)
       : objects_(setup)
   {
     if (!objects_.hasDesign() || !objects_.hasInfrastructure()) {
@@ -197,9 +200,16 @@ class CheckerHarness
     // The checker self-initializes from the activated Session design; the
     // repair engine is created lazily on the first failing check. The seam
     // presets what production obtains from the DePlace-registered provider.
-    checker_->setFillerRepairContext(objects_.design().desMgr(),
-                                     filler_setting_.get());
+    if (presetContext) {
+      checker_->setFillerRepairContext(objects_.design().desMgr(),
+                                       filler_setting_.get());
+    }
     checker_ready_ = true;
+  }
+
+  const dpl2::fillerSetting* fillerSetting() const
+  {
+    return filler_setting_.get();
   }
 
   bool checkerReady() const { return checker_ready_; }
@@ -268,6 +278,15 @@ class FillerRepairEngineE2E
 {
 };
 
+// Stand-in for the provider DePlace registers. The pointer it returns is
+// swapped mid-test to model set_filler_option running after the first
+// failing check.
+const dpl2::fillerSetting* g_providedSetting = nullptr;
+const dpl2::fillerSetting* provideTestSetting()
+{
+  return g_providedSetting;
+}
+
 }  // namespace
 
 
@@ -317,14 +336,14 @@ TEST(FillerRepairInitializationDiagnostics,
 
   ASSERT_TRUE(initialized) << transcript;
   EXPECT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
-  EXPECT_NE(transcript.find("[fr][engine] implant rule input:"), std::string::npos);
   EXPECT_NE(transcript.find("[fr][engine] default halo source:"),
             std::string::npos);
+  // Rule reach comes from the checker alone; the widest placed master (6)
+  // beats it here, so the halo is 2 * 6.
   EXPECT_NE(transcript.find("kind=PLACED_MASTER_WIDTH"), std::string::npos);
-  EXPECT_NE(transcript.find("rawValue=6"), std::string::npos);
-  EXPECT_NE(transcript.find("ruleCandidate{layer=\"VTL_N\" kind=WIDTH "
-                            "rawValue=2}"),
-            std::string::npos);
+  EXPECT_NE(transcript.find("widestPlaced{"), std::string::npos);
+  EXPECT_NE(transcript.find("dbu=6}"), std::string::npos);
+  EXPECT_NE(transcript.find("checkerReach{sites="), std::string::npos);
   EXPECT_NE(transcript.find("defaultHaloX=12"), std::string::npos);
   EXPECT_NE(transcript.find("guard=[-4,24) rows[1,3]"), std::string::npos);
   EXPECT_NE(transcript.find("[fr][engine] snapshot frame: request{"),
@@ -761,7 +780,11 @@ TEST_P(FillerRepairEngineE2E, MissingInfrastructureErrorsOut)
   EXPECT_TRUE(hasDiagnostic(repair.diagnostics, "missing_infrastructure"));
 }
 
-TEST_P(FillerRepairEngineE2E, ActiveDesignMismatchFailsInit)
+// The engine binds its private oracle checker to the PhysDesMgr it is given,
+// so a design that is not Session's current one is repaired normally. This
+// used to be a fatal init diagnostic ("active_design_mismatch") purely
+// because the oracle took its design from the global Session.
+TEST_P(FillerRepairEngineE2E, InitBindsRequestedDesignNotSessionCurrent)
 {
   auto provider = frt::makeE2ETestProvider();
   ASSERT_NE(provider, nullptr);
@@ -770,6 +793,8 @@ TEST_P(FillerRepairEngineE2E, ActiveDesignMismatchFailsInit)
   auto infrastructure
       = provider->createInfrastructure(*requested, GetParam().setup);
   ASSERT_NE(infrastructure, nullptr);
+  // A different design becomes Session's current one AFTER infrastructure was
+  // built for `requested`.
   auto active = provider->createDesign({});
   ASSERT_NE(active, nullptr);
   active->activate();
@@ -777,12 +802,39 @@ TEST_P(FillerRepairEngineE2E, ActiveDesignMismatchFailsInit)
   setting.addFillerCell(kDefaultFillers);
   dpl2::fillerRepair::FillerRepairEngine engine(infrastructure->grid(),
                                                  infrastructure->network());
-  EXPECT_FALSE(engine.init(requested->desMgr(), setting));
+  ASSERT_TRUE(engine.init(requested->desMgr(), setting));
   const auto repair = engine.repair(
       requested->cell(frt::CellRole::Target),
       requested->master(frt::MasterRole::TargetNew));
-  EXPECT_FALSE(repair.hasSolution);
-  EXPECT_TRUE(hasDiagnostic(repair.diagnostics, "active_design_mismatch"));
+  EXPECT_TRUE(repair.hasSolution);
+  EXPECT_FALSE(hasDiagnostic(repair.diagnostics, "active_design_mismatch"));
+}
+
+// Lazy init means the first failing check can arrive before
+// set_filler_option has run. That is "not configured yet", not a failure:
+// latching it would silently disable repair for the rest of the run even
+// after the configuration shows up.
+TEST_P(FillerRepairEngineE2E, UnconfiguredRepairRetriesOnceConfigured)
+{
+  CheckerHarness harness(GetParam().setup, /*presetContext=*/false);
+  ASSERT_TRUE(harness.checkerReady());
+  g_providedSetting = nullptr;
+  dpl2::ipl::ImplantLayerChecker::setFillerRepairSettingProvider(
+      provideTestSetting);
+  ASSERT_TRUE(harness.setTargetMaster(frt::MasterRole::TargetNew));
+
+  // No setting yet: the check fails and no repair is attempted.
+  EXPECT_FALSE(harness.checkTarget());
+  EXPECT_TRUE(harness.fillerChanges().empty());
+
+  // set_filler_option lands; the very next failing check must build the
+  // engine and repair.
+  g_providedSetting = harness.fillerSetting();
+  EXPECT_TRUE(harness.checkTarget());
+  EXPECT_EQ(harness.fillerChanges().size(), 1U);
+
+  dpl2::ipl::ImplantLayerChecker::setFillerRepairSettingProvider(nullptr);
+  g_providedSetting = nullptr;
 }
 
 TEST_P(FillerRepairEngineE2E, FailedInitFailsClosed)

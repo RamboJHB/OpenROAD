@@ -138,18 +138,22 @@ SwapGenerationResult generateSwaps(
             makeDiag(Severity::Warning, "RejectedCandidate",
                      cat("filler ", fillerId, " -> master ",
                          candidate.masterId, ": ", error)));
-        log.msg("swapgen",
-                cat("reject filler=", fillerId, " master=",
-                    candidate.masterId, " reason=", error));
+        log.msg("swapgen", [&] {
+          return cat("reject filler=", fillerId, " master=",
+                     candidate.masterId, " reason=", error);
+        });
         continue;
       }
       result.swaps.push_back(*swap);
       ++emitted;
-      log.msg("swapgen",
-              cat("emit filler=", swap->instanceId, " row=", swap->rowId,
-                  " span=", show(swap->span), " master ", swap->oldMasterId,
-                  "(vt", swap->oldVt, ") -> ", swap->newMasterId, "(vt",
-                  swap->newVt, ')'));
+      // Deferred: this is the innermost loop of swap generation, so a
+      // silenced transcript must not pay for the string.
+      log.msg("swapgen", [&] {
+        return cat("emit filler=", swap->instanceId, " row=", swap->rowId,
+                   " span=", show(swap->span), " master ", swap->oldMasterId,
+                   "(vt", swap->oldVt, ") -> ", swap->newMasterId, "(vt",
+                   swap->newVt, ')');
+      });
     }
     log.msg("swapgen",
             cat("filler ", fillerId, " (row=",
@@ -1497,11 +1501,12 @@ FillerRepairResult RepairPlanner::repair(
                " memberCaps=[", config_.memberCapSize2, ',',
                config_.memberCapSize3, ',', config_.memberCapSize4,
                "] adaptiveStep=", config_.adaptiveStepFillers,
-               " maxAdaptiveLevels=", config_.maxAdaptiveLevels));
+               " maxAdaptiveLevels=", config_.maxAdaptiveLevels,
+               " budget/repair=", config_.checkerCallBudgetPerRepair));
 
-  // Placement coverage is intentionally not checked here. Runtime opto
-  // calls FillerRepairEngine::precheck() before any mutation; keeping that
-  // gate out of repair preserves the explicit orchestration contract.
+  // Placement coverage is intentionally not checked here: the engine's
+  // regional gate runs before this, and whole-design legality is
+  // infrastructure's own gate.
   // Empty snapshot: nothing to repair is a success with no changes.
   if (request.violations.empty()) {
     result.hasSolution = true;
@@ -1545,6 +1550,24 @@ FillerRepairResult RepairPlanner::repair(
     std::vector<Violation> blockingForExpansion = request.violations;
     bool currentDefinitive = false;
 
+    // Per-repair ceiling across all adaptive levels. Checked before the
+    // window is searched so exhaustion ends the search the same way an
+    // expansion cutoff does -- truncated, not a baseline-gate failure.
+    if (config_.checkerCallBudgetPerRepair > 0
+        && gate.requestsSent() >= config_.checkerCallBudgetPerRepair) {
+      result.diagnostics.push_back(makeDiag(
+          Severity::Info, "RepairBudgetExhausted",
+          cat("window ", label, " not searched: checker requests=",
+              gate.requestsSent(), " reached checkerCallBudgetPerRepair=",
+              config_.checkerCallBudgetPerRepair, " -> truncated")));
+      log_.msg("planner",
+               cat("per-repair checker budget ",
+                   config_.checkerCallBudgetPerRepair,
+                   " exhausted before ", label, " -> truncated"));
+      lastSearchedDefinitive = false;
+      break;
+    }
+
     // One loop iteration is one independently budgeted search question. The
     // window and guard are logged before generating swaps so a transcript can
     // explain exactly which fillers were editable versus check-only.
@@ -1579,6 +1602,13 @@ FillerRepairResult RepairPlanner::repair(
                         log_);
 
         int budget = config_.checkerCallBudgetPerWindow;
+        if (config_.checkerCallBudgetPerRepair > 0) {
+          // Never let one window spend past the per-repair ceiling. The
+          // remainder is > 0 here: the loop head just checked it.
+          budget = std::min(budget,
+                            config_.checkerCallBudgetPerRepair
+                                - gate.requestsSent());
+        }
         if (!gate.runBaseline(window, budget)) {
           result.hasSolution = false;
           result.diagnostics.insert(result.diagnostics.end(),
