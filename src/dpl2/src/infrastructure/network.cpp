@@ -1,25 +1,16 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2021-2025, The OpenROAD Authors
 
-#include "network.h"
+#include <network.h>
 
-#include "dpl2/DePlace.h"
-#include "infrastructure/Grid.h"
-#include "infrastructure/Objects.h"
-#include "infrastructure/architecture.h"
-
-#if __has_include("dpl2/PlacementDRC.h")
-#include "dpl2/PlacementDRC.h"
-#define DPL2_HAS_PLACEMENT_DRC 1
-#else
-#define DPL2_HAS_PLACEMENT_DRC 0
-#endif
+#include <infrastructure/Grid.h>
+#include <infrastructure/Objects.h>
+#include <infrastructure/architecture.h>
 
 namespace dpl2 {
 
 namespace {
 
-#if DPL2_HAS_PLACEMENT_DRC
 std::vector<Rect> difference(const Rect& parent_segment,
                              const std::vector<Rect>& segs)
 {
@@ -31,6 +22,7 @@ std::vector<Rect> difference(const Rect& parent_segment,
   // Sort segments by start coordinate
   std::ranges::sort(
       sorted_segs,
+
       [is_horizontal](const Rect& a, const Rect& b) {
         return (is_horizontal ? a.getXL() < b.getXL() : a.getYL() < b.getYL());
       });
@@ -48,17 +40,16 @@ std::vector<Rect> difference(const Rect& parent_segment,
   // Get the difference
   const int start
       = is_horizontal ? parent_segment.getXL().getStorage()
-                      : parent_segment.getYL().getStorage();
-  const int end
-      = is_horizontal ? parent_segment.getXH().getStorage()
-                      : parent_segment.getYH().getStorage();
+      : parent_segment.getYL().getStorage();
+  const int end = is_horizontal ? parent_segment.getXH().getStorage()
+    : parent_segment.getYH().getStorage();
   int current_pos = start;
   std::vector<Rect> result;
   for (const Rect& seg : sorted_segs) {
     int seg_start = is_horizontal ? seg.getXL().getStorage()
-                                  : seg.getYL().getStorage();
+      : seg.getYL().getStorage();
     int seg_end = is_horizontal ? seg.getXH().getStorage()
-                                : seg.getYH().getStorage();
+      : seg.getYH().getStorage();
     if (seg_start > current_pos) {
       if (is_horizontal) {
         result.emplace_back(UvDist(current_pos),
@@ -77,22 +68,21 @@ std::vector<Rect> difference(const Rect& parent_segment,
   // Add the remaining end segment if it exists
   if (current_pos < end) {
     if (is_horizontal) {
-      result.emplace_back(UvDist(current_pos),
-                          parent_segment.getYL(),
-                          UvDist(end),
-                          parent_segment.getYH());
+      result.emplace_back(
+          UvDist(current_pos), parent_segment.getYL(),
+          UvDist(end), parent_segment.getYH());
     } else {
-      result.emplace_back(parent_segment.getXL(),
-                          UvDist(current_pos),
-                          parent_segment.getXH(),
-                          UvDist(end));
+      result.emplace_back(
+          parent_segment.getXL(), UvDist(current_pos),
+          parent_segment.getXH(), UvDist(end));
     }
   }
 
   return result;
 }
 
-Rect getBoundarySegment(const Rect& bbox, const eLIB::MacroEdgeDir dir)
+Rect getBoundarySegment(const Rect& bbox,
+                        const eLIB::MacroEdgeDir dir)
 {
   Rect segment(bbox);
   switch (dir) {
@@ -111,7 +101,6 @@ Rect getBoundarySegment(const Rect& bbox, const eLIB::MacroEdgeDir dir)
   }
   return segment;
 }
-#endif
 
 std::pair<int, int> getMasterPwrs(const eLIB::PhysLibCell& master)
 {
@@ -159,7 +148,7 @@ std::pair<int, int> getMasterPwrs(const eLIB::PhysLibCell& master)
   return {topPwr, botPwr};
 }
 
-}  // namespace
+} // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
@@ -172,14 +161,9 @@ Master* Network::getMaster(LibCellID db_master)
   return masters_[it->second].get();
 }
 
-const Master* Network::getMaster(LibCellID db_master) const
-{
-  auto it = master_to_idx_.find(db_master);
-  return it == master_to_idx_.end() ? nullptr : masters_[it->second].get();
-}
-
 Master* Network::addMaster(const PhysLibCell& db_master,
-                           const Grid* grid)
+                           const Grid* grid,
+                           const EdgeTypeTable* edge_types)
 {
   LibCellID masterId = db_master.getLibCellId();
   const auto it = master_to_idx_.find(masterId);
@@ -202,34 +186,14 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   auto master_pwrs = getMasterPwrs(db_master);
   master->setTopPowerType(master_pwrs.first);
   master->setBottomPowerType(master_pwrs.second);
-  master->clearEdges();  // [fillerRepair-fix] was clearEdgeS
-  return master;
-}
-
-Master* Network::addMaster(const PhysLibCell& db_master,
-                           const Grid* grid,
-                           const PlacementDRC* drc_engine)
-{
-  const auto existing = master_to_idx_.find(db_master.getLibCellId());
-  if (existing != master_to_idx_.end()) {
-    return masters_[existing->second].get();
-  }
-  Master* master = addMaster(db_master, grid);
-#if !DPL2_HAS_PLACEMENT_DRC
-  (void) drc_engine;
-  return master;
-#else
-  if (drc_engine == nullptr) {
-    return master;
-  }
-  if (!drc_engine->hasCellEdgeSpacingTable()) {
+  master->clearEdges();
+  if (!edge_types->hasTable()) {
     return master;
   }
   if (db_master.getType().isCoreFiller()) {  // Skip fillcells
     return master;
   }
 
-  Rect bbox(UvDist(0), UvDist(0), db_master.getWidth(), db_master.getHeight());
   std::map<eLIB::MacroEdgeDir, std::vector<Rect>> typed_segs;
   int num_rows = grid->gridHeight(db_master).v;
 
@@ -247,28 +211,27 @@ Master* Network::addMaster(const PhysLibCell& db_master,
       auto row_height = dy.getStorage() / num_rows;
       auto half_row_height = row_height / 2;
       if (edge.hasCellRow()) {
-        edge_rect.setYL(
-            UvDist(edge_rect.getYL().getStorage()
-                   + (edge.cellRow - 1) * row_height));
+        edge_rect.setYL(UvDist(edge_rect.getYL().getStorage()
+                               + (edge.cellRow - 1) * (row_height)));
         edge_rect.setYH(UvDist(
             std::min(edge_rect.getYH().getStorage(),
-                     edge_rect.getYL().getStorage() + row_height)));
+                     edge_rect.getYL().getStorage() + (row_height))));
       } else if (edge.hasHalfRow()) {
         edge_rect.setYL(UvDist(edge_rect.getYL().getStorage()
-                               + (edge.halfRow - 1) * half_row_height));
+                               + (edge.halfRow - 1) * (half_row_height)));
         edge_rect.setYH(UvDist(
             std::min(edge_rect.getYH().getStorage(),
-                     edge_rect.getYL().getStorage() + half_row_height)));
+                     edge_rect.getYL().getStorage() + (half_row_height))));
       }
     }
     typed_segs[dir].push_back(edge_rect);
-    const auto edge_type_idx = drc_engine->getEdgeTypeIdx(edge.edgeTypeName.c_str());
+    const auto edge_type_idx = edge_types->getEdgeTypeIdx(edge.edgeTypeName.c_str());
     if (edge_type_idx != -1) {
       // consider only edge types defined in the spacing table
       master->addEdge(dpl2::MasterEdge(edge_type_idx, edge_rect));
     }
   }
-  const auto default_edge_type_idx = drc_engine->getEdgeTypeIdx("DEFAULT");
+  const auto default_edge_type_idx = edge_types->getEdgeTypeIdx("DEFAULT");
   if (default_edge_type_idx == -1) {
     return master;
   }
@@ -282,9 +245,7 @@ Master* Network::addMaster(const PhysLibCell& db_master,
     }
   }
   return master;
-#endif
 }
-
 ////////////////////////////////////////////////////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 Node* Network::getNode(LeafCellID cellId)
@@ -296,12 +257,6 @@ Node* Network::getNode(LeafCellID cellId)
   return nodes_[it->second].get();
 }
 
-const Node* Network::getNode(LeafCellID cellId) const
-{
-  auto it = inst_to_node_idx_.find(cellId);
-  return it == inst_to_node_idx_.end() ? nullptr : nodes_[it->second].get();
-}
-
 void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
 {
   Node ndi;
@@ -309,11 +264,13 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
   const PhysCell& inst = desMgr->getPhysCell(cellId);
   ndi.setId(id);
   ndi.setDbInst(cellId);
-  // [fillerRepair-fix] One shared predicate (Objects.h) instead of an
-  // open-coded copy, so node classification, Master::isFiller() and
-  // fillerRepair can never disagree.
-  ndi.setType(isFillerMaster(inst.getPhysMaster()) ? Node::FILLER : Node::CELL);
   auto master = getMaster(inst.getPhysMaster().getLibCellId());
+  auto lc = master->getPhysLibCell();
+  if (lc->getType().isCoreFiller()) {
+    ndi.setType(Node::FILLER);
+  } else {
+    ndi.setType(Node::CELL);
+  }
   ndi.setMaster(master);
   ndi.setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi.setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
@@ -321,10 +278,10 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
   ndi.setOrient(inst.getOrient());
   ndi.setHeight(DbuY{inst.getPhysMaster().getHeight().getStorage()});
   ndi.setWidth(DbuX{inst.getPhysMaster().getWidth().getStorage()});
-  ndi.setOrigLeft(DbuX{inst.getOrigin().getX().getStorage()
-                       - core_.getXL().getStorage()});
-  ndi.setOrigBottom(DbuY{inst.getOrigin().getY().getStorage()
-                         - core_.getYL().getStorage()});
+  ndi.setOrigLeft(DbuX{(inst.getOrigin().getX().getStorage()
+        - core_.getXL().getStorage())});
+  ndi.setOrigBottom(DbuY{(inst.getOrigin().getY().getStorage()
+        - core_.getYL().getStorage())});
 
   ndi.setLeft(ndi.getOrigLeft());
   ndi.setBottom(ndi.getOrigBottom());
@@ -343,20 +300,16 @@ bool Network::updateNode(Node* ndi,
   const PhysCell& inst = desMgr->getPhysCell(cellId);
   auto master = getMaster(physLibCell.getLibCellId());
   ndi->setMaster(master);
-  ndi->setType(physLibCell.getType().isCoreFiller()
-                       || physLibCell.getType().isPadFiller()
-                   ? Node::FILLER
-                   : Node::CELL);
   ndi->setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi->setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
 
-  ndi->setOrient(inst.getOrient());
+  ndi->setOrient(PhysOrientationE::R0);
   ndi->setHeight(DbuY{physLibCell.getHeight().getStorage()});
   ndi->setWidth(DbuX{physLibCell.getWidth().getStorage()});
-  ndi->setOrigLeft(DbuX{inst.getOrigin().getX().getStorage()
-                        - core_.getXL().getStorage()});
-  ndi->setOrigBottom(DbuY{inst.getOrigin().getY().getStorage()
-                          - core_.getYL().getStorage()});
+  ndi->setOrigLeft(DbuX{(inst.getOrigin().getX().getStorage()
+        - core_.getXL().getStorage())});
+  ndi->setOrigBottom(DbuY{(inst.getOrigin().getY().getStorage()
+        - core_.getYL().getStorage())});
 
   ndi->setLeft(ndi->getOrigLeft());
   ndi->setBottom(ndi->getOrigBottom());
