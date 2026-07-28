@@ -60,6 +60,14 @@ bool sameChanges(const dpl2::ipl::FillerChanges& lhs,
   return true;
 }
 
+// addMaster dereferences the edge-type table unconditionally; these cases
+// exercise implant DRC, which reads master geometry only.
+const dpl2::EdgeTypeTable& noEdgeTypes()
+{
+  static const dpl2::EdgeTypeTable kTable;
+  return kTable;
+}
+
 bool syncInfrastructureNode(frt::E2ETestDesign& design,
                             dpl2::Grid* grid,
                             dpl2::Network* network,
@@ -75,7 +83,7 @@ bool syncInfrastructureNode(frt::E2ETestDesign& design,
     return false;
   }
   const eLIB::PhysLibCell& master = cell.getPhysMaster();
-  return network->addMaster(master, grid) != nullptr
+  return network->addMaster(master, grid, &noEdgeTypes()) != nullptr
          && network->updateNode(node, design.desMgr(), master);
 }
 
@@ -239,7 +247,8 @@ class CheckerHarness
     const eLIB::PhysLibCell& master = design().master(role);
     dpl2::Node* target = network->getNode(
         design().cell(frt::CellRole::Target));
-    return target != nullptr && network->addMaster(master, grid) != nullptr
+    return target != nullptr
+           && network->addMaster(master, grid, &noEdgeTypes()) != nullptr
            && network->updateNode(target, design().desMgr(), master);
   }
 

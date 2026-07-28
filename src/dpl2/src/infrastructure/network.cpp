@@ -303,7 +303,13 @@ bool Network::updateNode(Node* ndi,
   ndi->setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi->setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
 
-  ndi->setOrient(PhysOrientationE::R0);
+  // [fillerRepair-fix] was hard-coded PhysOrientationE::R0. DePlace::isLegal
+  // calls updateNode immediately before checkDRC, so forcing R0 makes every
+  // implant check on an MX-placed row (odd rows, by the band-polarity model)
+  // evaluate the wrong band track. It also outlives the check: isLegal
+  // restores the master afterwards but not the orientation, so the Node keeps
+  // a wrong orientation in shared Network state.
+  ndi->setOrient(inst.getOrient());
   ndi->setHeight(DbuY{physLibCell.getHeight().getStorage()});
   ndi->setWidth(DbuX{physLibCell.getWidth().getStorage()});
   ndi->setOrigLeft(DbuX{(inst.getOrigin().getX().getStorage()

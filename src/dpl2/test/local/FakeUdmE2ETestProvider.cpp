@@ -304,9 +304,12 @@ class FakeInfrastructureFixture final : public E2ETestInfrastructure
       placedMasters[cell.getPhysMaster().getLibCellId()]
           = &cell.getPhysMaster();
     }
+    // Empty edge-type table: this harness exercises implant DRC, which reads
+    // master geometry only. addMaster dereferences the table unconditionally.
+    static const dpl2::EdgeTypeTable kNoEdgeTypes;
     for (const auto& [id, master] : placedMasters) {
       (void) id;
-      network_.addMaster(*master, &grid_);
+      network_.addMaster(*master, &grid_, &kNoEdgeTypes);
     }
     for (const Placement& placement : kPlacements) {
       const eUNL::LeafCellID id(0, placement.cellIndex);

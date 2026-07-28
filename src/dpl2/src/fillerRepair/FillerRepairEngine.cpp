@@ -1760,7 +1760,15 @@ bool FillerRepairEngine::Impl::ensureMasterRegistered(
   // This is the only infrastructure-version-sensitive registration call in
   // fillerRepair. A destination with a different addMaster signature adapts
   // this one private seam; planner/oracle code remains unchanged.
-  return network_->addMaster(master, grid_) != nullptr;
+  //
+  // Edge-type decoration is deliberately empty here. addMaster dereferences
+  // the table unconditionally, so nullptr is not an option, and an empty one
+  // makes it return right after the geometry it does set -- which is all the
+  // implant oracle reads. This path is a fallback: on the production route
+  // DePlace has already registered the master WITH the real edge table before
+  // check() runs, so a Master decorated by us never reaches placement DRC.
+  static const EdgeTypeTable kNoEdgeTypes;
+  return network_->addMaster(master, grid_, &kNoEdgeTypes) != nullptr;
 }
 
 bool FillerRepairEngine::Impl::rebuildOracle()
