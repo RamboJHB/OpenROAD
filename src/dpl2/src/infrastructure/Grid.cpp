@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
 
+#include <algorithm>
 #include <cmath>
 #include <Grid.h>
 
@@ -442,6 +443,88 @@ GridY Grid::gridSnapDownY(const Node* cell) const
 std::pair<GridX, GridY> Grid::gridXY(const Node* cell) const
 {
   return {gridX(cell), gridSnapDownY(cell)};
+}
+
+// See Grid.h. Walks pixels outward and counts DISTINCT placed cells; a cell
+// spans several pixels, so the count advances when the occupant changes.
+Rect Grid::getBoundingBox(const Rect& region, int rings) const
+{
+  const int lastRow = row_count_.v - 1;
+  const int lastCol = row_site_count_.v - 1;
+  if (lastRow < 0 || lastCol < 0 || site_width_.v <= 0) {
+    return region;
+  }
+  const int steps = std::max(rings, 0);
+
+  const int64_t inXl = region.getXL().getStorage();
+  const int64_t inYl = region.getYL().getStorage();
+  const int64_t inXh
+      = std::max<int64_t>(region.getXH().getStorage(), inXl + 1);
+  const int64_t inYh
+      = std::max<int64_t>(region.getYH().getStorage(), inYl + 1);
+
+  const int rowLo = std::clamp(
+      gridSnapDownY(DbuY{static_cast<int>(inYl)}).v - steps, 0, lastRow);
+  const int rowHi = std::clamp(
+      gridSnapDownY(DbuY{static_cast<int>(inYh - 1)}).v + steps, 0, lastRow);
+  const int colLo = std::clamp(gridX(DbuX{static_cast<int>(inXl)}).v,
+                               0, lastCol);
+  const int colHi = std::clamp(gridX(DbuX{static_cast<int>(inXh - 1)}).v,
+                               0, lastCol);
+
+  int64_t outXl = inXl;
+  int64_t outXh = inXh;
+  const auto absorb = [&](const Node* cell) {
+    outXl = std::min<int64_t>(outXl, cell->getLeft().v);
+    outXh = std::max<int64_t>(outXh, cell->getLeft().v + cell->getWidth().v);
+  };
+
+  for (int row = rowLo; row <= rowHi; ++row) {
+    // Cells overlapping the region are snapped in whole.
+    for (int col = colLo; col <= colHi; ++col) {
+      const Pixel* pixel = gridPixel(GridX{col}, GridY{row});
+      if (pixel != nullptr && pixel->cell != nullptr) {
+        absorb(pixel->cell);
+      }
+    }
+    // Then `steps` further distinct cells on each side. Seed `previous` with
+    // the occupant of the boundary column: a cell that already overlaps the
+    // region was absorbed above and must not consume a ring when the walk
+    // steps over the rest of its sites.
+    const Pixel* loPixel = gridPixel(GridX{colLo}, GridY{row});
+    const Node* previous = loPixel != nullptr ? loPixel->cell : nullptr;
+    int counted = 0;
+    for (int col = colLo - 1; col >= 0 && counted < steps; --col) {
+      const Pixel* pixel = gridPixel(GridX{col}, GridY{row});
+      const Node* cell = pixel != nullptr ? pixel->cell : nullptr;
+      if (cell == nullptr || cell == previous) {
+        continue;  // empty site or the same cell again: not a new ring
+      }
+      previous = cell;
+      ++counted;
+      absorb(cell);
+    }
+    const Pixel* hiPixel = gridPixel(GridX{colHi}, GridY{row});
+    previous = hiPixel != nullptr ? hiPixel->cell : nullptr;
+    counted = 0;
+    for (int col = colHi + 1; col <= lastCol && counted < steps; ++col) {
+      const Pixel* pixel = gridPixel(GridX{col}, GridY{row});
+      const Node* cell = pixel != nullptr ? pixel->cell : nullptr;
+      if (cell == nullptr || cell == previous) {
+        continue;
+      }
+      previous = cell;
+      ++counted;
+      absorb(cell);
+    }
+  }
+
+  const int64_t coreWidth
+      = core_.getXH().getStorage() - core_.getXL().getStorage();
+  outXl = std::clamp<int64_t>(outXl, 0, coreWidth);
+  outXh = std::clamp<int64_t>(outXh, 0, coreWidth);
+  return Rect(UvDist(outXl), UvDist(gridYToDbu(GridY{rowLo}).v),
+              UvDist(outXh), UvDist(gridYToDbu(GridY{rowHi + 1}).v));
 }
 
 GridY Grid::gridRoundY(const Node* cell) const

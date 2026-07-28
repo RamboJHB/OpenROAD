@@ -95,6 +95,20 @@ class Grid
   // the pair is always in the same frame as those two calls.
   std::pair<GridX, GridY> gridXY(const Node* cell) const;
 
+  // Bounding box of `region` grown by `rings` whole placed CELLS to the left
+  // and right and `rings` rows up and down.
+  //
+  // Rings are counted in cells, not sites or DBU: the walk steps over each
+  // placed instance it meets regardless of kind, so a std cell is a ring
+  // member like any other and never stops it. Cells merely overlapping the
+  // region are snapped in whole, empty sites are skipped without consuming a
+  // ring, and rows/columns clamp at the core, so the result never leaves the
+  // placeable area.
+  //
+  // Coordinates are core-relative DBU -- the frame gridX(DbuX) and
+  // Node::getBBox() use. Needs nothing but the built Grid.
+  Rect getBoundingBox(const Rect& region, int rings = 3) const;
+
   DbuY gridYToDbu(GridY y) const;
 
   GridX gridPaddedWidth(const Node* cell) const;

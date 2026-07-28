@@ -127,6 +127,21 @@ const Grid* getGrid() const {return grid_.get();};
 Network* getNetwork() {return network_.get();};
 const Network* getNetwork() const {return network_.get();};
 Rect getCoreArea();
+
+/**
+ * Bounding box of @p region grown by @p rings whole placed CELLS left/right
+ * and @p rings rows up/down.
+ *
+ * Rings count cells, not sites or DBU: the walk steps over each placed
+ * instance regardless of kind, so a std cell is a ring member like any other
+ * and never stops it. Cells overlapping @p region are snapped in whole, empty
+ * sites are skipped without consuming a ring, and the result clamps at the
+ * core so it never leaves the placeable area.
+ *
+ * Coordinates are core-relative DBU -- the frame Node::getBBox() and
+ * Grid::gridX(DbuX) use, NOT the absolute frame of getCoreArea().
+ */
+Rect getBoundingBox(const Rect& region, int rings = 3) const;
 fillerSetting* getFillerSetting() { return filler_setting_.get();};
 
 private:

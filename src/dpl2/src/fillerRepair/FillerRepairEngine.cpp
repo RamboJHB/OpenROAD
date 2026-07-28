@@ -42,7 +42,6 @@ class FillerRepairEngine::Impl final : private PlacementView,
   RepairOutcome repair(const ipl::CheckRequest& request);
   RepairOutcome repair(eUNL::LeafCellID targetCell,
                        const eLIB::PhysLibCell& newMaster);
-  ::Rect expandByCellRing(const ::Rect& region, int rings) const;
 
  private:
   struct Config
@@ -1142,74 +1141,6 @@ Region FillerRepairEngine::Impl::snapshotGuard(RowId rowId,
   return guard;
 }
 
-::Rect FillerRepairEngine::Impl::expandByCellRing(const ::Rect& region,
-                                                  int rings) const
-{
-  if (!initialized_ || row_frames_.empty() || rings < 0) {
-    log_.msg("engine",
-             cat("expandByCellRing: not initialized (initialized=",
-                 initialized_, " rows=", row_frames_.size(), " rings=", rings,
-                 ") -> region returned unchanged"));
-    return region;
-  }
-
-  const DbCoord inXl = region.getXL().getStorage();
-  const DbCoord inYl = region.getYL().getStorage();
-  const DbCoord inXh = region.getXH().getStorage();
-  const DbCoord inYh = region.getYH().getStorage();
-
-  // Rows spanned by the input, then grown by `rings` rows and clamped. yh is
-  // treated as exclusive: a rectangle ending exactly on a row boundary does
-  // not pull in the row above.
-  const RowId lastRow = static_cast<RowId>(row_frames_.size()) - 1;
-  const auto rowContaining = [&](DbCoord y) {
-    for (RowId r = 0; r <= lastRow; ++r) {
-      if (y >= row_frames_[static_cast<size_t>(r)].yLo
-          && y < row_frames_[static_cast<size_t>(r)].yHi) {
-        return r;
-      }
-    }
-    return y < row_frames_[0].yLo ? RowId{0} : lastRow;
-  };
-  const RowId rowLo = std::max<RowId>(
-      0, rowContaining(inYl) - static_cast<RowId>(rings));
-  const RowId rowHi = std::min<RowId>(
-      lastRow,
-      rowContaining(std::max(inYl, inYh - 1)) + static_cast<RowId>(rings));
-
-  // x: union the spans of every ring member across those rows. instancesInRing
-  // selects by index, so std cells are counted like any other cell.
-  DbCoord outXl = inXl;
-  DbCoord outXh = inXh;
-  const XInterval query{inXl, inXh};
-  for (RowId row = rowLo; row <= rowHi; ++row) {
-    for (const PlacedInstance& inst : instancesInRing(*this, row, query, rings)) {
-      const XInterval span = instanceSpan(*this, inst);
-      outXl = std::min(outXl, span.xl);
-      outXh = std::max(outXh, span.xh);
-    }
-  }
-
-  const DbCoord coreXh =
-      grid_->getCore().getXH().getStorage() - core_xl_;
-  outXl = std::max<DbCoord>(0, outXl);
-  outXh = std::min<DbCoord>(coreXh, outXh);
-
-  const ::Rect out(eUTL::UvDist(static_cast<int64_t>(outXl)),
-                   eUTL::UvDist(static_cast<int64_t>(
-                       row_frames_[static_cast<size_t>(rowLo)].yLo)),
-                   eUTL::UvDist(static_cast<int64_t>(outXh)),
-                   eUTL::UvDist(static_cast<int64_t>(
-                       row_frames_[static_cast<size_t>(rowHi)].yHi)));
-  log_.msg("engine",
-           cat("expandByCellRing: rings=", rings, " in=[", inXl, ",", inYl,
-               ",", inXh, ",", inYh, ") rows[", rowLo, ",", rowHi,
-               "] -> out=[", outXl, ",",
-               row_frames_[static_cast<size_t>(rowLo)].yLo, ",", outXh, ",",
-               row_frames_[static_cast<size_t>(rowHi)].yHi, ")"));
-  return out;
-}
-
 RepairOutcome FillerRepairEngine::Impl::repair(
     const ipl::CheckRequest& request)
 {
@@ -1954,11 +1885,6 @@ RepairOutcome FillerRepairEngine::repair(const ipl::CheckRequest& request)
   return impl_->repair(request);
 }
 
-::Rect FillerRepairEngine::expandByCellRing(const ::Rect& region,
-                                            int rings) const
-{
-  return impl_->expandByCellRing(region, rings);
-}
 
 }  // namespace fillerRepair
 }  // namespace dpl2

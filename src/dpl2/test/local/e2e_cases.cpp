@@ -439,10 +439,11 @@ TEST_P(FillerRepairEngineE2E, RepairIgnoresGapOutsideInfluenceRows)
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
-// --- expandByCellRing -------------------------------------------------------
+// --- Grid::getBoundingBox ---------------------------------------------------
 // Fixture rows (core-relative, siteWidth 1, rowHeight 8, 20 sites, 5 rows):
 //   row 2 (target row): [0,6) [6,8) [8,12)=target [12,14) [14,20)
 //   rows 0/1/3/4:       [0,6) [6,12) [12,18) [18,20)
+// This needs only a built Grid -- no engine, no checker, no init.
 namespace {
 
 ::Rect rect(int64_t xl, int64_t yl, int64_t xh, int64_t yh)
@@ -461,12 +462,14 @@ std::string showRect(const ::Rect& r)
 
 }  // namespace
 
-TEST_P(FillerRepairEngineE2E, ExpandByCellRingCountsCellsAcrossStdCells)
+TEST_P(FillerRepairEngineE2E, BoundingBoxCountsCellsAcrossStdCells)
 {
-  EngineHarness harness(GetParam().setup);
-  ASSERT_TRUE(harness.engineReady());
+  ProviderObjects objects(GetParam().setup);
+  ASSERT_TRUE(objects.hasInfrastructure());
+  const dpl2::Grid* grid = objects.infrastructure().grid();
+
   // One ring around the target's own site band.
-  const ::Rect out = harness.engine().expandByCellRing(rect(8, 16, 12, 24), 1);
+  const ::Rect out = grid->getBoundingBox(rect(8, 16, 12, 24), 1);
 
   // Rows 1..3 -> y [8,32). On the target row one cell each side gives
   // [6,14); on rows 1 and 3 the single ring step lands on cells at [0,6) and
@@ -475,25 +478,29 @@ TEST_P(FillerRepairEngineE2E, ExpandByCellRingCountsCellsAcrossStdCells)
   EXPECT_EQ(showRect(out), showRect(rect(0, 8, 18, 32)));
 }
 
-TEST_P(FillerRepairEngineE2E, ExpandByCellRingDefaultsToThreeRingsAndClamps)
+TEST_P(FillerRepairEngineE2E, BoundingBoxDefaultsToThreeRingsAndClamps)
 {
-  EngineHarness harness(GetParam().setup);
-  ASSERT_TRUE(harness.engineReady());
+  ProviderObjects objects(GetParam().setup);
+  ASSERT_TRUE(objects.hasInfrastructure());
+  const dpl2::Grid* grid = objects.infrastructure().grid();
+
   // Three rings reach past every cell in this 5-row fixture; the result
   // clamps to the core instead of running off the placeable area.
-  const ::Rect out = harness.engine().expandByCellRing(rect(8, 16, 12, 24));
+  const ::Rect out = grid->getBoundingBox(rect(8, 16, 12, 24));
   EXPECT_EQ(showRect(out),
             showRect(rect(0, 0, frt::kRowSites * frt::kSiteWidth,
                           frt::kStandardRows * frt::kRowHeight)));
 }
 
-TEST_P(FillerRepairEngineE2E, ExpandByCellRingIsMonotonicInRings)
+TEST_P(FillerRepairEngineE2E, BoundingBoxIsMonotonicInRings)
 {
-  EngineHarness harness(GetParam().setup);
-  ASSERT_TRUE(harness.engineReady());
+  ProviderObjects objects(GetParam().setup);
+  ASSERT_TRUE(objects.hasInfrastructure());
+  const dpl2::Grid* grid = objects.infrastructure().grid();
+
   const ::Rect in = rect(8, 16, 12, 24);
-  const ::Rect zero = harness.engine().expandByCellRing(in, 0);
-  const ::Rect one = harness.engine().expandByCellRing(in, 1);
+  const ::Rect zero = grid->getBoundingBox(in, 0);
+  const ::Rect one = grid->getBoundingBox(in, 1);
   // Zero rings still snaps to whole cells/rows, and growth never shrinks.
   EXPECT_LE(zero.getXL().getStorage(), in.getXL().getStorage());
   EXPECT_GE(zero.getXH().getStorage(), in.getXH().getStorage());
@@ -501,17 +508,6 @@ TEST_P(FillerRepairEngineE2E, ExpandByCellRingIsMonotonicInRings)
   EXPECT_GE(one.getXH().getStorage(), zero.getXH().getStorage());
   EXPECT_LE(one.getYL().getStorage(), zero.getYL().getStorage());
   EXPECT_GE(one.getYH().getStorage(), zero.getYH().getStorage());
-}
-
-TEST_P(FillerRepairEngineE2E, ExpandByCellRingWithoutInitReturnsInputUnchanged)
-{
-  ProviderObjects objects(GetParam().setup);
-  ASSERT_TRUE(objects.hasDesign());
-  ASSERT_TRUE(objects.hasInfrastructure());
-  dpl2::fillerRepair::FillerRepairEngine engine(
-      objects.infrastructure().grid(), objects.infrastructure().network());
-  const ::Rect in = rect(8, 16, 12, 24);
-  EXPECT_EQ(showRect(engine.expandByCellRing(in)), showRect(in));
 }
 
 TEST_P(FillerRepairEngineE2E, CleanTargetOverlayReturnsNoChanges)

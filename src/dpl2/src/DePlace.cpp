@@ -201,6 +201,11 @@ bool DePlace::isLegal(LeafCellID cellId, LibCellID lcId,
   return is_valid;
 }
 
+Rect DePlace::getBoundingBox(const Rect& region, int rings) const
+{
+  return grid_->getBoundingBox(region, rings);
+}
+
 Rect DePlace::getCoreArea()
 {
   std::vector<PhysRow> rows;
