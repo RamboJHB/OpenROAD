@@ -943,6 +943,68 @@ void testWindowBridgeConditionsEach()
   EXPECT_TRUE(!adjacentWindow.containsEditable(31)); // only touches x=3
 }
 
+// The guard is the checker's question, so a guard that tracked the window
+// exactly would make every adaptive level re-ask everything the previous
+// level already answered. It is snapped outward to a power-of-two distance
+// from the anchor instead. Two properties carry the whole argument:
+//
+//   soundness  -- the guard always CONTAINS the window it protects, and never
+//                 crosses the core-left edge (enlarging a guard is safe;
+//                 shrinking one is not);
+//   the point  -- it takes far fewer distinct values than there are levels,
+//                 which is what lets the answer cache span them.
+void testGuardQuantizationContainsWindowAndIsStable()
+{
+  fr::TestPlacementView design = makeLibrary();
+  constexpr int kFillers = 60;
+  const fr::DbCoord span = 8 + 2 * kFillers;
+  design.addRow(0, 0, span);
+  design.place(1, cellMaster(kVt2), 0, 0);
+  design.place(2, cellMaster(kVt2), 0, 4);
+  for (int i = 0; i < kFillers; ++i) {
+    design.place(100 + i, fillerMaster(2, kVt1), 0, 8 + 2 * i);
+  }
+
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {8, 12});
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 2);
+  request.violations = {original};
+  const auto normalized =
+      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+
+  fr::RepairWindow window = fr::buildWindow(
+      0, request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+
+  std::set<std::pair<fr::DbCoord, fr::DbCoord>> guards;
+  int levels = 0;
+  for (int step = 0; step < 20; ++step) {
+    // Soundness, at every level.
+    EXPECT_TRUE(window.guardRegion.x.xl <= window.x.xl);
+    EXPECT_TRUE(window.guardRegion.x.xh >= window.x.xh);
+    EXPECT_TRUE(window.guardRegion.x.xl >= 0);
+    guards.insert({window.guardRegion.x.xl, window.guardRegion.x.xh});
+    ++levels;
+
+    const fr::RepairWindow next = fr::expandWindowAdaptive(
+        window, request.targetPlace, {original}, design, 1,
+        fr::DebugLog(verbose()));
+    if (next.editableFillers == window.editableFillers) {
+      break;  // expansion cutoff
+    }
+    window = next;
+  }
+
+  // The whole point: growing the window ~20 times must not produce ~20
+  // different checker questions.
+  EXPECT_TRUE(levels >= 8);
+  EXPECT_TRUE(static_cast<int>(guards.size()) * 2 <= levels);
+}
+
 void testWindowAtDesignEdges()
 {
   // Vt Type: {1,2} | Widths: {4} | cell type: 1=std, 0=filler
@@ -3853,6 +3915,8 @@ void registerPlannerTests()
       {"window_L0_exact_membership", testWindowL0ExactMembership},
       {"window_bridge_conditions_each", testWindowBridgeConditionsEach},
       {"window_at_design_edges", testWindowAtDesignEdges},
+      {"guard_quantization_contains_window_and_is_stable",
+       testGuardQuantizationContainsWindowAndIsStable},
       {"window_adaptive_adds_k_on_blocking_side",
        testWindowAdaptiveAddsKOnBlockingSide},
       {"window_adaptive_coupled_rows_and_fixed_boundary",

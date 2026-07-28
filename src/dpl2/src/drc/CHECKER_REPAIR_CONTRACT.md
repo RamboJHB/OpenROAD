@@ -281,11 +281,11 @@ Supersedes the 2026-07-20 checker-entry wiring above where they differ.
 
 ## Verified test boundary (2026-07-28)
 
-Portable planner 85 + portable checker E2E 59 build and run in BOTH harness
-modes (fake-UDM and the real-UDM-mode migration gate: 144/144). The fixture
+Portable planner 86 + portable checker E2E 60 build and run in BOTH harness
+modes (fake-UDM and the real-UDM-mode migration gate: 146/146). The fixture
 invariants they depend on -- rule/layer ids as container indices, the
 band-polarity model, the `maxRuleValue_`-sized snapshot window and min width
 -- are documented in `fillerRepair/README.md`; the spacing scenarios were
 re-derived against that window (neighbour run within reach, one editable
 bridge filler across a sub-minimum gap). Local fake-UDM engine regression:
-74 cases. Full local suite 218/218 normal + ASan, gate 144/144 normal + ASan.
+74 cases. Full local suite 220/220 normal + ASan, gate 146/146 normal + ASan.

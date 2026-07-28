@@ -399,11 +399,50 @@ std::vector<RowId> clampRows(const PlacementView& view, RowId lo, RowId hi)
   return result;
 }
 
+// Snaps a non-negative distance up to the next power-of-two multiple of
+// `unit` (at least one unit).
+DbCoord snapUpPow2(DbCoord distance, DbCoord unit)
+{
+  DbCoord snapped = std::max<DbCoord>(unit, 1);
+  while (snapped < distance) {
+    snapped *= 2;
+  }
+  return snapped;
+}
+
+// The guard is the region the checker is asked about, so a guard that tracks
+// the window exactly makes every distinct window a distinct checker question.
+// Adaptive expansion adds a couple of fillers per level, which moves the
+// guard a little every level and turns every previously answered overlay back
+// into a cache miss: measured on the no-solution path, 90% of checker calls
+// were an overlay already asked under a slightly different guard.
+//
+// Snapping each side outward to a power-of-two distance from the ANCHOR (the
+// one point that cannot move during a repair) makes the guard change O(log)
+// times over the whole escalation instead of once per level, so the cache
+// spans levels. Enlarging a guard is always sound: a wider snapshot can only
+// remove truncation artifacts at its edge, never introduce them -- which is
+// the same direction the rule-reach halo already errs in.
+XInterval quantizeGuard(XInterval guard, DbCoord anchorX, DbCoord siteWidth)
+{
+  const DbCoord unit = std::max<DbCoord>(siteWidth, 1);
+  const DbCoord left = std::max<DbCoord>(anchorX - guard.xl, 0);
+  const DbCoord right = std::max<DbCoord>(guard.xh - anchorX, 0);
+  // x is core-left-relative, so 0 is a known edge: snapping must not walk off
+  // it. Overshooting the right edge is harmless (those columns are empty and
+  // Grid::gridPixel bounds-checks), and the view exposes no core width to
+  // clamp against.
+  return XInterval{
+      std::max<DbCoord>(anchorX - snapUpPow2(left, unit), 0),
+      anchorX + snapUpPow2(right, unit)};
+}
+
 RepairWindow finalizeWindow(int level,
                             const std::set<RowId>& rowSet,
                             const std::set<InstanceId>& editable,
                             const std::set<InstanceId>& bridge,
                             XInterval x,
+                            DbCoord anchorX,
                             const PlacementView& view,
                             const DebugLog& log)
 {
@@ -441,7 +480,9 @@ RepairWindow finalizeWindow(int level,
       guardX.xh = std::max(guardX.xh, span.xh);
     }
   }
-  window.guardRegion = Region{guardX, guardRows.front(), guardRows.back()};
+  window.guardRegion = Region{quantizeGuard(guardX, anchorX, view.siteWidth()),
+                              guardRows.front(),
+                              guardRows.back()};
 
   log.msg("window",
           cat(level == 0 ? "L0" : cat("adaptive-L1 step ", level),
@@ -534,7 +575,7 @@ RepairWindow buildWindow(int level,
     }
   }
 
-  return finalizeWindow(0, rowSet, editable, bridge, x, view, log);
+  return finalizeWindow(0, rowSet, editable, bridge, x, anchor.x, view, log);
 }
 
 RepairWindow expandWindowAdaptive(const RepairWindow& current,
@@ -689,6 +730,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                         editable,
                         bridge,
                         x,
+                        anchor.x,
                         view,
                         log);
 }

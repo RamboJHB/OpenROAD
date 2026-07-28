@@ -1689,13 +1689,46 @@ TEST(FillerRepairCheckerE2ETest, OneCallBudgetReturnsNoPartialRepair)
       = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
   ASSERT_FALSE(baseline.violations.empty());
   fr::RepairConfig config;
-  config.checkerCallBudgetPerWindow = 1;
+  // The per-REPAIR ceiling is the one that starves the whole search: a
+  // per-window ceiling alone is refilled at every adaptive level, and a guard
+  // repeated across levels makes that level's baseline free (see
+  // CachedBaselineFreesWindowBudget below). One call total means the L0
+  // baseline consumes it and no candidate is ever evaluated.
+  config.checkerCallBudgetPerRepair = 1;
   config.batchSize = 1;
   config.adaptiveStepFillers = 100;
   const fr::FillerRepairResult result = fixture.repair(
       INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, config);
   EXPECT_FALSE(result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
+  EXPECT_TRUE(fixture.inputUnchanged());
+}
+
+// Adaptive levels reuse the guard (it is quantized, so it changes O(log)
+// times rather than once per level), and a repeated guard means the level's
+// baseline is answered from cache without spending budget. The budget then
+// buys candidate evaluations instead of re-buying an answer already held --
+// and whatever comes back is still a complete, checker-verified repair.
+TEST(FillerRepairCheckerE2ETest, CachedBaselineFreesWindowBudget)
+{
+  PlannerCheckerFixture fixture;
+  const fr::OracleResult baseline
+      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  ASSERT_FALSE(baseline.violations.empty());
+  fr::RepairConfig config;
+  config.checkerCallBudgetPerWindow = 1;  // one call per window, refilled
+  config.batchSize = 1;
+  config.adaptiveStepFillers = 100;
+  const fr::FillerRepairResult result = fixture.repair(
+      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, config);
+  ASSERT_TRUE(result.hasSolution);
+  ASSERT_FALSE(result.changes.empty());
+  // Complete and independently legal, not a partial edit that happened to
+  // fit the budget.
+  EXPECT_TRUE(
+      fixture
+          .verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes, C1_MASTER)
+          .isLegal);
   EXPECT_TRUE(fixture.inputUnchanged());
 }
 

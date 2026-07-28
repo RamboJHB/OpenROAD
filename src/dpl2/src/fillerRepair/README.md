@@ -34,6 +34,25 @@ adaptive level, so the worst case is not `maxAdaptiveLevels` full windows.
 Reaching either ends the search with the existing *truncated* semantics --
 never a wrong answer, only a bounded give-up.
 
+**The guard is quantized so the answer cache spans adaptive levels.** The
+guard region *is* the checker's question, so a guard that tracked the window
+exactly made every level re-ask what the previous level already answered —
+measured on the no-solution path, **90% of all checker calls were an overlay
+already asked under a slightly different guard**. Each side is now snapped
+outward to a power-of-two distance from the anchor (the one point that cannot
+move during a repair), so the guard changes O(log) times over the whole
+escalation instead of once per level. Two properties carry the argument, and
+`guard_quantization_contains_window_and_is_stable` asserts both: the guard
+always **contains** the window and never crosses the core-left edge
+(enlarging a guard is sound — a wider snapshot can only remove truncation
+artifacts, never add them), and it takes far fewer distinct values than there
+are levels.
+
+A side effect worth knowing: a repeated guard makes that level's baseline a
+cache hit, so `checkerCallBudgetPerWindow` now buys candidate evaluations
+instead of re-buying a baseline already held
+(`CachedBaselineFreesWindowBudget`).
+
 **Overlay identity is a value, not a string.** Two candidates are the same
 checker question when they propose the same `(instance -> new master)` set
 under the same guard; `OverlayKey` is that identity, and `OracleGate::resolve`
@@ -92,8 +111,8 @@ nothing else, which is what keeps it database-free and portable.
 | `Debug.h` | `[fr][stage]` transcript (`cat`, `show`, `DebugLog`) |
 | `CMakeLists.txt` | the module's own targets — `dpl2::fillerRepair` (payload, C++20) and `dpl2::fillerRepairPlanner` (pure pipeline, C++17); a destination adds the directory and links a target rather than listing sources |
 | `test/CMakeLists.txt` | the portable tests, added when `DPL2_FILLER_REPAIR_BUILD_TESTS=ON` |
-| `test/RepairPlannerTest.cpp` + `TestPlacementView.h`, `TestRepairOracle.*`, `SyntheticMasterCatalog.*` | 82 portable database-free planner unit tests (the doubles implement the two seams) |
-| `test/FillerRepairCheckerE2ETest.cpp` | 59 portable real-checker and planner-to-checker cases (see the fixture model below) |
+| `test/RepairPlannerTest.cpp` + `TestPlacementView.h`, `TestRepairOracle.*`, `SyntheticMasterCatalog.*` | 86 portable database-free planner unit tests (the doubles implement the two seams) |
+| `test/FillerRepairCheckerE2ETest.cpp` | 60 portable real-checker and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript
 
@@ -167,29 +186,45 @@ destination wiring exists.
 
 ## Verification
 
-- portable planner: 85 cases; portable checker E2E: 59 cases (both compile,
+- portable planner: 86 cases; portable checker E2E: 60 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
 - repository-local fake-UDM engine regression: 74 cases under
   `src/dpl2/test/local/`.
-- 2026-07-28 full local suite: 218/218 normal and ASan; migration gate
-  144/144 normal and ASan; standalone module build 144/144.
+- 2026-07-28 full local suite: 220/220 normal and ASan; migration gate
+  146/146 normal and ASan; standalone module build 146/146.
 
 ### Search cost
 
 Worst case measured on the no-solution path (120 editable fillers, every
-adaptive level searched to the caps, per-repair budget disabled, oracle cost
-excluded), gcc 13 `-O2`:
+adaptive level searched to the caps, per-repair budget disabled), gcc 13
+`-O2`. Planner time excludes the oracle; **checker calls are the number that
+matters in production**, where each one is real DRC work:
 
-| | ms per repair | oracle calls |
-|---|---|---|
-| before | 66.7 | 312 660 |
-| after | 23.9 | 312 660 |
+| | checker calls | batches | planner ms/repair |
+|---|---|---|---|
+| baseline | 15 633 | 523 | 63.5 |
+| value-typed key, no per-call allocation | 15 633 | 523 | 22.5 |
+| quantized guard | **2 972** | **189** | **9.8** |
 
-**2.8x**, with an identical oracle-call count — the work removed was overhead,
-not search. It came from three places: the per-candidate cache key no longer
-builds a formatted string (it was one `ostringstream` per swap), signature
-comparison no longer allocates two sorted row vectors per call, and batch
-results are moved into the cache instead of deep-copied.
+(call and batch counts are per repair; the ms column is over 20 repeats)
 
-With the transcript on (the default) the same case costs 30.9 ms rather than
-40.3 ms, after dropping the per-line flush.
+The first step removed overhead only — identical call count. The second is
+algorithmic: the same ~1 525 distinct overlays are still explored, they are
+simply no longer re-asked once per adaptive level (33 distinct guards became
+5). **5.3x fewer checker calls, 6.5x less planner time.** At any realistic
+per-call cost the call count dominates, so the end-to-end factor is ~5x.
+
+The common case (a solution a few fillers away) went 30 -> 27 calls: it never
+escalated far enough to pay the old re-check tax.
+
+With the transcript on (the default) the pre-quantization case cost 30.9 ms
+rather than 40.3 ms after dropping the per-line flush.
+
+**Evaluated and not done:** coalescing uncached candidates across chunks into
+full batches. Batches are smaller now that most candidates hit the cache
+(mean 15.7 rather than 29.9 per batch), and `checkPlaceWithOverlays` has a
+per-batch fixed cost — one empty-overlay region scan — with the candidates
+themselves run through `parallelFor`. Whether refilling batches wins depends
+on the production thread count and on how much a speculatively-sent candidate
+costs when an earlier one turns out clean; that needs measurement on real
+hardware, not a guess here.
