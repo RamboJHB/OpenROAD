@@ -5,10 +5,19 @@
 #include <util/tclCommand.hh>
 #include <cci/cciCommand.hh>
 
+#include <string>
+
 namespace dpl2 {
 
 // test_filler_repair -- exercise the filler VT overlay repair chain on the
 // loaded design.
+//
+//   test_filler_repair                              sweep every movable cell
+//   test_filler_repair -inst <inst> -master <name>  one specific VT swap
+//
+// `-inst` takes an instance name, or the numeric node id the sweep prints.
+// `-master` takes the replacement master's cell name. Both must be given
+// together; with neither, the command sweeps.
 //
 // It talks to ImplantLayerChecker DIRECTLY, not through DePlace::isLegal /
 // PlacementDRC: this command must be usable before that wiring exists, and
@@ -24,14 +33,15 @@ namespace dpl2 {
 class TestFillerRepairCmd : public uvTCL::CciCommand
 {
  public:
-  TestFillerRepairCmd() : uvTCL::CciCommand("test_filler_repair",
-      "check the loaded design's implant DRC and report the filler swaps "
-      "the repair engine proposes for VT changes", false/*echo*/,
-      false/*hidden*/, false/*internal*/)
-  {
-  };
+  TestFillerRepairCmd();
 
   bool exec() override;
+
+ private:
+  // The only two places this file touches the command framework's option
+  // API; see the ADAPT block at the top of the .cc.
+  void declareOptions();
+  bool readOption(const char* name, std::string& value) const;
 };
 
 }  // namespace dpl2

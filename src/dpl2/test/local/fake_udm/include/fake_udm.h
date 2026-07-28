@@ -690,6 +690,7 @@ struct PhysCellData
   PhysObjStatus status = PhysObjStatus::PLACED;
   eUTL::Point2D origin;
   eUTL::PhysOrientation orient = eUTL::PhysOrientationE::R0;
+  std::string name;
 };
 
 class PhysCell
@@ -698,6 +699,8 @@ class PhysCell
   PhysCell() = default;
   explicit PhysCell(const PhysCellData* data) : data_(data) {}
   bool isValid() const { return data_ != nullptr && data_->valid; }
+  // Instance name; commands resolve a user-supplied instance through it.
+  const std::string& getName() const { return data_->name; }
   const eLIB::PhysLibCell& getPhysMaster() const { return *data_->master; }
   PhysObjStatus getStatus() const { return data_->status; }
   eUTL::Point2D getOrigin() const { return data_->origin; }
