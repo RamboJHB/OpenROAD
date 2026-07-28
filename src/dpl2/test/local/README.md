@@ -1,50 +1,35 @@
 # Repository-local fillerRepair harness
 
-This directory is intentionally not part of the migration payload. It owns the
-UDM-compatible include tree, the 101-case `E2ETestProvider` suite and local
-runner scripts.
+Updated: 2026-07-28.
 
-The suite includes focused initialization coverage for non-uniform row-site
-widths, integer-multiple mixed row heights and conflicting Node/physical
-filler classifications. It verifies that mixed heights use the smallest base
-height, Node/configured-list authority permits initialization, and precheck is
-non-mutating.
+**Not part of the migration payload.** It exists so the feature can be
+developed and gated with no real UDM present. It owns the UDM-compatible
+include tree (`fake_udm/`), the 74-case engine regression and its
+`E2ETestProvider`, and the runner scripts. No fake header or provider crosses
+into `src/dpl2/src/fillerRepair/`.
 
-The portable 82-case planner suite and its database-free doubles now live below
-`src/dpl2/src/fillerRepair/test/` as same-level sources; `run_planner_tests.sh` is only a
-convenience entry point. The runtime engine E2E source and its fake-UDM
-provider remain here. No local fake/provider include crosses into the
-migration payload.
+The engine regression is the one target that cannot be built against a real
+UDM: its data comes from `FakeUdmE2ETestProvider`, which constructs fake-UDM
+objects directly. Everything else it links is the same runtime chain a
+destination builds.
 
 ```sh
-src/dpl2/test/local/run_planner_tests.sh
-SANITIZE=address src/dpl2/test/local/run_planner_tests.sh
-src/dpl2/test/local/run_fake_udm_e2e.sh              # engine regression only
-ALL=1 src/dpl2/test/local/run_fake_udm_e2e.sh        # whole suite, 203 cases
-SANITIZE=address ALL=1 src/dpl2/test/local/run_fake_udm_e2e.sh
+ALL=1 ./run_fake_udm_e2e.sh                     # whole suite, 220 cases
+SANITIZE=address ALL=1 ./run_fake_udm_e2e.sh
+./run_fake_udm_e2e.sh                           # engine regression only
+./run_migration_gate.sh                         # destination code path, 146
+SANITIZE=address ./run_migration_gate.sh
 ```
 
-## Migration gate (no UDM required)
+## The migration gate
 
-`run_migration_gate.sh` configures with `DPL2_TEST_USE_FAKE_UDM=OFF` -- the
-destination code path -- and supplies the fake headers through the real-UDM
-knob, so it runs with no UDM installed. Point `DPL2_UDM_INCLUDE_DIRS` /
-`DPL2_UDM_LIBRARIES` at a genuine install to use one.
+`run_migration_gate.sh` builds with `DPL2_TEST_USE_FAKE_UDM=OFF` — no fake-only
+target, no test provider — supplying the fake headers through the *real*-UDM
+knob. That is deliberate: the point is not that the headers are real, it is
+that this exercises the **destination code path** and proves every source
+compiles and every executable's link closure is complete.
 
-```sh
-src/dpl2/test/local/run_migration_gate.sh            # 141 portable cases
-SANITIZE=address src/dpl2/test/local/run_migration_gate.sh
-```
-
-Its value is exercising the destination configuration (no fake test provider,
-no fake-only target), not the headers being real. It proves every supplied and
-runtime source compiles and that the executable **link closure** is complete:
-a source missing from a target surfaces as an undefined symbol. A static
-compile-check library cannot prove this -- archives do not resolve symbols,
-only linking an executable does.
-
-Both UDM modes now build the same targets from the same sources, with
-`dpl2_test_udm` as the only switch. Keeping two divergent branches is how the
-real-UDM configuration silently stopped linking once the checker took
-ownership of `FillerRepairEngine`: nothing local could build that branch.
-Run this gate after any change to the target/source wiring.
+A static compile-check library cannot prove that. Archives do not resolve
+symbols; only linking an executable does. This gate exists because a divergent
+real-UDM CMake branch once quietly stopped linking `FillerRepairEngine`, and
+nobody could see it without a real UDM.

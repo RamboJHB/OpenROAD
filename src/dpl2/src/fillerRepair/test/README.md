@@ -1,60 +1,62 @@
 # Portable fillerRepair tests
 
-This directory moves with `fillerRepair/` and contains 153 portable tests:
-82 database-free planner unit tests plus 71 final-checker/precheck E2E tests.
-No source below this directory includes the repository's fake UDM tree or
-depends on its `E2ETestProvider`.
+Updated: 2026-07-28.
 
-The same-level `RepairPlannerTest.cpp`, `TestPlacementView.h`,
-`PlannerTestOracle.*` and `SyntheticMasterCatalog.*` sources own all planner,
-window, ranker, subset-search and OracleGate cases. They compile against the
-destination's real wire types but construct no UDM
-objects.
-
-`FillerRepairCheckerE2ETest.cpp` has 71 cases:
-
-- 26 final-checker fixture/overlay cases: intra/inter-row WIDTH/SPACING at
-  five target-local filler:std-cell ratios, local-ratio invariants, plus
-  target-related detection when a changed neighbor is outside the guard;
-- 33 end-to-end cases that pass checker snapshots to
-  `internal::RepairPlanner`, apply its returned overlay to the final
-  checker, and cover clean/repair/failure, deterministic batching, candidate
-  and budget boundaries, third-VT reachability, baseline consistency,
-  same-size changes, new-violation rejection and multi-swap minimum width. The
-  three-swap case also verifies opposite-side adaptive fallback when the best
-  residual initially points at a blocked side;
-- 12 UDM-free internal precheck cases for exact coverage, leading/middle/
-  trailing gaps, overlaps, legal holes, clipping, multiple rows, empty spans
-  and deterministic mixed diagnostics, plus empty placement, unordered input,
-  triple overlap and touching legal spans.
-
-The E2E source uses no fake checker, fake placement view or fake UDM data. The
-small `PortablePlacementView` in the source is only the planner projection
-of the same `ImplantInput` owned by `ImplantLayerCheckerHelper`.
-Every width/spacing path runs at exact target-local-window ratios of 50:50,
-30:70, 20:80, 10:90 and 5:95 while preserving implant geometry and the
-minimum required editable/bridge fillers. Design implications are recorded in
-`docs/filler_repair_dense_placement_analysis.md`.
-
-## Destination CMake
-
-The standalone CMake works when given the destination UDM includes/targets:
+These move with `fillerRepair/` and are the migration gate: **146 tests**, none
+of which construct a UDM object, include the repository's fake UDM tree, or
+need a fixture provider from the destination. They run before a design exists.
 
 ```sh
-cmake -S fillerRepair/test -B build-filler-repair-e2e \
-  -DDPL2_UDM_INCLUDE_DIRS='<real UDM includes>' \
-  -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>' \
-  -DDPL2_UDM_LIBRARIES='<real UDM targets/libraries>'
-cmake --build build-filler-repair-e2e
-ctest --test-dir build-filler-repair-e2e --output-on-failure
+cmake -S <srcroot>/fillerRepair -B build-fr -DDPL2_FILLER_REPAIR_BUILD_TESTS=ON \
+      -DDPL2_UDM_INCLUDE_DIRS='<real UDM includes>' \
+      -DDPL2_UDM_LIBRARIES='<real UDM targets/libraries>' \
+      -DDPL2_RUNTIME_LIBRARIES='<existing infra/checker targets>'
+cmake --build build-fr && ctest --test-dir build-fr --output-on-failure
 ```
 
-The CMake project builds the 82-case planner executable and the 71-case E2E
-executable. The latter always compiles `${DPL2_FILLER_REPAIR_SOURCES}`, including
-the public runtime engine. If the destination already has owning dpl2/checker
-targets, pass them through `DPL2_RUNTIME_LIBRARIES`; otherwise the standalone
-fallback compiles the adjacent supplied sources. The test cannot pass merely
-by compiling the planner while the engine/real-UDM boundary is broken.
+With `DPL2_RUNTIME_LIBRARIES` empty the E2E compiles the adjacent
+infrastructure/checker sources itself, so the suite still runs before any
+destination wiring exists.
 
-Only the 101-case checker/engine suite and its fake UDM fixture/provider remain
-outside the migration payload under `src/dpl2/test/local/`.
+## 86 planner cases — `RepairPlannerTest.cpp`
+
+Database-free. `TestPlacementView.h`, `TestRepairOracle.*` and
+`SyntheticMasterCatalog.*` implement the two seams (`PlacementView`,
+`RepairOracle`) with no database behind them, which is what makes the pure
+pipeline portable on its own (`dpl2::fillerRepairPlanner`, C++17).
+
+Coverage: swap validity and candidate filtering; synthetic master metadata;
+L0 window construction and adaptive expansion (including opposite-side
+fallback when the primary side is blocked); ranking into filler domains;
+subset enumeration and member caps; the oracle-gate protocol and its error
+paths; both budgets; determinism; guard quantization; and cache invariants.
+
+## 60 real-checker cases — `FillerRepairCheckerE2ETest.cpp`
+
+Drive the **real `ImplantLayerChecker`** over `ImplantLayerCheckerHelper`-built
+input. No fake checker, no fake placement view, no fake UDM. The small
+`PortablePlacementView` in the source is only the planner's projection of the
+same `ImplantInput` the helper owns.
+
+- **26 direct checker overlay cases** — intra/inter-row WIDTH and SPACING
+  accept/reject, plus target-related detection when the changed neighbour sits
+  outside the guard (proving the checker uses its own snapshot and rule reach).
+- **34 planner-to-checker cases** — the planner takes a checker snapshot,
+  returns an overlay, and that overlay is re-verified by the checker.
+  Clean/repair/failure, batching invariance down to batch size one, empty
+  candidate universes, third-VT reachability, baseline consistency, budget
+  exhaustion with no partial changes, multi-swap minimum width, and the cached
+  baseline freeing window budget.
+
+Each dense fixture is 8 rows x 200 sites. The density matrix runs every
+width/spacing class at target-local filler:std ratios of 50:50, 30:70, 20:80,
+10:90 and 5:95, holding implant geometry and the minimum required
+editable/bridge fillers fixed while redistributing the rest.
+
+## Fixture invariants
+
+Four properties of the current checker; breaking any of them silently changes
+what these cases test. They are documented with their consequences in
+`../README.md` ("Portable fixture model"): rule and layer ids **are** container
+indices, the band-polarity model, `getSnapshot` spanning
+`colId ± maxRuleValue_` sites, and min width applying to every run.

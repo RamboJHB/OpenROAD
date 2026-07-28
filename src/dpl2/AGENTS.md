@@ -1,125 +1,61 @@
 # AGENTS.md — dpl2 filler repair project memory
 
-Updated: 2026-07-24. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-28. Branch: `claude/wizardly-carson-secahu`.
 
-Read `docs/filler_vt_overlay_repair_spec.md`, `src/dpl2/HandOff.md`,
-`src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md` and the fillerRepair/test READMEs
-before changing this feature.
+Read before changing this feature:
 
-## Project status
+| Document | Answers |
+|---|---|
+| `docs/filler_vt_overlay_repair_spec.md` | what the feature must do |
+| `src/dpl2/src/fillerRepair/README.md` | how the module is built and why |
+| `src/dpl2/HandOff.md` | how to migrate it |
+| `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md` | what we changed outside fillerRepair |
+| `src/dpl2/src/fillerRepair/test/README.md` | what the portable tests cover |
 
-The V2.1 swap-only planner and real-UDM runtime E2E package are complete.
+## Status
+
+Swap-only repair, complete and migration-ready.
 
 | Area | State |
 |---|---|
-| Planner | internal `FillerRepairPlanner`; adaptive-L1, filler domains, per-band ranking/filtering, deterministic `FillerCellRecord` output and opt-in `[fr][stage]` transcript complete |
-| Unit tests | 82/82 database-free GoogleTests as same-level sources under `fillerRepair/test`; portable with the feature |
-| Infrastructure | existing runtime Grid/Network are borrowed; infrastructure owns UDM-to-Grid/Network synchronization; `Objects.h` owns `OpType`/`FillerCellRecord`; engine registers configured filler masters and rebuilds private snapshots |
-| Checker | final blocking contract, accessor-based `Layer`/`Rule`, Node/Master IDs and `ipl::FillerChanges` alias/API |
-| Runtime API | caller owns one `ImplantLayerChecker`; it owns the engine, calls it from `check()`, and exposes precheck/update plus the last `FillerChanges` |
-| Portable tests | 153 GoogleTests: 82 planner cases plus 71 final-checker/planner/precheck E2E cases; no destination fixture provider |
-| Local regression | 101 fake-UDM checker/engine cases; repository CTest total 254 |
-| CMake | `fillerRepair/CMakeLists.txt` owns the module's targets (`dpl2::fillerRepair`, `dpl2::fillerRepairPlanner`); all external dependencies arrive through the single `dpl2_filler_repair_deps` interface target, with a cache-variable fallback for standalone use |
+| Planner | `internal::RepairPlanner`: adaptive window, filler domains, per-band ranking, subset enumeration, baseline-delta oracle gate. Deterministic, non-mutating |
+| Engine | `FillerRepairEngine` implements both seams (`PlacementView`, `RepairOracle`), owns a private oracle checker, borrows Grid/Network |
+| Checker | repair wiring in `check()` writes into the caller's `fcRecord`; engine built lazily on first failing check |
+| Build | `fillerRepair/CMakeLists.txt` owns `dpl2::fillerRepair` (C++20) and `dpl2::fillerRepairPlanner` (C++17); externals arrive through the single `dpl2_filler_repair_deps` interface target |
+| Tests | 86 portable planner + 60 portable real-checker + 74 local fake-UDM engine cases; 220/220 local and 146/146 migration gate, normal and ASan |
 
 ## Fixed decisions
 
-1. The planner is deterministic and non-mutating. Its algorithm uses dense
-   integer IDs; request/result changes deliberately reuse the checker
-   infrastructure-owned `dpl2::FillerCellRecord`; checker APIs group those
-   records as `ipl::FillerChanges`.
-2. This stage supports same-position/same-size filler swaps only.
-3. `ImplantLayerChecker` is the only DRC oracle.
-   Checker metadata is owned by its `Layer`/`Rule` classes; fillerRepair reads
-   `Layer::Vt`, `Layer::Polar` and `TechLayerRelativeID` through accessors and
-   does not copy those classes.
-4. `ImplantLayerChecker::check()` is the placement-call boundary and invokes
-   its owned `FillerRepairEngine` with the exact `ipl::CheckRequest`.
-5. Opto calls `ImplantLayerChecker::precheckFillerRepair()` before mutation; it checks gap/overlap only
-   inside maximal supplied-Grid runs where pixels are valid and not reserved
-   by halo/padding. Blockage cuts and legal empty regions are outside scope.
-6. Candidates come only from `fillerSetting::getFillerPhysCells()`.
-   Placed-instance filler identity comes only from `Node::isFiller()`; engine
-   initialization does not require matching UDM macro-type filler flags.
-   PhysRow site heights may differ when every height is an integer multiple of
-   the smallest non-pad base height.
-7. Instance/master IDs are `Node::getId()` / `Master::getId()`; physical wire
-   handles are `LeafCellID` / `LibCellID` in `FillerCellRecord`.
-8. Existing Network supplies placed masters. Configured filler masters are
-   registered before init-time checker construction. On the checker path,
-   DePlace has already registered the request master; repair validates it and
-   rebuilds the private snapshot if that master was added after init. The
-   direct UDM-handle overload retains validate-then-lazy-registration for
-   focused engine tests.
-9. Checker batches use one target/guard plus ordered `FillerChanges`; checker
-   computes the empty-overlay baseline and returns blocking violations.
-10. After a same-instance-set position/master commit, call
-    `ImplantLayerChecker::updateFillerRepair()`; rebuild
-    Grid/Network first when rows, blockages or the instance set changed.
-11. Adaptive expansion follows the best residual's side first, but tries the
-    opposite side if the primary side cannot add a filler. Unchanged blocking
-    alone is not a valid cutoff for non-monotone multi-swap repair.
-
-## Checker boundary
-
-The caller constructs one `ImplantLayerChecker(grid, network)` and calls
-`initFillerRepair(desMgr, fillerSetting)`. The checker owns the engine; callers
-do not construct a second repair object. Initialization then:
-
-- validates Grid/Network, `fillerSetting`, `PhysDesMgr` and UDM Session describe
-  one active design;
-- registers every configured filler master in the existing Network;
-- constructs and validates the engine's private oracle/snapshot;
-- lets `repair()` validate a checker request master and rebuild the private
-  checker/snapshot only when that master was added after init.
-
-The owned engine contains only its oracle and immutable planner snapshot. The caller passes the
-Grid/Network already owned by DePlace and never constructs another
-repair-specific infrastructure object. No leaf-cell list, target master or
-placement properties are accepted by init.
-
-## Thread/lifetime model
-
-One checker/engine pair borrows infrastructure and privately owns an oracle
-snapshot for one design revision. Precheck and repair do not mutate UDM; repair may idempotently
-extend Network's in-memory master registry after request validation and repeats
-precheck internally. Checker calls are serialized privately per engine.
-Infrastructure must synchronize Grid/Network before `update()`. The method
-validates that revision and replaces only private checker/planner/precheck
-state; failure leaves the engine fail-closed.
-
-## Tests
-
-```sh
-src/dpl2/test/local/run_planner_tests.sh
-SANITIZE=address src/dpl2/test/local/run_planner_tests.sh
-src/dpl2/test/local/run_fake_udm_e2e.sh
-SANITIZE=address src/dpl2/test/local/run_fake_udm_e2e.sh
-```
-
-`fillerRepair/test` travels with the feature and contains 153 portable GoogleTests:
-82 database-free planner cases/doubles plus 71 final-checker/planner/precheck
-E2E cases. E2E data is built with `ImplantLayerCheckerHelper`; it needs no
-DEF/LEF reader or destination fixture provider. The local UDM-compatible
-include tree, provider and 101 checker/engine cases remain under `src/dpl2/test/local`.
-
-The destination copies `fillerRepair/`, keeps `OpType`/`FillerCellRecord` in
-`infrastructure/Objects.h`, and applies the small checker entry patch.
-Infrastructure owns every UDM-to-Grid/Network synchronization. Every test
-source copied with `fillerRepair/` targets real UDM wire types.
-
-Local dependencies are GoogleTest, Boost, TBB, C++17/C++20 and CMake. On Apple ASan, use the
-static Homebrew TBB archive as encoded in both build entry points. If GoogleTest itself is an
-unsanitized Homebrew library, set `ASAN_OPTIONS=detect_container_overflow=0` for build-time test
-discovery and CTest; this disables only incompatible libc++ container annotations.
+1. **Checker-as-oracle.** `ImplantLayerChecker` is the only DRC authority.
+   Nothing in fillerRepair re-derives a rule, a reach, or a legality verdict.
+2. **Swap only.** Same instance, position, orientation, width and height;
+   different master. No move, no resize, no merge/split, no rewrite.
+3. **Opto owns the records.** `check()` appends into the caller's
+   `std::vector<FillerCellRecord>`; the checker keeps no member state, and
+   commit belongs to opto/infrastructure. Repair never mutates UDM.
+4. **Candidates come only from `fillerSetting::getFillerPhysCells()`.**
+   Placed-instance filler identity comes only from `Node::isFiller()`, which is
+   `dpl2::isFillerMaster` — one predicate for the whole flow.
+5. **Trust infrastructure.** RowId is the Grid row, x is core-left-relative.
+   No Network↔UDM cross-validation: with lazy init the engine typically runs
+   mid-check, while the candidate Node already carries its proposed master.
+6. **Regional gate only.** Repair refuses to run on a gap/overlap in the rows
+   it can edit. Whole-design placement legality is infrastructure's gate.
+7. **Bounded, never wrong.** Budgets and level caps end a search as
+   *truncated*, which is a bounded give-up — never a wrong acceptance.
+8. **Two seams, no third abstraction.** `PlacementView` in, `RepairOracle`
+   out. Do not add another runtime layer beside the checker-owned engine.
 
 ## Change rules
 
-- Keep planner algorithms unchanged unless a final-checker runtime-chain
-  regression demonstrates a planner defect.
-- Checker algorithm changes remain checker-RD-owned. Record any checker entry
-  or compatibility edit in `CHECKER_REPAIR_CONTRACT.md`.
-- Do not add another runtime abstraction beside the checker-owned engine.
-- Add/remove runtime or portable test sources only via
-  `src/dpl2/src/fillerRepair/CMakeLists.txt` and its `test/` subdirectory.
-- Run planner and E2E normal + ASan before commit.
-- Keep changes in `src/dpl2/` and the authoritative spec unless scope expands.
+- Keep changes inside `src/dpl2/`. Outside `fillerRepair/`, change only what
+  is necessary, and tag it `[fillerRepair-fix]` with the reason.
+- Record any checker-side edit in `CHECKER_REPAIR_CONTRACT.md`.
+- Add or remove sources only via `fillerRepair/CMakeLists.txt` and its
+  `test/` subdirectory — never by listing files in a consumer's build.
+- Includes use angle brackets, resolved from the `src/` root.
+- Changing planner algorithms requires a real-checker regression showing the
+  defect, not a reading of the code.
+- Run the full suite **and** the migration gate, normal and ASan, before
+  committing. Performance claims need a before/after measurement, not an
+  argument.

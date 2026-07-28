@@ -264,7 +264,7 @@ std::vector<NormalizedViolation> normalizeViolations(
     nv.raw = raw;
 
     // Rows: checker-provided, sorted unique; when missing, fall back to the
-    // anchor row and flag it (spec 6.2).
+    // anchor row and flag it.
     nv.rowIds = sortedUniqueRows(raw.rowIds);
     if (nv.rowIds.empty()) {
       nv.rowIds = {request.targetPlace.rowId};
@@ -322,7 +322,7 @@ bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth)
   }
   // Implant layers distinguish otherwise-identical violations -- in
   // particular P-band vs N-band MS at the same x gap, which the checker may
-  // report with the same ruleId/kind/relation/rows (spec 6.2). Both default
+  // report with the same ruleId/kind/relation/rows. Both default
   // to 0/nullopt when the checker leaves them unset, so this is a no-op for
   // layer-agnostic checkers.
   if (a.primaryLayer != b.primaryLayer || a.secondaryLayer != b.secondaryLayer) {
@@ -531,7 +531,7 @@ RepairWindow buildWindow(int level,
     x.xh = std::max(x.xh, span.xh);
   };
 
-  // --- L0 seed set (spec 6.3): violation filler participants, plus the
+  // --- L0 seed set: violation filler participants, plus the
   // violation footprints/rows for the x range.
   for (const NormalizedViolation& nv : violations) {
     rowSet.insert(nv.rowIds.begin(), nv.rowIds.end());
@@ -545,7 +545,7 @@ RepairWindow buildWindow(int level,
     }
   }
 
-  // --- Bridge fillers (default-mandatory, spec 6.3): fillers touching the
+  // --- Bridge fillers (default-mandatory): fillers touching the
   // anchor in its row, and fillers in rows ±1 overlapping the anchor span
   // widened by one rule distance. They join even outside the footprint.
   const XInterval bridgeSpan{anchorSpan.xl - ruleDistance,
@@ -741,8 +741,8 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
 
 namespace {
 
-// Neighbor majority VT of a filler, counted PER BAND SLOT (spec 6.6: "per
-// band-slot, not per cell"). A master's VT family is uniform across its
+// Neighbor majority VT of a filler, counted PER BAND SLOT rather than per
+// cell. A master's VT family is uniform across its
 // bands (checker: master_implant_family_mismatch), so the band structure
 // shows up as WEIGHT: an x-adjacent same-row neighbor faces the filler on
 // BOTH half-row bands (two band votes), while a row +-1 neighbor interacts
@@ -810,7 +810,7 @@ VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
   return majority;
 }
 
-// Filler-level ordering key (V2.1 #9): which fillers the searcher combines
+// Filler-level ordering key: which fillers the searcher combines
 // first. VT-choice features (anchor vote, third-VT demotion) do NOT belong
 // here -- they order options WITHIN a domain, below.
 struct FillerKey
@@ -873,7 +873,7 @@ std::vector<FillerDomain> rankFillers(
   for (auto& [id, domain] : byFiller) {
     // Domain order: anchor's new VT -> neighbor majority -> stable master id;
     // the third VT (neither) last -- demoted within THIS domain only, so it
-    // stays reachable in every subset the filler joins (V2.1 #9).
+    // stays reachable in every subset the filler joins.
     const VtId majorityVt = neighborMajorityVt(view, *view.instance(id));
     const auto optionKey = [&](const Swap& s) {
       const bool third = s.newVt != anchorVt && s.newVt != majorityVt;
@@ -979,7 +979,7 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   const int maxSize = plan.complete
                           ? fillerTotal
                           : std::min(config.maxSubsetSize, fillerTotal);
-  // Member cap counts FILLERS (V2.1 #9): size-s subsets draw from the first
+  // Member cap counts FILLERS: size-s subsets draw from the first
   // N_s ranked fillers, each contributing its full domain.
   const auto memberCap = [&](int size) -> int {
     if (plan.complete || size == 1) {
@@ -1075,7 +1075,7 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
 namespace {
 
 // A violation falls inside the repair window when its x overlaps the editable
-// span and at least one of its rows is editable (spec 6.8 rule 3). Empty rows
+// span and at least one of its rows is editable. Empty rows
 // -> not in-window, matching the checker-provided-rows fallback.
 bool inRepairWindow(const Violation& v, const RepairWindow& window)
 {
@@ -1181,7 +1181,7 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
                baseline_->violations.size(), " violation(s)"));
 
   // Baseline consistency gate: refuse to search on a stale/inconsistent
-  // snapshot (spec 6.8, V2.1 #2+#4).
+  // snapshot.
   if (!checkBaselineConsistency(window)) {
     baseline_ = nullptr;
     return false;
@@ -1227,10 +1227,10 @@ bool OracleGate::checkBaselineConsistency(const RepairWindow& window)
   }
 
   // (b) No unexpected in-window violation may pre-exist in the baseline: by the
-  //     §2.3 assumption the input snapshot is clean apart from the originals,
+  //     input snapshot is assumed clean apart from the originals,
   //     so an unmatched baseline finding inside the repair window signals an
   //     inconsistent snapshot. Unmatched findings OUTSIDE the window are the
-  //     allowed unrelated pre-existing halo (spec 6.8 rule 5).
+  //     allowed unrelated pre-existing halo.
   for (size_t i = 0; i < baseline_->violations.size(); ++i) {
     if (consumed[i]) {
       continue;
@@ -1268,7 +1268,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   if (!summary.usable) {
     return summary;
   }
-  // Self-consistency both ways (V2.1 #1): isLegal must agree with whether the
+  // Self-consistency both ways: isLegal must agree with whether the
   // result reports violations. `isLegal && violations non-empty` AND
   // `!isLegal && violations empty` (an unexplained illegal result, which the
   // real checker returns for blocking overlaps / off-grid / polarity) are both
@@ -1276,7 +1276,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   summary.inconsistent = (result.isLegal != result.violations.empty());
 
   // Residual originals: match each original to a DISTINCT result finding, so
-  // two originals cannot both claim the same one (V2.1 #3, one-to-one).
+  // two originals cannot both claim the same one (one-to-one).
   {
     std::vector<char> consumed(result.violations.size(), 0);
     for (const Violation& original : originals_) {
@@ -1293,7 +1293,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   }
 
   // New violations = result findings not matched one-to-one against the
-  // baseline (V2.1 #3): one baseline finding absorbs at most one candidate
+  // baseline: one baseline finding absorbs at most one candidate
   // finding, so a second same-signature finding is correctly counted as new
   // (P/N bands + the one-site signature tolerance make duplicates real). Inside
   // the repair window a new violation always rejects; in the guard halo only
@@ -1317,7 +1317,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
       summary.blockingViolations.push_back(v);
     } else if (isRelatedToOverlay(v, overlay,
                                   std::max(rule_distance_, v.requiredValue))) {
-      // Per-violation rule distance (V2.1 #5): a new violation from a
+      // Per-violation rule distance: a new violation from a
       // larger-distance rule must not be mislabeled unrelated and let through.
       ++summary.relatedInHalo;
       summary.blockingViolations.push_back(v);
@@ -1574,7 +1574,7 @@ FillerRepairResult RepairPlanner::repair(
 {
   FillerRepairResult result;
 
-  // Spec 3.3: the overlay API is a pure query and must never call back into
+  // The overlay API is a pure query and must never call back into
   // repair, and one planner instance never runs two repairs at once
   // (concurrent repairs = one planner per thread over a shared immutable
   // view). Turn a violation into a fatal result instead of corrupted state.
@@ -1623,7 +1623,7 @@ FillerRepairResult RepairPlanner::repair(
     return result;
   }
 
-  // Stage 2 (spec 6.2): normalize the snapshot into signatures/footprints.
+  // Stage 2: normalize the snapshot into signatures/footprints.
   const std::vector<NormalizedViolation> violations =
       normalizeViolations(request, view_, log_);
 
@@ -1636,12 +1636,12 @@ FillerRepairResult RepairPlanner::repair(
   OracleGate gate(view_, oracle_, request.targetPlace, request.violations,
                   view_.siteWidth(), ruleDistance, config_, log_);
 
-  // Stages 3..7 under the adaptive window loop (spec 6.3/6.7/6.8,
-  // V2.1 #8): search L0, then grow K fillers toward the best non-clean
-  // candidate's blocking side until clean or an expansion cutoff.
+  // The adaptive window loop: search L0, then grow K fillers toward the
+  // best non-clean candidate's blocking side until clean or an expansion
+  // cutoff.
   OracleGate::SearchResult best;  // best non-clean across windows (diagnostics)
   // Definitive iff the LAST window we actually searched was fully enumerated
-  // (V2.1 #10): an earlier smaller window being complete does not prove the
+  // an earlier smaller window being complete does not prove the
   // later truncated window has no solution.
   bool lastSearchedDefinitive = false;
   RepairWindow window = buildWindow(0,
@@ -1824,7 +1824,7 @@ FillerRepairResult RepairPlanner::repair(
     window = expanded;
   }
 
-  // No clean overlay anywhere (spec 6.9): empty changes, explain why.
+  // No clean overlay anywhere: empty changes, explain why.
   result.hasSolution = false;
   result.diagnostics.push_back(makeDiag(
       Severity::Error, "NoCleanOverlay",

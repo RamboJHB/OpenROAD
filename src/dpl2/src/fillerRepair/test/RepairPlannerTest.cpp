@@ -79,7 +79,7 @@ fr::MasterId cellMaster(fr::VtId vt)
 }
 
 // Full master library: widths {2,3,4,8} x VTs {1,2,3}, all fillers, plus one
-// width-4 std cell master per VT (mirrors appendix A of the spec).
+// width-4 std cell master per VT.
 fr::TestPlacementView makeLibrary()
 {
   fr::TestPlacementView design;
@@ -337,7 +337,7 @@ void testSyntheticCatalogRejectsMalformedMasters()
   EXPECT_EQ(d[1].vt, fr::kUnknownVt);
 }
 
-// Candidate query contract (spec 5.3) on the appendix-A library, plus the
+// Candidate query contract on the catalog library, plus the
 // design sync via registerInto.
 void testSyntheticCatalogCandidatesContract()
 {
@@ -630,7 +630,7 @@ void testCheckerTargetOverrideSeedsViolation()
   }
   EXPECT_TRUE(targetSeen);
 
-  // Repair direction (spec anchor-follow): recolor bridge filler 203 to VT1
+  // Repair direction: recolor bridge filler 203 to VT1
   // -> row1 becomes one VT1 run, anchor's VT2 shape has no partner -> clean.
   auto repaired = changed;
   repaired.requestId = 3;
@@ -742,7 +742,7 @@ void testSignatureMatching()
   EXPECT_TRUE(!fr::sameSignature(base, rows, 1));
 
   // P/N band: same rule/kind/relation/rows/xWindow but different implant
-  // layer -> distinct violations (spec 6.2, no dedup by position).
+  // layer -> distinct violations (no dedup by position).
   fr::Violation pband = base;
   pband.primaryLayer = 10;  // e.g. P-band implant
   fr::Violation nband = base;
@@ -1198,8 +1198,8 @@ void testPlannerNoEditableFillerZeroCalls()
 {
   // A row of std cells only: no filler can enter any window. The planner
   // returns no solution with ZERO checker calls -- because the search finds
-  // no editable filler, never via an early abort (V2.1 #6 dropped the
-  // ring-based fast-fail; the hint itself was later removed as noise).
+  // no editable filler, never via an early abort: the ring-based fast-fail
+  // was dropped, and the hint it produced was later removed as noise.
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 16)
       .place(100, cellMaster(kVt1), 0, 0)
@@ -1238,7 +1238,7 @@ class ReentrantChecker : public fr::RepairOracle
   {
     if (!fired && planner != nullptr && request != nullptr) {
       fired = true;
-      inner = planner->repair(*request);  // illegal callback (spec 3.3)
+      inner = planner->repair(*request);  // illegal callback
     }
     fr::OracleResult result;
     result.requestId = r.requestId;
@@ -1262,7 +1262,7 @@ class ReentrantChecker : public fr::RepairOracle
 
 void testPlannerReentrantRepairRefused()
 {
-  // Spec 3.3: the overlay API is a pure query; a checker calling back into
+  // The overlay API is a pure query; a checker calling back into
   // repair() on the same planner gets a fatal ReentrantRepair result, and
   // the outer repair completes normally.
   fr::TestPlacementView design = makeLibrary();
@@ -1464,7 +1464,7 @@ void testRankerOrder()
       fr::rankFillers(generated.swaps, sc.request.targetPlace, normalized,
                       window, sc.design, fr::DebugLog(verbose()));
 
-  // V2.1 #9: the ranker returns filler DOMAINS. 203 is the only direct
+  // the ranker returns filler DOMAINS. 203 is the only direct
   // participant -> its domain ranks first; within the domain the
   // neighbor-majority (VT1) target beats the demoted third VT (VT3).
   EXPECT_EQ(ranked[0].instanceId, 203);
@@ -1562,7 +1562,7 @@ void testRankerDomainOrderIsolated()
 void testRankerMajorityPerBand()
 {
   // Vt Type: {1,2,3,4} | Widths: {2,4} | cell type: 1=std, 0=filler
-  // Spec 6.6: majority counts PER BAND SLOT, not per cell. A same-row
+  // Majority counts PER BAND SLOT, not per cell. A same-row
   // abutting neighbor faces the filler on BOTH half-row bands (2 band
   // votes); a row +-1 neighbor shares only the facing band pair (1 vote).
   // Per-cell counting ties kVt1/kVt2 at 2 cells each and picks kVt1;
@@ -1729,7 +1729,7 @@ void testSyntheticBottomPolarityDerived()
 void testEnumerationOrderAndCompleteness()
 {
   RowFixture f = makeCoveredRow();
-  // V2.1 #9: enumeration input is ranked filler domains.
+  // enumeration input is ranked filler domains.
   fr::FillerDomain d100;
   d100.instanceId = 100;
   d100.options = {*fr::makeSwap(f.design, 100, fillerMaster(4, kVt2)),
@@ -1767,7 +1767,7 @@ void testEnumerationOrderAndCompleteness()
   EXPECT_EQ(truncated.overlays.size(), 3u);
 }
 
-// V2.1 #9 regression: member caps count FILLERS, not options. Three ranked
+// Regression: member caps count FILLERS, not options. Three ranked
 // domains, truncated mode, memberCapSize2=2: size-2 subsets draw from the
 // first TWO fillers with their FULL domains. Under the old flat-swap-prefix
 // semantics a cap of 2 covered only filler 100's two options, so no valid
@@ -2106,7 +2106,7 @@ void testPlannerComplexThirdVtStillSucceeds()
 }
 
 // Unrelated pre-existing violation inside the guard halo must not block
-// acceptance (spec 6.8 rule 5). Far VT3 inter-row MW at x=[2,3) exists in
+// acceptance. Far VT3 inter-row MW at x=[2,3) exists in
 // baseline and in every overlay result; the initial snapshot (target-local)
 // contains only the anchor-caused violation.
 void testPlannerIgnoresUnrelatedHaloViolation()
@@ -2448,7 +2448,7 @@ void testPlannerNeverEditsGuardOnly()
 
 
 // Scripted checker: fixed violation sets per overlay key, honest protocol.
-// Lets us hit each delta-classification branch exactly (spec 6.8).
+// Lets us hit each delta-classification branch exactly.
 class ScriptedChecker : public fr::RepairOracle
 {
  public:
@@ -2610,7 +2610,7 @@ void testGateDeltaClassificationBranches()
   EXPECT_EQ(sr.bestSummary.newInWindow, 1);  // o1 was the best-tracked reject
 }
 
-// --- V2.1 batch-1 correctness regressions ----------------------------------
+// --- correctness regressions ------------------------------------------------
 
 // Returns an unexplained-illegal result (Checked, isLegal=false, no violations)
 // for any candidate overlay; the baseline honestly reproduces the original.
@@ -2644,7 +2644,7 @@ class IllegalEmptyChecker : public fr::RepairOracle
   }
 };
 
-// V2.1 #1: an unexplained illegal result (isLegal=false with no violations)
+// an unexplained illegal result (isLegal=false with no violations)
 // must be rejected, not accepted as clean just because no violation is listed.
 void testGateRejectsUnexplainedIllegal()
 {
@@ -2675,7 +2675,7 @@ void testGateRejectsUnexplainedIllegal()
   EXPECT_TRUE(sr.bestSummary.inconsistent);  // rejected for self-inconsistency
 }
 
-// V2.1 #2: a baseline that fails to reproduce an in-guard original means the
+// a baseline that fails to reproduce an in-guard original means the
 // input snapshot is stale -- the gate must refuse to search (BaselineMismatch),
 // not silently treat "not observed" as "repaired".
 void testGateBaselineMismatchAbortsSearch()
@@ -2707,7 +2707,7 @@ void testGateBaselineMismatchAbortsSearch()
   EXPECT_TRUE(sawMismatch);
 }
 
-// V2.1 #3: two candidate violations of the same signature must not both be
+// two candidate violations of the same signature must not both be
 // absorbed by a single baseline finding. One baseline H, two candidate H ->
 // the second H is genuinely new (here related-in-halo -> reject).
 void testGateMultisetNewViolationNotAbsorbed()
@@ -2743,7 +2743,7 @@ void testGateMultisetNewViolationNotAbsorbed()
   EXPECT_EQ(sr.bestSummary.relatedInHalo, 1);
 }
 
-// V2.1 #5: relatedness of a NEW violation uses max(originalRuleDistance, its
+// relatedness of a NEW violation uses max(originalRuleDistance, its
 // own requiredValue). A new violation from a larger-distance rule must be seen
 // as related (and reject), not mislabeled unrelated and let through.
 void testGatePerViolationRuleDistance()
@@ -3265,7 +3265,7 @@ void testPlannerAdaptiveContinuesPastUnchangedBlocking()
   EXPECT_TRUE(sawNoNewFillerCutoff);
 }
 
-// V2.1 #10: "definitive no solution" must reflect the LAST searched window.
+// "definitive no solution" must reflect the LAST searched window.
 // A single contiguous filler run: L0 is just the anchor-touching participant
 // filler (space 2, fully enumerated) while one configured adaptive step pulls
 // in six more fillers (7 fillers, space 3^7 -> budget-truncated). The failure must read
@@ -3866,7 +3866,7 @@ void testPlannerUserGridMwMs1()
 
   // Deterministic solution: this layout has several oracle-clean single
   // swaps; the planner returns the FIRST in the pinned enumeration order.
-  // Under the V2.1 #9 filler-domain order that is the row2 width-4 vt1
+  // Under the filler-domain order that is the row2 width-4 vt1
   // filler 2012 -> vt0 (the pre-#9 flat-swap order surfaced 3013 -> vt1,
   // an equally clean alternative). Oracle-verified: residual=0,
   // newInWindow=0, relatedInHalo=0.

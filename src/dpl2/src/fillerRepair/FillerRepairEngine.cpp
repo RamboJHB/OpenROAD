@@ -632,7 +632,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
 
   // --- default snapshot halo: cover both the checker's rule reach and two
   // widest placed instances. The latter is a conservative horizontal
-  // approximation of the spec's two-cell guard ring.
+  // approximation of the two-cell guard ring.
   //
   // Rule reach has exactly ONE source: the checker. `getMaxRuleValue()` is
   // literally the radius (in sites) of the neighbourhood `getSnapshot` scans,

@@ -120,7 +120,7 @@ inline Diagnostic makeDiag(Severity severity, std::string code, std::string mess
   return Diagnostic{severity, std::move(code), std::move(message)};
 }
 
-// --- Shared planner model (spec sections 5.1 / 5.2) -------------------------
+// --- Shared planner model ---------------------------------------------------
 
 // Anchor: the std cell changed by upstream opto/ECO. Not a repair window.
 struct TargetPlace
@@ -196,7 +196,7 @@ inline bool sameFillerCellRecord(const FillerCellRecord& left,
          && left.new_lib_cell_ == right.new_lib_cell_;
 }
 
-// --- Planner entry types (spec section 5.4) --------------------------------
+// --- Planner entry types ----------------------------------------------------
 
 struct FillerRepairRequest
 {

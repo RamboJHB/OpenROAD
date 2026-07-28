@@ -12,7 +12,7 @@
 //     VTS/VTL/VTH/VTUL (case-insensitive), polarity P/p -> P, anything else N
 //     (ImplantLayerCheckerHelper::parseLayerName);
 //   - a master's VT is the FAMILY of the implant layers its shapes sit on --
-//     NEVER parsed from the master's name (spec appendix A note). All shapes
+//     NEVER parsed from the master's name. All shapes
 //     of one master must share one family, or the master is unusable
 //     (buildMasters: master_implant_family_mismatch);
 //   - width is DBU and must be site-aligned (master_width_not_site_aligned);
@@ -80,7 +80,7 @@ struct MasterDescription
 class SyntheticMasterCatalog
 {
  public:
-  // `view` resolves instances for the candidate query (spec 5.3 is keyed by
+  // `view` resolves instances for the candidate query (which is keyed by
   // filler INSTANCE); the catalog itself is master-only.
   SyntheticMasterCatalog(DbCoord siteWidth, DbCoord rowHeight)
       : site_width_(siteWidth), row_height_(rowHeight)
@@ -107,7 +107,7 @@ class SyntheticMasterCatalog
   // nullptr when the id is not in the catalog.
   const MasterDescription* describeMaster(MasterId id) const;
 
-  // --- planner candidate contract (spec 5.3) --------------------------------
+  // --- planner candidate contract -------------------------------------
   // Same width + height, usable filler masters, current master excluded,
   // ascending master id. Non-filler input / no replacement -> diagnostics,
   // never an error.
@@ -120,7 +120,7 @@ class SyntheticMasterCatalog
   // Appendix-A library: F_FILL{8,4,3,2}_63S6T9{R,L,UL}_1 on layers
   // {VTS,VTL,VTUL}_{N,P}, widths in sites * siteWidth. Suffix mapping
   // R->VTS, L->VTL, UL->VTUL is an assumption pending library-team
-  // confirmation (spec appendix A); derivation still goes through the
+  // confirmation; derivation still goes through the
   // implant layers, the names are decoration.
   void addAppendixALibrary();
 

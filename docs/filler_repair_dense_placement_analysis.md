@@ -1,8 +1,18 @@
 # Dense placement 下的 filler repair 风险与演进提议
 
-状态: 设计讨论稿；swap 搜索算法保持 V2.1，已记录 engine safety/performance 改进。
+状态: **设计讨论稿 / 历史记录**。本文的分析前提仍然成立，但其中列出的部分提议
+此后已经落地，另有一部分接口在实现中被移除。以本文做设计参考时请对照下表:
 
-更新: 2026-07-23。
+| 本文提议 | 现状 |
+|---|---|
+| §4.3 #2 per-repair budget + truncated diagnostic | 已落地: `checkerCallBudgetPerRepair`(默认 2048) |
+| §5 Window/Ranker 的有界扫描 | 已落地 |
+| §4.3 #1 提到的全局 `precheckFillerRepair()` | **已移除**。engine 只保留区域 gate;全设计 placement 合法性归 infrastructure |
+| `updateFillerRepair()` 快照刷新 | **已移除**。engine 改为懒初始化,快照随下一次懒建重建 |
+| §5 的 254/254 CTest 与时间数据 | 已过期。当前为 220/220 本地 + 146/146 migration gate;最新性能数据见 `src/dpl2/src/fillerRepair/README.md` 的 "Search cost" |
+| §4.1 influence closure / §4.2 Tier 2 span rewrite | **未实现**,仍是未来方向 |
+
+原始更新: 2026-07-23。
 
 ## 1. 新前提
 
@@ -147,10 +157,10 @@ Tier 2 应按 span 建模，不引入通用 Move。一个 rewrite 必须满足 r
 1. precheck 失败：返回 `PrecheckFailed`，不进入搜索。已落地：`repair()` 在
    replacement master 注册前检查初始 target influence；adaptive candidate 若编辑
    更远行，则该 request 在进入 checker batch 前扩展并补查对应行。multi-row object
-   按垂直重叠计入每一行。未触达区域的 gap/overlap 仍由 public
-   `precheckFillerRepair()` 全局 gate 负责；placement/master commit 后必须先
-   先由 infrastructure 同步 Grid/Network，再调用 `updateFillerRepair()` 重建
-   checker/engine snapshot；live read 不能代替 snapshot row membership refresh；
+   按垂直重叠计入每一行。未触达区域的 gap/overlap 由 infrastructure 自己的全设计
+   gate 负责（本文写作时设想的 public `precheckFillerRepair()` 已被移除）；
+   placement/master commit 后由 infrastructure 同步 Grid/Network，engine 快照随
+   下一次懒初始化重建；
 2. influence closure 内无 editable filler：swap tier 返回
    `UnrepairableBySwap`；若不存在可重铺 filler span，则返回
    `NeedsPlacementRepair`；

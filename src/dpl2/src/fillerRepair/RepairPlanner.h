@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// The deterministic search pipeline (spec 3.2 / 5.4 / 6.2-6.9), in the order
+// The deterministic search pipeline, in the order a repair flows through it:
 // a repair flows through it:
 //   swap model -> violation signatures -> repair window -> ranking ->
 //   subset enumeration -> oracle gate -> pipeline driver.
@@ -33,7 +33,7 @@
 
 namespace dpl2::fillerRepair {
 
-// Search parameters (spec section 7). All knobs live here so tests and
+// Search parameters. All knobs live here so tests and diagnostics can
 // diagnostics can print the exact configuration used.
 struct RepairConfig
 {
@@ -46,11 +46,11 @@ struct RepairConfig
   // never a wrong answer, only a bounded give-up. <= 0 disables the cap.
   int checkerCallBudgetPerRepair = 2048;
   int batchSize = 32;
-  int maxSubsetSize = 4;          // large-window truncation only (spec 6.7)
+  int maxSubsetSize = 4;          // large-window truncation only
   int memberCapSize2 = 24;        // N_2
   int memberCapSize3 = 12;        // N_3
   int memberCapSize4 = 8;         // N_4
-  int adaptiveStepFillers = 2;    // K per relevant row/side (spec 6.3 #8)
+  int adaptiveStepFillers = 2;    // K per relevant row/side
   // Safety valve for the NO-SOLUTION path: without it adaptive expansion
   // keeps adding fillers until the window rows are exhausted (levels ~
   // fillers/(2K), each level up to one window budget of checker calls).
@@ -60,7 +60,7 @@ struct RepairConfig
   bool verbose = true;            // [fr] transcript; FR_VERBOSE=0 silences
 };
 
-// --- Swap: the atomic operation (spec section 4) ---------------------------
+// --- Swap: the atomic operation ---------------------------------------------
 
 struct RepairWindow;
 
@@ -136,7 +136,7 @@ SwapGenerationResult generateSwaps(
     const PlacementView& view,
     const DebugLog& log);
 
-// --- violation signatures / relatedness (spec 6.2) -------------------------
+// --- violation signatures / relatedness ------------------------------------
 
 // A violation with the derived fields the planner works on. `raw` is kept by
 // value: normalization must outlive the request's snapshot vector.
@@ -177,7 +177,7 @@ bool isRelatedToOverlay(const Violation& violation,
 DbCoord estimateRuleDistance(const std::vector<Violation>& violations,
                              DbCoord siteWidth);
 
-// --- repair window: L0 + adaptive-L1 (spec 6.3, V2.1 #7/#8) ----------------
+// --- repair window: L0 + adaptive-L1 ----------------------------------------
 
 struct RepairWindow
 {
@@ -188,7 +188,7 @@ struct RepairWindow
   // Fillers inside rows/x, sorted by (row, x): the move-generation universe.
   std::vector<InstanceId> editableFillers;
   // Subset of editableFillers flagged as bridge fillers (default-mandatory
-  // candidates, spec 6.3/6.5).
+  // candidates).
   std::vector<InstanceId> bridgeFillers;
 
   Region area() const
@@ -214,7 +214,7 @@ RepairWindow buildWindow(int level,
                          DbCoord ruleDistance,
                          const DebugLog& log);
 
-// One adaptive-L1 step (spec 6.3, V2.1 #8). `blocking` is the best non-clean
+// One adaptive-L1 step. `blocking` is the best non-clean
 // candidate's residual/new-related violation set. Direction is derived from
 // those x windows relative to `current`; when no directional finding exists,
 // both sides are tried. The step is deterministic and never sweeps an entire
@@ -227,10 +227,10 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                   int fillersPerRow,
                                   const DebugLog& log);
 
-// --- ranking into filler domains (spec 6.6, V2.1 #9) -----------------------
+// --- ranking into filler domains --------------------------------------------
 
 // One editable filler with its full, preference-ordered candidate domain.
-// Ranking never truncates a domain (V2.1 #9).
+// Ranking never truncates a domain.
 struct FillerDomain
 {
   InstanceId instanceId = 0;
@@ -245,7 +245,7 @@ std::vector<FillerDomain> rankFillers(
     const PlacementView& view,
     const DebugLog& log);
 
-// --- subset enumeration (spec 6.7, V2.1 #9/#10) ----------------------------
+// --- subset enumeration -----------------------------------------------------
 
 struct EnumerationPlan
 {
@@ -258,7 +258,7 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
                                   int budget,
                                   const DebugLog& log);
 
-// --- oracle gate: baseline-delta accept (spec 6.8, 4.2) --------------------
+// --- oracle gate: baseline-delta accept -------------------------------------
 
 // Delta classification of one checker result against the baseline.
 struct DeltaSummary
@@ -270,7 +270,7 @@ struct DeltaSummary
   int relatedInHalo = 0;
   int unrelatedInHalo = 0;     // reported, never blocking
   // Actual residual/new-related findings that prevented acceptance. Adaptive
-  // L1 uses their rows/x windows to choose the next growth side (V2.1 #8).
+  // L1 uses their rows/x windows to choose the next growth side.
   std::vector<Violation> blockingViolations;
   bool clean = false;
 };
@@ -289,7 +289,7 @@ class OracleGate
 
   // Baseline for `window.guardRegion`; consumes budget only on a cache miss.
   // False when the baseline is unusable (checker error) OR fails the baseline
-  // consistency gate (spec 6.8, V2.1 #2+#4): the baseline must reproduce every
+  // consistency gate: the baseline must reproduce every
   // original that lies inside the guard, and must not carry an unexpected
   // in-window violation that was not in the input snapshot. A false return is
   // fatal for the window -- either a checker error or a stale/inconsistent
@@ -335,7 +335,7 @@ class OracleGate
   DeltaSummary classify(const OracleResult& result,
                         const Overlay& overlay,
                         const RepairWindow& window) const;
-  // Baseline consistency gate (spec 6.8, V2.1 #2+#4). Uses the already-fetched
+  // Baseline consistency gate. Uses the already-fetched
   // baseline_, spends no budget. Pushes a fatal BaselineMismatch diagnostic and
   // returns false when the snapshot is stale/inconsistent.
   bool checkBaselineConsistency(const RepairWindow& window);
@@ -378,7 +378,7 @@ class RepairPlanner
   RepairOracle& oracle_;
   RepairConfig config_;
   DebugLog log_;
-  // Guards spec 3.3's no-reentrancy contract AND flags concurrent use of one
+  // Guards the no-reentrancy contract AND flags concurrent use of one
   // planner instance; concurrent repairs use one planner per thread.
   std::atomic<bool> repair_active_{false};
 };
