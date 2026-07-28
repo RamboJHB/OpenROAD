@@ -10,12 +10,37 @@ commit. It never mutates UDM, Network or Grid.
 
 ---
 
+## 0. Migration snapshot
+
+**`76e197c5c0158ea07c824288cbbc057d1715679d`** — take the payload from this
+commit. Everything below describes exactly that state.
+
+```sh
+git tag fillerRepair-migration-20260728 76e197c5c0
+```
+
+(The tag exists locally only; this environment's git proxy accepts writes to
+the working branch and refuses tag refs, so the commit id is the reference
+that actually travels.)
+
+Verified at that commit:
+
+| | |
+|---|---|
+| local suite | 220/220, normal and ASan |
+| migration gate (destination code path) | 146/146, normal and ASan |
+| standalone module | 146/146 — configure, build and test with no harness |
+| `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
+
+---
+
 ## 1. What to take
 
 | | |
 |---|---|
 | **Payload** | `src/dpl2/src/fillerRepair/` — whole directory, including its `CMakeLists.txt` and `test/` |
-| **Patches to delivered code** | listed in `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`, all tagged `[fillerRepair-fix]` |
+| **Test command** | `src/dpl2/dpl2ui/testFillerRepairCmd.{hh,cc}` — `test_filler_repair`, optional |
+| **Patches to delivered code** | **not in either path above** — nine files, all tagged `[fillerRepair-fix]`, itemised with reasons in `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`: `drc/DRCChecker.h`, `drc/ImplantLayerChecker.{h,cpp}`, `drc/ImplantLayerCheckerHelper.cpp`, `infrastructure/Objects.h`, `infrastructure/Object.cpp`, `infrastructure/Grid.{h,cpp}`, `infrastructure/network.cpp`. Without them the payload does not build |
 | **Not part of the payload** | `src/dpl2/test/` — the repository-local harness (fake UDM tree, engine regression, runner scripts). It exists so this can be developed and gated without a real UDM. |
 
 The payload needs no DEF/LEF reader, no fake UDM, and no fixture provider from
