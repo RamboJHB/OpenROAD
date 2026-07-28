@@ -77,5 +77,5 @@ breaking any of them silently changes what the cases test:
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
 - repository-local fake-UDM engine regression: 62 cases under
   `src/dpl2/test/local/`.
-- 2026-07-27 full local suite: 203/203 normal and ASan; migration gate
-  141/141.
+- 2026-07-28 full local suite: 203/203 normal and ASan; migration gate
+  141/141 normal and ASan.

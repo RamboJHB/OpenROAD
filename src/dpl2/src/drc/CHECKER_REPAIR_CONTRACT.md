@@ -264,11 +264,13 @@ Supersedes the 2026-07-20 checker-entry wiring above where they differ.
   `DePlace::isLegal` addMaster-then-check flow); both builders are idempotent
   by master id.
 
-## Verified test boundary (2026-07-27)
+## Verified test boundary (2026-07-28)
 
 Portable planner 82 + portable checker E2E 59 build and run in BOTH harness
-modes (fake-UDM and the real-UDM-mode migration gate: 141/141). The portable
-checker fixtures use the band-polarity model: per VT family an N layer
-(bottom band) and a P layer (top band), `basePolar=N`, odd-row placements MX;
-inter-row expectations pick the N or P rule by boundary parity. Local
-fake-UDM engine regression: 62 cases. Full local suite 203/203 normal + ASan.
+modes (fake-UDM and the real-UDM-mode migration gate: 141/141). The fixture
+invariants they depend on -- rule/layer ids as container indices, the
+band-polarity model, the `maxRuleValue_`-sized snapshot window and min width
+-- are documented in `fillerRepair/README.md`; the spacing scenarios were
+re-derived against that window (neighbour run within reach, one editable
+bridge filler across a sub-minimum gap). Local fake-UDM engine regression:
+62 cases. Full local suite 203/203 normal + ASan, gate 141/141 normal + ASan.
