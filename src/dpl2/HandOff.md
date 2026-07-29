@@ -192,7 +192,32 @@ gate; the engine has no global precheck and does not want one.
 
 ---
 
-## 8. State of this branch
+## 8. API the destination does not need
+
+Public surface that exists for the repository-local regression suite, which is
+not migrated. None of it is called by the payload, by the checker, or by any
+production path — listed so a reviewer does not go looking for the caller.
+
+| | Why it exists |
+|---|---|
+| `FillerRepairEngine::update(desMgr, fillerSetting)` | Pre-dates lazy init. Production refreshes by calling `setFillerRepairContext()`, which drops the engine so the next failing check rebuilds it; there is no path that reaches `update()`. Kept because the local regression drives snapshot refresh through it. |
+| `FillerRepairEngine::repair(LeafCellID, const PhysLibCell&)` | The direct UDM-handle entry. Production enters through `ImplantLayerChecker::check()`, which uses the `CheckRequest` overload. Kept as the local regression's entry point. |
+| `FillerRepairEngine::setDebugLogging(bool)` | The transcript is on by default and `FR_VERBOSE=0` silences it globally; this is the per-engine override. |
+| `isOracleSnapshotClean()` (`RepairOracle.h`) | Assertion helper for the portable planner tests. |
+
+Deleting them is safe for the destination and costs about sixty lines. It is
+not recommended: they are the local suite's entry points, so removing them
+weakens the ability to reproduce a destination-reported problem here.
+
+Separately, **`Grid::getBoundingBox` / `DePlace::getBoundingBox` is not a
+fillerRepair dependency** — the module never calls it. It is an independent
+feature that happens to ride in the same patch set, and can be dropped without
+affecting repair. `Grid::gridXY` in the same file must stay: the checker uses
+it.
+
+---
+
+## 9. State of this branch
 
 | | |
 |---|---|

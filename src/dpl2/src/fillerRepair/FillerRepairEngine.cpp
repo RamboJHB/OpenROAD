@@ -47,7 +47,6 @@ class FillerRepairEngine::Impl final : private PlacementView,
   struct Config
   {
     RepairConfig repair;
-    DbCoord snapshotHaloX = 0;
     int snapshotHaloRows = 1;
     bool verbose = debugLoggingDefault();
   };
@@ -1095,11 +1094,8 @@ Region FillerRepairEngine::Impl::snapshotGuard(RowId rowId,
                                                DbCoord width,
                                                DbCoord heightRows) const
 {
-  const DbCoord halo =
-      config_.snapshotHaloX > 0 ? config_.snapshotHaloX : default_halo_x_;
-
   Region guard;
-  guard.x = XInterval{x - halo, x + width + halo};
+  guard.x = XInterval{x - default_halo_x_, x + width + default_halo_x_};
   const RowId minRow = row_list_.empty() ? 0 : row_list_.front();
   const RowId maxRow = row_list_.empty() ? 0 : row_list_.back();
   guard.rowLo = std::max<RowId>(
