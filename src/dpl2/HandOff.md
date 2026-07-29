@@ -40,7 +40,7 @@ Verified at that commit:
 | | |
 |---|---|
 | **Payload** | `src/dpl2/src/fillerRepair/` — whole directory, including its `CMakeLists.txt` and `test/` |
-| **Test command** | `src/dpl2/dpl2ui/testFillerRepairCmd.{hh,cc}` — `test_filler_repair`, optional |
+| **Test command** | `src/dpl2/dpl2ui/testFillerRepairCmd.{hh,cc}` — `test_filler_repair`, optional. Run `set_filler_option` first, then `test_filler_repair` to sweep, or `test_filler_repair -inst <instance id> -master <master id>` for one VT swap. Both options take id numbers — the same `LeafCellID` / `LibCellID` handles `DePlace::isLegal` takes — and the sweep prints its findings as the `-inst`/`-master` pair that reproduces them |
 | **Patches to delivered code** | **not in either path above** — eleven files, all tagged `[fillerRepair-fix]`, itemised with reasons in `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`: `drc/DRCChecker.h`, `drc/ImplantLayerChecker.{h,cpp}`, `drc/ImplantLayerCheckerHelper.cpp`, `infrastructure/Objects.h`, `infrastructure/Object.cpp`, `infrastructure/Grid.{h,cpp}`, `infrastructure/network.cpp`, `DePlace.cpp`, `include/dpl2/DePlace.h`. Without them the payload does not build. The `DePlace` / `Grid::isFullUtil` pair is a **correctness fix in delivered code, independent of repair** — grid occupancy was missing every filler |
 | **Not part of the payload** | `src/dpl2/test/` — the repository-local harness (fake UDM tree, engine regression, runner scripts). It exists so this can be developed and gated without a real UDM. |
 

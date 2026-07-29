@@ -12,12 +12,16 @@ namespace dpl2 {
 // test_filler_repair -- exercise the filler VT overlay repair chain on the
 // loaded design.
 //
-//   test_filler_repair                              sweep every movable cell
-//   test_filler_repair -inst <inst> -master <name>  one specific VT swap
+//   test_filler_repair                          sweep every movable cell
+//   test_filler_repair -inst <id> -master <id>  one specific VT swap
 //
-// `-inst` takes an instance name, or the numeric node id the sweep prints.
-// `-master` takes the replacement master's cell name. Both must be given
-// together; with neither, the command sweeps.
+// Both options take **id numbers**, not names: `-inst` the instance id
+// (`LeafCellID`) and `-master` the replacement master's id (`LibCellID`) --
+// the same two handles `DePlace::isLegal(LeafCellID, LibCellID, fcRecord)`
+// takes, so a drill-in reproduces exactly the call opto makes. The values are
+// the ids' index values, which is what the sweep prints, so a reported line
+// pastes straight back as options. Both must be given together; with neither,
+// the command sweeps.
 //
 // It talks to ImplantLayerChecker DIRECTLY, not through DePlace::isLegal /
 // PlacementDRC: this command must be usable before that wiring exists, and
