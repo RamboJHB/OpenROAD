@@ -2,7 +2,7 @@
 
 Updated: 2026-07-28.
 
-These move with `fillerRepair/` and are the migration gate: **146 tests**, none
+These move with `fillerRepair/` and are the migration gate: **147 tests**, none
 of which construct a UDM object, include the repository's fake UDM tree, or
 need a fixture provider from the destination. They run before a design exists.
 
@@ -31,7 +31,7 @@ fallback when the primary side is blocked); ranking into filler domains;
 subset enumeration and member caps; the oracle-gate protocol and its error
 paths; both budgets; determinism; guard quantization; and cache invariants.
 
-## 60 real-checker cases — `FillerRepairCheckerE2ETest.cpp`
+## 61 real-checker cases — `FillerRepairCheckerE2ETest.cpp`
 
 Drive the **real `ImplantLayerChecker`** over `ImplantLayerCheckerHelper`-built
 input. No fake checker, no fake placement view, no fake UDM. The small
@@ -41,7 +41,7 @@ same `ImplantInput` the helper owns.
 - **26 direct checker overlay cases** — intra/inter-row WIDTH and SPACING
   accept/reject, plus target-related detection when the changed neighbour sits
   outside the guard (proving the checker uses its own snapshot and rule reach).
-- **34 planner-to-checker cases** — the planner takes a checker snapshot,
+- **35 planner-to-checker cases** — the planner takes a checker snapshot,
   returns an overlay, and that overlay is re-verified by the checker.
   Clean/repair/failure, batching invariance down to batch size one, empty
   candidate universes, third-VT reachability, baseline consistency, budget

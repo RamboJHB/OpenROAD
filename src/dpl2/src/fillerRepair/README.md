@@ -112,7 +112,7 @@ nothing else, which is what keeps it database-free and portable.
 | `CMakeLists.txt` | the module's own targets — `dpl2::fillerRepair` (payload, C++20) and `dpl2::fillerRepairPlanner` (pure pipeline, C++17); a destination adds the directory and links a target rather than listing sources |
 | `test/CMakeLists.txt` | the portable tests, added when `DPL2_FILLER_REPAIR_BUILD_TESTS=ON` |
 | `test/RepairPlannerTest.cpp` + `TestPlacementView.h`, `TestRepairOracle.*`, `SyntheticMasterCatalog.*` | 86 portable database-free planner cases (the doubles implement the two seams) |
-| `test/FillerRepairCheckerE2ETest.cpp` | 60 portable real-checker and planner-to-checker cases (see the fixture model below) |
+| `test/FillerRepairCheckerE2ETest.cpp` | 61 portable real-checker and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript
 
@@ -149,6 +149,15 @@ breaking any of them silently changes what the cases test:
   out is never in `shapes`, so the spacing scenarios keep their neighbour run
   starting within that window, with a single editable bridge filler forming
   the sub-minimum gap.
+- **`xWindow` means something different per rule kind.** Width with no
+  neighbour: the run itself. Width with a neighbour: the union (intra-row) or
+  the intersection (inter-row). **Spacing: the GAP** — an interval lying
+  *between* the participants that overlaps neither of them. The planner seeds
+  its window from `xWindow` united with the participants' spans, so the gap
+  form is handled, but relatedness of a halo finding is measured from
+  `xWindow` alone. An earlier checker left spacing violations with a
+  default-constructed `[0,0)`, which parked every one of them at the core's
+  left edge; `SpacingViolationXWindowIsTheGap` fails if that returns.
 - **Min width still applies** to every run, so a scenario's runs must stay at
   or above `MIN_RULE` while the gap between them stays below it.
 
@@ -179,12 +188,12 @@ Full migration instructions, including the destination checklist, are in
 
 ## Verification
 
-- portable planner: 86 cases; portable checker E2E: 60 cases (both compile,
+- portable planner: 86 cases; portable checker E2E: 61 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
 - repository-local fake-UDM engine regression: 74 cases under
   `src/dpl2/test/local/`.
-- 2026-07-28 full local suite: 220/220 normal and ASan; migration gate
-  146/146 normal and ASan; standalone module build 146/146.
+- 2026-07-28 full local suite: 221/221 normal and ASan; migration gate
+  147/147 normal and ASan; standalone module build 147/147.
 
 ### Search cost
 

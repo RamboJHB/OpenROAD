@@ -1682,6 +1682,60 @@ TEST(FillerRepairCheckerE2ETest, ThirdVtOnlyCandidateRemainsReachable)
           .isLegal);
 }
 
+// Pins what Violation::xWindow MEANS, per rule kind. The planner seeds its
+// repair window from it (united with the participants' spans) and measures
+// relatedness of a new halo finding by its distance to a changed span, so a
+// silent change of meaning here silently changes which fillers are editable
+// and which new violations count as blocking.
+//
+// The checker sets it three ways:
+//   width, no neighbour   the run itself
+//   width, with neighbour the union / inter-row intersection of the two runs
+//   SPACING               the GAP between the two runs -- an interval that
+//                         lies BETWEEN the participants and contains neither
+//
+// That last one is the surprising one, and it is the one an earlier checker
+// did not set at all: spacing violations used to arrive with a
+// default-constructed [0,0), which put every one of them at the core's left
+// edge. Anything that regresses to that shows up here rather than as
+// mysteriously wide repair windows.
+TEST(FillerRepairCheckerE2ETest, SpacingViolationXWindowIsTheGap)
+{
+  PlannerCheckerFixture fixture;
+  const fr::OracleResult baseline
+      = fixture.baseline(INTRA_SPACING_ROW, INTRA_SPACING_COL);
+  ASSERT_FALSE(baseline.violations.empty());
+
+  int spacingSeen = 0;
+  for (const fr::Violation& violation : baseline.violations) {
+    if (violation.kind != fr::ViolationKind::MinSpacing) {
+      continue;
+    }
+    ++spacingSeen;
+
+    // Never the degenerate window at the core edge the old checker left.
+    EXPECT_TRUE(violation.xWindow.xl > 0 || violation.xWindow.xh > 0)
+        << "spacing xWindow is [0,0): the checker did not set it";
+
+    // A gap is what separates the participants, so it overlaps none of them.
+    for (const fr::ViolationParticipant& participant :
+         violation.participants) {
+      if (participant.xRange.empty()) {
+        continue;
+      }
+      EXPECT_FALSE(violation.xWindow.overlaps(participant.xRange))
+          << "spacing xWindow [" << violation.xWindow.xl << ","
+          << violation.xWindow.xh << ") overlaps participant "
+          << participant.instanceId << " [" << participant.xRange.xl << ","
+          << participant.xRange.xh << ")";
+    }
+
+    // And it measures the distance the rule is about.
+    EXPECT_EQ(violation.xWindow.length(), violation.measuredValue);
+  }
+  EXPECT_TRUE(spacingSeen > 0) << "fixture produced no spacing violation";
+}
+
 TEST(FillerRepairCheckerE2ETest, OneCallBudgetReturnsNoPartialRepair)
 {
   PlannerCheckerFixture fixture;

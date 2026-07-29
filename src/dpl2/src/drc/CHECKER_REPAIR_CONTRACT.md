@@ -237,10 +237,10 @@ partial repair; it never reinterprets or bypasses checker legality.
 
 ## 6. Verified boundary
 
-86 portable planner cases and 60 portable real-checker cases build, link and
+86 portable planner cases and 61 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
-gate (146/146, normal and ASan). Repository-local fake-UDM engine regression:
-74 cases. Full local suite 220/220, normal and ASan.
+gate (147/147, normal and ASan). Repository-local fake-UDM engine regression:
+74 cases. Full local suite 221/221, normal and ASan.
 
 The fixture invariants those 60 cases depend on — rule and layer ids as
 container indices, the band-polarity model, the `maxRuleValue_`-sized snapshot
