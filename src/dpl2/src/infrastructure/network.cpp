@@ -266,11 +266,11 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
   ndi.setDbInst(cellId);
   auto master = getMaster(inst.getPhysMaster().getLibCellId());
   auto lc = master->getPhysLibCell();
-  if (lc->getType().isCoreFiller()) {
-    ndi.setType(Node::FILLER);
-  } else {
-    ndi.setType(Node::CELL);
-  }
+  // [fillerRepair-fix] was isCoreFiller() alone, so a PAD_FILLER node came out
+  // as Node::CELL while Master::isFiller() called it a filler. Route through
+  // the one shared predicate so Node::isFiller() and Master::isFiller() cannot
+  // disagree about the same instance.
+  ndi.setType(isFillerMaster(*lc) ? Node::FILLER : Node::CELL);
   ndi.setMaster(master);
   ndi.setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi.setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
@@ -299,7 +299,22 @@ bool Network::updateNode(Node* ndi,
   LeafCellID cellId = ndi->getDbInst();
   const PhysCell& inst = desMgr->getPhysCell(cellId);
   auto master = getMaster(physLibCell.getLibCellId());
+  // [fillerRepair-fix] this is what the bool return was for. An unregistered
+  // master used to be stored and then dereferenced a few lines down
+  // (getBottomPowerType), so the node was left half-updated and the process
+  // died. Refuse instead, and leave the node exactly as it was.
+  if (master == nullptr) {
+    return false;
+  }
   ndi->setMaster(master);
+  // [fillerRepair-fix] the type was the one field this refreshed nothing for,
+  // so a swap that changes filler-ness left Node::isFiller() answering about
+  // the previous master. ImplantLayerChecker::checkOverlap uses it to decide
+  // whether an occupant is an excludable filler or a hard
+  // placement_overlap_in_input, and validateOverlayRequest uses it to accept a
+  // changed instance at all -- both now reachable, since the grid actually
+  // carries filler occupants.
+  ndi->setType(isFillerMaster(physLibCell) ? Node::FILLER : Node::CELL);
   ndi->setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi->setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
 

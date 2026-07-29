@@ -165,7 +165,31 @@ occupancy independent of the filler/non-filler classification, which
 
 ### `infrastructure/network.cpp`, `Object.cpp`
 
-`Object.cpp` routes `Master::isFiller()` through the shared predicate above.
+`Object.cpp` routes `Master::isFiller()` through the shared predicate above,
+and **`Node::isStdCell()` now excludes fillers**. `PhysMacroType::isCore()` is
+true for `CORE_FILLER`, so it used to answer "yes, a standard cell" for every
+filler in the design — the mirror image of the `DePlace` bug and the same
+confusion: *is a standard cell* is not *stands on a site*. Ask `!isTerminal()`
+for the latter. Behaviour change in delivered code: grep the destination for
+other callers.
+
+`network.cpp`, three fixes beyond the orientation one below:
+
+- **`addNode` classifies with `isFillerMaster()`**, not `isCoreFiller()` alone.
+  A `PAD_FILLER` node came out as `Node::CELL` while `Master::isFiller()`
+  called it a filler, so the two disagreed about one instance.
+- **`updateNode` sets the type.** It refreshed master, size, orientation and
+  status but never the type, so a swap that changes filler-ness left
+  `Node::isFiller()` answering about the previous master.
+  `ImplantLayerChecker::checkOverlap` uses that to decide whether an occupant
+  is an excludable filler or a hard `placement_overlap_in_input`, and
+  `validateOverlayRequest` uses it to accept a changed instance at all — both
+  now reachable, because the grid finally carries filler occupants.
+- **`updateNode` refuses an unregistered master.** `getMaster()` returns
+  nullptr for one, and that nullptr was stored and then dereferenced a few
+  lines later (`getBottomPowerType`): the node was left half-updated and the
+  process died. It now returns `false` — which is what the `bool` return was
+  always for — and leaves the node untouched.
 
 `network.cpp`: **`updateNode` restores `setOrient(inst.getOrient())`**, which
 the 2026-07-28 destination update replaced with a hard-coded
@@ -186,9 +210,10 @@ Not patched here; they belong to the integration owner.
 | | |
 |---|---|
 | `network.h` shipped with line numbers pasted into every line, so it is not valid C++ | fixed locally; confirm the source file |
-| `Network::addNode` classifies with `isCoreFiller()` alone while `Master::isFiller()` is `isCoreFiller() \|\| isPadFiller()` | the two disagree on pad fillers — pick one predicate |
-| `updateNode` no longer sets the node type | stale after a master swap that changes filler-ness |
 | `network.h` dropped `#include <memory>` while still using `std::unique_ptr` | currently resolves transitively |
+| **`PhysObjStatus` may carry values beyond `PLACED` / `LOC_FIXED`** | `addNode` derives `isPlaced()`/`isFixed()` from those two alone, and `setFixedGridCells`/`setPlacedGridCells` paint only nodes matching one of them. If the real enum has a third "placed and immovable" value (a DEF `COVER`, say), instances carrying it are painted by neither loop — the same hole as the filler one, on the status axis. The stand-in UDM here has only the three values, so this cannot be settled in this repository. **Confirm the real enum.** |
+| `Grid::visitCellPixels` and `Grid::paintPixel` disagree on obstruction-bearing masters | `visitCellPixels` (DePlace's initial paint) paints only OVERLAP-layer obstruction rects when the master has any, while `paintPixel` (every later repaint) always paints the whole footprint. A master whose obstruction is smaller than its outline therefore has different occupancy depending on which path last touched it, and leaves unpainted sites at init. Deliberate mechanism for macros, so not changed here |
+| `addNode` dereferences `getMaster()` without a null check | same crash `updateNode` had; it returns `void`, so the fix is not a one-liner — skipping the node silently would desynchronize ids |
 | `PlacementDRC.h` includes `<dpl2/DRCChecker.h>`; the header is at `drc/DRCChecker.h` | does not compile as shipped |
 | `PlacementDRC.h` declares `const eUNL::PhysOrientation&`; `DRCChecker` and `ImplantLayerChecker` use `eUTL::PhysOrientation` | namespace mismatch on the call into our checker |
 | `initPlacementDRC()` is declared but never defined, `drc_engine_` is never constructed, and nothing calls `PlacementDRC::addChecker` | `DePlace::isLegal` cannot reach any checker; with an empty `checkers_` it would report every candidate legal |
@@ -266,7 +291,7 @@ partial repair; it never reinterprets or bypasses checker legality.
 85 portable planner cases and 75 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
 gate (160/160, normal and ASan). Repository-local fake-UDM engine regression:
-81 cases. Full local suite 241/241, normal and ASan.
+93 cases. Full local suite 253/253, normal and ASan.
 
 The fixture invariants the real-checker cases depend on — rule and layer ids as
 container indices, the band-polarity model, the `maxRuleValue_`-sized snapshot

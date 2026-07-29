@@ -28,7 +28,7 @@ Verified at that commit:
 
 | | |
 |---|---|
-| local suite | 241/241, normal and ASan |
+| local suite | 253/253, normal and ASan |
 | migration gate (destination code path) | 160/160, normal and ASan |
 | standalone module | 160/160 — configure, build and test with no harness |
 | `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
@@ -224,8 +224,8 @@ it.
 |---|---|
 | Portable planner tests | 85 |
 | Portable real-checker E2E | 75 |
-| Repository-local engine regression | 81 (fake UDM, not migrated) |
-| Full local suite | 241/241, normal and ASan |
+| Repository-local engine regression | 93 (fake UDM, not migrated) |
+| Full local suite | 253/253, normal and ASan |
 | Migration gate (destination code path) | 160/160, normal and ASan |
 | Standalone module build | 160/160 |
 

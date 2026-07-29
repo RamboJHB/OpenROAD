@@ -210,9 +210,9 @@ Full migration instructions, including the destination checklist, are in
 
 - portable planner: 85 cases; portable checker E2E: 75 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
-- repository-local fake-UDM engine regression: 81 cases under
+- repository-local fake-UDM engine regression: 93 cases under
   `src/dpl2/test/local/`.
-- 2026-07-29 full local suite: 241/241 normal and ASan; migration gate
+- 2026-07-29 full local suite: 253/253 normal and ASan; migration gate
   160/160 normal and ASan; standalone module build 160/160.
 
 ### Search cost

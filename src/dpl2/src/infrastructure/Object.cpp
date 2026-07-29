@@ -145,11 +145,17 @@ bool Master::isFiller() const
 {
   return phys_lib_cell_ != nullptr && isFillerMaster(*phys_lib_cell_);
 }
+// [fillerRepair-fix] excludes fillers. PhysMacroType::isCore() is true for
+// CORE_FILLER, so this used to answer "yes, a standard cell" for every filler
+// in the design -- the opposite of the DePlace bug, and the same confusion:
+// "is a standard cell" is not "stands on a site". For the latter ask
+// !isTerminal().
 bool Node::isStdCell() const
 {
   if (master_ && master_->getPhysLibCell()) {
-    return master_->getPhysLibCell()->getType().isCore()
-      || master_->getPhysLibCell()->getType().isEndcap();
+    const PhysLibCell& cell = *master_->getPhysLibCell();
+    return (cell.getType().isCore() || cell.getType().isEndcap())
+           && !isFillerMaster(cell);
   }
   return false;
 }

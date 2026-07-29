@@ -940,6 +940,112 @@ TEST(GridIsFullUtil, EmptyGridIsNotFull)
   EXPECT_FALSE(grid.isFullUtil());
 }
 
+// --- filler classification --------------------------------------------------
+// One predicate answers "is this a filler", and everything that asks must get
+// the same answer for the same instance. These pin the three places that
+// disagreed.
+
+// PhysMacroType::isCore() is true for CORE_FILLER, so isStdCell() used to say
+// yes for every filler. "Is a standard cell" is not "stands on a site".
+TEST_P(FillerRepairEngineE2E, FillerIsNotAStandardCell)
+{
+  ProviderObjects objects(GetParam().setup);
+  ASSERT_TRUE(objects.hasInfrastructure());
+  int fillers = 0;
+  int stdCells = 0;
+  for (const auto& node : objects.infrastructure().network()->getNodes()) {
+    if (node->isFiller()) {
+      ++fillers;
+      EXPECT_FALSE(node->isStdCell()) << "filler reported as a standard cell";
+    } else if (!node->isTerminal()) {
+      ++stdCells;
+    }
+  }
+  EXPECT_GT(fillers, 0);
+  EXPECT_GT(stdCells, 0) << "isStdCell must not have swallowed everything";
+}
+
+// Node::isFiller() and Master::isFiller() must agree about one instance:
+// addNode classified with isCoreFiller() alone while Master::isFiller() is the
+// shared isCoreFiller() || isPadFiller().
+TEST_P(FillerRepairEngineE2E, NodeAndMasterAgreeOnFillerness)
+{
+  ProviderObjects objects(GetParam().setup);
+  ASSERT_TRUE(objects.hasInfrastructure());
+  for (const auto& node : objects.infrastructure().network()->getNodes()) {
+    ASSERT_NE(node->getMaster(), nullptr);
+    EXPECT_EQ(node->isFiller(), node->getMaster()->isFiller())
+        << "node " << node->getId() << " disagrees with its master";
+  }
+}
+
+// updateNode refreshed master, size, orientation and status but never the
+// type, so a swap that changes filler-ness left isFiller() answering about the
+// previous master.
+TEST_P(FillerRepairEngineE2E, UpdateNodeRefreshesFillerness)
+{
+  ProviderObjects objects(GetParam().setup, /*buildInfrastructure=*/true);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::Network* network = objects.infrastructure().network();
+
+  dpl2::Node* target
+      = network->getNode(objects.design().cell(frt::CellRole::Target));
+  ASSERT_NE(target, nullptr);
+  ASSERT_FALSE(target->isFiller());
+  ASSERT_NE(target->getMaster(), nullptr);
+  const eLIB::PhysLibCell& oldMaster = *target->getMaster()->getPhysLibCell();
+
+  // A master already registered in this Network, so the swap is the only
+  // thing under test.
+  const eLIB::PhysLibCell* fillerMaster = nullptr;
+  for (const auto& node : network->getNodes()) {
+    if (node->isFiller() && node->getMaster() != nullptr) {
+      fillerMaster = node->getMaster()->getPhysLibCell();
+      break;
+    }
+  }
+  ASSERT_NE(fillerMaster, nullptr);
+  ASSERT_TRUE(dpl2::isFillerMaster(*fillerMaster));
+
+  ASSERT_TRUE(
+      network->updateNode(target, objects.design().desMgr(), *fillerMaster));
+  EXPECT_TRUE(target->isFiller());
+  EXPECT_FALSE(target->isStdCell());
+
+  ASSERT_TRUE(
+      network->updateNode(target, objects.design().desMgr(), oldMaster));
+  EXPECT_FALSE(target->isFiller());
+  EXPECT_TRUE(target->isStdCell());
+}
+
+// An unregistered master used to be stored and then dereferenced: the node was
+// left half-updated and the process died. updateNode returns bool; this is
+// what it is for.
+TEST_P(FillerRepairEngineE2E, UpdateNodeRefusesAnUnregisteredMaster)
+{
+  ProviderObjects objects(GetParam().setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::Network* network = objects.infrastructure().network();
+
+  dpl2::Node* target
+      = network->getNode(objects.design().cell(frt::CellRole::Target));
+  ASSERT_NE(target, nullptr);
+  const dpl2::Master* before = target->getMaster();
+  const bool wasFiller = target->isFiller();
+
+  // Never instantiated, so no placed cell caused it to be registered.
+  const eLIB::PhysLibCell& unregistered
+      = objects.design().master(frt::MasterRole::ExtraUninstantiatedFiller);
+  ASSERT_EQ(network->getMaster(unregistered.getLibCellId()), nullptr);
+
+  EXPECT_FALSE(
+      network->updateNode(target, objects.design().desMgr(), unregistered));
+  EXPECT_EQ(target->getMaster(), before);
+  EXPECT_EQ(target->isFiller(), wasFiller);
+}
+
 INSTANTIATE_TEST_SUITE_P(
     FiveRowLayouts,
     FillerRepairEngineE2E,
