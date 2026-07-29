@@ -7,7 +7,7 @@ in code it does not own. Edits are tagged `[fillerRepair-fix]` in the source so
 they can be found with one grep:
 
 ```sh
-grep -rn "fillerRepair-fix" src/dpl2/src/drc src/dpl2/src/infrastructure
+grep -rn "fillerRepair-fix" src/dpl2/src src/dpl2/include
 ```
 
 Checker DRC rules, shapes, scan behaviour and blocking-violation logic are
@@ -136,6 +136,32 @@ concept — which filler masters may be *offered* as replacements.
   members like any other and never stop the walk. Exposed on `DePlace` as
   `Rect getBoundingBox(Rect, int rings = 3) const`.
 - `#include <tbb/task_arena.h>` — `tbb::task_arena` was used without it.
+- `isFullUtil()` — see below; the fix is mostly in `DePlace`, but two defects
+  were in this function. It now iterates the **logical** grid
+  (`row_count_` x `row_site_count_`) rather than the pixel vector's extent:
+  `allocateGrid()` only resizes when `pixels_` is empty and resets exactly the
+  logical range, so re-initializing onto a smaller design left stale rows that
+  nothing else could reach — `gridPixel()` bounds-checks, so no cell is ever
+  painted there — and scanning them made the answer depend on a previous
+  design. An empty grid now returns **false**: it used to warn and return
+  true, claiming a design is full at the one moment it knows nothing. The
+  false path names the first empty site so the next report is diagnosable.
+
+### `DePlace.cpp`
+
+**`setFixedGridCells` / `setPlacedGridCells` painted only
+`getType() == Node::CELL`**, which drops every `Node::FILLER` —
+`Network::addNode` types core fillers that way. Fillers are exactly what makes
+a design full, so on a fully filled design their sites stayed empty in the
+grid and `Grid::isFullUtil()` reported false. Anything else reading pixel
+occupancy (legality checks, gap detection, `getBoundingBox`) saw the same
+holes.
+
+Both loops now share one `paintGridCell(Node*)` and select with
+`!cell->isTerminal()` — "does this node stand on sites", not "is it a standard
+cell". Asking that rather than listing `CELL || FILLER` also keeps grid
+occupancy independent of the filler/non-filler classification, which
+`updateNode` does not refresh after a master swap (open item below).
 
 ### `infrastructure/network.cpp`, `Object.cpp`
 
@@ -240,7 +266,7 @@ partial repair; it never reinterprets or bypasses checker legality.
 85 portable planner cases and 75 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
 gate (160/160, normal and ASan). Repository-local fake-UDM engine regression:
-74 cases. Full local suite 234/234, normal and ASan.
+81 cases. Full local suite 241/241, normal and ASan.
 
 The fixture invariants the real-checker cases depend on — rule and layer ids as
 container indices, the band-polarity model, the `maxRuleValue_`-sized snapshot

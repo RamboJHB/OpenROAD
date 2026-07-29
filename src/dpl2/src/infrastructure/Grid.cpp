@@ -600,15 +600,34 @@ bool Grid::isMultiHeight(const PhysLibCell& master) const
   return master.hasSitePattern();
 }
 
+// [fillerRepair-fix] True when every site the rows actually offer carries an
+// occupant. Sites under a hard blockage are is_valid == false and are not
+// counted; so are the pixels of a fragmented row outside its site span.
+//
+// Two corrections here beyond the caller-side one (see
+// DePlace::paintGridCell, which was dropping fillers):
+//
+//  - iterate the LOGICAL grid, row_count_ x row_site_count_, not the pixel
+//    vector's extent. allocateGrid() only resizes when pixels_ is empty and
+//    resets exactly the logical range, so a re-init onto a smaller design
+//    leaves stale rows behind that nothing else can reach -- gridPixel()
+//    bounds-checks against the logical size, so no cell is ever painted
+//    there. Scanning them made the answer depend on a previous design.
+//  - an empty grid is not "full". It used to warn and then return true,
+//    which is a false positive at exactly the moment the function knows it
+//    has nothing to report on.
 bool Grid::isFullUtil() const
 {
-  if (pixels_.size() == 0) {
+  if (pixels_.empty() || row_count_ <= 0 || row_site_count_ <= 0) {
     std::cout << "WARN: grid pixel is empty." << std::endl;
+    return false;
   }
-  for (unsigned y = 0; y < pixels_.size(); y++) {
-    for (unsigned x = 0; x < pixels_[y].size(); x++) {
-      const Pixel& pixel = pixels_[y][x];
-      if (pixel.is_valid && pixel.cell == nullptr) {
+  for (GridY y{0}; y < row_count_; y++) {
+    for (GridX x{0}; x < row_site_count_; x++) {
+      const Pixel* pixel = gridPixel(x, y);
+      if (pixel != nullptr && pixel->is_valid && pixel->cell == nullptr) {
+        std::cout << "Grid not fully utilized: first empty site at row "
+                  << y.v << " site " << x.v << std::endl;
         return false;
       }
     }

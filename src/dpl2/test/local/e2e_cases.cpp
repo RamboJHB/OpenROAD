@@ -886,6 +886,60 @@ TEST_P(FillerRepairEngineE2E, EngineUsesOneInitialization)
   EXPECT_TRUE(outcome.hasSolution);
 }
 
+// --- Grid::isFullUtil -------------------------------------------------------
+// Reported as returning false on a design that is in fact full. The cause was
+// on the painting side (DePlace was skipping Node::FILLER, so filler sites
+// stayed empty in the grid); these pin the detection side, which is what makes
+// that diagnosis sound. DePlace.cpp is destination code and is not compiled
+// here, so the painting filter itself has no coverage in this repository --
+// this fixture paints every node unconditionally, which is what a correct
+// DePlace does.
+
+TEST_P(FillerRepairEngineE2E, FullyOccupiedGridIsFullyUtilized)
+{
+  ProviderObjects objects(GetParam().setup);
+  ASSERT_TRUE(objects.hasInfrastructure());
+  EXPECT_TRUE(objects.infrastructure().grid()->isFullUtil());
+}
+
+// The exact shape of the report: a filler's sites left unpainted. If a filler
+// does not count as an occupant, a full design looks unfull.
+TEST_P(FillerRepairEngineE2E, UnpaintedFillerSitesMakeTheGridNotFull)
+{
+  ProviderObjects objects(GetParam().setup);
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::Grid* grid = objects.infrastructure().grid();
+  ASSERT_TRUE(grid->isFullUtil());
+
+  dpl2::Node* filler = nullptr;
+  for (const auto& node : objects.infrastructure().network()->getNodes()) {
+    if (node->isFiller()) {
+      filler = node.get();
+      break;
+    }
+  }
+  ASSERT_NE(filler, nullptr) << "fixture has no filler node";
+
+  // Its sites are occupied by it, and only by it.
+  const dpl2::Pixel* pixel
+      = grid->gridPixel(grid->gridX(filler), grid->gridSnapDownY(filler));
+  ASSERT_NE(pixel, nullptr);
+  EXPECT_EQ(pixel->cell, filler);
+
+  grid->erasePixel(filler);
+  EXPECT_FALSE(grid->isFullUtil());
+  grid->paintPixel(filler);
+  EXPECT_TRUE(grid->isFullUtil());
+}
+
+// A grid with no pixels knows nothing about utilization, so it must not claim
+// the design is full. It used to warn and return true.
+TEST(GridIsFullUtil, EmptyGridIsNotFull)
+{
+  dpl2::Grid grid;
+  EXPECT_FALSE(grid.isFullUtil());
+}
+
 INSTANTIATE_TEST_SUITE_P(
     FiveRowLayouts,
     FillerRepairEngineE2E,

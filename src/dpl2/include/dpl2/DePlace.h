@@ -112,6 +112,9 @@ DePlace(const DePlace&) = delete;
 DePlace& operator=(const DePlace&) = delete;
 void setFixedGridCells();
 void setPlacedGridCells();
+// [fillerRepair-fix] shared body of the two above: paints one node's
+// footprint (and its padding reservation) into the grid.
+void paintGridCell(Node* cell);
 void setGridCell(Node* cell, Pixel* pixel);
 void setPaddingGlobal(int left, int right);
 void setPadding(PhysLibCell* master, int left, int right);

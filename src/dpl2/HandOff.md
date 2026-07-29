@@ -28,7 +28,7 @@ Verified at that commit:
 
 | | |
 |---|---|
-| local suite | 234/234, normal and ASan |
+| local suite | 241/241, normal and ASan |
 | migration gate (destination code path) | 160/160, normal and ASan |
 | standalone module | 160/160 — configure, build and test with no harness |
 | `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
@@ -41,7 +41,7 @@ Verified at that commit:
 |---|---|
 | **Payload** | `src/dpl2/src/fillerRepair/` — whole directory, including its `CMakeLists.txt` and `test/` |
 | **Test command** | `src/dpl2/dpl2ui/testFillerRepairCmd.{hh,cc}` — `test_filler_repair`, optional |
-| **Patches to delivered code** | **not in either path above** — nine files, all tagged `[fillerRepair-fix]`, itemised with reasons in `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`: `drc/DRCChecker.h`, `drc/ImplantLayerChecker.{h,cpp}`, `drc/ImplantLayerCheckerHelper.cpp`, `infrastructure/Objects.h`, `infrastructure/Object.cpp`, `infrastructure/Grid.{h,cpp}`, `infrastructure/network.cpp`. Without them the payload does not build |
+| **Patches to delivered code** | **not in either path above** — eleven files, all tagged `[fillerRepair-fix]`, itemised with reasons in `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`: `drc/DRCChecker.h`, `drc/ImplantLayerChecker.{h,cpp}`, `drc/ImplantLayerCheckerHelper.cpp`, `infrastructure/Objects.h`, `infrastructure/Object.cpp`, `infrastructure/Grid.{h,cpp}`, `infrastructure/network.cpp`, `DePlace.cpp`, `include/dpl2/DePlace.h`. Without them the payload does not build. The `DePlace` / `Grid::isFullUtil` pair is a **correctness fix in delivered code, independent of repair** — grid occupancy was missing every filler |
 | **Not part of the payload** | `src/dpl2/test/` — the repository-local harness (fake UDM tree, engine regression, runner scripts). It exists so this can be developed and gated without a real UDM. |
 
 The payload needs no DEF/LEF reader, no fake UDM, and no fixture provider from
@@ -224,8 +224,8 @@ it.
 |---|---|
 | Portable planner tests | 85 |
 | Portable real-checker E2E | 75 |
-| Repository-local engine regression | 74 (fake UDM, not migrated) |
-| Full local suite | 234/234, normal and ASan |
+| Repository-local engine regression | 81 (fake UDM, not migrated) |
+| Full local suite | 241/241, normal and ASan |
 | Migration gate (destination code path) | 160/160, normal and ASan |
 | Standalone module build | 160/160 |
 

@@ -224,17 +224,34 @@ Rect DePlace::getCoreArea()
   return rect.getRect();
 }
 
+// [fillerRepair-fix] Paints one node's footprint into the grid.
+//
+// The predicate is "does this node stand on sites", NOT "is it a standard
+// cell". Both callers used to test `getType() == Node::CELL`, which drops
+// every Node::FILLER -- Network::addNode types core fillers that way -- so on
+// a fully filled design the sites the fillers occupy stayed empty in the grid
+// and Grid::isFullUtil() reported false. Fillers are what makes a design
+// full; they have to be painted like anything else standing on a row.
+//
+// Asking isTerminal() rather than listing CELL and FILLER also keeps grid
+// occupancy independent of the filler/non-filler classification, which
+// Network::updateNode does not refresh after a master swap.
+void DePlace::paintGridCell(Node* cell)
+{
+  grid_->visitCellPixels(cell, false, [&](Pixel* pixel, bool padded) {
+    if (padded) {
+      pixel->padding_reserved_by = cell;
+    } else {
+      setGridCell(cell, pixel);
+    }
+  });
+}
+
 void DePlace::setFixedGridCells()
 {
   for (auto& cell : network_->getNodes()) {
-    if (cell->getType() == Node::CELL && cell->isFixed()) {
-      grid_->visitCellPixels(cell.get(), false, [&](Pixel* pixel, bool padded) {
-        if (padded) {
-          pixel->padding_reserved_by = cell.get();
-        } else {
-          setGridCell(cell.get(), pixel);
-        }
-      });
+    if (!cell->isTerminal() && cell->isFixed()) {
+      paintGridCell(cell.get());
     }
   }
 }
@@ -242,14 +259,8 @@ void DePlace::setFixedGridCells()
 void DePlace::setPlacedGridCells()
 {
   for (auto& cell : network_->getNodes()) {
-    if (cell->getType() == Node::CELL && cell->isPlaced()) {
-      grid_->visitCellPixels(cell.get(), false, [&](Pixel* pixel, bool padded) {
-        if (padded) {
-          pixel->padding_reserved_by = cell.get();
-        } else {
-          setGridCell(cell.get(), pixel);
-        }
-      });
+    if (!cell->isTerminal() && cell->isPlaced()) {
+      paintGridCell(cell.get());
     }
   }
 }
