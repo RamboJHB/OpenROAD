@@ -12,11 +12,12 @@ commit. It never mutates UDM, Network or Grid.
 
 ## 0. Migration snapshot
 
-**`76e197c5c0158ea07c824288cbbc057d1715679d`** — take the payload from this
-commit. Everything below describes exactly that state.
+**`bfe8642f23`** — take the payload from this commit. Everything below
+describes exactly that state. (This section is the only thing that changed
+afterwards, to record the id.)
 
 ```sh
-git tag fillerRepair-migration-20260728 76e197c5c0
+git tag fillerRepair-migration-20260729 bfe8642f23
 ```
 
 (The tag exists locally only; this environment's git proxy accepts writes to
