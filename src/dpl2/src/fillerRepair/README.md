@@ -111,7 +111,7 @@ nothing else, which is what keeps it database-free and portable.
 | `Debug.h` | `[fr][stage]` transcript (`cat`, `show`, `DebugLog`) |
 | `CMakeLists.txt` | the module's own targets — `dpl2::fillerRepair` (payload, C++20) and `dpl2::fillerRepairPlanner` (pure pipeline, C++17); a destination adds the directory and links a target rather than listing sources |
 | `test/CMakeLists.txt` | the portable tests, added when `DPL2_FILLER_REPAIR_BUILD_TESTS=ON` |
-| `test/RepairPlannerTest.cpp` + `TestPlacementView.h`, `TestRepairOracle.*`, `SyntheticMasterCatalog.*` | 86 portable database-free planner cases (the doubles implement the two seams) |
+| `test/RepairPlannerTest.cpp` | 85 portable database-free planner cases; the two seam doubles and the synthetic master catalog are folded into this one file |
 | `test/FillerRepairCheckerE2ETest.cpp` | 61 portable real-checker and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript
@@ -188,12 +188,12 @@ Full migration instructions, including the destination checklist, are in
 
 ## Verification
 
-- portable planner: 86 cases; portable checker E2E: 61 cases (both compile,
+- portable planner: 85 cases; portable checker E2E: 61 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
 - repository-local fake-UDM engine regression: 74 cases under
   `src/dpl2/test/local/`.
-- 2026-07-28 full local suite: 221/221 normal and ASan; migration gate
-  147/147 normal and ASan; standalone module build 147/147.
+- 2026-07-28 full local suite: 220/220 normal and ASan; migration gate
+  146/146 normal and ASan; standalone module build 146/146.
 
 ### Search cost
 

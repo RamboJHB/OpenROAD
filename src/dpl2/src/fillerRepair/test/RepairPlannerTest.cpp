@@ -1,26 +1,957 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Portable unit tests for the database-free fillerRepair planner. The
-// in-memory data source, oracle and master catalog use the real planner
-// interfaces and final-checker wire types without a fake UDM object model.
-// Each case is an independent GoogleTest so failures remain filterable.
+// Portable, database-free planner tests -- ONE self-contained file.
+//
+// The test doubles that used to live in TestPlacementView.h,
+// SyntheticMasterCatalog.{h,cpp} and TestRepairOracle.{h,cpp} are folded in
+// below: they had no consumer but this file, and five extra files is five
+// extra things to lose when the module is copied to a destination.
+//
+// Layout: the two seam doubles, then the synthetic master catalog, then the
+// oracle double, then the cases.
 
 #include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <gtest/gtest.h>
 #include <map>
 #include <string>
 #include <tuple>
+#include <utility>
 #include <vector>
 
-#include <gtest/gtest.h>
+#include <fillerRepair/PlacementView.h>
+#include <fillerRepair/RepairPlanner.h>
+#include <fillerRepair/RepairTypes.h>
+
+// ==========================================================================
+// Test double: PlacementView (seam 1)
+// ==========================================================================
+// In-memory PlacementView for unit tests.
+//
+// A TestPlacementView is built fluently:
+//   design.setSiteWidth(1)
+//         .addMaster(41, /*w=*/4, /*h=*/1, /*filler=*/true, /*vt=*/1)
+//         .addRow(0, 0, 16)
+//         .place(100, 41, /*row=*/0, /*x=*/0);
+// It is deliberately dumb: no legality checks on construction, so tests can
+// build broken layouts (gaps, overlaps) for the pre-check cases.
+//
+// PlacementView's reference-returning queries are served from caches that
+// every mutator invalidates and the next query rebuilds. Unlike runtime
+// views this object stays mutable, so it is SINGLE-THREADED by design
+// (tests only) -- the thread-safety contract lives with the runtime engine.
+
+
+#include <algorithm>
+#include <map>
+#include <utility>
+#include <vector>
+
+#include <fillerRepair/PlacementView.h>
+
+namespace dpl2::fillerRepair {
+
+class TestPlacementView : public PlacementView
+{
+ public:
+  TestPlacementView& setSiteWidth(DbCoord w)
+  {
+    site_width_ = w;
+    return *this;
+  }
+
+  TestPlacementView& addMaster(MasterId id, DbCoord width, DbCoord height, bool isFiller, VtId vt,
+                        BandPolarity bottomBandPolarity = BandPolarity::N)
+  {
+    masters_[id] = MasterInfo{id, width, height, isFiller, vt, bottomBandPolarity};
+    caches_dirty_ = true;  // master height feeds multi-row bucketing
+    return *this;
+  }
+
+  TestPlacementView& addRow(RowId id, DbCoord xl, DbCoord xh)
+  {
+    row_spans_[id] = XInterval{xl, xh};
+    caches_dirty_ = true;
+    return *this;
+  }
+
+  TestPlacementView& place(InstanceId id, MasterId masterId, RowId rowId, DbCoord x,
+                    Orient orient = Orient::R0)
+  {
+    const auto it = masters_.find(masterId);
+    const bool isFiller = it != masters_.end() && it->second.isFiller;
+    instances_[id] = PlacedInstance{id, masterId, rowId, x, orient, isFiller};
+    caches_dirty_ = true;
+    return *this;
+  }
+
+  TestPlacementView& remove(InstanceId id)
+  {
+    instances_.erase(id);
+    caches_dirty_ = true;
+    return *this;
+  }
+
+  TestPlacementView& setFillerMasterIds(std::vector<MasterId> ids)
+  {
+    configured_fillers_ = std::move(ids);
+    have_configured_fillers_ = true;
+    caches_dirty_ = true;
+    return *this;
+  }
+
+  // PlacementView -----------------------------------------------------------
+
+  const std::vector<RowId>& rows() const override
+  {
+    refreshCaches();
+    return row_list_;
+  }
+
+  DbCoord siteWidth() const override { return site_width_; }
+
+  const std::vector<PlacedInstance>& instancesInRow(RowId rowId) const override
+  {
+    refreshCaches();
+    const auto it = by_row_.find(rowId);
+    return it != by_row_.end() ? it->second : emptyInstances();
+  }
+
+  const PlacedInstance* instance(InstanceId id) const override
+  {
+    const auto it = instances_.find(id);
+    return it != instances_.end() ? &it->second : nullptr;
+  }
+
+  const MasterInfo* masterInfo(MasterId id) const override
+  {
+    const auto it = masters_.find(id);
+    return it != masters_.end() ? &it->second : nullptr;
+  }
+
+  const std::vector<MasterId>& fillerMasterIds() const override
+  {
+    refreshCaches();
+    return filler_master_list_;
+  }
+
+  FillerCellRecord fillerCellRecord(InstanceId instanceId,
+                                    MasterId newMasterId) const override
+  {
+    const PlacedInstance* placed = instance(instanceId);
+    const MasterId originalMaster
+        = placed != nullptr ? placed->masterId : MasterId{};
+    return FillerCellRecord{OpType::Replace,
+                            eUNL::LeafCellID(0, instanceId),
+                            eUTL::UvDist(placed != nullptr ? placed->x : 0),
+                            eUTL::UvDist(placed != nullptr ? placed->rowId : 0),
+                            eLIB::LibCellID(0, originalMaster),
+                            eLIB::LibCellID(0, newMasterId)};
+  }
+
+ private:
+  void refreshCaches() const
+  {
+    if (!caches_dirty_) {
+      return;
+    }
+    caches_dirty_ = false;
+
+    row_list_.clear();
+    row_list_.reserve(row_spans_.size());
+    for (const auto& [id, span] : row_spans_) {
+      row_list_.push_back(id);
+    }
+
+    by_row_.clear();
+    for (const auto& [id, inst] : instances_) {
+      const MasterInfo* master = masterInfo(inst.masterId);
+      const DbCoord height
+          = master != nullptr ? std::max<DbCoord>(master->height, 1) : 1;
+      // Multi-height contract: reported by every covered row. Rows are
+      // bucketed even when not declared via addRow (tests place instances
+      // in undeclared rows for boundary cases).
+      for (DbCoord offset = 0; offset < height; ++offset) {
+        PlacedInstance copy = inst;
+        copy.rowId = inst.rowId + static_cast<RowId>(offset);
+        by_row_[copy.rowId].push_back(copy);
+      }
+    }
+    for (auto& [rowId, list] : by_row_) {
+      std::sort(list.begin(), list.end(),
+                [](const PlacedInstance& a, const PlacedInstance& b) {
+                  return a.x != b.x ? a.x < b.x : a.id < b.id;
+                });
+    }
+
+    if (have_configured_fillers_) {
+      filler_master_list_ = configured_fillers_;
+    } else {
+      filler_master_list_.clear();
+      for (const auto& [id, info] : masters_) {
+        if (info.isFiller) {
+          filler_master_list_.push_back(id);
+        }
+      }
+    }
+    // Contract: sorted ascending, unique.
+    std::sort(filler_master_list_.begin(), filler_master_list_.end());
+    filler_master_list_.erase(
+        std::unique(filler_master_list_.begin(), filler_master_list_.end()),
+        filler_master_list_.end());
+  }
+
+  DbCoord site_width_ = 1;
+  std::map<MasterId, MasterInfo> masters_;      // ordered => deterministic
+  std::map<RowId, XInterval> row_spans_;        // ordered => deterministic
+  std::map<InstanceId, PlacedInstance> instances_;
+  std::vector<MasterId> configured_fillers_;
+  bool have_configured_fillers_ = false;
+  // Query caches (single-threaded test object; mutators set the dirty flag).
+  mutable bool caches_dirty_ = true;
+  mutable std::vector<RowId> row_list_;
+  mutable std::map<RowId, std::vector<PlacedInstance>> by_row_;
+  mutable std::vector<MasterId> filler_master_list_;
+};
+
+}  // namespace dpl2::fillerRepair
+
+// ==========================================================================
+// Test double: synthetic master catalog
+// ==========================================================================
+// Synthetic, UDM-free master catalog for planner tests.
+//
+// It models the normalized master metadata consumed by the planner; it does
+// not include or emulate UDM object APIs. The real derivation runs inside the checker
+// (ImplantLayerChecker::buildMasters, parseLayerName, rebuildMasterShapes);
+// this catalog mirrors the resulting rules:
+//
+//   - implant layers are named "<FAMILY>_<POLARITY>"; family is one of
+//     VTS/VTL/VTH/VTUL (case-insensitive), polarity P/p -> P, anything else N
+//     (ImplantLayerCheckerHelper::parseLayerName);
+//   - a master's VT is the FAMILY of the implant layers its shapes sit on --
+//     NEVER parsed from the master's name. All shapes
+//     of one master must share one family, or the master is unusable
+//     (buildMasters: master_implant_family_mismatch);
+//   - width is DBU and must be site-aligned (master_width_not_site_aligned);
+//     implant shapes must span the full master width
+//     (implant_shape_width_mismatch);
+//   - height spans whole rows; each row carries two half-row band shapes with
+//     alternating polarity (rebuildMasterShapes). Polarity does not affect the
+//     derived VT, so describeMasters is polarity-agnostic.
+//
+// VtId mapping (pinned, documented): family enum index -- VTS=0, VTL=1,
+// VTH=2, VTUL=3; underivable -> kUnknownVt.
+
+
+#include <map>
+#include <string>
+#include <vector>
+
+#include <fillerRepair/RepairTypes.h>
+#include <fillerRepair/PlacementView.h>
+
+namespace dpl2::fillerRepair {
+
+// Structural mirrors of ipl::MasterShape / ipl::MasterInput, UDM-free (the
+// eUTL::Rect is reduced to plain extents).
+struct SyntheticMasterShape
+{
+  ShapeId shapeId = 0;
+  LayerId layer = 0;
+  DbCoord xl = 0;
+  DbCoord yl = 0;
+  DbCoord xh = 0;
+  DbCoord yh = 0;
+};
+
+struct SyntheticMaster
+{
+  MasterId masterId = 0;
+  std::string name;  // human-readable only; never used for derivation
+  DbCoord width = 0;
+  DbCoord height = 0;
+  bool isFiller = false;
+  std::vector<SyntheticMasterShape> shapes;
+};
+
+// Result of the derivation for one master id: the "given master ids, return
+// every id's width and VT type" query.
+struct MasterDescription
+{
+  MasterId masterId = 0;
+  std::string name;
+  DbCoord width = 0;
+  int heightRows = 0;
+  VtId vt = kUnknownVt;  // family index (see header comment)
+  // Bottommost shape's layer polarity (R0 frame), mirroring
+  // rebuildMasterShapes' band anchor.
+  BandPolarity bottomBandPolarity = BandPolarity::N;
+  bool isFiller = false;
+  bool usable = false;   // derivation succeeded; unusable masters are never
+                         // offered as swap candidates
+  std::string reason;    // checker-style code when unusable, empty otherwise
+};
+
+class SyntheticMasterCatalog
+{
+ public:
+  // `view` resolves instances for the candidate query (which is keyed by
+  // filler INSTANCE); the catalog itself is master-only.
+  SyntheticMasterCatalog(DbCoord siteWidth, DbCoord rowHeight)
+      : site_width_(siteWidth), row_height_(rowHeight)
+  {
+  }
+
+  // --- catalog building (mirrors ImplantInput.layers / .masters) -----------
+  void addLayer(LayerId id, const std::string& name);
+  void addMaster(const SyntheticMaster& master);
+  // Convenience: a single-row master carrying the two canonical band shapes
+  // (bottom on the family's N layer, top on its P layer) exactly as
+  // rebuildMasterShapes would emit them. Layers of `family` must exist.
+  void addBandMaster(MasterId id,
+                     const std::string& name,
+                     DbCoord width,
+                     bool isFiller,
+                     const std::string& family);
+
+  // --- the requested query --------------------------------------------------
+  // One description per input id, input order preserved; unknown ids yield
+  // usable=false with reason "unknown_master".
+  std::vector<MasterDescription> describeMasters(
+      const std::vector<MasterId>& ids) const;
+  // nullptr when the id is not in the catalog.
+  const MasterDescription* describeMaster(MasterId id) const;
+
+  // --- planner candidate contract -------------------------------------
+  // Same width + height, usable filler masters, current master excluded,
+  // ascending master id. Non-filler input / no replacement -> diagnostics,
+  // never an error.
+
+  // Sync every usable master into a TestPlacementView so the planner data
+  // source and this catalog agree on width/height/vt (the planner validates each
+  // candidate against view.masterInfo when constructing Swaps).
+  void registerInto(TestPlacementView& design) const;
+
+  // Appendix-A library: F_FILL{8,4,3,2}_63S6T9{R,L,UL}_1 on layers
+  // {VTS,VTL,VTUL}_{N,P}, widths in sites * siteWidth. Suffix mapping
+  // R->VTS, L->VTL, UL->VTUL is an assumption pending library-team
+  // confirmation; derivation still goes through the
+  // implant layers, the names are decoration.
+  void addAppendixALibrary();
+
+ private:
+  struct LayerInfo
+  {
+    LayerId id = 0;
+    std::string name;
+    int familyIndex = -1;  // -1 = Unknown
+    bool polarityP = false;
+  };
+
+  const LayerInfo* layer(LayerId id) const;
+  MasterDescription derive(const SyntheticMaster& master) const;
+
+  DbCoord site_width_ = 1;
+  DbCoord row_height_ = 1;
+  std::map<LayerId, LayerInfo> layers_;              // ordered: deterministic
+  std::map<MasterId, SyntheticMaster> masters_;        // ordered: deterministic
+  std::map<MasterId, MasterDescription> described_;  // derived on addMaster
+};
+
+// parseLayerName replica (ImplantLayerCheckerHelper.cpp): split at the LAST
+// '_'; family index VTS=0 VTL=1 VTH=2 VTUL=3, unknown -> -1; polarity "P"/"p"
+// -> P, anything else N. Exposed for tests.
+void parseSyntheticLayerName(const std::string& name,
+                           int& familyIndex,
+                           bool& polarityP);
+
+}  // namespace dpl2::fillerRepair
+
+#include <algorithm>
+#include <utility>
+
+namespace dpl2::fillerRepair {
+
+void parseSyntheticLayerName(const std::string& name,
+                           int& familyIndex,
+                           bool& polarityP)
+{
+  familyIndex = -1;
+  polarityP = false;
+
+  const auto pos = name.rfind('_');
+  if (pos == std::string::npos) {
+    return;
+  }
+  const std::string famStr = name.substr(0, pos);
+  const std::string polStr = name.substr(pos + 1);
+
+  polarityP = (polStr == "P" || polStr == "p");
+
+  if (famStr == "VTS" || famStr == "vts") {
+    familyIndex = 0;
+  } else if (famStr == "VTL" || famStr == "vtl") {
+    familyIndex = 1;
+  } else if (famStr == "VTH" || famStr == "vth") {
+    familyIndex = 2;
+  } else if (famStr == "VTUL" || famStr == "vtul") {
+    familyIndex = 3;
+  }
+}
+
+void SyntheticMasterCatalog::addLayer(LayerId id, const std::string& name)
+{
+  LayerInfo info;
+  info.id = id;
+  info.name = name;
+  parseSyntheticLayerName(name, info.familyIndex, info.polarityP);
+  layers_[id] = info;
+}
+
+const SyntheticMasterCatalog::LayerInfo* SyntheticMasterCatalog::layer(
+    LayerId id) const
+{
+  const auto it = layers_.find(id);
+  return it != layers_.end() ? &it->second : nullptr;
+}
+
+// Derivation mirror of ImplantLayerChecker::buildMasters: width alignment,
+// per-shape layer lookup, single-family requirement, full-width span. The
+// first failed rule is recorded as the checker-style reason.
+MasterDescription SyntheticMasterCatalog::derive(
+    const SyntheticMaster& master) const
+{
+  MasterDescription d;
+  d.masterId = master.masterId;
+  d.name = master.name;
+  d.width = master.width;
+  d.isFiller = master.isFiller;
+  d.heightRows = row_height_ > 0
+                     ? static_cast<int>((master.height + row_height_ - 1)
+                                        / row_height_)
+                     : 0;
+
+  if (site_width_ <= 0 || master.width <= 0
+      || master.width % site_width_ != 0) {
+    d.reason = "master_width_not_site_aligned";
+    return d;
+  }
+  if (master.shapes.empty()) {
+    d.reason = "no_implant_shape";
+    return d;
+  }
+
+  int familyIndex = -1;
+  const SyntheticMasterShape* bottom = nullptr;
+  for (const SyntheticMasterShape& shape : master.shapes) {
+    const LayerInfo* info = layer(shape.layer);
+    if (info == nullptr || info->familyIndex < 0) {
+      d.reason = "skipped_missing_rule_parameter";  // unknown implant layer
+      return d;
+    }
+    if (familyIndex < 0) {
+      familyIndex = info->familyIndex;
+    } else if (familyIndex != info->familyIndex) {
+      d.reason = "master_implant_family_mismatch";
+      return d;
+    }
+    if (shape.xl != 0 || shape.xh != master.width) {
+      d.reason = "implant_shape_width_mismatch";
+      return d;
+    }
+    if (bottom == nullptr || shape.yl < bottom->yl) {
+      bottom = &shape;
+    }
+  }
+
+  d.vt = familyIndex;
+  // Band anchor exactly like rebuildMasterShapes: the bottommost shape's
+  // layer polarity is the master's R0-frame bottom band.
+  if (bottom != nullptr) {
+    d.bottomBandPolarity =
+        layer(bottom->layer)->polarityP ? BandPolarity::P : BandPolarity::N;
+  }
+  d.usable = true;
+  return d;
+}
+
+void SyntheticMasterCatalog::addMaster(const SyntheticMaster& master)
+{
+  masters_[master.masterId] = master;
+  described_[master.masterId] = derive(master);
+}
+
+void SyntheticMasterCatalog::addBandMaster(MasterId id,
+                                             const std::string& name,
+                                             DbCoord width,
+                                             bool isFiller,
+                                             const std::string& family)
+{
+  // Find the family's N and P layers (rebuildMasterShapes needs both).
+  int familyIndex = -1;
+  bool polarityP = false;
+  parseSyntheticLayerName(family + "_N", familyIndex, polarityP);
+  LayerId nLayer = -1;
+  LayerId pLayer = -1;
+  for (const auto& [layerId, info] : layers_) {
+    if (familyIndex >= 0 && info.familyIndex == familyIndex) {
+      (info.polarityP ? pLayer : nLayer) = layerId;
+    }
+  }
+
+  SyntheticMaster master;
+  master.masterId = id;
+  master.name = name;
+  master.width = width;
+  master.height = row_height_;
+  master.isFiller = isFiller;
+  const DbCoord halfRow = row_height_ / 2;
+  // Canonical single-row band pair: bottom band on the N layer, top band on
+  // the P layer, both spanning the full width (rebuildMasterShapes).
+  master.shapes.push_back(SyntheticMasterShape{0, nLayer, 0, 0, width, halfRow});
+  master.shapes.push_back(
+      SyntheticMasterShape{1, pLayer, 0, halfRow, width, row_height_});
+  addMaster(master);
+}
+
+const MasterDescription* SyntheticMasterCatalog::describeMaster(
+    MasterId id) const
+{
+  const auto it = described_.find(id);
+  return it != described_.end() ? &it->second : nullptr;
+}
+
+std::vector<MasterDescription> SyntheticMasterCatalog::describeMasters(
+    const std::vector<MasterId>& ids) const
+{
+  std::vector<MasterDescription> result;
+  result.reserve(ids.size());
+  for (const MasterId id : ids) {
+    if (const MasterDescription* d = describeMaster(id)) {
+      result.push_back(*d);
+    } else {
+      MasterDescription missing;
+      missing.masterId = id;
+      missing.reason = "unknown_master";
+      result.push_back(missing);
+    }
+  }
+  return result;
+}
+
+void SyntheticMasterCatalog::registerInto(TestPlacementView& design) const
+{
+  std::vector<MasterId> fillerIds;
+  for (const auto& [id, d] : described_) {
+    if (d.usable) {
+      design.addMaster(id, d.width, d.heightRows, d.isFiller, d.vt,
+                       d.bottomBandPolarity);
+      if (d.isFiller) fillerIds.push_back(id);
+    }
+  }
+  design.setFillerMasterIds(std::move(fillerIds));
+}
+
+void SyntheticMasterCatalog::addAppendixALibrary()
+{
+  // Layers first: {VTS, VTL, VTUL} x {N, P} with deterministic ids.
+  addLayer(1, "VTS_N");
+  addLayer(2, "VTS_P");
+  addLayer(3, "VTL_N");
+  addLayer(4, "VTL_P");
+  addLayer(5, "VTUL_N");
+  addLayer(6, "VTUL_P");
+
+  // F_FILL{8,4,3,2}_63S6T9{R,L,UL}_1; master id = width-in-sites * 10 +
+  // family index (VTS=0, VTL=1, VTUL=3) -- deterministic and readable.
+  const std::pair<const char*, const char*> suffixToFamily[] = {
+      {"R", "VTS"}, {"L", "VTL"}, {"UL", "VTUL"}};
+  for (const int widthSites : {2, 3, 4, 8}) {
+    for (const auto& [suffix, family] : suffixToFamily) {
+      int familyIndex = -1;
+      bool polarityP = false;
+      parseSyntheticLayerName(std::string(family) + "_N", familyIndex,
+                            polarityP);
+      const MasterId id = widthSites * 10 + familyIndex;
+      addBandMaster(id,
+                    cat("F_FILL", widthSites, "_63S6T9", suffix, "_1"),
+                    widthSites * site_width_,
+                    /*isFiller=*/true,
+                    family);
+    }
+  }
+}
+
+}  // namespace dpl2::fillerRepair
+
+// ==========================================================================
+// Test double: RepairOracle (seam 2)
+// ==========================================================================
+// Synthetic implant overlay oracle for planner unit tests.
+//
+// Purpose: lock the OracleRequest/OracleResult protocol and give the
+// planner a rule-parameterized oracle for unit tests. The rule model is a
+// deliberate simplification (single implant band per row, VT id == layer id):
+//
+//   runs        maximal x-adjacent same-VT stretches per row
+//   intra MW    run length < mwIntra                     (ruleId 1)
+//   intra MS    gap between same-VT runs < msIntra       (ruleId 2)
+//   inter MW    x-overlap of same-VT runs in adjacent rows
+//               0 < overlap < mwInter                    (ruleId 3)
+//   inter MS    x-distance of disjoint same-VT runs in adjacent
+//               rows < msInter (corner touch counts as 0) (ruleId 4)
+//
+// The real checker owns the true semantics (P/N bands, PRL, LEF58 etc.);
+// nothing in the planner may depend on the details above -- that is exactly
+// the checker-as-oracle boundary this test double exists to enforce.
+//
+// Protocol guarantees implemented here and asserted by tests:
+//  - every OracleResult echoes the request's requestId;
+//  - batch results are returned in input order (planner must not rely on it);
+//  - one invalid request affects only its own result;
+//  - status != Checked always carries diagnostics;
+//  - violations are collected only inside guardRegion.
+
+
+#include <map>
+#include <vector>
 
 #include <fillerRepair/RepairPlanner.h>
-#include <fillerRepair/test/TestPlacementView.h>
-#include <fillerRepair/test/TestRepairOracle.h>
-#include <fillerRepair/test/SyntheticMasterCatalog.h>
+
+namespace dpl2::fillerRepair {
+
+struct PlannerTestRules
+{
+  DbCoord mwIntra = 0;  // 0 disables the rule
+  DbCoord msIntra = 0;
+  DbCoord mwInter = 0;
+  DbCoord msInter = 0;
+};
+
+class TestRepairOracle : public RepairOracle
+{
+ public:
+  TestRepairOracle(const TestPlacementView& design, PlannerTestRules rules)
+      : design_(design), rules_(rules)
+  {
+  }
+
+  OracleResult checkPlaceWithOverlay(const OracleRequest& request) override;
+  std::vector<OracleResult> checkPlaceWithOverlays(
+      const std::vector<OracleRequest>& requests) override;
+
+  // Telemetry for tests: total requests evaluated / batch calls made.
+  int requestCount() const { return request_count_; }
+  int batchCount() const { return batch_count_; }
+
+ private:
+  struct Run
+  {
+    VtId vt = kUnknownVt;
+    XInterval span;
+    std::vector<const PlacedInstance*> insts;
+  };
+
+  OracleResult evaluate(const OracleRequest& request) const;
+
+  // Effective master of an instance under the overlay: fillerChanges first,
+  // then the target-place master override, else the placed master.
+  MasterId effectiveMaster(const PlacedInstance& inst,
+                           const OracleRequest& request,
+                           const std::map<InstanceId, MasterId>& overlay) const;
+
+  std::vector<Run> buildRuns(RowId rowId,
+                             const OracleRequest& request,
+                             const std::map<InstanceId, MasterId>& overlay) const;
+
+  const TestPlacementView& design_;
+  PlannerTestRules rules_;
+  int request_count_ = 0;
+  int batch_count_ = 0;
+};
+
+}  // namespace dpl2::fillerRepair
+
+#include <algorithm>
+
+
+namespace dpl2::fillerRepair {
+
+namespace {
+
+ViolationParticipant participantOf(const PlacementView& view,
+                                   const PlacedInstance& inst,
+                                   const TargetPlace& target)
+{
+  ViolationParticipant p;
+  p.instanceId = inst.id;
+  p.masterId = inst.masterId;
+  p.rowId = inst.rowId;
+  p.xRange = instanceSpan(view, inst);
+  p.isFiller = inst.isFiller;
+  p.isTarget = inst.id == target.instanceId;
+  return p;
+}
+
+// Collected iff it intersects the guard region (any touched row inside the
+// row range, and x windows overlapping).
+bool inGuardRegion(const Violation& v, const Region& region)
+{
+  if (!v.xWindow.overlaps(region.x)) {
+    return false;
+  }
+  for (const RowId row : v.rowIds) {
+    if (region.containsRow(row)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+}  // namespace
+
+OracleResult TestRepairOracle::checkPlaceWithOverlay(
+    const OracleRequest& request)
+{
+  ++request_count_;
+  return evaluate(request);
+}
+
+std::vector<OracleResult> TestRepairOracle::checkPlaceWithOverlays(
+    const std::vector<OracleRequest>& requests)
+{
+  ++batch_count_;
+  std::vector<OracleResult> results;
+  results.reserve(requests.size());
+  for (const OracleRequest& request : requests) {
+    ++request_count_;
+    // Each request is evaluated independently: an invalid overlay produces
+    // its own InvalidOverlay result and cannot leak into its neighbors.
+    results.push_back(evaluate(request));
+  }
+  return results;
+}
+
+MasterId TestRepairOracle::effectiveMaster(
+    const PlacedInstance& inst,
+    const OracleRequest& request,
+    const std::map<InstanceId, MasterId>& overlay) const
+{
+  const auto it = overlay.find(inst.id);
+  if (it != overlay.end()) {
+    return it->second;
+  }
+  if (inst.id == request.targetPlace.instanceId) {
+    return request.targetPlace.masterId;
+  }
+  return inst.masterId;
+}
+
+std::vector<TestRepairOracle::Run> TestRepairOracle::buildRuns(
+    RowId rowId,
+    const OracleRequest& request,
+    const std::map<InstanceId, MasterId>& overlay) const
+{
+  std::vector<Run> runs;
+  for (const PlacedInstance& placed : design_.instancesInRow(rowId)) {
+    const PlacedInstance* inst = design_.instance(placed.id);
+    const MasterInfo* master = design_.masterInfo(effectiveMaster(placed, request, overlay));
+    const XInterval span = XInterval{placed.x, placed.x + master->width};
+    // Extend the previous run only when same VT and x-contiguous; a gap in
+    // coverage (illegal design, pre-check territory) breaks the run.
+    if (!runs.empty() && runs.back().vt == master->vt
+        && runs.back().span.xh == span.xl) {
+      runs.back().span.xh = span.xh;
+      runs.back().insts.push_back(inst);
+    } else {
+      runs.push_back(Run{master->vt, span, {inst}});
+    }
+  }
+  return runs;
+}
+
+OracleResult TestRepairOracle::evaluate(const OracleRequest& request) const
+{
+  OracleResult result;
+  result.requestId = request.requestId;  // echo, always
+
+  // --- Request validation (one atomic overlay). Any defect makes only this
+  // request InvalidOverlay, with diagnostics as the protocol demands.
+  std::map<InstanceId, MasterId> overlay;
+  const auto invalid = [&](std::string why) {
+    result.status = OracleStatus::InvalidOverlay;
+    result.diagnostics.push_back(
+        makeDiag(Severity::Error, "InvalidOverlay", std::move(why)));
+    return result;
+  };
+
+  if (design_.instance(request.targetPlace.instanceId) == nullptr) {
+    return invalid(cat("target instance ", request.targetPlace.instanceId,
+                       " not found"));
+  }
+  for (const FillerCellRecord& change : request.fillerChanges) {
+    const InstanceId instanceId = change.cell_id_.getIndexValue();
+    const MasterId newMasterId = change.new_lib_cell_.getIndexValue();
+    const PlacedInstance* inst = design_.instance(instanceId);
+    if (inst == nullptr) {
+      return invalid(cat("instance ", instanceId, " not found"));
+    }
+    if (!inst->isFiller) {
+      return invalid(cat("instance ", instanceId, " is not a filler"));
+    }
+    const MasterInfo* oldMaster = design_.masterInfo(inst->masterId);
+    const MasterInfo* newMaster = design_.masterInfo(newMasterId);
+    if (newMaster == nullptr || !newMaster->isFiller) {
+      return invalid(cat("master ", newMasterId, " unknown or not a filler"));
+    }
+    if (newMaster->width != oldMaster->width
+        || newMaster->height != oldMaster->height) {
+      return invalid(cat("size mismatch for instance ", instanceId,
+                         ": new master ", newMasterId));
+    }
+    if (!overlay.emplace(instanceId, newMasterId).second) {
+      return invalid(cat("duplicate instance ", instanceId,
+                         " in one overlay"));
+    }
+  }
+
+  // --- Rule evaluation over the overlaid design.
+  const std::vector<RowId>& rowIds = design_.rows();
+  std::map<RowId, std::vector<Run>> runsByRow;
+  for (const RowId rowId : rowIds) {
+    runsByRow[rowId] = buildRuns(rowId, request, overlay);
+  }
+
+  const auto addViolation = [&](Violation v) {
+    if (inGuardRegion(v, request.guardRegion)) {
+      result.violations.push_back(std::move(v));
+    }
+  };
+  const auto participants = [&](const Run& run) {
+    std::vector<ViolationParticipant> ps;
+    for (const PlacedInstance* inst : run.insts) {
+      ps.push_back(participantOf(design_, *inst, request.targetPlace));
+    }
+    return ps;
+  };
+
+  for (const RowId rowId : rowIds) {
+    const std::vector<Run>& runs = runsByRow[rowId];
+
+    // Intra-row MW (ruleId 1): every run must reach mwIntra.
+    if (rules_.mwIntra > 0) {
+      for (const Run& run : runs) {
+        if (run.span.length() < rules_.mwIntra) {
+          Violation v;
+          v.ruleId = 1;
+          v.kind = ViolationKind::MinWidth;
+          v.relation = ViolationRelation::IntraRow;
+          v.primaryLayer = run.vt;
+          v.rowIds = {rowId};
+          v.xWindow = run.span;
+          v.measuredValue = run.span.length();
+          v.requiredValue = rules_.mwIntra;
+          v.participants = participants(run);
+          addViolation(std::move(v));
+        }
+      }
+    }
+
+    // Intra-row MS (ruleId 2): distance between consecutive same-VT runs.
+    if (rules_.msIntra > 0) {
+      for (size_t i = 0; i < runs.size(); ++i) {
+        for (size_t j = i + 1; j < runs.size(); ++j) {
+          if (runs[j].vt != runs[i].vt) {
+            continue;
+          }
+          const DbCoord gap = runs[j].span.xl - runs[i].span.xh;
+          if (gap > 0 && gap < rules_.msIntra) {
+            Violation v;
+            v.ruleId = 2;
+            v.kind = ViolationKind::MinSpacing;
+            v.relation = ViolationRelation::IntraRow;
+            v.primaryLayer = runs[i].vt;
+            v.rowIds = {rowId};
+            v.xWindow = XInterval{runs[i].span.xh, runs[j].span.xl};
+            v.measuredValue = gap;
+            v.requiredValue = rules_.msIntra;
+            v.participants = participants(runs[i]);
+            const auto more = participants(runs[j]);
+            v.participants.insert(v.participants.end(), more.begin(), more.end());
+            addViolation(std::move(v));
+          }
+          break;  // only the nearest same-VT run to the right matters
+        }
+      }
+    }
+  }
+
+  // Inter-row rules between vertically adjacent rows.
+  for (size_t r = 0; r + 1 < rowIds.size(); ++r) {
+    const RowId rowA = rowIds[r];
+    const RowId rowB = rowIds[r + 1];
+    for (const Run& a : runsByRow[rowA]) {
+      for (const Run& b : runsByRow[rowB]) {
+        if (a.vt != b.vt) {
+          continue;
+        }
+        const DbCoord overlap = std::min(a.span.xh, b.span.xh)
+                                - std::max(a.span.xl, b.span.xl);
+        if (overlap > 0 && rules_.mwInter > 0 && overlap < rules_.mwInter) {
+          // Inter-row MW (ruleId 3): merged shape too narrow at the row
+          // boundary.
+          Violation v;
+          v.ruleId = 3;
+          v.kind = ViolationKind::MinWidth;
+          v.relation = ViolationRelation::InterRow;
+          v.primaryLayer = a.vt;
+          v.rowIds = {rowA, rowB};
+          v.xWindow = XInterval{std::max(a.span.xl, b.span.xl),
+                                std::min(a.span.xh, b.span.xh)};
+          v.measuredValue = overlap;
+          v.requiredValue = rules_.mwInter;
+          v.participants = participants(a);
+          const auto more = participants(b);
+          v.participants.insert(v.participants.end(), more.begin(), more.end());
+          addViolation(std::move(v));
+        } else if (overlap <= 0 && rules_.msInter > 0
+                   && -overlap < rules_.msInter) {
+          // Inter-row MS (ruleId 4): disjoint same-VT shapes too close
+          // (corner touch = distance 0 counts).
+          const DbCoord dist = -overlap;
+          Violation v;
+          v.ruleId = 4;
+          v.kind = ViolationKind::MinSpacing;
+          v.relation = ViolationRelation::InterRow;
+          v.primaryLayer = a.vt;
+          v.rowIds = {rowA, rowB};
+          const DbCoord lo = std::min(a.span.xh, b.span.xh);
+          v.xWindow = XInterval{lo, lo + std::max<DbCoord>(dist, 1)};
+          v.measuredValue = dist;
+          v.requiredValue = rules_.msInter;
+          v.participants = participants(a);
+          const auto more = participants(b);
+          v.participants.insert(v.participants.end(), more.begin(), more.end());
+          addViolation(std::move(v));
+        }
+      }
+    }
+  }
+
+  result.status = OracleStatus::Checked;
+  result.isLegal = result.violations.empty();
+  return result;
+}
+
+}  // namespace dpl2::fillerRepair
+
+// ==========================================================================
+// Cases
+// ==========================================================================
 
 namespace fr = dpl2::fillerRepair;
 
@@ -165,7 +1096,7 @@ void testSwapConstruction()
   EXPECT_TRUE(!fr::makeSwap(f.design, 103, fillerMaster(2, kVt1), &error).has_value());
 }
 
-void testCanonicalKeyOrderIndependent()
+void testOverlayKeyOrderIndependent()
 {
   RowFixture f = makeCoveredRow();
   auto m1 = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt2));
@@ -224,9 +1155,9 @@ void testPlannerDoesNotRunPlacementPrecheck()
   request.targetPlace = anchorPlace(f.design, f.anchor);
   const auto result = planner.repair(request);
 
-  // FillerRepairEngine::precheck() owns the placement gate. The pure planner
-  // sees an empty implant snapshot and succeeds without ever
-  // inspecting placement coverage.
+  // The placement gate lives in the engine and is regional; the pure planner
+  // has none. An empty implant snapshot succeeds with no changes and no
+  // checker call, and a placement hole in the row does not change that.
   EXPECT_TRUE(result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   EXPECT_EQ(checker.requestCount(), 0);
@@ -1296,22 +2227,6 @@ void testPlannerReentrantRepairRefused()
   }
   EXPECT_TRUE(sawReentrant);
   EXPECT_TRUE(result.hasSolution);  // the outer repair is unaffected
-}
-
-void testPlannerEmptySnapshotIsSuccess()
-{
-  RowFixture f = makeCoveredRow();
-  fr::TestRepairOracle checker(f.design, {});
-  fr::RepairConfig config;
-  config.verbose = verbose();
-  fr::internal::RepairPlanner planner(f.design, checker, config);
-
-  fr::FillerRepairRequest request;
-  request.targetPlace = anchorPlace(f.design, f.anchor);
-  const auto result = planner.repair(request);
-  EXPECT_TRUE(result.hasSolution);
-  EXPECT_TRUE(result.changes.empty());
-  EXPECT_EQ(checker.requestCount(), 0);
 }
 
 
@@ -3888,7 +4803,7 @@ void registerPlannerTests()
 {
   const std::vector<Test> tests = {
       {"swap_construction", testSwapConstruction},
-      {"canonical_key_order_independent", testCanonicalKeyOrderIndependent},
+      {"overlay_key_order_independent", testOverlayKeyOrderIndependent},
       {"wire_conversion", testWireConversion},
       {"planner_does_not_run_placement_precheck",
        testPlannerDoesNotRunPlacementPrecheck},
@@ -3924,7 +4839,6 @@ void registerPlannerTests()
       {"guard_region_two_cell_ring", testGuardRegionTwoCellRing},
       {"planner_no_editable_filler_zero_calls", testPlannerNoEditableFillerZeroCalls},
       {"planner_reentrant_repair_refused", testPlannerReentrantRepairRefused},
-      {"planner_empty_snapshot_is_success", testPlannerEmptySnapshotIsSuccess},
       {"swap_generator_basic", testSwapGeneratorBasic},
       {"swap_generator_no_usable_master", testSwapGeneratorNoUsableMaster},
       {"swapgen_rejected_candidate_diag", testSwapgenRejectedCandidateDiag},
@@ -3938,7 +4852,7 @@ void registerPlannerTests()
        testCandidatesBandPolarityLayoutMustMatch},
       {"candidates_polarity_only_filter_diagnosed",
        testCandidatesPolarityOnlyFilterDiagnosed},
-      {"planner_data_source_caches_follow_mutation",
+      {"placement_view_caches_follow_mutation",
        testTestPlacementViewCachesFollowMutation},
       {"synthetic_bottom_polarity_derived",
        testSyntheticBottomPolarityDerived},

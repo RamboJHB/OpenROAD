@@ -2,7 +2,7 @@
 
 Updated: 2026-07-28.
 
-These move with `fillerRepair/` and are the migration gate: **147 tests**, none
+These move with `fillerRepair/` and are the migration gate: **146 tests**, none
 of which construct a UDM object, include the repository's fake UDM tree, or
 need a fixture provider from the destination. They run before a design exists.
 
@@ -18,10 +18,10 @@ With `DPL2_RUNTIME_LIBRARIES` empty the E2E compiles the adjacent
 infrastructure/checker sources itself, so the suite still runs before any
 destination wiring exists.
 
-## 86 planner cases — `RepairPlannerTest.cpp`
+## 85 planner cases — `RepairPlannerTest.cpp`
 
-Database-free. `TestPlacementView.h`, `TestRepairOracle.*` and
-`SyntheticMasterCatalog.*` implement the two seams (`PlacementView`,
+Database-free. The two seam doubles and the synthetic master catalog are folded into that
+same file — it is self-contained. They implement the two seams (`PlacementView`,
 `RepairOracle`) with no database behind them, which is what makes the pure
 pipeline portable on its own (`dpl2::fillerRepairPlanner`, C++17).
 

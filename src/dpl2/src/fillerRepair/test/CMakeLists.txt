@@ -30,11 +30,9 @@ set(DPL2_SRC_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 
 # Database-free planner tests. The doubles implement the two seams
 # (PlacementView, RepairOracle) without any UDM fixture or provider.
-add_executable(
-  dpl2_filler_repair_planner_test
-  TestRepairOracle.cpp
-  SyntheticMasterCatalog.cpp
-  RepairPlannerTest.cpp)
+# One self-contained source: the seam doubles and the synthetic catalog are
+# folded into it, so the database-free suite is a single file to carry.
+add_executable(dpl2_filler_repair_planner_test RepairPlannerTest.cpp)
 target_link_libraries(
   dpl2_filler_repair_planner_test
   PRIVATE GTest::gtest_main dpl2::fillerRepairPlanner)
