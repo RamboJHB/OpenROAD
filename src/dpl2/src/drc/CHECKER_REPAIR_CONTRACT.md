@@ -1,6 +1,6 @@
 # fillerRepair ↔ delivered code: contract and change list
 
-Updated: 2026-07-28.
+Updated: 2026-07-29.
 
 Everything fillerRepair needs from outside itself, and every edit it required
 in code it does not own. Edits are tagged `[fillerRepair-fix]` in the source so
@@ -237,12 +237,12 @@ partial repair; it never reinterprets or bypasses checker legality.
 
 ## 6. Verified boundary
 
-85 portable planner cases and 61 portable real-checker cases build, link and
+85 portable planner cases and 75 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
-gate (146/146, normal and ASan). Repository-local fake-UDM engine regression:
-74 cases. Full local suite 220/220, normal and ASan.
+gate (160/160, normal and ASan). Repository-local fake-UDM engine regression:
+74 cases. Full local suite 234/234, normal and ASan.
 
-The fixture invariants those 60 cases depend on — rule and layer ids as
+The fixture invariants the real-checker cases depend on — rule and layer ids as
 container indices, the band-polarity model, the `maxRuleValue_`-sized snapshot
-window, and min width applying to every run — are documented in
-`../fillerRepair/README.md`.
+window, what `xWindow` means per rule kind, and min width applying to every run
+— are documented in `../fillerRepair/README.md`.

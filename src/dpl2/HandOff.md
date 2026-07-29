@@ -1,6 +1,6 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-07-28. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-29. Branch: `claude/wizardly-carson-secahu`.
 
 What this feature does: opto changes one standard cell's VT. The fillers around
 it still carry the old implant type, which is an MW/MS violation. This finds a
@@ -27,9 +27,9 @@ Verified at that commit:
 
 | | |
 |---|---|
-| local suite | 220/220, normal and ASan |
-| migration gate (destination code path) | 146/146, normal and ASan |
-| standalone module | 146/146 — configure, build and test with no harness |
+| local suite | 234/234, normal and ASan |
+| migration gate (destination code path) | 160/160, normal and ASan |
+| standalone module | 160/160 — configure, build and test with no harness |
 | `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
 
 ---
@@ -128,7 +128,7 @@ cmake -S <srcroot>/fillerRepair -B build-fr \
 cmake --build build-fr && ctest --test-dir build-fr --output-on-failure
 ```
 
-146 portable tests: 85 database-free planner cases and 61 that drive the **real
+160 portable tests: 85 database-free planner cases and 75 that drive the **real
 `ImplantLayerChecker`** through `ImplantLayerCheckerHelper`-built input. They
 build no UDM objects, so they run before any design is available.
 
@@ -222,11 +222,11 @@ it.
 | | |
 |---|---|
 | Portable planner tests | 85 |
-| Portable real-checker E2E | 61 |
+| Portable real-checker E2E | 75 |
 | Repository-local engine regression | 74 (fake UDM, not migrated) |
-| Full local suite | 220/220, normal and ASan |
-| Migration gate (destination code path) | 146/146, normal and ASan |
-| Standalone module build | 146/146 |
+| Full local suite | 234/234, normal and ASan |
+| Migration gate (destination code path) | 160/160, normal and ASan |
+| Standalone module build | 160/160 |
 
 The migration gate builds the payload the way a destination does
 (`DPL2_TEST_USE_FAKE_UDM=OFF`, no fake-only target, no test provider) with the

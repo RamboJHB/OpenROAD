@@ -29,7 +29,9 @@ namespace {
 
 constexpr Dbu SITE_WIDTH = 10;
 constexpr Dbu ROW_HEIGHT = 100;
-constexpr RowId ROW_COUNT = 8;
+constexpr RowId ROW_COUNT = 7;
+// Middle row: three rows of context above and below every target.
+constexpr RowId TARGET_ROW = 3;
 constexpr ColId SITE_COUNT = 200;
 constexpr Dbu MIN_RULE = 20;
 
@@ -70,30 +72,110 @@ constexpr int interRule(int baseRule, RowId topRowOfBoundary)
   return (topRowOfBoundary % 2) == 0 ? baseRule + P_RULE_OFFSET : baseRule;
 }
 
-constexpr RowId INTRA_WIDTH_ROW = 0;
-constexpr ColId INTRA_WIDTH_COL = 10;
-constexpr RowId INTER_WIDTH_TARGET_ROW = 1;
-constexpr RowId INTER_WIDTH_NEIGHBOR_ROW = 2;
-constexpr ColId INTER_WIDTH_COL = 30;
-constexpr RowId INTRA_SPACING_ROW = 3;
-constexpr ColId INTRA_SPACING_COL = 50;
-constexpr RowId INTER_SPACING_TARGET_ROW = 4;
-constexpr RowId INTER_SPACING_NEIGHBOR_ROW = 5;
-constexpr ColId INTER_SPACING_COL = 70;
+// --- Scenarios ------------------------------------------------------------
+//
+// The placed layout is LEGAL as built: columns run in same-VT pairs
+// (std cell + filler), so every implant run is exactly MIN_RULE wide and
+// two runs of one VT family sit four sites apart. Nothing is planted.
+//
+// A scenario is what opto actually does: take one std cell and give it a
+// different VT. Changing the cell at an even column to the VT of the pair on
+// its RIGHT isolates it -- its own run collapses to one site (below min
+// width) and it lands one site away from that neighbouring run (below min
+// spacing), on the N band and on its P partner, intra-row and across both
+// row boundaries. One realistic edit, ten violations, none of them
+// hand-placed.
+//
+// The natural repair is the filler between the two runs -- the BRIDGE:
+// recolour it to the new VT and the runs merge into one four-site run.
+//
+// Every scenario runs on a design of ROW_COUNT (7) rows with its target on an
+// interior row, so each case carries real rows of context above and below --
+// enough for the guard (window +/- two rows) and for an adaptive step before
+// it clamps.
+struct Scenario
+{
+  const char* name;
+  RowId row;
+  ColId col;          // even column: a std cell site
+  MasterId newMaster;  // the VT opto retargets it to
+  ColId bridgeCol;     // the one filler whose recolour merges the two runs
+  ColId windowLo;      // local-density window: 20 columns from here
+};
 
-constexpr RowId NEW_INTRA_WIDTH_ROW = 0;
-constexpr ColId NEW_INTRA_WIDTH_COL = 100;
-constexpr RowId NEW_INTER_WIDTH_TOP_ROW = 0;
-constexpr RowId NEW_INTER_WIDTH_BOTTOM_ROW = 1;
-constexpr ColId NEW_INTER_WIDTH_COL = 120;
-constexpr RowId NEW_INTRA_SPACING_ROW = 0;
-constexpr ColId NEW_INTRA_SPACING_COL = 140;
-constexpr RowId NEW_INTER_SPACING_TOP_ROW = 2;
-constexpr RowId NEW_INTER_SPACING_BOTTOM_ROW = 3;
-constexpr ColId NEW_INTER_SPACING_COL = 160;
+// (col/2)%3 is a site's VT family, so the pair to the right of column c is
+// family ((c/2)+1)%3 -- that is the master that isolates the target.
+constexpr MasterId rightNeighborCellMaster(ColId col)
+{
+  return static_cast<MasterId>(C1_MASTER + (((col / 2) + 1) % 3));
+}
 
-constexpr RowId OLD_UNRELATED_ROW = 7;
+// Family index of a cell/filler master (C1/F1 -> 0, C2/F2 -> 1, ...).
+constexpr int familyOf(MasterId masterId)
+{
+  return masterId >= F1_FILL_MASTER ? masterId - F1_FILL_MASTER
+                                    : masterId - C1_MASTER;
+}
+
+constexpr MasterId fillerOfFamily(int family)
+{
+  return static_cast<MasterId>(F1_FILL_MASTER + family);
+}
+
+// N-band rule ids per family; the P partner is the same rule + P_RULE_OFFSET.
+constexpr int widthRule(int family)
+{
+  return F1_WIDTH_RULE + family;
+}
+
+constexpr int spacingRule(int family)
+{
+  return F1_SPACING_RULE + family;
+}
+
+constexpr Scenario scenario(const char* name,
+                            RowId row,
+                            ColId col,
+                            ColId windowLo)
+{
+  return Scenario{name,
+                  row,
+                  col,
+                  rightNeighborCellMaster(col),
+                  static_cast<ColId>(col + 1),
+                  windowLo};
+}
+
+// Four positions, all on a 7-row design: an odd (MX) row and an even (R0)
+// row, one target near the left edge of the core and one far along the row.
+constexpr Scenario SCN_MID = scenario("mid-row", TARGET_ROW, 50, 42);
+constexpr Scenario SCN_EVEN_ROW
+    = scenario("even-row", static_cast<RowId>(TARGET_ROW - 1), 70, 62);
+constexpr Scenario SCN_LEFT_EDGE = scenario("near-left-edge", TARGET_ROW, 4, 0);
+constexpr Scenario SCN_FAR = scenario("far-column", TARGET_ROW, 150, 142);
+
+constexpr std::array<Scenario, 4> SCENARIOS{
+    SCN_MID, SCN_EVEN_ROW, SCN_LEFT_EDGE, SCN_FAR};
+
+// The bridge filler recoloured to the target's new VT: the repair.
+constexpr MasterId bridgeRepairMaster(const Scenario& scn)
+{
+  return fillerOfFamily(familyOf(scn.newMaster));
+}
+
+// A third VT on the bridge: a plausible-looking swap that fixes nothing.
+constexpr MasterId bridgeWrongMaster(const Scenario& scn)
+{
+  return fillerOfFamily((familyOf(scn.newMaster) + 1) % 3);
+}
+
+// A pre-existing, unrelated violation far from every scenario, planted the
+// same way a real one arrives: one std cell left carrying the wrong VT, with
+// no bridge next to it. It must never surface on another target's check.
+constexpr RowId OLD_UNRELATED_ROW = 0;
 constexpr ColId OLD_UNRELATED_COL = 190;
+constexpr MasterId OLD_UNRELATED_MASTER
+    = rightNeighborCellMaster(OLD_UNRELATED_COL);
 
 struct DensityCase
 {
@@ -120,63 +202,44 @@ std::string densityTrace(const DensityCase& density)
 
 const char* denseOverlaySchematic()
 {
-  return R"(Schematic: dense_overlay_8x200
-  Legend: [ 1F1 ] = non-filler one-site cell on F1.
-          [ aF1 ] = filler one-site cell on F1.
-        1/2/3 use layers F1/F2/F3; a/b/c are F1/F2/F3 fillers.
-        * marks the filler changed by the tested candidate.
-        Each row is 200 sites wide and 100% occupied.
-        Only repair windows are shown.
-        Each density window is 20 columns across target row +/-1 (clamped).
-        Filler identity inside every density window follows the test ratio;
-        implant geometry and the required editable fillers stay unchanged.
+  return R"(Schematic: 7 rows x 200 sites, 100% occupied, LEGAL as built.
+  Legend: [ 1F1 ] = std cell on the F1 VT family.
+          [ aF1 ] = filler on the F1 VT family.
+        1/2/3 are std cells on F1/F2/F3; a/b/c are F1/F2/F3 fillers.
+        ^ marks the retargeted std cell, * the bridge filler that repairs it.
+        Rows alternate R0 / MX, so a master's N band faces N across an
+        odd->even row boundary and P across an even->odd one.
 
-Background implant geometry (filler/std identity is density-dependent):
-Sites:    ... [ 1F1 ][ aF1 ][ 2F2 ][ bF2 ][ 3F3 ][ cF3 ] ...
+Background: same-VT pairs marching along the row, so every implant run is
+exactly MIN_RULE (two sites) wide and the next run of that family starts four
+sites later.
+Sites:    ... [ 1F1 ][ aF1 ][ 2F2 ][ bF2 ][ 3F3 ][ cF3 ][ 1F1 ][ aF1 ] ...
 
-Intra-row width target, row0 sites 8..13:
-Sites:       08      09      10      11      12      13
-before:   [ 2F2 ][ bF2 ][ 1F1 ][ bF2*][ 2F2 ][ bF2 ]
-clear:    [ 2F2 ][ bF2 ][ 1F1 ][ aF1*][ 2F2 ][ bF2 ]
+One scenario, at the mid-row target (row 3, sites 46..55). Opto retargets the
+std cell at site 50 from F2 to F3 -- the VT of the pair on its right:
+Sites:       46      47      48      49      50      51      52      53
+built:    [ 3F3 ][ cF3 ][ 1F1 ][ aF1 ][ 2F2 ][ bF2 ][ 3F3 ][ cF3 ]
+                                        ^
+retargeted:                           [ 3F3 ][ bF2 ][ 3F3 ][ cF3 ]
+  F3 runs are now [500,510) and [520,540): the first is one site wide
+  (min width) and the gap between them is one site (min spacing). Both fire
+  on the F3 N band and on its P partner, intra-row and across both row
+  boundaries -- ten violations from one edit.
+repaired:                             [ 3F3 ][ cF3*][ 3F3 ][ cF3 ]
+  one bridge swap at site 51 merges them into [500,540).
 
-Inter-row width target, rows1/2 sites 30..31:
-Sites:       30      31
-row2 before:[ 1F1 ][ bF2*]
-row2 clear: [ 1F1 ][ aF1*]
-row1 target:[ 1F1 ][ aF1 ]
+The other three scenarios are the same edit at (row 2, site 70), (row 3,
+site 4) near the left edge, and (row 3, site 150).
 
-Intra-row spacing target, row3 sites 48..56:
-Sites:       48      49      50      51      52      53      54      55      56
-before:   [ bF2 ][ bF2 ][ 1F1 ][ aF1 ][ bF2*][ 1F1 ][ aF1 ][ bF2 ][ 2F2 ]
-clear:    [ bF2 ][ bF2 ][ 1F1 ][ aF1 ][ aF1*][ 1F1 ][ aF1 ][ bF2 ][ 2F2 ]
+Local density: each scenario owns a 20-column window across its target row
++/-1 in which the filler:stdCell ratio follows the test parameter. Only the
+FILLER IDENTITY of a site changes -- its implant geometry does not -- so the
+violations above are identical at every ratio and only the size of the
+editable universe moves.
 
-Inter-row spacing target, rows4/5 sites 70..75:
-Sites:       70      71      72      73      74      75
-row5 before:[ ---- ][ ---- ][ bF2*][ 1F1 ][ aF1 ][ bF2 ]
-row5 clear: [ ---- ][ ---- ][ aF1*][ 1F1 ][ aF1 ][ bF2 ]
-row4 target:[ 1F1 ][ aF1 ][ 2F2 ][ bF2 ][ 2F2 ][ bF2 ]
-
-New-violation windows:
-Intra-row width row0 sites 98..103:
-safe:     [ 2F2 ][ bF2 ][ 1F1 ][ aF1*][ 2F2 ][ bF2 ]
-bad:      [ 2F2 ][ bF2 ][ 1F1 ][ bF2*][ 2F2 ][ bF2 ]
-
-Inter-row width rows0/1 sites 120..121:
-row1 safe:[ bF2*][ bF2 ]
-row1 bad: [ aF1*][ bF2 ]
-row0 ref: [ 1F1 ][ aF1 ]
-
-Intra-row spacing row0 sites 140..145:
-safe:     [ 1F1 ][ aF1 ][ bF2 ][ cF3*][ 1F1 ][ aF1 ]
-bad:      [ 1F1 ][ aF1 ][ bF2 ][ aF1*][ 1F1 ][ aF1 ]
-
-Inter-row spacing rows2/3 sites 160..165:
-row3 safe:[ ---- ][ ---- ][ bF2 ][ cF3*][ 1F1 ][ aF1 ]
-row3 bad: [ ---- ][ ---- ][ bF2 ][ aF1*][ 1F1 ][ aF1 ]
-row2 ref: [ 1F1 ][ aF1 ][ 2F2 ][ bF2 ][ 2F2 ][ bF2 ]
-
-Old unrelated baseline violation, row7 sites 189..191:
-before:   [ bF2 ][ 1F1 ][ bF2 ]
+Pre-existing unrelated violation, planted at row 0 site 190 the same way
+(a retargeted std cell with no bridge). It is in the guard of a whole-design
+check and must never be reported for another target.
 )";
 }
 
@@ -256,25 +319,14 @@ void setCell(std::vector<SiteSpec>& sites,
   setSite(sites, rowId, colId, masterId, false);
 }
 
-void setFiller(std::vector<SiteSpec>& sites,
-               RowId rowId,
-               ColId colId,
-               MasterId masterId)
-{
-  setSite(sites, rowId, colId, masterId, true);
-}
-
-int masterLayerIndex(MasterId masterId)
-{
-  return masterId >= F1_FILL_MASTER ? masterId - F1_FILL_MASTER
-                                    : masterId - C1_MASTER;
-}
-
+// Flips a site between filler and std cell WITHOUT touching its implant
+// geometry: same VT family, same shapes, same width. That is what lets the
+// density matrix vary the editable universe while every case sees exactly the
+// same violations.
 void setFillerIdentity(SiteSpec& site, bool isFiller)
 {
-  const int layerIndex = masterLayerIndex(site.masterId);
-  site.masterId
-      = isFiller ? fillerMaster(layerIndex) : cellMaster(layerIndex);
+  const int family = familyOf(site.masterId);
+  site.masterId = isFiller ? fillerMaster(family) : cellMaster(family);
   site.isFiller = isFiller;
 }
 
@@ -291,97 +343,27 @@ struct LocalDensityWindow
   std::vector<SiteCoord> requiredStdCells;
 };
 
-const std::array<LocalDensityWindow, 4>& localDensityWindows()
+// One 20-column, 3-row window per scenario, centred on its target row. The
+// bridge filler must stay a filler at every ratio (it is the repair), and the
+// target must stay a std cell (it is what opto retargets); everything else in
+// the window is free to take either identity.
+const std::array<LocalDensityWindow, SCENARIOS.size()>& localDensityWindows()
 {
-  static const std::array<LocalDensityWindow, 4> windows{
-      LocalDensityWindow{"IntraRowWidth",
-                         0,
-                         1,
-                         2,
-                         22,
-                         {{INTRA_WIDTH_ROW, 11}},
-                         {{0, 8},
-                          {0, 9},
-                          {0, 10},
-                          {0, 12},
-                          {0, 13},
-                          {1, 8},
-                          {1, 9},
-                          {1, 10},
-                          {1, 11},
-                          {1, 12},
-                          {1, 13}}},
-      LocalDensityWindow{
-          "InterRowWidth",
-          0,
-          2,
-          22,
-          42,
-          {{INTER_WIDTH_NEIGHBOR_ROW, 31}},
-          {{0, 30},
-           {0, 31},
-           {1, 30},
-           {1, 31},
-           {2, 30}}},
-      LocalDensityWindow{
-          "IntraRowSpacing",
-          2,
-          4,
-          42,
-          62,
-          {{INTRA_SPACING_ROW, 51}},
-          {{2, 48},
-           {2, 49},
-           {2, 50},
-           {2, 51},
-           {2, 52},
-           {2, 53},
-           {2, 54},
-           {2, 55},
-           {2, 56},
-           {3, 48},
-           {3, 49},
-           {3, 50},
-           {3, 52},
-           {3, 53},
-           {3, 54},
-           {3, 55},
-           {3, 56},
-           {4, 48},
-           {4, 49},
-           {4, 50},
-           {4, 51},
-           {4, 52},
-           {4, 53},
-           {4, 54},
-           {4, 55},
-           {4, 56}}},
-      LocalDensityWindow{
-          "InterRowSpacing",
-          3,
-          5,
-          62,
-          82,
-          {{INTER_SPACING_TARGET_ROW, 71}},
-          {{3, 70},
-           {3, 71},
-           {3, 72},
-           {3, 73},
-           {3, 74},
-           {3, 75},
-           {4, 68},
-           {4, 69},
-           {4, 70},
-           {4, 72},
-           {4, 73},
-           {4, 74},
-           {4, 75},
-           {5, 70},
-           {5, 71},
-           {5, 72},
-           {5, 73},
-           {5, 74},
-           {5, 75}}}};
+  static const std::array<LocalDensityWindow, SCENARIOS.size()> windows = [] {
+    std::array<LocalDensityWindow, SCENARIOS.size()> built{};
+    for (size_t index = 0; index < SCENARIOS.size(); ++index) {
+      const Scenario& scn = SCENARIOS[index];
+      built[index] = LocalDensityWindow{
+          scn.name,
+          static_cast<RowId>(scn.row - 1),
+          static_cast<RowId>(scn.row + 1),
+          scn.windowLo,
+          static_cast<ColId>(scn.windowLo + 20),
+          {{scn.row, scn.bridgeCol}},
+          {{scn.row, scn.col}}};
+    }
+    return built;
+  }();
   return windows;
 }
 
@@ -464,93 +446,13 @@ std::vector<PlacedInst> densePlaced(const DensityCase& density)
     }
   }
 
-  setCell(sites, INTRA_WIDTH_ROW, 8, C2_MASTER);
-  setFiller(sites, INTRA_WIDTH_ROW, 9, F2_FILL_MASTER);
-  setCell(sites, INTRA_WIDTH_ROW, 10, C1_MASTER);
-  setFiller(sites, INTRA_WIDTH_ROW, 11, F2_FILL_MASTER);
-  setCell(sites, INTRA_WIDTH_ROW, 12, C2_MASTER);
-  setFiller(sites, INTRA_WIDTH_ROW, 13, F2_FILL_MASTER);
-
-  setCell(sites, INTER_WIDTH_TARGET_ROW, 30, C1_MASTER);
-  setFiller(sites, INTER_WIDTH_TARGET_ROW, 31, F1_FILL_MASTER);
-  setCell(sites, INTER_WIDTH_NEIGHBOR_ROW, 30, C1_MASTER);
-  setFiller(sites, INTER_WIDTH_NEIGHBOR_ROW, 31, F2_FILL_MASTER);
-
-  for (RowId rowId : {INTRA_SPACING_ROW - 1, INTRA_SPACING_ROW + 1}) {
-    for (ColId colId = 48; colId <= 56; ++colId) {
-      if (colId % 2 == 0) {
-        setCell(sites, rowId, colId, C2_MASTER);
-      } else {
-        setFiller(sites, rowId, colId, F2_FILL_MASTER);
-      }
-    }
-  }
-  setFiller(sites, INTRA_SPACING_ROW, 48, F2_FILL_MASTER);
-  setFiller(sites, INTRA_SPACING_ROW, 49, F2_FILL_MASTER);
-  // The checker only sees cols in [colId - maxRuleValue_, colId + width +
-  // maxRuleValue_ - 1] (= 48..52 here), so the neighbour F1 run must START by
-  // col 52. F1 runs 48..50 and 52..55 straddle a single editable bridge
-  // filler at col 51: both runs clear min width, the 1-site gap is below it,
-  // and swapping the bridge to F1 merges them (same layer, touching ->
-  // NotApplicable). Cols 48/49 (F1 cell + filler) and 54/55 come from the
-  // background pattern.
-  setCell(sites, INTRA_SPACING_ROW, 50, C1_MASTER);
-  setFiller(sites, INTRA_SPACING_ROW, 51, F2_FILL_MASTER);
-  setCell(sites, INTRA_SPACING_ROW, 52, C1_MASTER);
-  setFiller(sites, INTRA_SPACING_ROW, 53, F1_FILL_MASTER);
-
-  // Same reach constraint across the row boundary: the row-5 F1 run must
-  // start by col 72. Row 4 carries the target run 68..70 and the editable
-  // bridge at 71; swapping that bridge to F1 makes the two rows' facing
-  // bands touch. Row 5 keeps its background F1 run at 72..73.
-  setFiller(sites, INTER_SPACING_TARGET_ROW, 68, F1_FILL_MASTER);
-  setFiller(sites, INTER_SPACING_TARGET_ROW, 69, F1_FILL_MASTER);
-  setCell(sites, INTER_SPACING_TARGET_ROW, 70, C1_MASTER);
-  setFiller(sites, INTER_SPACING_TARGET_ROW, 71, F2_FILL_MASTER);
-  setCell(sites, INTER_SPACING_TARGET_ROW, 72, C2_MASTER);
-  setFiller(sites, INTER_SPACING_TARGET_ROW, 73, F2_FILL_MASTER);
-  setCell(sites, INTER_SPACING_TARGET_ROW, 74, C2_MASTER);
-  setFiller(sites, INTER_SPACING_TARGET_ROW, 75, F2_FILL_MASTER);
-  setCell(sites, INTER_SPACING_NEIGHBOR_ROW, 72, C1_MASTER);
-  setFiller(sites, INTER_SPACING_NEIGHBOR_ROW, 73, F1_FILL_MASTER);
-
-  setCell(sites, NEW_INTRA_WIDTH_ROW, 98, C2_MASTER);
-  setFiller(sites, NEW_INTRA_WIDTH_ROW, 99, F2_FILL_MASTER);
-  setCell(sites, NEW_INTRA_WIDTH_ROW, 100, C1_MASTER);
-  setFiller(sites, NEW_INTRA_WIDTH_ROW, 101, F1_FILL_MASTER);
-  setCell(sites, NEW_INTRA_WIDTH_ROW, 102, C2_MASTER);
-  setFiller(sites, NEW_INTRA_WIDTH_ROW, 103, F2_FILL_MASTER);
-
-  setCell(sites, NEW_INTER_WIDTH_TOP_ROW, 120, C1_MASTER);
-  setFiller(sites, NEW_INTER_WIDTH_TOP_ROW, 121, F1_FILL_MASTER);
-  setFiller(sites, NEW_INTER_WIDTH_BOTTOM_ROW, 120, F2_FILL_MASTER);
-  setFiller(sites, NEW_INTER_WIDTH_BOTTOM_ROW, 121, F2_FILL_MASTER);
-
-  setCell(sites, NEW_INTRA_SPACING_ROW, 140, C1_MASTER);
-  setFiller(sites, NEW_INTRA_SPACING_ROW, 141, F1_FILL_MASTER);
-  setFiller(sites, NEW_INTRA_SPACING_ROW, 142, F2_FILL_MASTER);
-  setFiller(sites, NEW_INTRA_SPACING_ROW, 143, F3_FILL_MASTER);
-  setCell(sites, NEW_INTRA_SPACING_ROW, 144, C1_MASTER);
-  setFiller(sites, NEW_INTRA_SPACING_ROW, 145, F1_FILL_MASTER);
-
-  setCell(sites, NEW_INTER_SPACING_TOP_ROW, 160, C1_MASTER);
-  setFiller(sites, NEW_INTER_SPACING_TOP_ROW, 161, F1_FILL_MASTER);
-  setCell(sites, NEW_INTER_SPACING_TOP_ROW, 162, C2_MASTER);
-  setFiller(sites, NEW_INTER_SPACING_TOP_ROW, 163, F2_FILL_MASTER);
-  setCell(sites, NEW_INTER_SPACING_TOP_ROW, 164, C2_MASTER);
-  setFiller(sites, NEW_INTER_SPACING_TOP_ROW, 165, F2_FILL_MASTER);
-  setFiller(sites, NEW_INTER_SPACING_BOTTOM_ROW, 162, F2_FILL_MASTER);
-  setFiller(sites, NEW_INTER_SPACING_BOTTOM_ROW, 163, F3_FILL_MASTER);
-  setCell(sites, NEW_INTER_SPACING_BOTTOM_ROW, 164, C1_MASTER);
-  setFiller(sites, NEW_INTER_SPACING_BOTTOM_ROW, 165, F1_FILL_MASTER);
-
-  // Old unrelated violation inside the full guard. It must be present in the
-  // baseline but filtered from successful overlay results.
-  setFiller(sites, OLD_UNRELATED_ROW, 189, F2_FILL_MASTER);
-  setCell(sites, OLD_UNRELATED_ROW, 190, C1_MASTER);
-  setFiller(sites, OLD_UNRELATED_ROW, 191, F2_FILL_MASTER);
-
   applyLocalDensities(sites, density);
+
+  // The one planted defect: a std cell far from every scenario left carrying
+  // the wrong VT, with no bridge beside it. Pre-existing and unrelated, so a
+  // check on any other target must filter it out (see
+  // expectOldUnrelatedFiltered).
+  setCell(sites, OLD_UNRELATED_ROW, OLD_UNRELATED_COL, OLD_UNRELATED_MASTER);
 
   std::vector<PlacedInst> placed;
   placed.reserve(static_cast<size_t>(ROW_COUNT * SITE_COUNT));
@@ -611,14 +513,42 @@ Rect guard()
   return makeRect(0, 0, SITE_COUNT * SITE_WIDTH, ROW_COUNT * ROW_HEIGHT);
 }
 
-CheckRequest request(RowId rowId, ColId colId)
+// The check opto issues: same instance, same site, same orientation, the new
+// master it wants to place there.
+CheckRequest request(RowId rowId, ColId colId, MasterId masterId)
 {
   return CheckRequest{instId(rowId, colId),
-                      C1_MASTER,
+                      masterId,
                       rowId,
                       colId,
                       (rowId % 2) != 0 ? PhysOrientationE::MX
                                        : PhysOrientationE::R0};
+}
+
+CheckRequest retargeted(const Scenario& scn)
+{
+  return request(scn.row, scn.col, scn.newMaster);
+}
+
+LeafCellID leafCellId(RowId rowId, ColId colId)
+{
+  return LeafCellID(0, instId(rowId, colId));
+}
+
+LibCellID libCellId(MasterId masterId)
+{
+  return LibCellID(0, masterId);
+}
+
+// One candidate: recolour the scenario's bridge filler to `masterId`.
+FillerChanges bridgeSwap(const Scenario& scn, MasterId masterId)
+{
+  return FillerChanges{FillerCellRecord{OpType::Replace,
+                                        leafCellId(scn.row, scn.bridgeCol),
+                                        UvDist(0),
+                                        UvDist(0),
+                                        LibCellID(),
+                                        libCellId(masterId)}};
 }
 
 bool hasViolation(const CheckResult& result,
@@ -646,22 +576,26 @@ bool hasViolation(const CheckResult& result,
       });
 }
 
+// Any violation of `ruleId`/`relationship`, whoever the participants are.
+bool hasRuleViolation(const CheckResult& result,
+                      int ruleId,
+                      Relationship relationship)
+{
+  return hasViolation(result, ruleId, relationship, {});
+}
+
+// The planted defect at OLD_UNRELATED sits inside a whole-design guard, so a
+// check on any other target proves the checker suppresses pre-existing
+// findings that do not touch it.
 void expectOldUnrelatedFiltered(const CheckResult& result)
 {
-  EXPECT_FALSE(hasViolation(result,
-                            F1_WIDTH_RULE,
-                            Relationship::IntraRow,
-                            {instId(OLD_UNRELATED_ROW, OLD_UNRELATED_COL)}));
-}
-
-LeafCellID leafCellId(RowId rowId, ColId colId)
-{
-  return LeafCellID(0, instId(rowId, colId));
-}
-
-LibCellID libCellId(MasterId masterId)
-{
-  return LibCellID(0, masterId);
+  for (const Violation& violation : result.violations) {
+    EXPECT_EQ(std::find(violation.instances.begin(),
+                        violation.instances.end(),
+                        instId(OLD_UNRELATED_ROW, OLD_UNRELATED_COL)),
+              violation.instances.end())
+        << "the pre-existing unrelated violation was reported";
+  }
 }
 
 std::vector<CheckResult> check(const CheckRequest& request,
@@ -983,26 +917,33 @@ class PortableCheckerOracle final : public fr::RepairOracle
   int batch_count_ = 0;
 };
 
-fr::TargetPlace plannerTarget(RowId rowId,
-                              ColId colId,
-                              MasterId masterId = C1_MASTER)
+// The planner-side form of `retargeted()`: same instance, same site, same
+// orientation, the master opto wants there.
+fr::TargetPlace plannerTarget(const Scenario& scn)
 {
   // Odd rows are placed MX (band polarity alternates per row).
-  return fr::TargetPlace{instId(rowId, colId),
-                         masterId,
-                         rowId,
-                         colId * SITE_WIDTH,
-                         (rowId % 2) != 0 ? fr::Orient::MX : fr::Orient::R0};
+  return fr::TargetPlace{
+      instId(scn.row, scn.col),
+      scn.newMaster,
+      scn.row,
+      scn.col * SITE_WIDTH,
+      (scn.row % 2) != 0 ? fr::Orient::MX : fr::Orient::R0};
 }
 
-fr::Region snapshotRegion(RowId rowId, ColId colId)
+fr::Region snapshotRegion(const Scenario& scn)
 {
   return fr::Region{
-      fr::XInterval{std::max<Dbu>(0, colId * SITE_WIDTH - 4 * MIN_RULE),
-                    std::min<Dbu>(SITE_COUNT * SITE_WIDTH,
-                                  (colId + 1) * SITE_WIDTH + 4 * MIN_RULE)},
-      std::max<RowId>(0, rowId - 1),
-      std::min<RowId>(ROW_COUNT - 1, rowId + 1)};
+      fr::XInterval{
+          std::max<Dbu>(0, scn.col * SITE_WIDTH - 4 * MIN_RULE),
+          std::min<Dbu>(SITE_COUNT * SITE_WIDTH,
+                        (scn.col + 1) * SITE_WIDTH + 4 * MIN_RULE)},
+      std::max<RowId>(0, scn.row - 1),
+      std::min<RowId>(ROW_COUNT - 1, scn.row + 1)};
+}
+
+fr::InstanceId bridgeInstance(const Scenario& scn)
+{
+  return instId(scn.row, scn.bridgeCol);
 }
 
 bool hasPlannerDiagnostic(const fr::FillerRepairResult& result,
@@ -1038,38 +979,54 @@ bool sameChanges(const dpl2::ipl::FillerChanges& left,
   return true;
 }
 
+// A realistic wide-implant scenario: one VT family whose minimum width spans
+// several sites, which real technologies do have. The band around the target
+// carries no cell of that family, so the retargeted cell has to grow its own
+// run by recolouring the fillers beside it -- one swap can never be enough.
+//
+// The band is uniform F2 across every row and thirty columns wide, so the
+// raised rule cannot reach any other F1 run from the target's window, and the
+// sites flanking the target are fillers so a run of any width can be formed
+// at all. The target site itself stays a placed F2 std cell: the F1 master
+// arrives only in the CheckRequest, exactly as opto issues it.
+constexpr ColId WIDE_RULE_COL = 100;
+constexpr ColId WIDE_RULE_BAND_LO = 90;
+constexpr ColId WIDE_RULE_BAND_HI = 120;
+constexpr Scenario SCN_WIDE_RULE{"wide-rule",
+                                 TARGET_ROW,
+                                 WIDE_RULE_COL,
+                                 C1_MASTER,
+                                 static_cast<ColId>(WIDE_RULE_COL + 1),
+                                 WIDE_RULE_BAND_LO};
+
 ImplantInput multiSwapWidthInput(int requiredFillers)
 {
   ImplantInput result = input();
+  const Dbu required = (requiredFillers + 1) * SITE_WIDTH;
   for (Rule& candidate : result.rules) {
-    if (candidate.getRuleId() == F1_WIDTH_RULE) {
-      candidate.setMinValue((requiredFillers + 1) * SITE_WIDTH);
+    if (candidate.getRuleId() == widthRule(familyOf(C1_MASTER))
+        || candidate.getRuleId()
+               == widthRule(familyOf(C1_MASTER)) + P_RULE_OFFSET) {
+      candidate.setMinValue(required);
     }
   }
-  for (RowId rowId = 0; rowId <= 1; ++rowId) {
-    for (ColId colId = 0; colId <= 30; ++colId) {
+  for (RowId rowId = 0; rowId < ROW_COUNT; ++rowId) {
+    for (ColId colId = WIDE_RULE_BAND_LO; colId < WIDE_RULE_BAND_HI; ++colId) {
       PlacedInst& placed = result.placedInsts[siteIndex(rowId, colId)];
-      placed.masterId = colId % 2 == 0 ? C2_MASTER : F2_FILL_MASTER;
-      placed.isFiller = colId % 2 != 0;
+      const bool isFiller = colId % 2 != 0;
+      placed.masterId = isFiller ? F2_FILL_MASTER : C2_MASTER;
+      placed.isFiller = isFiller;
     }
   }
-  PlacedInst& target
-      = result.placedInsts[siteIndex(INTRA_WIDTH_ROW, INTRA_WIDTH_COL)];
-  target.masterId = C1_MASTER;
-  target.isFiller = false;
-  for (ColId colId : {12, 13}) {
-    PlacedInst& filler = result.placedInsts[siteIndex(INTRA_WIDTH_ROW, colId)];
+  for (ColId colId = WIDE_RULE_COL - 3; colId <= WIDE_RULE_COL + 3; ++colId) {
+    if (colId == WIDE_RULE_COL) {
+      continue;
+    }
+    PlacedInst& filler = result.placedInsts[siteIndex(SCN_WIDE_RULE.row, colId)];
     filler.masterId = F2_FILL_MASTER;
     filler.isFiller = true;
   }
   return result;
-}
-
-ImplantInput thirdVtTargetInput()
-{
-  // Track-slot layer demands no longer exist; the F3-family target and the
-  // F3-restricted allow list alone express the third-VT scenario.
-  return input();
 }
 
 class PlannerCheckerFixture
@@ -1097,36 +1054,28 @@ class PlannerCheckerFixture
   const PortablePlacementView& view() const { return *view_; }
   PortableCheckerOracle& oracle() { return *oracle_; }
 
-  fr::OracleResult baseline(RowId rowId,
-                           ColId colId,
-                           MasterId targetMaster = C1_MASTER)
+  const ImplantLayerChecker& checker() const { return *checker_; }
+
+  fr::OracleResult baseline(const Scenario& scn)
   {
-    const fr::TargetPlace target = plannerTarget(rowId, colId, targetMaster);
     return oracle_->checkPlaceWithOverlay(
-        fr::OracleRequest{0, target, snapshotRegion(rowId, colId), {}});
+        fr::OracleRequest{0, plannerTarget(scn), snapshotRegion(scn), {}});
   }
 
-  fr::FillerRepairResult repair(RowId rowId,
-                                ColId colId,
+  fr::FillerRepairResult repair(const Scenario& scn,
                                 const std::vector<fr::Violation>& violations,
-                                fr::RepairConfig config = {},
-                                MasterId targetMaster = C1_MASTER)
+                                fr::RepairConfig config = {})
   {
     fr::internal::RepairPlanner planner(*view_, *oracle_, config);
-    return planner.repair(fr::FillerRepairRequest{
-        plannerTarget(rowId, colId, targetMaster), violations});
+    return planner.repair(
+        fr::FillerRepairRequest{plannerTarget(scn), violations});
   }
 
-  fr::OracleResult verify(RowId rowId,
-                         ColId colId,
-                         const dpl2::ipl::FillerChanges& changes,
-                         MasterId targetMaster = C1_MASTER)
+  fr::OracleResult verify(const Scenario& scn,
+                          const dpl2::ipl::FillerChanges& changes)
   {
-    return oracle_->checkPlaceWithOverlay(
-        fr::OracleRequest{100,
-                                plannerTarget(rowId, colId, targetMaster),
-                                snapshotRegion(rowId, colId),
-                                changes});
+    return oracle_->checkPlaceWithOverlay(fr::OracleRequest{
+        100, plannerTarget(scn), snapshotRegion(scn), changes});
   }
 
   bool inputUnchanged() const
@@ -1156,51 +1105,76 @@ class PlannerCheckerFixture
   std::unique_ptr<PortableCheckerOracle> oracle_;
 };
 
-void expectPlannerRepairsWithFinalChecker(RowId rowId,
-                                          ColId colId,
+// --- window probe -----------------------------------------------------------
+//
+// The repair window IS the search space: which fillers may be edited, and --
+// through its guard -- how much of the design the checker is asked about. Too
+// narrow and the only repair is out of reach; too wide and the search explodes
+// and the guard stops being the reach authority. So the cases below assert its
+// size, not just that a repair came out the far end.
+struct WindowProbe
+{
+  std::vector<fr::NormalizedViolation> normalized;
+  fr::DbCoord ruleDistance = 0;
+  fr::RepairWindow window;
+};
+
+WindowProbe probeWindow(PlannerCheckerFixture& fixture,
+                        const Scenario& scn,
+                        const std::vector<fr::Violation>& violations)
+{
+  WindowProbe probe;
+  const fr::DebugLog log(false);
+  const fr::FillerRepairRequest request{plannerTarget(scn), violations};
+  probe.normalized = fr::normalizeViolations(request, fixture.view(), log);
+  probe.ruleDistance = fr::estimateRuleDistance(violations, SITE_WIDTH);
+  probe.window = fr::buildWindow(0,
+                                 request.targetPlace,
+                                 probe.normalized,
+                                 fixture.view(),
+                                 probe.ruleDistance,
+                                 log);
+  return probe;
+}
+
+bool windowHasEditable(const fr::RepairWindow& window, fr::InstanceId id)
+{
+  return std::find(window.editableFillers.begin(),
+                   window.editableFillers.end(),
+                   id)
+         != window.editableFillers.end();
+}
+
+// The whole flow on one scenario: retarget the std cell, confirm the checker
+// rejects it, size the window, repair, and re-check with the real checker.
+void expectPlannerRepairsWithFinalChecker(const Scenario& scn,
                                           const DensityCase& density)
 {
   SCOPED_TRACE(densityTrace(density));
-  const ImplantInput immutableInput = input(density);
-  const std::vector<PlacedInst> before = immutableInput.placedInsts;
-  ImplantLayerCheckerHelper helper;
-  helper.initialize(immutableInput);
-  ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
-  helper.initChecker(checker);
-  ASSERT_TRUE(checker.getDiags().empty());
+  SCOPED_TRACE(scn.name);
+  PlannerCheckerFixture fixture(input(density));
+  ASSERT_TRUE(fixture.checkerDiagnostics().empty());
 
-  PortablePlacementView view(immutableInput);
-  PortableCheckerOracle oracle(view, checker);
-  const fr::TargetPlace target = plannerTarget(rowId, colId);
-  const fr::Region snapshot = snapshotRegion(rowId, colId);
-  fr::OracleRequest baselineRequest{0, target, snapshot, {}};
-  const fr::OracleResult baseline
-      = oracle.checkPlaceWithOverlay(baselineRequest);
+  const fr::OracleResult baseline = fixture.baseline(scn);
   ASSERT_EQ(baseline.status, fr::OracleStatus::Checked);
   ASSERT_FALSE(baseline.isLegal);
   ASSERT_FALSE(baseline.violations.empty());
 
-  fr::internal::RepairPlanner planner(view, oracle);
+  // The window has to reach the bridge filler, or no repair exists at all.
+  const WindowProbe probe = probeWindow(fixture, scn, baseline.violations);
+  EXPECT_TRUE(windowHasEditable(probe.window, bridgeInstance(scn)))
+      << "the L0 window does not reach the bridge filler";
+
   const fr::FillerRepairResult repaired
-      = planner.repair(fr::FillerRepairRequest{target, baseline.violations});
+      = fixture.repair(scn, baseline.violations);
   ASSERT_TRUE(repaired.hasSolution) << plannerDiagnostics(repaired);
   ASSERT_FALSE(repaired.changes.empty());
 
-  fr::OracleRequest verifyRequest{1, target, snapshot, repaired.changes};
-  const fr::OracleResult verified = oracle.checkPlaceWithOverlay(verifyRequest);
+  const fr::OracleResult verified = fixture.verify(scn, repaired.changes);
   EXPECT_EQ(verified.status, fr::OracleStatus::Checked);
   EXPECT_TRUE(verified.isLegal);
   EXPECT_TRUE(verified.violations.empty());
-
-  ASSERT_EQ(immutableInput.placedInsts.size(), before.size());
-  for (size_t index = 0; index < before.size(); ++index) {
-    EXPECT_EQ(immutableInput.placedInsts[index].instanceId,
-              before[index].instanceId);
-    EXPECT_EQ(immutableInput.placedInsts[index].masterId,
-              before[index].masterId);
-    EXPECT_EQ(immutableInput.placedInsts[index].rowId, before[index].rowId);
-    EXPECT_EQ(immutableInput.placedInsts[index].colId, before[index].colId);
-  }
+  EXPECT_TRUE(fixture.inputUnchanged());
 }
 
 class ImplantCheckerOverlayDensityTest
@@ -1253,166 +1227,118 @@ TEST_P(ImplantCheckerOverlayDensityTest,
   }
 }
 
-TEST_P(ImplantCheckerOverlayDensityTest, IntraRowWidth)
+// --- checker: what one VT change does, and what undoes it -------------------
+
+// The layout is built legal, so every violation below is produced by the
+// scenario edit and nothing else. Without this the cases could be passing on
+// a defect that was planted rather than caused.
+TEST_P(ImplantCheckerOverlayDensityTest, BuiltLayoutIsCleanBeforeAnyVtChange)
 {
-  const CheckRequest target = request(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
-  const std::vector<CheckResult> results
-      = check(target,
-              {{FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTRA_WIDTH_ROW, 11),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F1_FILL_MASTER)}},
-               {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTRA_WIDTH_ROW, 11),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F2_FILL_MASTER)}},
-               {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTRA_WIDTH_ROW, 11),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F1_FILL_MASTER)},
-                FillerCellRecord{OpType::Replace,
-                                 leafCellId(NEW_INTRA_WIDTH_ROW, 101),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F2_FILL_MASTER)}}},
-              GetParam());
-
-  ASSERT_EQ(results.size(), 3u);
-  EXPECT_TRUE(results[0].isLegal);
-  EXPECT_TRUE(results[0].violations.empty());
-
-  EXPECT_FALSE(results[1].isLegal);
-  EXPECT_TRUE(hasViolation(
-      results[1], F1_WIDTH_RULE, Relationship::IntraRow, {target.instanceId}));
-
-  EXPECT_FALSE(results[2].isLegal);
-  EXPECT_FALSE(hasViolation(
-      results[2], F1_WIDTH_RULE, Relationship::IntraRow, {target.instanceId}));
-  EXPECT_TRUE(hasViolation(results[2],
-                           F1_WIDTH_RULE,
-                           Relationship::IntraRow,
-                           {instId(NEW_INTRA_WIDTH_ROW, NEW_INTRA_WIDTH_COL)}));
-  expectOldUnrelatedFiltered(results[0]);
+  for (const Scenario& scn : SCENARIOS) {
+    SCOPED_TRACE(scn.name);
+    const MasterId built = cellMaster((scn.col / 2) % 3);
+    const std::vector<CheckResult> results
+        = check(request(scn.row, scn.col, built), {{}}, GetParam());
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_TRUE(results.front().isLegal);
+    EXPECT_TRUE(results.front().violations.empty());
+  }
 }
 
-TEST_P(ImplantCheckerOverlayDensityTest, InterRowWidth)
+// One realistic edit -- opto retargets a std cell to the VT of the pair on
+// its right -- and the checker reports min width AND min spacing, on the new
+// family's N band and on its P partner, intra-row and across a row boundary.
+TEST_P(ImplantCheckerOverlayDensityTest, VtChangeViolatesWidthAndSpacing)
 {
-  const CheckRequest target = request(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL);
-  const InstanceId neighbor = instId(INTER_WIDTH_NEIGHBOR_ROW, INTER_WIDTH_COL);
-  const std::vector<CheckResult> results
-      = check(target,
-              {{FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTER_WIDTH_NEIGHBOR_ROW, 31),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F1_FILL_MASTER)}},
-               {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTER_WIDTH_NEIGHBOR_ROW, 31),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F2_FILL_MASTER)}},
-               {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTER_WIDTH_NEIGHBOR_ROW, 31),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F1_FILL_MASTER)},
-                FillerCellRecord{
-                    OpType::Replace,
-                    leafCellId(NEW_INTER_WIDTH_BOTTOM_ROW, NEW_INTER_WIDTH_COL),
-                    UvDist(0),
-                    UvDist(0),
-                    LibCellID(),
-                    libCellId(F1_FILL_MASTER)}}},
-              GetParam());
+  for (const Scenario& scn : SCENARIOS) {
+    SCOPED_TRACE(scn.name);
+    const int family = familyOf(scn.newMaster);
+    const std::vector<CheckResult> results
+        = check(retargeted(scn), {{}}, GetParam());
+    ASSERT_EQ(results.size(), 1u);
+    const CheckResult& result = results.front();
+    EXPECT_FALSE(result.isLegal);
 
-  ASSERT_EQ(results.size(), 3u);
-  EXPECT_TRUE(results[0].isLegal);
-  EXPECT_TRUE(results[0].violations.empty());
-
-  EXPECT_FALSE(results[1].isLegal);
-  EXPECT_TRUE(hasViolation(results[1],
-                           F1_WIDTH_RULE,
-                           Relationship::InterRow,
-                           {target.instanceId, neighbor}));
-
-  EXPECT_FALSE(results[2].isLegal);
-  EXPECT_FALSE(hasViolation(results[2],
-                            F1_WIDTH_RULE,
-                            Relationship::InterRow,
-                            {target.instanceId, neighbor}));
-  EXPECT_TRUE(
-      hasViolation(results[2],
-                   interRule(F1_WIDTH_RULE, NEW_INTER_WIDTH_TOP_ROW),
-                   Relationship::InterRow,
-                   {instId(NEW_INTER_WIDTH_TOP_ROW, NEW_INTER_WIDTH_COL),
-                    instId(NEW_INTER_WIDTH_BOTTOM_ROW, NEW_INTER_WIDTH_COL)}));
-  expectOldUnrelatedFiltered(results[0]);
+    // The retargeted cell's own run is one site wide, on both bands.
+    EXPECT_TRUE(hasRuleViolation(result, widthRule(family),
+                                 Relationship::IntraRow));
+    EXPECT_TRUE(hasRuleViolation(result, widthRule(family) + P_RULE_OFFSET,
+                                 Relationship::IntraRow));
+    // And it sits one site from the run it was meant to join.
+    EXPECT_TRUE(hasRuleViolation(result, spacingRule(family),
+                                 Relationship::IntraRow));
+    EXPECT_TRUE(hasRuleViolation(result, spacingRule(family) + P_RULE_OFFSET,
+                                 Relationship::IntraRow));
+    // The same gap is seen across the row boundary, on whichever band faces
+    // it (interRule picks by boundary parity; both boundaries are checked).
+    EXPECT_TRUE(hasRuleViolation(result, spacingRule(family),
+                                 Relationship::InterRow)
+                || hasRuleViolation(result,
+                                    spacingRule(family) + P_RULE_OFFSET,
+                                    Relationship::InterRow));
+    // Every reported violation involves the instance opto asked about.
+    for (const Violation& violation : result.violations) {
+      EXPECT_NE(std::find(violation.instances.begin(),
+                          violation.instances.end(),
+                          instId(scn.row, scn.col)),
+                violation.instances.end());
+    }
+    expectOldUnrelatedFiltered(result);
+  }
 }
 
-TEST_P(ImplantCheckerOverlayDensityTest, IntraRowSpacing)
+// The repair, expressed as the checker sees it: recolour the one filler
+// between the two runs and they merge into a legal four-site run.
+TEST_P(ImplantCheckerOverlayDensityTest, BridgeFillerSwapClearsEveryViolation)
 {
-  const CheckRequest target = request(INTRA_SPACING_ROW, INTRA_SPACING_COL);
-  const InstanceId neighbor = instId(INTRA_SPACING_ROW, INTRA_SPACING_COL + 2);
-  const std::vector<CheckResult> results
-      = check(target,
-              {{FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTRA_SPACING_ROW, 51),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F1_FILL_MASTER)}},
-               {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTRA_SPACING_ROW, 51),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F2_FILL_MASTER)}},
-               {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTRA_SPACING_ROW, 51),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F1_FILL_MASTER)},
-                FillerCellRecord{OpType::Replace,
-                                 leafCellId(NEW_INTRA_SPACING_ROW, 143),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F1_FILL_MASTER)}}},
-              GetParam());
+  for (const Scenario& scn : SCENARIOS) {
+    SCOPED_TRACE(scn.name);
+    const std::vector<CheckResult> results
+        = check(retargeted(scn),
+                {bridgeSwap(scn, bridgeRepairMaster(scn))},
+                GetParam());
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_TRUE(results.front().isLegal);
+    EXPECT_TRUE(results.front().violations.empty());
+    expectOldUnrelatedFiltered(results.front());
+  }
+}
 
-  ASSERT_EQ(results.size(), 3u);
-  EXPECT_TRUE(results[0].isLegal);
-  EXPECT_TRUE(results[0].violations.empty());
+// A same-size swap on the right filler with the wrong VT: it looks like a
+// repair and fixes nothing, which is why acceptance is the checker's call.
+TEST_P(ImplantCheckerOverlayDensityTest, WrongVtOnTheBridgeLeavesTheViolation)
+{
+  for (const Scenario& scn : SCENARIOS) {
+    SCOPED_TRACE(scn.name);
+    const int family = familyOf(scn.newMaster);
+    const std::vector<CheckResult> results
+        = check(retargeted(scn),
+                {bridgeSwap(scn, bridgeWrongMaster(scn))},
+                GetParam());
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_FALSE(results.front().isLegal);
+    EXPECT_TRUE(hasRuleViolation(results.front(), widthRule(family),
+                                 Relationship::IntraRow));
+  }
+}
 
-  EXPECT_FALSE(results[1].isLegal);
-  EXPECT_TRUE(hasViolation(results[1],
-                           F1_SPACING_RULE,
-                           Relationship::IntraRow,
-                           {target.instanceId, neighbor}));
-
-  EXPECT_FALSE(results[2].isLegal);
-  EXPECT_FALSE(hasViolation(results[2],
-                            F1_SPACING_RULE,
-                            Relationship::IntraRow,
-                            {target.instanceId, neighbor}));
-  EXPECT_TRUE(
-      hasViolation(results[2],
-                   F1_SPACING_RULE,
-                   Relationship::IntraRow,
-                   {instId(NEW_INTRA_SPACING_ROW, NEW_INTRA_SPACING_COL),
-                    instId(NEW_INTRA_SPACING_ROW, NEW_INTRA_SPACING_COL + 4)}));
-  expectOldUnrelatedFiltered(results[0]);
+// Results correlate by input order, so one batch must answer each candidate
+// on its own merits -- a clean one and a useless one side by side.
+TEST_P(ImplantCheckerOverlayDensityTest, BatchResultsCorrelateByInputOrder)
+{
+  for (const Scenario& scn : SCENARIOS) {
+    SCOPED_TRACE(scn.name);
+    const std::vector<CheckResult> results
+        = check(retargeted(scn),
+                {{},
+                 bridgeSwap(scn, bridgeRepairMaster(scn)),
+                 bridgeSwap(scn, bridgeWrongMaster(scn))},
+                GetParam());
+    ASSERT_EQ(results.size(), 3u);
+    EXPECT_FALSE(results[0].isLegal);
+    EXPECT_TRUE(results[1].isLegal);
+    EXPECT_FALSE(results[2].isLegal);
+  }
 }
 
 TEST(ImplantCheckerOverlayTest,
@@ -1425,129 +1351,202 @@ TEST(ImplantCheckerOverlayTest,
   helper.initChecker(checker);
   ASSERT_TRUE(checker.getDiags().empty());
 
-  const CheckRequest target = request(INTRA_SPACING_ROW, INTRA_SPACING_COL);
-  // Guard spans the target's F1 runs (cols 48..53) on its own row. The
-  // checker builds its snapshot from the guard, so the guard must cover the
-  // pair under test; the changed filler is on a different row entirely --
+  const Scenario& scn = SCN_MID;
+  // A guard that spans the target's own runs on its own row and nothing else.
+  // The checker builds its snapshot from the guard, so the guard must cover
+  // the pair under test; the changed filler is on a different row entirely --
   // well outside the guard -- and must neither mask nor invent the target's
   // violation.
-  const Dbu targetY = INTRA_SPACING_ROW * ROW_HEIGHT;
-  const Rect scenarioGuard = makeRect(
-      48 * SITE_WIDTH, targetY, 54 * SITE_WIDTH, targetY + ROW_HEIGHT);
-  const FillerChanges unchangedOutsideGuard{
+  const Dbu targetY = scn.row * ROW_HEIGHT;
+  const Rect scenarioGuard = makeRect((scn.col - 4) * SITE_WIDTH,
+                                      targetY,
+                                      (scn.col + 4) * SITE_WIDTH,
+                                      targetY + ROW_HEIGHT);
+  const FillerChanges outsideGuard{
       FillerCellRecord{OpType::Replace,
-                       leafCellId(OLD_UNRELATED_ROW, 189),
+                       leafCellId(OLD_UNRELATED_ROW, OLD_UNRELATED_COL + 1),
                        UvDist(0),
                        UvDist(0),
                        LibCellID(),
                        libCellId(F3_FILL_MASTER)}};
   const std::vector<CheckResult> results = checker.checkPlaceWithOverlays(
-      target, scenarioGuard, {unchangedOutsideGuard});
+      retargeted(scn), scenarioGuard, {outsideGuard});
 
   ASSERT_EQ(results.size(), 1u);
   EXPECT_FALSE(results.front().isLegal);
-  EXPECT_TRUE(hasViolation(results.front(),
-                           F1_SPACING_RULE,
-                           Relationship::IntraRow,
-                           {target.instanceId,
-                            instId(INTRA_SPACING_ROW,
-                                   INTRA_SPACING_COL + 2)}));
+  EXPECT_TRUE(hasRuleViolation(results.front(),
+                               widthRule(familyOf(scn.newMaster)),
+                               Relationship::IntraRow));
 }
 
-TEST_P(ImplantCheckerOverlayDensityTest, InterRowSpacing)
+// --- repair window: how much the planner opens up ---------------------------
+
+// The L0 window is derived from the checker's own violation geometry, so it
+// has to land on the two runs and the filler between them -- and stop there.
+// A window that misses the bridge makes the repair unreachable; a window that
+// swallows the row makes the search exponential for nothing.
+TEST(FillerRepairWindowTest, L0WindowCoversTheViolationAndItsBridge)
 {
-  const CheckRequest target
-      = request(INTER_SPACING_TARGET_ROW, INTER_SPACING_COL);
-  const InstanceId neighbor
-      = instId(INTER_SPACING_NEIGHBOR_ROW, INTER_SPACING_COL + 2);
-  const std::vector<CheckResult> results
-      = check(target,
-              {{FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTER_SPACING_TARGET_ROW, 71),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F1_FILL_MASTER)}},
-               {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTER_SPACING_TARGET_ROW, 71),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F2_FILL_MASTER)}},
-               {FillerCellRecord{OpType::Replace,
-                                 leafCellId(INTER_SPACING_TARGET_ROW, 71),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F1_FILL_MASTER)},
-                FillerCellRecord{OpType::Replace,
-                                 leafCellId(NEW_INTER_SPACING_BOTTOM_ROW, 163),
-                                 UvDist(0),
-                                 UvDist(0),
-                                 LibCellID(),
-                                 libCellId(F1_FILL_MASTER)}}},
-              GetParam());
+  for (const Scenario& scn : SCENARIOS) {
+    SCOPED_TRACE(scn.name);
+    PlannerCheckerFixture fixture;
+    const fr::OracleResult baseline = fixture.baseline(scn);
+    ASSERT_FALSE(baseline.violations.empty());
+    const WindowProbe probe = probeWindow(fixture, scn, baseline.violations);
+    const fr::RepairWindow& window = probe.window;
 
-  ASSERT_EQ(results.size(), 3u);
-  EXPECT_TRUE(results[0].isLegal);
-  EXPECT_TRUE(results[0].violations.empty());
+    // Rows: the target's row plus the two it shares an inter-row violation
+    // with -- no more, even though the design has three on each side.
+    const std::vector<fr::RowId> expectedRows{
+        static_cast<fr::RowId>(scn.row - 1),
+        static_cast<fr::RowId>(scn.row),
+        static_cast<fr::RowId>(scn.row + 1)};
+    EXPECT_EQ(window.rows, expectedRows);
 
-  EXPECT_FALSE(results[1].isLegal);
-  EXPECT_TRUE(hasViolation(results[1],
-                           interRule(F1_SPACING_RULE, INTER_SPACING_TARGET_ROW),
-                           Relationship::InterRow,
-                           {target.instanceId, neighbor}));
+    // X: exactly five sites. The violation footprint is the retargeted cell
+    // plus the run it has to join (four sites from the target), snapped out to
+    // whole instances, which picks up the filler on the target's other side.
+    // Wider would make the subset search exponential for nothing; narrower
+    // would put the bridge out of reach.
+    EXPECT_EQ(probe.ruleDistance, MIN_RULE);
+    EXPECT_EQ(window.x.xl, (scn.col - 1) * SITE_WIDTH);
+    EXPECT_EQ(window.x.xh, (scn.col + 4) * SITE_WIDTH);
+    EXPECT_EQ(window.x.length(), 5 * SITE_WIDTH);
 
-  EXPECT_FALSE(results[2].isLegal);
-  EXPECT_FALSE(hasViolation(results[2],
-                            interRule(F1_SPACING_RULE, INTER_SPACING_TARGET_ROW),
-                            Relationship::InterRow,
-                            {target.instanceId, neighbor}));
-  EXPECT_TRUE(hasViolation(
-      results[2],
-      interRule(F1_SPACING_RULE, NEW_INTER_SPACING_TOP_ROW),
-      Relationship::InterRow,
-      {instId(NEW_INTER_SPACING_TOP_ROW, NEW_INTER_SPACING_COL),
-       instId(NEW_INTER_SPACING_BOTTOM_ROW, NEW_INTER_SPACING_COL + 4)}));
-  expectOldUnrelatedFiltered(results[0]);
+    // Three rows of five sites, of which the odd columns are fillers.
+    EXPECT_EQ(window.editableFillers.size(), 9u);
+    // The bridge filler is editable; the retargeted std cell is not.
+    EXPECT_TRUE(windowHasEditable(window, bridgeInstance(scn)));
+    EXPECT_FALSE(windowHasEditable(window, instId(scn.row, scn.col)));
+    // Every editable is a filler inside the window's own rows and x range.
+    for (fr::InstanceId id : window.editableFillers) {
+      const fr::PlacedInstance* placed = fixture.view().instance(id);
+      ASSERT_NE(placed, nullptr);
+      EXPECT_TRUE(placed->isFiller);
+      EXPECT_NE(std::find(window.rows.begin(), window.rows.end(), placed->rowId),
+                window.rows.end());
+      EXPECT_GE(placed->x, window.x.xl);
+      EXPECT_LT(placed->x, window.x.xh);
+    }
+  }
 }
 
-TEST_P(FillerRepairCheckerDensityE2ETest, RepairsIntraRowWidth)
+// The guard is what the checker is asked about, and the checker's own reach
+// (`getMaxRuleValue()` sites) is the one authority for how far a rule can
+// see. A guard narrower than the window truncates the snapshot and fabricates
+// min-width findings at its edge, so this pins containment plus reach.
+TEST(FillerRepairWindowTest, GuardContainsTheWindowAndTheCheckersRuleReach)
 {
-  const RowId rowId = INTRA_WIDTH_ROW;
-  const ColId colId = INTRA_WIDTH_COL;
-  ASSERT_EQ(instId(rowId, colId), instId(INTRA_WIDTH_ROW, INTRA_WIDTH_COL));
-  expectPlannerRepairsWithFinalChecker(rowId, colId, GetParam());
-  SUCCEED();
+  for (const Scenario& scn : SCENARIOS) {
+    SCOPED_TRACE(scn.name);
+    PlannerCheckerFixture fixture;
+    const fr::OracleResult baseline = fixture.baseline(scn);
+    ASSERT_FALSE(baseline.violations.empty());
+    const WindowProbe probe = probeWindow(fixture, scn, baseline.violations);
+    const fr::RepairWindow& window = probe.window;
+    const fr::Region area = window.area();
+    const fr::Region& guard = window.guardRegion;
+
+    EXPECT_LE(guard.x.xl, area.x.xl);
+    EXPECT_GE(guard.x.xh, area.x.xh);
+    EXPECT_LE(guard.rowLo, area.rowLo);
+    EXPECT_GE(guard.rowHi, area.rowHi);
+
+    // Quantized: each side is snapped outward to a power-of-two number of
+    // sites from the anchor (the target, which cannot move during a repair),
+    // clamped at the core edge. That is what lets neighbouring adaptive
+    // levels share one guard -- and one cached baseline.
+    const Dbu anchor = scn.col * SITE_WIDTH;
+    EXPECT_EQ(guard.x.xl, std::max<Dbu>(0, anchor - 4 * SITE_WIDTH));
+    EXPECT_EQ(guard.x.xh, anchor + 8 * SITE_WIDTH);
+    // Two rows of ring on each side of the window, clamped to the design.
+    EXPECT_EQ(guard.rowLo, std::max<RowId>(0, scn.row - 3));
+    EXPECT_EQ(guard.rowHi, std::min<RowId>(ROW_COUNT - 1, scn.row + 3));
+
+    // And it clears the checker's own reach on both sides, so the snapshot it
+    // builds is never truncated inside the window. `getMaxRuleValue()` is the
+    // single authority for that distance; nothing here re-derives it from raw
+    // width/spacing values.
+    const Dbu reach = fixture.checker().getMaxRuleValue() * SITE_WIDTH;
+    EXPECT_EQ(reach, MIN_RULE);
+    EXPECT_LE(guard.x.xl, area.x.xl - reach);
+    EXPECT_GE(guard.x.xh, area.x.xh + reach);
+    EXPECT_GE(guard.x.xl, 0);
+    EXPECT_LE(guard.x.xh, SITE_COUNT * SITE_WIDTH);
+  }
 }
 
-TEST_P(FillerRepairCheckerDensityE2ETest, RepairsInterRowWidth)
+// One adaptive step must actually buy something: strictly more editable
+// fillers, never fewer, and never a window that walks off the design.
+//
+// A step walks outward from each window edge while it finds fillers and stops
+// at the first std cell, so it can only grow where fillers actually sit next
+// to each other. That is the wide-rule layout, not the alternating one.
+TEST(FillerRepairWindowTest, AdaptiveStepGrowsTheEditableUniverse)
 {
-  const RowId rowId = INTER_WIDTH_TARGET_ROW;
-  const ColId colId = INTER_WIDTH_COL;
-  ASSERT_EQ(instId(rowId, colId),
-            instId(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL));
-  expectPlannerRepairsWithFinalChecker(rowId, colId, GetParam());
-  SUCCEED();
+  const Scenario& scn = SCN_WIDE_RULE;
+  PlannerCheckerFixture fixture(multiSwapWidthInput(2));
+  const fr::OracleResult baseline = fixture.baseline(scn);
+  ASSERT_FALSE(baseline.violations.empty());
+  const WindowProbe probe = probeWindow(fixture, scn, baseline.violations);
+  const fr::DebugLog log(false);
+  const fr::RepairWindow grown = fr::expandWindowAdaptive(probe.window,
+                                                          plannerTarget(scn),
+                                                          baseline.violations,
+                                                          fixture.view(),
+                                                          2,
+                                                          log);
+  EXPECT_GT(grown.editableFillers.size(), probe.window.editableFillers.size());
+  EXPECT_LE(grown.x.xl, probe.window.x.xl);
+  EXPECT_GE(grown.x.xh, probe.window.x.xh);
+  EXPECT_GE(grown.x.xl, 0);
+  EXPECT_LE(grown.x.xh, SITE_COUNT * SITE_WIDTH);
+  EXPECT_GE(grown.rows.front(), 0);
+  EXPECT_LT(grown.rows.back(), ROW_COUNT);
+  // The guard grows with it and still contains it.
+  EXPECT_LE(grown.guardRegion.x.xl, grown.area().x.xl);
+  EXPECT_GE(grown.guardRegion.x.xh, grown.area().x.xh);
 }
 
-TEST_P(FillerRepairCheckerDensityE2ETest, RepairsIntraRowSpacing)
+// --- planner -> real checker, end to end ------------------------------------
+
+TEST_P(FillerRepairCheckerDensityE2ETest, RepairsMidRowTarget)
 {
-  const RowId rowId = INTRA_SPACING_ROW;
-  const ColId colId = INTRA_SPACING_COL;
-  ASSERT_EQ(instId(rowId, colId), instId(INTRA_SPACING_ROW, INTRA_SPACING_COL));
-  expectPlannerRepairsWithFinalChecker(rowId, colId, GetParam());
-  SUCCEED();
+  expectPlannerRepairsWithFinalChecker(SCN_MID, GetParam());
 }
 
-TEST_P(FillerRepairCheckerDensityE2ETest, RepairsInterRowSpacing)
+TEST_P(FillerRepairCheckerDensityE2ETest, RepairsEvenRowTarget)
 {
-  const RowId rowId = INTER_SPACING_TARGET_ROW;
-  const ColId colId = INTER_SPACING_COL;
-  ASSERT_EQ(instId(rowId, colId),
-            instId(INTER_SPACING_TARGET_ROW, INTER_SPACING_COL));
-  expectPlannerRepairsWithFinalChecker(rowId, colId, GetParam());
-  SUCCEED();
+  expectPlannerRepairsWithFinalChecker(SCN_EVEN_ROW, GetParam());
+}
+
+TEST_P(FillerRepairCheckerDensityE2ETest, RepairsTargetNearTheLeftEdge)
+{
+  expectPlannerRepairsWithFinalChecker(SCN_LEFT_EDGE, GetParam());
+}
+
+TEST_P(FillerRepairCheckerDensityE2ETest, RepairsFarColumnTarget)
+{
+  expectPlannerRepairsWithFinalChecker(SCN_FAR, GetParam());
+}
+
+// The bridge is the natural repair, so the planner should reach for it. It is
+// not required to: acceptance is the checker's, and any checker-clean set is
+// a correct answer. What is required is that the answer stays minimal.
+TEST_P(FillerRepairCheckerDensityE2ETest, PrefersTheSingleBridgeSwap)
+{
+  PlannerCheckerFixture fixture(input(GetParam()));
+  const Scenario& scn = SCN_MID;
+  const fr::OracleResult baseline = fixture.baseline(scn);
+  ASSERT_FALSE(baseline.violations.empty());
+  const fr::FillerRepairResult result = fixture.repair(scn, baseline.violations);
+  ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
+  EXPECT_EQ(result.changes.size(), 1u);
+  ASSERT_FALSE(result.changes.empty());
+  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes.front()),
+            bridgeInstance(scn));
+  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes.front()),
+            bridgeRepairMaster(scn));
 }
 
 INSTANTIATE_TEST_SUITE_P(
@@ -1574,14 +1573,17 @@ TEST(FillerRepairCheckerE2ETest, CleanSnapshotReturnsEmptyRepair)
 {
   PlannerCheckerFixture fixture;
   ASSERT_TRUE(fixture.checkerDiagnostics().empty());
-  const fr::OracleResult clean = fixture.baseline(6, 20);
-  ASSERT_EQ(clean.status, fr::OracleStatus::Checked);
-  ASSERT_TRUE(clean.isLegal);
-  ASSERT_TRUE(clean.violations.empty());
+  // The same site, left on the VT it was built with: nothing to repair.
+  const Scenario clean{"unchanged", TARGET_ROW, 20,
+                       cellMaster((20 / 2) % 3), 21, 0};
+  const fr::OracleResult result = fixture.baseline(clean);
+  ASSERT_EQ(result.status, fr::OracleStatus::Checked);
+  ASSERT_TRUE(result.isLegal);
+  ASSERT_TRUE(result.violations.empty());
   const int beforeRequests = fixture.oracle().requestCount();
-  const fr::FillerRepairResult result = fixture.repair(6, 20, {});
-  EXPECT_TRUE(result.hasSolution);
-  EXPECT_TRUE(result.changes.empty());
+  const fr::FillerRepairResult repaired = fixture.repair(clean, {});
+  EXPECT_TRUE(repaired.hasSolution);
+  EXPECT_TRUE(repaired.changes.empty());
   EXPECT_EQ(fixture.oracle().requestCount(), beforeRequests);
   EXPECT_TRUE(fixture.inputUnchanged());
 }
@@ -1589,13 +1591,12 @@ TEST(FillerRepairCheckerE2ETest, CleanSnapshotReturnsEmptyRepair)
 TEST(FillerRepairCheckerE2ETest, RepeatedRepairIsDeterministic)
 {
   PlannerCheckerFixture fixture;
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const fr::OracleResult baseline = fixture.baseline(SCN_MID);
   ASSERT_FALSE(baseline.violations.empty());
   const fr::FillerRepairResult first
-      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations);
+      = fixture.repair(SCN_MID, baseline.violations);
   const fr::FillerRepairResult second
-      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations);
+      = fixture.repair(SCN_MID, baseline.violations);
   ASSERT_TRUE(first.hasSolution);
   ASSERT_TRUE(second.hasSolution);
   EXPECT_TRUE(sameChanges(first.changes, second.changes));
@@ -1605,18 +1606,15 @@ TEST(FillerRepairCheckerE2ETest, RepeatedRepairIsDeterministic)
 TEST(FillerRepairCheckerE2ETest, BatchSizeOneStillFindsSameRepair)
 {
   PlannerCheckerFixture fixture;
-  const fr::OracleResult baseline
-      = fixture.baseline(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL);
+  const fr::OracleResult baseline = fixture.baseline(SCN_FAR);
   ASSERT_FALSE(baseline.violations.empty());
   fr::RepairConfig config;
   config.batchSize = 1;
-  const fr::FillerRepairResult result = fixture.repair(
-      INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL, baseline.violations, config);
+  const fr::FillerRepairResult result
+      = fixture.repair(SCN_FAR, baseline.violations, config);
   ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
   ASSERT_FALSE(result.changes.empty());
-  const fr::OracleResult verified
-      = fixture.verify(INTER_WIDTH_TARGET_ROW, INTER_WIDTH_COL, result.changes);
-  EXPECT_TRUE(verified.isLegal);
+  EXPECT_TRUE(fixture.verify(SCN_FAR, result.changes).isLegal);
   EXPECT_GT(fixture.oracle().batchCount(), 1);
 }
 
@@ -1624,18 +1622,16 @@ TEST(FillerRepairCheckerE2ETest, BatchSizeDoesNotChangeChosenOverlay)
 {
   PlannerCheckerFixture smallBatch;
   PlannerCheckerFixture largeBatch;
-  const fr::OracleResult smallBaseline
-      = smallBatch.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
-  const fr::OracleResult largeBaseline
-      = largeBatch.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const fr::OracleResult smallBaseline = smallBatch.baseline(SCN_MID);
+  const fr::OracleResult largeBaseline = largeBatch.baseline(SCN_MID);
   fr::RepairConfig smallConfig;
   smallConfig.batchSize = 1;
   fr::RepairConfig largeConfig;
   largeConfig.batchSize = 64;
-  const fr::FillerRepairResult small = smallBatch.repair(
-      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, smallBaseline.violations, smallConfig);
-  const fr::FillerRepairResult large = largeBatch.repair(
-      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, largeBaseline.violations, largeConfig);
+  const fr::FillerRepairResult small
+      = smallBatch.repair(SCN_MID, smallBaseline.violations, smallConfig);
+  const fr::FillerRepairResult large
+      = largeBatch.repair(SCN_MID, largeBaseline.violations, largeConfig);
   ASSERT_TRUE(small.hasSolution);
   ASSERT_TRUE(large.hasSolution);
   EXPECT_TRUE(sameChanges(small.changes, large.changes));
@@ -1644,14 +1640,13 @@ TEST(FillerRepairCheckerE2ETest, BatchSizeDoesNotChangeChosenOverlay)
 TEST(FillerRepairCheckerE2ETest, EmptyCandidateUniverseFailsWithoutPartial)
 {
   PlannerCheckerFixture fixture(input(), std::vector<fr::MasterId>{});
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const fr::OracleResult baseline = fixture.baseline(SCN_MID);
   ASSERT_FALSE(baseline.violations.empty());
   fr::RepairConfig config;
   config.adaptiveStepFillers = 100;
   config.checkerCallBudgetPerWindow = 32;
-  const fr::FillerRepairResult result = fixture.repair(
-      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, config);
+  const fr::FillerRepairResult result
+      = fixture.repair(SCN_MID, baseline.violations, config);
   EXPECT_FALSE(result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   EXPECT_TRUE(hasPlannerDiagnostic(result, "NoSwapGenerated")
@@ -1659,27 +1654,25 @@ TEST(FillerRepairCheckerE2ETest, EmptyCandidateUniverseFailsWithoutPartial)
   EXPECT_TRUE(fixture.inputUnchanged());
 }
 
-TEST(FillerRepairCheckerE2ETest, ThirdVtOnlyCandidateRemainsReachable)
+// set_filler_option can leave exactly one VT family available. The repair for
+// SCN_MID happens to need that family, so it must still be reachable when it
+// is the only master offered.
+TEST(FillerRepairCheckerE2ETest, SingleAllowedFillerMasterRemainsReachable)
 {
-  PlannerCheckerFixture fixture(thirdVtTargetInput(),
-                                std::vector<fr::MasterId>{F3_FILL_MASTER});
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, C3_MASTER);
+  const MasterId only = bridgeRepairMaster(SCN_MID);
+  PlannerCheckerFixture fixture(input(), std::vector<fr::MasterId>{only});
+  const fr::OracleResult baseline = fixture.baseline(SCN_MID);
   ASSERT_FALSE(baseline.violations.empty());
-  const fr::FillerRepairResult result = fixture.repair(
-      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, {}, C3_MASTER);
-  ASSERT_TRUE(result.hasSolution);
+  const fr::FillerRepairResult result
+      = fixture.repair(SCN_MID, baseline.violations);
+  ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
   ASSERT_FALSE(result.changes.empty());
   EXPECT_TRUE(std::all_of(result.changes.begin(),
                           result.changes.end(),
-                          [](const dpl2::FillerCellRecord& change) {
-                            return fr::fillerRecordNewMasterId(change)
-                                   == F3_FILL_MASTER;
+                          [only](const dpl2::FillerCellRecord& change) {
+                            return fr::fillerRecordNewMasterId(change) == only;
                           }));
-  EXPECT_TRUE(
-      fixture
-          .verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes, C3_MASTER)
-          .isLegal);
+  EXPECT_TRUE(fixture.verify(SCN_MID, result.changes).isLegal);
 }
 
 // Pins what Violation::xWindow MEANS, per rule kind. The planner seeds its
@@ -1702,8 +1695,7 @@ TEST(FillerRepairCheckerE2ETest, ThirdVtOnlyCandidateRemainsReachable)
 TEST(FillerRepairCheckerE2ETest, SpacingViolationXWindowIsTheGap)
 {
   PlannerCheckerFixture fixture;
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_SPACING_ROW, INTRA_SPACING_COL);
+  const fr::OracleResult baseline = fixture.baseline(SCN_MID);
   ASSERT_FALSE(baseline.violations.empty());
 
   int spacingSeen = 0;
@@ -1736,11 +1728,33 @@ TEST(FillerRepairCheckerE2ETest, SpacingViolationXWindowIsTheGap)
   EXPECT_TRUE(spacingSeen > 0) << "fixture produced no spacing violation";
 }
 
+// Width windows are the runs themselves, so the retargeted cell's own
+// one-site run is exactly what the checker hands back.
+TEST(FillerRepairCheckerE2ETest, WidthViolationXWindowIsTheRun)
+{
+  PlannerCheckerFixture fixture;
+  const fr::OracleResult baseline = fixture.baseline(SCN_MID);
+  ASSERT_FALSE(baseline.violations.empty());
+
+  int widthSeen = 0;
+  for (const fr::Violation& violation : baseline.violations) {
+    if (violation.kind != fr::ViolationKind::MinWidth
+        || violation.relation != fr::ViolationRelation::IntraRow) {
+      continue;
+    }
+    ++widthSeen;
+    EXPECT_EQ(violation.xWindow.xl, SCN_MID.col * SITE_WIDTH);
+    EXPECT_EQ(violation.xWindow.xh, (SCN_MID.col + 1) * SITE_WIDTH);
+    EXPECT_EQ(violation.xWindow.length(), violation.measuredValue);
+    EXPECT_EQ(violation.requiredValue, MIN_RULE);
+  }
+  EXPECT_GT(widthSeen, 0) << "fixture produced no intra-row width violation";
+}
+
 TEST(FillerRepairCheckerE2ETest, OneCallBudgetReturnsNoPartialRepair)
 {
   PlannerCheckerFixture fixture;
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const fr::OracleResult baseline = fixture.baseline(SCN_MID);
   ASSERT_FALSE(baseline.violations.empty());
   fr::RepairConfig config;
   // The per-REPAIR ceiling is the one that starves the whole search: a
@@ -1751,51 +1765,59 @@ TEST(FillerRepairCheckerE2ETest, OneCallBudgetReturnsNoPartialRepair)
   config.checkerCallBudgetPerRepair = 1;
   config.batchSize = 1;
   config.adaptiveStepFillers = 100;
-  const fr::FillerRepairResult result = fixture.repair(
-      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, config);
+  const fr::FillerRepairResult result
+      = fixture.repair(SCN_MID, baseline.violations, config);
   EXPECT_FALSE(result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   EXPECT_TRUE(fixture.inputUnchanged());
 }
 
-// Adaptive levels reuse the guard (it is quantized, so it changes O(log)
-// times rather than once per level), and a repeated guard means the level's
-// baseline is answered from cache without spending budget. The budget then
-// buys candidate evaluations instead of re-buying an answer already held --
-// and whatever comes back is still a complete, checker-verified repair.
+// Adaptive levels reuse the guard -- it is quantized, so it changes O(log)
+// times over the whole escalation rather than once per level -- and a
+// repeated guard means that level's baseline is answered from cache without
+// spending budget. The budget then buys candidate evaluations instead of
+// re-buying an answer already held.
+//
+// One call per window makes that visible with nothing to hide behind: L0
+// spends its single call on the baseline and evaluates no candidate at all,
+// and the only way any candidate is ever evaluated is a later level whose
+// baseline cost nothing. Starving the search this hard is the point, so no
+// solution is expected -- `OneCallBudgetReturnsNoPartialRepair` above covers
+// what a starved search must NOT return.
 TEST(FillerRepairCheckerE2ETest, CachedBaselineFreesWindowBudget)
 {
-  PlannerCheckerFixture fixture;
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  // Needs a layout the window can actually escalate through, so that a later
+  // level gets the chance to reuse an already-answered guard.
+  const Scenario& scn = SCN_WIDE_RULE;
+  PlannerCheckerFixture fixture(multiSwapWidthInput(2));
+  const fr::OracleResult baseline = fixture.baseline(scn);
   ASSERT_FALSE(baseline.violations.empty());
+  const int beforeRequests = fixture.oracle().requestCount();
   fr::RepairConfig config;
   config.checkerCallBudgetPerWindow = 1;  // one call per window, refilled
   config.batchSize = 1;
   config.adaptiveStepFillers = 100;
-  const fr::FillerRepairResult result = fixture.repair(
-      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, config);
-  ASSERT_TRUE(result.hasSolution);
-  ASSERT_FALSE(result.changes.empty());
-  // Complete and independently legal, not a partial edit that happened to
-  // fit the budget.
-  EXPECT_TRUE(
-      fixture
-          .verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes, C1_MASTER)
-          .isLegal);
+  const fr::FillerRepairResult result
+      = fixture.repair(scn, baseline.violations, config);
+  EXPECT_FALSE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  // A candidate was evaluated, which a level paying for its own baseline
+  // could never afford at one call per window.
+  EXPECT_TRUE(hasPlannerDiagnostic(result, "BestOverlay"))
+      << "no candidate was evaluated: the baseline was re-bought every level"
+      << plannerDiagnostics(result);
+  EXPECT_GT(fixture.oracle().requestCount(), beforeRequests + 1);
   EXPECT_TRUE(fixture.inputUnchanged());
 }
 
 TEST(FillerRepairCheckerE2ETest, FabricatedOriginalFailsBaselineGate)
 {
   PlannerCheckerFixture fixture;
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const fr::OracleResult baseline = fixture.baseline(SCN_MID);
   ASSERT_FALSE(baseline.violations.empty());
   std::vector<fr::Violation> stale = baseline.violations;
   stale.front().ruleId += 10000;
-  const fr::FillerRepairResult result
-      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, stale);
+  const fr::FillerRepairResult result = fixture.repair(SCN_MID, stale);
   EXPECT_FALSE(result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   EXPECT_TRUE(hasPlannerDiagnostic(result, "BaselineMismatch"));
@@ -1804,13 +1826,11 @@ TEST(FillerRepairCheckerE2ETest, FabricatedOriginalFailsBaselineGate)
 TEST(FillerRepairCheckerE2ETest, DuplicateOriginalFailsOneToOneBaselineGate)
 {
   PlannerCheckerFixture fixture;
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  const fr::OracleResult baseline = fixture.baseline(SCN_MID);
   ASSERT_FALSE(baseline.violations.empty());
   std::vector<fr::Violation> duplicated = baseline.violations;
   duplicated.push_back(duplicated.front());
-  const fr::FillerRepairResult result
-      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, duplicated);
+  const fr::FillerRepairResult result = fixture.repair(SCN_MID, duplicated);
   EXPECT_FALSE(result.hasSolution);
   EXPECT_TRUE(result.changes.empty());
   EXPECT_TRUE(hasPlannerDiagnostic(result, "BaselineMismatch"));
@@ -1819,10 +1839,9 @@ TEST(FillerRepairCheckerE2ETest, DuplicateOriginalFailsOneToOneBaselineGate)
 TEST(FillerRepairCheckerE2ETest, ReturnedChangesTouchOnlySameSizeFillers)
 {
   PlannerCheckerFixture fixture;
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_SPACING_ROW, INTRA_SPACING_COL);
-  const fr::FillerRepairResult result = fixture.repair(
-      INTRA_SPACING_ROW, INTRA_SPACING_COL, baseline.violations);
+  const fr::OracleResult baseline = fixture.baseline(SCN_LEFT_EDGE);
+  const fr::FillerRepairResult result
+      = fixture.repair(SCN_LEFT_EDGE, baseline.violations);
   ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
   ASSERT_FALSE(result.changes.empty());
   for (const dpl2::FillerCellRecord& change : result.changes) {
@@ -1842,48 +1861,50 @@ TEST(FillerRepairCheckerE2ETest, ReturnedChangesTouchOnlySameSizeFillers)
   EXPECT_TRUE(fixture.inputUnchanged());
 }
 
-TEST(FillerRepairCheckerE2ETest, PlannerAvoidsKnownNewViolationSites)
+// Everything the planner touches lies in its own window: it never reaches
+// across the design to a filler that belongs to some other scenario.
+TEST(FillerRepairCheckerE2ETest, ChangesStayInsideTheRepairWindow)
 {
-  PlannerCheckerFixture fixture;
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
-  const fr::FillerRepairResult result
-      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations);
-  ASSERT_TRUE(result.hasSolution);
-  const std::array<InstanceId, 4> unrelatedSites{
-      instId(NEW_INTRA_WIDTH_ROW, 101),
-      instId(NEW_INTER_WIDTH_BOTTOM_ROW, NEW_INTER_WIDTH_COL),
-      instId(NEW_INTRA_SPACING_ROW, 143),
-      instId(NEW_INTER_SPACING_BOTTOM_ROW, 163)};
-  for (const dpl2::FillerCellRecord& change : result.changes) {
-    EXPECT_EQ(
-        std::find(
-            unrelatedSites.begin(),
-            unrelatedSites.end(),
-            fr::fillerRecordInstanceId(change)),
-        unrelatedSites.end());
+  for (const Scenario& scn : SCENARIOS) {
+    SCOPED_TRACE(scn.name);
+    PlannerCheckerFixture fixture;
+    const fr::OracleResult baseline = fixture.baseline(scn);
+    ASSERT_FALSE(baseline.violations.empty());
+    const fr::FillerRepairResult result
+        = fixture.repair(scn, baseline.violations);
+    ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
+    for (const dpl2::FillerCellRecord& change : result.changes) {
+      const fr::PlacedInstance* placed
+          = fixture.view().instance(fr::fillerRecordInstanceId(change));
+      ASSERT_NE(placed, nullptr);
+      EXPECT_LE(std::abs(placed->rowId - scn.row), 1);
+      EXPECT_LE(std::abs(placed->x - scn.col * SITE_WIDTH),
+                4 * MIN_RULE);
+    }
+    EXPECT_TRUE(fixture.verify(scn, result.changes).isLegal);
   }
-  EXPECT_TRUE(
-      fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes).isLegal);
 }
 
+// A minimum width of several sites cannot be met by one swap: the retargeted
+// cell has to grow its run through two adjacent fillers, and both have to be
+// in the answer or the answer is not legal.
 TEST(FillerRepairCheckerE2ETest, MinimumWidthCanRequireTwoAtomicSwaps)
 {
-  PlannerCheckerFixture fixture(multiSwapWidthInput(2),
-                                std::vector<fr::MasterId>{F1_FILL_MASTER});
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  PlannerCheckerFixture fixture(
+      multiSwapWidthInput(2),
+      std::vector<fr::MasterId>{bridgeRepairMaster(SCN_WIDE_RULE)});
+  const fr::OracleResult baseline = fixture.baseline(SCN_WIDE_RULE);
   ASSERT_FALSE(baseline.violations.empty());
   fr::RepairConfig config;
   config.checkerCallBudgetPerWindow = 4096;
   config.memberCapSize3 = 100;
   config.batchSize = 64;
-  const fr::FillerRepairResult result = fixture.repair(
-      INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations, config);
-  ASSERT_TRUE(result.hasSolution);
+  const fr::FillerRepairResult result
+      = fixture.repair(SCN_WIDE_RULE, baseline.violations, config);
+  ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
   EXPECT_EQ(result.changes.size(), 2u);
   const fr::OracleResult verified
-      = fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes);
+      = fixture.verify(SCN_WIDE_RULE, result.changes);
   EXPECT_TRUE(verified.isLegal);
   EXPECT_TRUE(verified.violations.empty());
 }
@@ -1891,29 +1912,38 @@ TEST(FillerRepairCheckerE2ETest, MinimumWidthCanRequireTwoAtomicSwaps)
 TEST(FillerRepairCheckerE2ETest,
      ThreeSwapSolutionSurvivesAdaptiveDirectionFallback)
 {
-  PlannerCheckerFixture fixture(multiSwapWidthInput(3),
-                                std::vector<fr::MasterId>{F1_FILL_MASTER});
-  const dpl2::ipl::FillerChanges expected{
-      fixture.view().fillerCellRecord(instId(INTRA_WIDTH_ROW, 9),
-                                      F1_FILL_MASTER),
-      fixture.view().fillerCellRecord(instId(INTRA_WIDTH_ROW, 11),
-                                      F1_FILL_MASTER),
-      fixture.view().fillerCellRecord(instId(INTRA_WIDTH_ROW, 12),
-                                      F1_FILL_MASTER)};
-  ASSERT_TRUE(
-      fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, expected).isLegal);
-  const fr::OracleResult baseline
-      = fixture.baseline(INTRA_WIDTH_ROW, INTRA_WIDTH_COL);
+  PlannerCheckerFixture fixture(
+      multiSwapWidthInput(3),
+      std::vector<fr::MasterId>{bridgeRepairMaster(SCN_WIDE_RULE)});
+  const fr::OracleResult baseline = fixture.baseline(SCN_WIDE_RULE);
   ASSERT_FALSE(baseline.violations.empty());
+  fr::RepairConfig config;
+  config.checkerCallBudgetPerWindow = 4096;
+  config.memberCapSize3 = 200;
+  config.batchSize = 64;
   const fr::FillerRepairResult result
-      = fixture.repair(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, baseline.violations);
-  ASSERT_TRUE(result.hasSolution);
-  EXPECT_TRUE(sameChanges(result.changes, expected));
-  EXPECT_TRUE(
-      fixture.verify(INTRA_WIDTH_ROW, INTRA_WIDTH_COL, result.changes).isLegal);
+      = fixture.repair(SCN_WIDE_RULE, baseline.violations, config);
+  ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
+  EXPECT_EQ(result.changes.size(), 3u);
+  // Contiguous with the retargeted cell: a run is only as wide as its
+  // uninterrupted sites, so a scattered triple could not have been accepted.
+  std::vector<ColId> columns{SCN_WIDE_RULE.col};
+  for (const dpl2::FillerCellRecord& change : result.changes) {
+    const fr::PlacedInstance* placed
+        = fixture.view().instance(fr::fillerRecordInstanceId(change));
+    ASSERT_NE(placed, nullptr);
+    EXPECT_EQ(placed->rowId, SCN_WIDE_RULE.row);
+    columns.push_back(static_cast<ColId>(placed->x / SITE_WIDTH));
+  }
+  std::sort(columns.begin(), columns.end());
+  EXPECT_EQ(columns.back() - columns.front(),
+            static_cast<ColId>(columns.size() - 1));
+  const fr::OracleResult verified
+      = fixture.verify(SCN_WIDE_RULE, result.changes);
+  EXPECT_TRUE(verified.isLegal);
+  EXPECT_TRUE(verified.violations.empty());
   EXPECT_TRUE(fixture.inputUnchanged());
 }
-
 
 }  // namespace
 }  // namespace ipl

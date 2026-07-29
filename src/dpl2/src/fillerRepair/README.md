@@ -1,6 +1,6 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-07-28.
+Updated: 2026-07-29.
 
 `ImplantLayerChecker::check()` is the caller-facing entry. Opto owns the
 `FillerCellRecord` vector; the checker appends checker-verified repair swaps
@@ -112,7 +112,7 @@ nothing else, which is what keeps it database-free and portable.
 | `CMakeLists.txt` | the module's own targets — `dpl2::fillerRepair` (payload, C++20) and `dpl2::fillerRepairPlanner` (pure pipeline, C++17); a destination adds the directory and links a target rather than listing sources |
 | `test/CMakeLists.txt` | the portable tests, added when `DPL2_FILLER_REPAIR_BUILD_TESTS=ON` |
 | `test/RepairPlannerTest.cpp` | 85 portable database-free planner cases; the two seam doubles and the synthetic master catalog are folded into this one file |
-| `test/FillerRepairCheckerE2ETest.cpp` | 61 portable real-checker and planner-to-checker cases (see the fixture model below) |
+| `test/FillerRepairCheckerE2ETest.cpp` | 75 portable real-checker, repair-window and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript
 
@@ -134,8 +134,28 @@ the flush alone was half the transcript's cost.
 
 ## Portable fixture model
 
-The portable checker fixtures encode four invariants of the current checker;
-breaking any of them silently changes what the cases test:
+The real-checker fixture is a 7-row x 200-site design that is **legal as
+built**: columns march in same-VT pairs (std cell, then filler, cycling the VT
+families), so every implant run is exactly min width and the next run of that
+family starts four sites later. Nothing is planted.
+
+Every case then does the one thing opto does — retarget a single std cell to a
+different VT — and lets the checker say what that costs. Giving the cell the VT
+of the pair on its right isolates it: its own run collapses to one site (min
+width) and it lands one site from the run it was meant to join (min spacing),
+on the new family's N band and its P partner, intra-row and across both row
+boundaries. Ten violations, all caused, none authored. The repair is the filler
+between the two runs; recolouring it merges them. Targets sit on interior rows
+so each case carries real context above and below — enough for the guard
+(window +/- two rows) and one adaptive step before it clamps.
+
+Because the layout is legal to begin with, a case that passes is evidence about
+the code rather than about the fixture, and the window assertions can pin exact
+sizes: five sites, three rows, nine editable fillers, and a guard quantized to
+a power-of-two number of sites either side of the anchor.
+
+The fixtures encode five invariants of the current checker; breaking any of
+them silently changes what the cases test:
 
 - **Rule and layer ids ARE indices** into `ImplantInput::rules` / `layers`.
   The checker resolves them as `rules_[id]` / `layers_[id]` (its own builders
@@ -188,12 +208,12 @@ Full migration instructions, including the destination checklist, are in
 
 ## Verification
 
-- portable planner: 85 cases; portable checker E2E: 61 cases (both compile,
+- portable planner: 85 cases; portable checker E2E: 75 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
 - repository-local fake-UDM engine regression: 74 cases under
   `src/dpl2/test/local/`.
-- 2026-07-28 full local suite: 220/220 normal and ASan; migration gate
-  146/146 normal and ASan; standalone module build 146/146.
+- 2026-07-29 full local suite: 234/234 normal and ASan; migration gate
+  160/160 normal and ASan; standalone module build 160/160.
 
 ### Search cost
 
