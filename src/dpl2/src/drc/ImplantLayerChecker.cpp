@@ -574,7 +574,7 @@ void ImplantLayerChecker::buildMasters()
         item.height = physCell->getHeight().getStorage();
         item.siteHeight = physCell->getTechSite()->getHeight().getStorage();
         item.masterId = mid;
-        item.isFiller = physCell->getType().isCoreFiller();
+        item.isFiller = nm->isFiller();
 
         // Check if this master has implant shapes
         bool hasImplant = false;
@@ -1641,7 +1641,8 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
                     makeMessage("unknown filler master ", newMasterId)});
                 continue;
             }
-            if (!masterItems_[newMasterId].isFiller) {
+            const Master* newMaster = network_->getMaster(newMasterId);
+            if (newMaster == nullptr || !newMaster->isFiller()) {
                 diagnostics.push_back({"replacement_master_not_filler",
                     makeMessage("replacement master is not filler ", newMasterId)});
             }

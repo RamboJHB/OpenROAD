@@ -5,6 +5,7 @@
 #include <dpl2/network.h>
 #include "util/performance.hh"
 
+#include <algorithm>
 #include <fstream>
 #include <iomanip>
 #include <memory>
@@ -183,6 +184,13 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
         std::unique_ptr<Master> master = std::make_unique<Master>();
         master->setId(i);
         master->setDbMaster(LibCellID(0, static_cast<int>(i)));
+        const bool isFiller = std::any_of(
+            input.placedInsts.begin(), input.placedInsts.end(),
+            [i](const PlacedInst& placed) {
+                return placed.masterId == static_cast<MasterId>(i)
+                       && placed.isFiller;
+            });
+        master->setFiller(isFiller);
         network_->addMaster(std::move(master));
     }
 

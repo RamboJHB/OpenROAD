@@ -105,6 +105,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
   Grid* grid_ = nullptr;
   Network* network_ = nullptr;
   eUNL::PhysDesMgr* des_mgr_ = nullptr;
+  const fillerSetting* filler_settings_ = nullptr;
   std::vector<const eLIB::PhysLibCell*> filler_masters_;
   std::unique_ptr<ipl::ImplantLayerChecker> checker_;
   Config config_;
@@ -219,10 +220,11 @@ std::string masterDebug(const eLIB::PhysLibCell& cell)
              ",endcap=", type.isEndcap(), "}");
 }
 
-bool isStandardCellMaster(const eLIB::PhysLibCell& cell)
+bool isStandardCellMaster(const eLIB::PhysLibCell& cell,
+                          const fillerSetting& filler_settings)
 {
   return cell.getType().isCore() && !cell.getType().isBlock()
-         && !isFillerMaster(cell);
+         && !filler_settings.isFiller(cell.getLibCellId());
 }
 
 ViolationKind toKind(ipl::RuleSource source)
@@ -1221,7 +1223,8 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   }
   const Node* targetNode = network_->getNode(targetId);
   if (targetNode == nullptr || !targetNode->isStdCell() || inst->isFiller
-      || !isStandardCellMaster(*newMaster)) {
+      || filler_settings_ == nullptr
+      || !isStandardCellMaster(*newMaster, *filler_settings_)) {
     addDiagnostic(Severity::Fatal,
                   "TargetNotStdCell",
                   "target and replacement master must both be standard cells");
@@ -1718,6 +1721,7 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
   // (DePlace::isLegal updates the Node before checkDRC). Nodes whose master
   // or physical record is unusable are simply skipped by buildPlannerData.
 
+  filler_settings_ = &fillerSettings;
   filler_masters_ = fillerSettings.getFillerPhysCells();
   size_t configuredIndex = 0;
   for (const eLIB::PhysLibCell* master : filler_masters_) {
@@ -1741,13 +1745,17 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
     }
     ++configuredIndex;
   }
+  // set_filler_option can populate the core list after DePlace imported the
+  // design. Refresh every already registered Master and its Node type before
+  // the private checker or PlacementView consumes filler identity.
+  network_->classifyFillers(fillerSettings);
   return init_diagnostics_.empty();
 }
 
 bool FillerRepairEngine::Impl::ensureMasterRegistered(
     const eLIB::PhysLibCell& master)
 {
-  if (network_ == nullptr || grid_ == nullptr) {
+  if (network_ == nullptr || grid_ == nullptr || filler_settings_ == nullptr) {
     return false;
   }
   if (network_->getMaster(master.getLibCellId()) != nullptr) {
@@ -1764,7 +1772,9 @@ bool FillerRepairEngine::Impl::ensureMasterRegistered(
   // DePlace has already registered the master WITH the real edge table before
   // check() runs, so a Master decorated by us never reaches placement DRC.
   static const EdgeTypeTable kNoEdgeTypes;
-  return network_->addMaster(master, grid_, &kNoEdgeTypes) != nullptr;
+  return network_->addMaster(
+             master, *filler_settings_, grid_, &kNoEdgeTypes)
+         != nullptr;
 }
 
 bool FillerRepairEngine::Impl::rebuildOracle()

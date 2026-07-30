@@ -140,22 +140,18 @@ bool Node::isFiller() const
 {
   return (type_ == FILLER);
 }
-// [fillerRepair-fix] see Objects.h: shares the one filler predicate.
 bool Master::isFiller() const
 {
-  return phys_lib_cell_ != nullptr && isFillerMaster(*phys_lib_cell_);
+  return is_filler_;
 }
-// [fillerRepair-fix] excludes fillers. PhysMacroType::isCore() is true for
-// CORE_FILLER, so this used to answer "yes, a standard cell" for every filler
-// in the design -- the opposite of the DePlace bug, and the same confusion:
-// "is a standard cell" is not "stands on a site". For the latter ask
-// !isTerminal().
+// PhysMacroType::isCore() can also be true for a configured filler. Use the
+// Node type inherited from Master instead of re-reading the UDM macro type.
 bool Node::isStdCell() const
 {
   if (master_ && master_->getPhysLibCell()) {
     const PhysLibCell& cell = *master_->getPhysLibCell();
     return (cell.getType().isCore() || cell.getType().isEndcap())
-           && !isFillerMaster(cell);
+           && !isFiller();
   }
   return false;
 }

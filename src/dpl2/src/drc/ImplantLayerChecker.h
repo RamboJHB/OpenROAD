@@ -171,6 +171,8 @@ struct MasterItem
     //(output of rebuildMasterShapes)
     std::vector<MasterShape> rawShapes;   // original raw shapes (preserved input)
     Dbu siteHeight = 0;               // site height from the master's site type
+    // Serialized portable-input metadata. Production overlay validation reads
+    // the live Network Master so late filler reclassification cannot go stale.
     bool isFiller = false;
     std::vector<MasterInterval> intervals;
 };

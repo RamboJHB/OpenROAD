@@ -21,6 +21,7 @@ DePlace::DePlace(PhysDesMgr* desMgr)
 {
   design_ = eUNL::Session::getSession().getCurrentDesign();
   padding_->setDesginManager(desMgr);
+  filler_setting_ = std::make_unique<fillerSetting>(design_);
 }
 
 DePlace::DePlace()
@@ -107,9 +108,10 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId, int diameter,
   const PhysLibCell& physLibCell =
     design_->getLibAcc().getPhysLibCell(libCell->getId());
 
+  network_->classifyFillers(*filler_setting_);
   Node* cell = this->network_->getNode(cellId);
   unplaceCell(cell);
-  this->network_->addMaster(physLibCell, this->grid_.get(),
+  this->network_->addMaster(physLibCell, *filler_setting_, this->grid_.get(),
       this->edge_type_table_.get());
   this->network_->updateNode(cell, desMgr_, physLibCell);
 
@@ -149,10 +151,11 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId, std::string moduleName)
   const PhysLibCell& physLibCell =
     design_->getLibAcc().getPhysLibCell(libCell->getId());
 
+  network_->classifyFillers(*filler_setting_);
   Node* cell = this->network_->getNode(cellId);
   unplaceCell(cell);
   this->network_->addMaster(physLibCell,
-      this->grid_.get(), this->edge_type_table_.get());
+      *filler_setting_, this->grid_.get(), this->edge_type_table_.get());
   this->network_->updateNode(cell, desMgr_, physLibCell);
 
   legalCellInRect(rect, cell);
@@ -183,13 +186,14 @@ bool DePlace::isLegal(LeafCellID cellId, LibCellID lcId,
   Rect rect = this->core_;
   const PhysLibCell& physLibCell = design_->getLibAcc().getPhysLibCell(lcId);
 
+  network_->classifyFillers(*filler_setting_);
   Node* cell = this->network_->getNode(cellId);
   LibCellID oriLcId = cell->getMaster()->getDbMaster();
   const PhysLibCell& oriLc = design_->getLibAcc().getPhysLibCell(oriLcId);
 
   // todo: not modify db for the legality check
   unplaceCell(cell);
-  this->network_->addMaster(physLibCell, this->grid_.get(),
+  this->network_->addMaster(physLibCell, *filler_setting_, this->grid_.get(),
       this->edge_type_table_.get());
   this->network_->updateNode(cell, desMgr_, physLibCell);
 
@@ -234,8 +238,7 @@ Rect DePlace::getCoreArea()
 // full; they have to be painted like anything else standing on a row.
 //
 // Asking isTerminal() rather than listing CELL and FILLER also keeps grid
-// occupancy independent of the filler/non-filler classification, which
-// Network::updateNode does not refresh after a master swap.
+// occupancy independent of filler/non-filler type refreshes.
 void DePlace::paintGridCell(Node* cell)
 {
   grid_->visitCellPixels(cell, false, [&](Pixel* pixel, bool padded) {

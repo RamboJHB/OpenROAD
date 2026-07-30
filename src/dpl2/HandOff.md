@@ -6,7 +6,9 @@ What this feature does: opto changes one standard cell's VT. The fillers around
 it still carry the old implant type, which is an MW/MS violation. This finds a
 set of same-size filler master swaps that removes the violation, validates them
 with the real `ImplantLayerChecker`, and hands the records back to opto to
-commit. It never mutates UDM, Network or Grid.
+commit. It never mutates UDM placement or Grid. During initialization it may
+register configured masters and synchronize Master/Node filler type metadata
+from `fillerSetting::core_`.
 
 ---
 
@@ -224,8 +226,8 @@ it.
 |---|---|
 | Portable planner tests | 85 |
 | Portable real-checker E2E | 75 |
-| Repository-local engine regression | 93 (fake UDM, not migrated) |
-| Full local suite | 253/253, normal and ASan |
+| Repository-local engine regression | 96 (fake UDM, not migrated) |
+| Full local suite | 256/256, normal and ASan |
 | Migration gate (destination code path) | 160/160, normal and ASan |
 | Standalone module build | 160/160 |
 

@@ -122,7 +122,10 @@ private:
 
     de_place_->unplaceCell(cell);
     de_place_->getNetwork()->addMaster(
-        newPhysCell, de_place_->getGrid(), de_place_->edge_type_table_.get());
+        newPhysCell,
+        *de_place_->getFillerSetting(),
+        de_place_->getGrid(),
+        de_place_->edge_type_table_.get());
     de_place_->getNetwork()->updateNode(cell, de_place_->getDesMgr(), newPhysCell);
     de_place_->placeCell(cell,
                          de_place_->getGrid()->gridX(cell),

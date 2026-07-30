@@ -74,12 +74,12 @@ engine performs no Network↔UDM cross-validation — with lazy init it typicall
 runs mid-check, while the candidate Node already carries its proposed master
 ahead of the pending UDM commit.
 
-**One filler authority.** `dpl2::isFillerMaster()` (infrastructure
-`Objects.h`) is the single predicate: `Network::addNode` classifies nodes with
-it, `Node::isFiller()` / `Master::isFiller()` report it, and fillerRepair asks
-those two rather than re-deriving anything from UDM macro flags.
-`fillerSetting` is a separate concept -- which filler masters may be *offered*
-as replacements -- and stays in the engine's `filler_master_ids_` allow list.
+**One filler authority.** `fillerSetting::isFiller(LibCellID)` answers whether
+a master belongs to the configured `core_` list. Infrastructure stores that
+answer on `Master`; `Node` inherits it whenever it is added, updated or
+refreshed. `Node::isFiller()` / `Master::isFiller()` are the only downstream
+queries, so no production path re-derives filler identity from UDM macro
+flags. The same core list is the replacement candidate allow-list.
 
 **Includes** use angle brackets throughout, resolved from the `src/` root
 (`<fillerRepair/RepairPlanner.h>`, `<infrastructure/Grid.h>`), matching the
@@ -210,9 +210,9 @@ Full migration instructions, including the destination checklist, are in
 
 - portable planner: 85 cases; portable checker E2E: 75 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
-- repository-local fake-UDM engine regression: 93 cases under
+- repository-local fake-UDM engine regression: 96 cases under
   `src/dpl2/test/local/`.
-- 2026-07-29 full local suite: 253/253 normal and ASan; migration gate
+- 2026-07-30 full local suite: 256/256 normal and ASan; migration gate
   160/160 normal and ASan; standalone module build 160/160.
 
 ### Search cost

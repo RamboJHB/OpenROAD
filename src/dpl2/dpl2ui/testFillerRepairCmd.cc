@@ -117,7 +117,7 @@ std::map<Footprint, std::vector<const eLIB::PhysLibCell*>> buildCandidateIndex(
       continue;
     }
     const eLIB::PhysLibCell* cell = master->getPhysLibCell();
-    if (cell == nullptr || isFillerMaster(*cell)) {
+    if (cell == nullptr || master->isFiller()) {
       continue;
     }
     index[footprintOf(*cell)].push_back(cell);
@@ -284,6 +284,9 @@ bool TestFillerRepairCmd::exec()
   }
   std::cout << "configured filler masters: "
             << setting->getFillerPhysCells().size() << "\n";
+  // set_filler_option can run after DePlace imported the design. Synchronize
+  // stored Master/Node types before this direct-checker command consumes them.
+  network->classifyFillers(*setting);
 
   const auto nameOf = [design](LibCellID lcId) -> std::string {
     return design->getLibAcc().getPhysLibCell(lcId).getLibCell().getName();
@@ -347,7 +350,8 @@ bool TestFillerRepairCmd::exec()
                 << " registered in Network (no placed instance uses it)\n";
       return false;
     }
-    if (isFillerMaster(*candidate)) {
+    Master* candidateMaster = network->getMaster(candidate->getLibCellId());
+    if (candidateMaster == nullptr || candidateMaster->isFiller()) {
       std::cout << "ERROR: replacement master is a filler; the target of a "
                    "repair is a standard cell\n";
       return false;

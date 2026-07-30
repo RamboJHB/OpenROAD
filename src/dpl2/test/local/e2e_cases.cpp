@@ -71,6 +71,7 @@ const dpl2::EdgeTypeTable& noEdgeTypes()
 bool syncInfrastructureNode(frt::E2ETestDesign& design,
                             dpl2::Grid* grid,
                             dpl2::Network* network,
+                            const dpl2::fillerSetting& fillerSetting,
                             frt::CellRole role)
 {
   if (grid == nullptr || network == nullptr || design.desMgr() == nullptr) {
@@ -83,7 +84,9 @@ bool syncInfrastructureNode(frt::E2ETestDesign& design,
     return false;
   }
   const eLIB::PhysLibCell& master = cell.getPhysMaster();
-  return network->addMaster(master, grid, &noEdgeTypes()) != nullptr
+  return network->addMaster(
+             master, fillerSetting, grid, &noEdgeTypes())
+             != nullptr
          && network->updateNode(node, design.desMgr(), master);
 }
 
@@ -168,6 +171,7 @@ class EngineHarness
     return syncInfrastructureNode(design(),
                                   objects_.infrastructure().grid(),
                                   objects_.infrastructure().network(),
+                                  *filler_setting_,
                                   role);
   }
   bool update()
@@ -229,6 +233,7 @@ class CheckerHarness
     return syncInfrastructureNode(design(),
                                   objects_.infrastructure().grid(),
                                   objects_.infrastructure().network(),
+                                  *filler_setting_,
                                   role);
   }
 
@@ -248,7 +253,9 @@ class CheckerHarness
     dpl2::Node* target = network->getNode(
         design().cell(frt::CellRole::Target));
     return target != nullptr
-           && network->addMaster(master, grid, &noEdgeTypes()) != nullptr
+           && network->addMaster(
+                  master, *filler_setting_, grid, &noEdgeTypes())
+                  != nullptr
            && network->updateNode(target, design().desMgr(), master);
   }
 
@@ -941,9 +948,74 @@ TEST(GridIsFullUtil, EmptyGridIsNotFull)
 }
 
 // --- filler classification --------------------------------------------------
-// One predicate answers "is this a filler", and everything that asks must get
-// the same answer for the same instance. These pin the three places that
-// disagreed.
+// fillerSetting::core_ is the only filler authority. Network stores that
+// answer on Master and Node; every downstream consumer reads those types.
+
+TEST(FillerClassification, CoreListOverridesUdmMacroFlags)
+{
+  frt::DesignSetup setup;
+  setup.misclassifiedFillerMasters = true;
+  ProviderObjects objects(setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+
+  dpl2::Node* filler = objects.infrastructure().network()->getNode(
+      objects.design().cell(frt::CellRole::TargetLeftFiller));
+  ASSERT_NE(filler, nullptr);
+  ASSERT_NE(filler->getMaster(), nullptr);
+  ASSERT_NE(filler->getMaster()->getPhysLibCell(), nullptr);
+
+  const eLIB::PhysMacroType& udmType
+      = filler->getMaster()->getPhysLibCell()->getType();
+  EXPECT_FALSE(udmType.isCoreFiller());
+  EXPECT_FALSE(udmType.isPadFiller());
+  EXPECT_TRUE(filler->getMaster()->isFiller());
+  EXPECT_TRUE(filler->isFiller());
+  EXPECT_FALSE(filler->isStdCell());
+}
+
+TEST(FillerClassification, LateCoreListRefreshesMasterAndNodeTypes)
+{
+  ProviderObjects objects(canonicalLayout().setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::Network* network = objects.infrastructure().network();
+  dpl2::Node* filler = network->getNode(
+      objects.design().cell(frt::CellRole::TargetLeftFiller));
+  ASSERT_NE(filler, nullptr);
+  ASSERT_NE(filler->getMaster(), nullptr);
+
+  dpl2::fillerSetting empty(objects.design().design());
+  EXPECT_FALSE(empty.isFiller(filler->getMaster()->getDbMaster()));
+  network->classifyFillers(empty);
+  EXPECT_FALSE(filler->getMaster()->isFiller());
+  EXPECT_FALSE(filler->isFiller());
+
+  dpl2::fillerSetting configured(objects.design().design());
+  configured.addFillerCell(kDefaultFillers);
+  EXPECT_TRUE(configured.isFiller(filler->getMaster()->getDbMaster()));
+  network->classifyFillers(configured);
+  EXPECT_TRUE(filler->getMaster()->isFiller());
+  EXPECT_TRUE(filler->isFiller());
+}
+
+TEST(FillerClassification, RepairUsesCoreListWhenUdmFlagsSayNonFiller)
+{
+  frt::DesignSetup setup;
+  setup.misclassifiedFillerMasters = true;
+  EngineHarness harness(setup);
+  ASSERT_TRUE(harness.engineReady());
+
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::Target),
+      harness.design().master(frt::MasterRole::TargetNew));
+  ASSERT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  ASSERT_EQ(outcome.changes.size(), 1U);
+  EXPECT_EQ(outcome.changes.front().new_lib_cell_,
+            harness.design()
+                .master(frt::MasterRole::RepairFiller)
+                .getLibCellId());
+}
 
 // PhysMacroType::isCore() is true for CORE_FILLER, so isStdCell() used to say
 // yes for every filler. "Is a standard cell" is not "stands on a site".
@@ -965,9 +1037,6 @@ TEST_P(FillerRepairEngineE2E, FillerIsNotAStandardCell)
   EXPECT_GT(stdCells, 0) << "isStdCell must not have swallowed everything";
 }
 
-// Node::isFiller() and Master::isFiller() must agree about one instance:
-// addNode classified with isCoreFiller() alone while Master::isFiller() is the
-// shared isCoreFiller() || isPadFiller().
 TEST_P(FillerRepairEngineE2E, NodeAndMasterAgreeOnFillerness)
 {
   ProviderObjects objects(GetParam().setup);
@@ -1006,7 +1075,7 @@ TEST_P(FillerRepairEngineE2E, UpdateNodeRefreshesFillerness)
     }
   }
   ASSERT_NE(fillerMaster, nullptr);
-  ASSERT_TRUE(dpl2::isFillerMaster(*fillerMaster));
+  ASSERT_TRUE(network->getMaster(fillerMaster->getLibCellId())->isFiller());
 
   ASSERT_TRUE(
       network->updateNode(target, objects.design().desMgr(), *fillerMaster));
@@ -1053,5 +1122,3 @@ INSTANTIATE_TEST_SUITE_P(
     [](const ::testing::TestParamInfo<LayoutCase>& info) {
       return info.param.name;
     });
-
-

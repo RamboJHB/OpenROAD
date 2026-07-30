@@ -14,6 +14,8 @@
 
 namespace dpl2 {
 
+class fillerSetting;
+
 class Network
 {
 public:
@@ -56,8 +58,12 @@ public:
   Master* getMaster(LibCellID db_master);
   // For creating masters.
   Master* addMaster(const PhysLibCell& db_master,
+                    const fillerSetting& filler_setting,
                     const Grid* grid,
                     const EdgeTypeTable* edge_types);
+  // Reclassify already imported masters and nodes after set_filler_option
+  // changes the core list.
+  void classifyFillers(const fillerSetting& filler_setting);
 
   void addNode(std::unique_ptr<Node> n) {
     inst_to_node_idx_[n->getDbInst()] = nodes_.size();

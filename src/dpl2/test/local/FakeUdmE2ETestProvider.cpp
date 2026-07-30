@@ -13,6 +13,7 @@
 #include "fake_udm.h"
 #include <infrastructure/Grid.h>
 #include <infrastructure/Padding.h>
+#include <infrastructure/fillerSetting.h>
 #include <infrastructure/network.h>
 
 namespace dpl2::fillerRepair::test {
@@ -290,6 +291,8 @@ class FakeInfrastructureFixture final : public E2ETestInfrastructure
     grid_.examineRows(desMgr);
     grid_.initGrid(desMgr, padding_, 100, 100);
     network_.setCore(core);
+    dpl2::fillerSetting filler_setting(fixture.design());
+    filler_setting.addFillerCell("FL2 FH2 FS2");
 
     std::map<eLIB::LibCellID, const eLIB::PhysLibCell*> placedMasters;
     for (const Placement& placement : kPlacements) {
@@ -309,7 +312,7 @@ class FakeInfrastructureFixture final : public E2ETestInfrastructure
     static const dpl2::EdgeTypeTable kNoEdgeTypes;
     for (const auto& [id, master] : placedMasters) {
       (void) id;
-      network_.addMaster(*master, &grid_, &kNoEdgeTypes);
+      network_.addMaster(*master, filler_setting, &grid_, &kNoEdgeTypes);
     }
     for (const Placement& placement : kPlacements) {
       const eUNL::LeafCellID id(0, placement.cellIndex);

@@ -85,7 +85,8 @@ bool Padding::isPaddedType(const PhysLibCell* master) const
 
 GridX Padding::padLeft(const Node* cell) const
 {
-    if (isPaddedType(cell->getMaster()->getPhysLibCell())) {
+    if (!cell->isFiller()
+        && isPaddedType(cell->getMaster()->getPhysLibCell())) {
         auto itr1 = inst_padding_map_.find(cell->getDbInst());
         if (itr1 != inst_padding_map_.end()) {
             return itr1->second.first;
@@ -101,7 +102,8 @@ GridX Padding::padLeft(const Node* cell) const
 
 GridX Padding::padRight(const Node* cell) const
 {
-    if (isPaddedType(cell->getMaster()->getPhysLibCell())) {
+    if (!cell->isFiller()
+        && isPaddedType(cell->getMaster()->getPhysLibCell())) {
         auto itr1 = inst_padding_map_.find(cell->getDbInst());
         if (itr1 != inst_padding_map_.end()) {
             return itr1->second.second;

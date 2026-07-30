@@ -6,6 +6,7 @@
 #include <infrastructure/Grid.h>
 #include <infrastructure/Objects.h>
 #include <infrastructure/architecture.h>
+#include <infrastructure/fillerSetting.h>
 
 namespace dpl2 {
 
@@ -162,13 +163,16 @@ Master* Network::getMaster(LibCellID db_master)
 }
 
 Master* Network::addMaster(const PhysLibCell& db_master,
+                           const fillerSetting& filler_setting,
                            const Grid* grid,
                            const EdgeTypeTable* edge_types)
 {
   LibCellID masterId = db_master.getLibCellId();
   const auto it = master_to_idx_.find(masterId);
   if (it != master_to_idx_.end()) {
-    return masters_[it->second].get();
+    Master* master = masters_[it->second].get();
+    master->setFiller(filler_setting.isFiller(masterId));
+    return master;
   }
   std::unique_ptr<Master> umaster = std::make_unique<Master>();
   Master* master = umaster.get();
@@ -178,6 +182,7 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   master->setId(id);
   master->setDbMaster(masterId);
   master->setPhysLibCell(&db_master);
+  master->setFiller(filler_setting.isFiller(masterId));
 
   Rect bbox(UvDist(0), UvDist(0), db_master.getWidth(), db_master.getHeight());
 
@@ -190,7 +195,7 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   if (!edge_types->hasTable()) {
     return master;
   }
-  if (db_master.getType().isCoreFiller()) {  // Skip fillcells
+  if (master->isFiller()) {
     return master;
   }
 
@@ -265,12 +270,7 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
   ndi.setId(id);
   ndi.setDbInst(cellId);
   auto master = getMaster(inst.getPhysMaster().getLibCellId());
-  auto lc = master->getPhysLibCell();
-  // [fillerRepair-fix] was isCoreFiller() alone, so a PAD_FILLER node came out
-  // as Node::CELL while Master::isFiller() called it a filler. Route through
-  // the one shared predicate so Node::isFiller() and Master::isFiller() cannot
-  // disagree about the same instance.
-  ndi.setType(isFillerMaster(*lc) ? Node::FILLER : Node::CELL);
+  ndi.setType(master->isFiller() ? Node::FILLER : Node::CELL);
   ndi.setMaster(master);
   ndi.setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi.setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
@@ -307,14 +307,7 @@ bool Network::updateNode(Node* ndi,
     return false;
   }
   ndi->setMaster(master);
-  // [fillerRepair-fix] the type was the one field this refreshed nothing for,
-  // so a swap that changes filler-ness left Node::isFiller() answering about
-  // the previous master. ImplantLayerChecker::checkOverlap uses it to decide
-  // whether an occupant is an excludable filler or a hard
-  // placement_overlap_in_input, and validateOverlayRequest uses it to accept a
-  // changed instance at all -- both now reachable, since the grid actually
-  // carries filler occupants.
-  ndi->setType(isFillerMaster(physLibCell) ? Node::FILLER : Node::CELL);
+  ndi->setType(master->isFiller() ? Node::FILLER : Node::CELL);
   ndi->setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi->setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
 
@@ -337,6 +330,23 @@ bool Network::updateNode(Node* ndi,
   ndi->setBottomPower(master->getBottomPowerType());
   ndi->setTopPower(master->getTopPowerType());
   return true;
+}
+
+void Network::classifyFillers(const fillerSetting& filler_setting)
+{
+  for (const auto& master : masters_) {
+    if (master != nullptr) {
+      master->setFiller(filler_setting.isFiller(master->getDbMaster()));
+    }
+  }
+  for (const auto& node : nodes_) {
+    if (node != nullptr && node->getMaster() != nullptr
+        && (node->getType() == Node::CELL
+            || node->getType() == Node::FILLER)) {
+      node->setType(node->getMaster()->isFiller() ? Node::FILLER
+                                                 : Node::CELL);
+    }
+  }
 }
 
 }  // namespace dpl2

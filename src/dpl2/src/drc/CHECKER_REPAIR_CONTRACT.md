@@ -120,11 +120,12 @@ unaffected.
 
 ### `infrastructure/Objects.h`
 
-**One filler authority**: `dpl2::isFillerMaster(const PhysLibCell&)`.
-`Network::addNode` classifies nodes with it, `Node::isFiller()` and
-`Master::isFiller()` report it. fillerRepair asks those rather than
-re-deriving anything from UDM macro flags. `fillerSetting` stays a separate
-concept — which filler masters may be *offered* as replacements.
+**One filler authority**: `fillerSetting::isFiller(LibCellID)`, which checks
+membership in its configured `core_` list. `Network::addMaster` stores that
+answer on `Master`; `addNode` and `updateNode` inherit the Master type, and
+`classifyFillers` refreshes already imported objects when `set_filler_option`
+runs later. `Node::isFiller()` and `Master::isFiller()` are the only
+downstream queries. UDM macro filler flags are not classification inputs.
 
 ### `infrastructure/Grid.h` / `.cpp`
 
@@ -160,13 +161,13 @@ holes.
 Both loops now share one `paintGridCell(Node*)` and select with
 `!cell->isTerminal()` — "does this node stand on sites", not "is it a standard
 cell". Asking that rather than listing `CELL || FILLER` also keeps grid
-occupancy independent of the filler/non-filler classification, which
-`updateNode` does not refresh after a master swap (open item below).
+occupancy independent of filler/non-filler type refreshes.
 
 ### `infrastructure/network.cpp`, `Object.cpp`
 
-`Object.cpp` routes `Master::isFiller()` through the shared predicate above,
-and **`Node::isStdCell()` now excludes fillers**. `PhysMacroType::isCore()` is
+`Object.cpp` returns the filler type stored on `Master`, and
+**`Node::isStdCell()` now excludes fillers through `Node::isFiller()`**.
+`PhysMacroType::isCore()` is
 true for `CORE_FILLER`, so it used to answer "yes, a standard cell" for every
 filler in the design — the mirror image of the `DePlace` bug and the same
 confusion: *is a standard cell* is not *stands on a site*. Ask `!isTerminal()`
@@ -175,9 +176,9 @@ other callers.
 
 `network.cpp`, three fixes beyond the orientation one below:
 
-- **`addNode` classifies with `isFillerMaster()`**, not `isCoreFiller()` alone.
-  A `PAD_FILLER` node came out as `Node::CELL` while `Master::isFiller()`
-  called it a filler, so the two disagreed about one instance.
+- **`addMaster` classifies only with `fillerSetting::isFiller()`**.
+  `addNode` inherits the stored Master type, and `classifyFillers()` updates
+  existing Master/Node types after a late core-list change.
 - **`updateNode` sets the type.** It refreshed master, size, orientation and
   status but never the type, so a swap that changes filler-ness left
   `Node::isFiller()` answering about the previous master.
@@ -291,7 +292,7 @@ partial repair; it never reinterprets or bypasses checker legality.
 85 portable planner cases and 75 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
 gate (160/160, normal and ASan). Repository-local fake-UDM engine regression:
-93 cases. Full local suite 253/253, normal and ASan.
+96 cases. Full local suite 256/256, normal and ASan.
 
 The fixture invariants the real-checker cases depend on — rule and layer ids as
 container indices, the band-polarity model, the `maxRuleValue_`-sized snapshot
