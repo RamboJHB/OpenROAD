@@ -294,9 +294,9 @@ class FillerRepairEngineE2E
 {
 };
 
-// Stand-in for the provider DePlace registers. The pointer it returns is
-// swapped mid-test to model set_filler_option running after the first
-// failing check.
+// Stand-in for the provider DePlace registers. The fail-closed test changes
+// this after an invalid first check to prove that a contract violation cannot
+// silently change behaviour later.
 const dpl2::fillerSetting* g_providedSetting = nullptr;
 const dpl2::fillerSetting* provideTestSetting()
 {
@@ -826,11 +826,10 @@ TEST_P(FillerRepairEngineE2E, InitBindsRequestedDesignNotSessionCurrent)
   EXPECT_FALSE(hasDiagnostic(repair.diagnostics, "active_design_mismatch"));
 }
 
-// Lazy init means the first failing check can arrive before
-// set_filler_option has run. That is "not configured yet", not a failure:
-// latching it would silently disable repair for the rest of the run even
-// after the configuration shows up.
-TEST_P(FillerRepairEngineE2E, UnconfiguredRepairRetriesOnceConfigured)
+// set_filler_option must precede checker and repair initialization. Missing
+// configuration is an integration error and disables repair for this checker
+// until an explicit setFillerRepairContext() reset.
+TEST_P(FillerRepairEngineE2E, MissingConfigurationFailsClosed)
 {
   CheckerHarness harness(GetParam().setup, /*presetContext=*/false);
   ASSERT_TRUE(harness.checkerReady());
@@ -839,15 +838,14 @@ TEST_P(FillerRepairEngineE2E, UnconfiguredRepairRetriesOnceConfigured)
       provideTestSetting);
   ASSERT_TRUE(harness.setTargetMaster(frt::MasterRole::TargetNew));
 
-  // No setting yet: the check fails and no repair is attempted.
+  // No setting: the check fails closed and no repair is attempted.
   EXPECT_FALSE(harness.checkTarget());
   EXPECT_TRUE(harness.fillerChanges().empty());
 
-  // set_filler_option lands; the very next failing check must build the
-  // engine and repair.
+  // A setting appearing later cannot implicitly revive this checker.
   g_providedSetting = harness.fillerSetting();
-  EXPECT_TRUE(harness.checkTarget());
-  EXPECT_EQ(harness.fillerChanges().size(), 1U);
+  EXPECT_FALSE(harness.checkTarget());
+  EXPECT_TRUE(harness.fillerChanges().empty());
 
   dpl2::ipl::ImplantLayerChecker::setFillerRepairSettingProvider(nullptr);
   g_providedSetting = nullptr;
@@ -972,31 +970,6 @@ TEST(FillerClassification, CoreListOverridesUdmMacroFlags)
   EXPECT_TRUE(filler->getMaster()->isFiller());
   EXPECT_TRUE(filler->isFiller());
   EXPECT_FALSE(filler->isStdCell());
-}
-
-TEST(FillerClassification, LateCoreListRefreshesMasterAndNodeTypes)
-{
-  ProviderObjects objects(canonicalLayout().setup);
-  ASSERT_TRUE(objects.hasDesign());
-  ASSERT_TRUE(objects.hasInfrastructure());
-  dpl2::Network* network = objects.infrastructure().network();
-  dpl2::Node* filler = network->getNode(
-      objects.design().cell(frt::CellRole::TargetLeftFiller));
-  ASSERT_NE(filler, nullptr);
-  ASSERT_NE(filler->getMaster(), nullptr);
-
-  dpl2::fillerSetting empty(objects.design().design());
-  EXPECT_FALSE(empty.isFiller(filler->getMaster()->getDbMaster()));
-  network->classifyFillers(empty);
-  EXPECT_FALSE(filler->getMaster()->isFiller());
-  EXPECT_FALSE(filler->isFiller());
-
-  dpl2::fillerSetting configured(objects.design().design());
-  configured.addFillerCell(kDefaultFillers);
-  EXPECT_TRUE(configured.isFiller(filler->getMaster()->getDbMaster()));
-  network->classifyFillers(configured);
-  EXPECT_TRUE(filler->getMaster()->isFiller());
-  EXPECT_TRUE(filler->isFiller());
 }
 
 TEST(FillerClassification, RepairUsesCoreListWhenUdmFlagsSayNonFiller)

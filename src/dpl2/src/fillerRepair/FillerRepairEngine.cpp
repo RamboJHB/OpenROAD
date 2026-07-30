@@ -1745,10 +1745,6 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
     }
     ++configuredIndex;
   }
-  // set_filler_option can populate the core list after DePlace imported the
-  // design. Refresh every already registered Master and its Node type before
-  // the private checker or PlacementView consumes filler identity.
-  network_->classifyFillers(fillerSettings);
   return init_diagnostics_.empty();
 }
 

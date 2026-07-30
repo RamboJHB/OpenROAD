@@ -22,7 +22,7 @@ Swap-only repair, complete and migration-ready.
 | Engine | `FillerRepairEngine` implements both seams (`PlacementView`, `RepairOracle`), owns a private oracle checker, borrows Grid/Network |
 | Checker | repair wiring in `check()` writes into the caller's `fcRecord`; engine built lazily on first failing check |
 | Build | `fillerRepair/CMakeLists.txt` owns `dpl2::fillerRepair` (C++20) and `dpl2::fillerRepairPlanner` (C++17); externals arrive through the single `dpl2_filler_repair_deps` interface target |
-| Tests | 85 portable planner + 75 portable real-checker + 96 local fake-UDM engine cases; 256/256 local and 160/160 migration gate, normal and ASan |
+| Tests | 85 portable planner + 75 portable real-checker + 95 local fake-UDM engine cases; 255/255 local and 160/160 migration gate, normal and ASan |
 
 ## Fixed decisions
 
@@ -34,7 +34,7 @@ Swap-only repair, complete and migration-ready.
    `std::vector<FillerCellRecord>`; the checker keeps no member state, and
    commit belongs to opto/infrastructure. Repair never mutates UDM.
 4. **`fillerSetting::core_` is the only filler authority.**
-   `fillerSetting::isFiller(LibCellID)` classifies imported/refreshed Masters;
+   `fillerSetting::isFiller(LibCellID)` classifies registered Masters;
    Nodes inherit that stored Master type. Candidates come from the same list.
    No production path re-derives filler identity from UDM macro flags.
 5. **Trust infrastructure.** RowId is the Grid row, x is core-left-relative.

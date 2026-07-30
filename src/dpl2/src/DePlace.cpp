@@ -108,7 +108,6 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId, int diameter,
   const PhysLibCell& physLibCell =
     design_->getLibAcc().getPhysLibCell(libCell->getId());
 
-  network_->classifyFillers(*filler_setting_);
   Node* cell = this->network_->getNode(cellId);
   unplaceCell(cell);
   this->network_->addMaster(physLibCell, *filler_setting_, this->grid_.get(),
@@ -151,7 +150,6 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId, std::string moduleName)
   const PhysLibCell& physLibCell =
     design_->getLibAcc().getPhysLibCell(libCell->getId());
 
-  network_->classifyFillers(*filler_setting_);
   Node* cell = this->network_->getNode(cellId);
   unplaceCell(cell);
   this->network_->addMaster(physLibCell,
@@ -186,7 +184,6 @@ bool DePlace::isLegal(LeafCellID cellId, LibCellID lcId,
   Rect rect = this->core_;
   const PhysLibCell& physLibCell = design_->getLibAcc().getPhysLibCell(lcId);
 
-  network_->classifyFillers(*filler_setting_);
   Node* cell = this->network_->getNode(cellId);
   LibCellID oriLcId = cell->getMaster()->getDbMaster();
   const PhysLibCell& oriLc = design_->getLibAcc().getPhysLibCell(oriLcId);

@@ -284,9 +284,6 @@ bool TestFillerRepairCmd::exec()
   }
   std::cout << "configured filler masters: "
             << setting->getFillerPhysCells().size() << "\n";
-  // set_filler_option can run after DePlace imported the design. Synchronize
-  // stored Master/Node types before this direct-checker command consumes them.
-  network->classifyFillers(*setting);
 
   const auto nameOf = [design](LibCellID lcId) -> std::string {
     return design->getLibAcc().getPhysLibCell(lcId).getLibCell().getName();

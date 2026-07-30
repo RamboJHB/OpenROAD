@@ -788,7 +788,6 @@ void ImplantLayerChecker::setFillerRepairContext(PhysDesMgr* desMgr,
     repairSetting_ = setting;
     repairEngine_.reset();
     repairEngineFailed_ = false;
-    repairUnconfiguredReported_ = false;
 }
 
 namespace {
@@ -815,19 +814,14 @@ bool ImplantLayerChecker::repairFillers(const CheckRequest& request,
             : (g_fillerSettingProvider != nullptr ? g_fillerSettingProvider()
                                                   : nullptr);
         if (setting == nullptr || desMgr_ == nullptr) {
-            // NOT a permanent failure: with lazy init this can simply mean
-            // set_filler_option has not run yet at this point in the flow.
-            // Latching the failure flag here would silently skip repair for
-            // the rest of the run even once the configuration arrives, so we
-            // report once and retry on the next failing check (re-reading the
-            // provider costs a pointer call).
-            if (!repairUnconfiguredReported_) {
-                repairUnconfiguredReported_ = true;
-                fillerRepair::reportRepairUnavailable(desMgr_ == nullptr
-                    ? "no PhysDesMgr (checker init has not run)"
-                    : "no fillerSetting (set_filler_option has not run and no"
-                      " setting provider is registered); will retry");
-            }
+            // set_filler_option and checker initialization are required to
+            // precede repair. Missing either context is an integration error,
+            // so fail closed instead of changing behaviour on a later check.
+            repairEngineFailed_ = true;
+            fillerRepair::reportRepairUnavailable(desMgr_ == nullptr
+                ? "no PhysDesMgr; filler repair is disabled for this checker"
+                : "no fillerSetting; set_filler_option must run before checker"
+                  " and repair initialization");
             return false;
         }
         auto engine = std::make_unique<fillerRepair::FillerRepairEngine>(
@@ -841,7 +835,6 @@ bool ImplantLayerChecker::repairFillers(const CheckRequest& request,
                 " this checker (use setFillerRepairContext to reset)");
             return false;
         }
-        repairUnconfiguredReported_ = false;
         repairEngine_ = std::move(engine);
     }
     fillerRepair::RepairOutcome outcome = repairEngine_->repair(request);

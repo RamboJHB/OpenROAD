@@ -332,21 +332,4 @@ bool Network::updateNode(Node* ndi,
   return true;
 }
 
-void Network::classifyFillers(const fillerSetting& filler_setting)
-{
-  for (const auto& master : masters_) {
-    if (master != nullptr) {
-      master->setFiller(filler_setting.isFiller(master->getDbMaster()));
-    }
-  }
-  for (const auto& node : nodes_) {
-    if (node != nullptr && node->getMaster() != nullptr
-        && (node->getType() == Node::CELL
-            || node->getType() == Node::FILLER)) {
-      node->setType(node->getMaster()->isFiller() ? Node::FILLER
-                                                 : Node::CELL);
-    }
-  }
-}
-
 }  // namespace dpl2

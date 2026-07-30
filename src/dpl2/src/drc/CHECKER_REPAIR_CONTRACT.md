@@ -45,7 +45,7 @@ order**; result count must equal candidate count. A missing or extra result
 invalidates the whole batch — no finding from a mis-correlated batch is
 consumed.
 
-### Lazy engine, and the two failure kinds
+### Lazy engine and initialization failures
 
 The engine is created on the first failing check. Context comes from the
 checker's own `init()` (`PhysDesMgr`) plus either
@@ -53,10 +53,12 @@ checker's own `init()` (`PhysDesMgr`) plus either
 `setFillerRepairSettingProvider()` (production — dependency inversion, so the
 checker never names `DePlace`).
 
-| | Meaning | Behaviour |
-|---|---|---|
-| **Not configured yet** | no `fillerSetting` / no `PhysDesMgr` | **Retryable.** With lazy init the first failing check can legitimately precede `set_filler_option`. One `[fr]` notice, then the next failing check tries again. Latching this would silently disable repair for the rest of the run once configuration did arrive. |
-| **Structural init failure** | `FillerRepairEngine::init()` returned false | **Permanent** for that checker, until `setFillerRepairContext()` sets a new context. Retrying would fail identically. |
+`set_filler_option` and checker initialization both precede repair. Missing
+`fillerSetting` or `PhysDesMgr` is therefore an integration error, not a
+retryable state. Missing context and structural
+`FillerRepairEngine::init()` failures both disable repair for that checker.
+`setFillerRepairContext()` is the explicit reset path used by harnesses and
+integrations that replace the context.
 
 ### IDs and wire
 
@@ -88,9 +90,8 @@ approved sequence from each result. A count-based single-prefix strip is wrong.
 1. **Repair wiring in `check()`** — the reserved block now calls the owned
    engine with the exact `CheckRequest` that method already built, and appends
    into the caller's `fcRecord`. Members added: `desMgr_`, `repairSetting_`,
-   `repairEngine_`, `repairEngineFailed_`, `repairUnconfiguredReported_`, plus
-   `setFillerRepairContext()` and the static
-   `setFillerRepairSettingProvider()`.
+   `repairEngine_`, `repairEngineFailed_`, plus `setFillerRepairContext()` and
+   the static `setFillerRepairSettingProvider()`.
 
 2. **Explicit-design constructor**
    `ImplantLayerChecker(Grid*, Network*, PhysDesMgr*)` — additive. The
@@ -122,9 +123,10 @@ unaffected.
 
 **One filler authority**: `fillerSetting::isFiller(LibCellID)`, which checks
 membership in its configured `core_` list. `Network::addMaster` stores that
-answer on `Master`; `addNode` and `updateNode` inherit the Master type, and
-`classifyFillers` refreshes already imported objects when `set_filler_option`
-runs later. `Node::isFiller()` and `Master::isFiller()` are the only
+answer on `Master`; `addNode` and `updateNode` inherit the Master type.
+`set_filler_option` runs before filler placement, checker initialization and
+repair initialization, so classification is established as objects enter
+infrastructure. `Node::isFiller()` and `Master::isFiller()` are the only
 downstream queries. UDM macro filler flags are not classification inputs.
 
 ### `infrastructure/Grid.h` / `.cpp`
@@ -161,7 +163,7 @@ holes.
 Both loops now share one `paintGridCell(Node*)` and select with
 `!cell->isTerminal()` — "does this node stand on sites", not "is it a standard
 cell". Asking that rather than listing `CELL || FILLER` also keeps grid
-occupancy independent of filler/non-filler type refreshes.
+occupancy independent of the filler/non-filler distinction.
 
 ### `infrastructure/network.cpp`, `Object.cpp`
 
@@ -177,8 +179,8 @@ other callers.
 `network.cpp`, three fixes beyond the orientation one below:
 
 - **`addMaster` classifies only with `fillerSetting::isFiller()`**.
-  `addNode` inherits the stored Master type, and `classifyFillers()` updates
-  existing Master/Node types after a late core-list change.
+  `set_filler_option` has already configured the core list before filler
+  placement, and `addNode` inherits the stored Master type.
 - **`updateNode` sets the type.** It refreshed master, size, orientation and
   status but never the type, so a swap that changes filler-ness left
   `Node::isFiller()` answering about the previous master.
@@ -292,7 +294,7 @@ partial repair; it never reinterprets or bypasses checker legality.
 85 portable planner cases and 75 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
 gate (160/160, normal and ASan). Repository-local fake-UDM engine regression:
-96 cases. Full local suite 256/256, normal and ASan.
+95 cases. Full local suite 255/255, normal and ASan.
 
 The fixture invariants the real-checker cases depend on — rule and layer ids as
 container indices, the band-polarity model, the `maxRuleValue_`-sized snapshot

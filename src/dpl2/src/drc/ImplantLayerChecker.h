@@ -172,7 +172,7 @@ struct MasterItem
     std::vector<MasterShape> rawShapes;   // original raw shapes (preserved input)
     Dbu siteHeight = 0;               // site height from the master's site type
     // Serialized portable-input metadata. Production overlay validation reads
-    // the live Network Master so late filler reclassification cannot go stale.
+    // the authoritative Network Master classification.
     bool isFiller = false;
     std::vector<MasterInterval> intervals;
 };
@@ -408,10 +408,9 @@ private:
     PhysDesMgr* desMgr_ = nullptr;
     const fillerSetting* repairSetting_ = nullptr;
     mutable std::unique_ptr<fillerRepair::FillerRepairEngine> repairEngine_;
-    // Structural init failure -- permanent. "Not configured yet" is separate
-    // and retryable; it only suppresses the repeated notice.
+    // Missing required context or structural initialization failure disables
+    // repair until setFillerRepairContext() explicitly resets the checker.
     mutable bool repairEngineFailed_ = false;
-    mutable bool repairUnconfiguredReported_ = false;
 
     std::map<eLIB::TechLayerRelativeID, LayerId> techLayerToIdx_;
     std::map<std::string, LayerId> layerNameToIdx_;

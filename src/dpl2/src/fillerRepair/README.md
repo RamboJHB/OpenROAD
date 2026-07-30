@@ -77,9 +77,11 @@ ahead of the pending UDM commit.
 **One filler authority.** `fillerSetting::isFiller(LibCellID)` answers whether
 a master belongs to the configured `core_` list. Infrastructure stores that
 answer on `Master`; `Node` inherits it whenever it is added, updated or
-refreshed. `Node::isFiller()` / `Master::isFiller()` are the only downstream
-queries, so no production path re-derives filler identity from UDM macro
-flags. The same core list is the replacement candidate allow-list.
+updated. `set_filler_option` runs before filler placement, checker
+initialization and repair initialization. `Node::isFiller()` /
+`Master::isFiller()` are the only downstream queries, so no production path
+re-derives filler identity from UDM macro flags. The same core list is the
+replacement candidate allow-list.
 
 **Includes** use angle brackets throughout, resolved from the `src/` root
 (`<fillerRepair/RepairPlanner.h>`, `<infrastructure/Grid.h>`), matching the
@@ -210,9 +212,9 @@ Full migration instructions, including the destination checklist, are in
 
 - portable planner: 85 cases; portable checker E2E: 75 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
-- repository-local fake-UDM engine regression: 96 cases under
+- repository-local fake-UDM engine regression: 95 cases under
   `src/dpl2/test/local/`.
-- 2026-07-30 full local suite: 256/256 normal and ASan; migration gate
+- 2026-07-30 full local suite: 255/255 normal and ASan; migration gate
   160/160 normal and ASan; standalone module build 160/160.
 
 ### Search cost
