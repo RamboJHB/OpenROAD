@@ -80,6 +80,14 @@ engine performs no Network↔UDM cross-validation — with lazy init it typicall
 runs mid-check, while the candidate Node already carries its proposed master
 ahead of the pending UDM commit.
 
+`Grid` is the single design authority for checker construction. It retains the
+`PhysDesMgr` used by `initGrid()`, and
+`ImplantLayerChecker(Grid*, Network*)` reads that manager through
+`Grid::getDesMgr()`. The engine rejects initialization unless its `PhysDesMgr`
+is that same pointer, then creates its private checker with only `Grid` and
+`Network`. There is no explicit-design checker constructor and no global
+design lookup.
+
 **One filler authority.** `fillerSetting::isFiller(LibCellID)` answers whether
 a master belongs to the configured `core_` list. Infrastructure stores that
 answer on `Master`; `Node` inherits it whenever it is added, updated or
@@ -120,7 +128,7 @@ nothing else, which is what keeps it database-free and portable.
 | `CMakeLists.txt` | the module's own targets — `dpl2::fillerRepair` (payload, C++20) and `dpl2::fillerRepairPlanner` (pure pipeline, C++17); a destination adds the directory and links a target rather than listing sources |
 | `test/CMakeLists.txt` | the portable tests, added when `DPL2_FILLER_REPAIR_BUILD_TESTS=ON` |
 | `test/RepairPlannerTest.cpp` | 85 portable database-free planner cases; the two seam doubles and the synthetic master catalog are folded into this one file |
-| `test/FillerRepairCheckerE2ETest.cpp` | 76 portable real-checker, repair-window and planner-to-checker cases (see the fixture model below) |
+| `test/FillerRepairCheckerE2ETest.cpp` | 77 portable real-checker, repair-window and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript
 
@@ -216,12 +224,12 @@ Full migration instructions, including the destination checklist, are in
 
 ## Verification
 
-- portable planner: 85 cases; portable checker E2E: 76 cases (both compile,
+- portable planner: 85 cases; portable checker E2E: 77 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
-- repository-local fake-UDM engine regression: 95 cases under
+- repository-local fake-UDM engine regression: 98 cases under
   `src/dpl2/test/local/`.
-- 2026-07-31 full local suite: 256/256 normal and ASan; migration gate
-  161/161 normal and ASan; standalone module build 161/161.
+- 2026-07-31 full local suite: 260/260 normal and ASan; migration gate
+  162/162 normal and ASan; standalone module build 162/162.
 
 ### Search cost
 

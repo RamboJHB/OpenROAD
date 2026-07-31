@@ -64,6 +64,7 @@ class Grid
                 int max_displacement_y);
   void allocateGrid();
   void examineRows(PhysDesMgr* desMgr);
+  PhysDesMgr* getDesMgr() const { return desMgr_; }
   std::unordered_set<int> getRowCoordinates() const;
 
   GridX gridX(DbuX x) const;
@@ -208,7 +209,7 @@ class Grid
                    const std::function<void(const PhysRow&)>& func) const;
 
   utl::Logger* logger_ = nullptr;
-  const PhysDesMgr* desMgr_;
+  PhysDesMgr* desMgr_ = nullptr;
   std::shared_ptr<Padding> padding_;
   Pixels pixels_;
   // Contains all the rows' yLo plus the yHi of the last row. The extra

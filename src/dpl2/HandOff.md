@@ -26,13 +26,14 @@ git tag fillerRepair-migration-20260729 bfe8642f23
 the working branch and refuses tag refs, so the commit id is the reference
 that actually travels.)
 
-Verified at that commit:
+Current branch verification (2026-07-31; the commit above remains the
+migration reference point):
 
 | | |
 |---|---|
-| local suite | 253/253, normal and ASan |
-| migration gate (destination code path) | 161/161, normal and ASan |
-| standalone module | 161/161 — configure, build and test with no harness |
+| local suite | 260/260, normal and ASan |
+| migration gate (destination code path) | 162/162, normal and ASan |
+| standalone module | 162/162 — configure, build and test with no harness |
 | `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
 
 ---
@@ -77,17 +78,20 @@ the first DRC-illegal check, so a run whose checks all pass never pays for it.
 
 Two things must reach the checker before the first failing check:
 
-- **`PhysDesMgr`** — the checker's own `init()` already remembers it.
+- **`PhysDesMgr`** — `Grid` retains the manager used by `initGrid()`;
+  `ImplantLayerChecker(Grid*, Network*)` reads it through `Grid::getDesMgr()`.
+  Missing `Grid`, `Network`, or manager is a fatal checker initialization
+  diagnostic.
 - **`fillerSetting`** — `DePlace` registers a provider once:
   `ImplantLayerChecker::setFillerRepairSettingProvider(&provideSetting)`.
   The checker never names `DePlace`, so builds without it still link.
   A harness with no `DePlace` owner calls
   `checker.setFillerRepairContext(desMgr, &fillerSetting)` instead.
 
-If configuration has not arrived yet, the check simply returns illegal, emits
-one `[fr]` notice, and **retries on the next failing check** — it is not a
-permanent failure. Only a structural `FillerRepairEngine::init()` failure
-disables repair for that checker's lifetime.
+If configuration has not arrived yet, the check returns illegal, emits one
+`[fr]` notice, and disables repair until `setFillerRepairContext()` explicitly
+resets the checker. Structural `FillerRepairEngine::init()` failures are also
+fail-closed.
 
 **Swap-only.** Same instance, same position, same orientation, same width and
 height, different master. A target whose placement moved is refused
@@ -137,7 +141,7 @@ cmake -S <srcroot>/fillerRepair -B build-fr \
 cmake --build build-fr && ctest --test-dir build-fr --output-on-failure
 ```
 
-160 portable tests: 85 database-free planner cases and 75 that drive the **real
+162 portable tests: 85 database-free planner cases and 77 that drive the **real
 `ImplantLayerChecker`** through `ImplantLayerCheckerHelper`-built input. They
 build no UDM objects, so they run before any design is available.
 
@@ -155,8 +159,9 @@ Rerun with `-DDPL2_ENABLE_ASAN=ON` before signing off.
 
 - **One design revision.** `PhysDesMgr`, `Grid`, `Network` and one engine
   describe the same revision. UDM design/library objects outlive the engine.
-  The `PhysDesMgr` need *not* be the Session current design: the engine builds
-  its private oracle checker with the exact `PhysDesMgr` it was given.
+  `Grid::getDesMgr()` is the design authority: engine initialization rejects a
+  different manager, and the private oracle checker receives only `Grid` and
+  `Network`. No global design state is read.
 - **Network completeness.** Every placed/fixed physical instance that can
   intersect the core, hard macros included. Placement blockages stay Grid
   state, not Network Nodes.
@@ -231,11 +236,11 @@ it.
 | | |
 |---|---|
 | Portable planner tests | 85 |
-| Portable real-checker E2E | 75 |
-| Repository-local engine regression | 95 (fake UDM, not migrated) |
-| Full local suite | 256/256, normal and ASan |
-| Migration gate (destination code path) | 161/161, normal and ASan |
-| Standalone module build | 161/161 |
+| Portable real-checker E2E | 77 |
+| Repository-local engine regression | 98 (fake UDM, not migrated) |
+| Full local suite | 260/260, normal and ASan |
+| Migration gate (destination code path) | 162/162, normal and ASan |
+| Standalone module build | 162/162 |
 
 The migration gate builds the payload the way a destination does
 (`DPL2_TEST_USE_FAKE_UDM=OFF`, no fake-only target, no test provider) with the

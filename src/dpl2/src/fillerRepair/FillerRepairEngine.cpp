@@ -1684,6 +1684,20 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " networkMasters=", network_->getMasters().size()));
     return false;
   }
+  eUNL::PhysDesMgr* const gridDesMgr = grid_->getDesMgr();
+  if (gridDesMgr == nullptr) {
+    failInit("missing_grid_phys_des_mgr",
+             "fatal: Grid does not retain an initialization PhysDesMgr");
+    return false;
+  }
+  if (gridDesMgr != desMgr) {
+    failInit("grid_phys_des_mgr_mismatch",
+             cat("fatal: engine PhysDesMgr must match Grid's initialization "
+                 "manager: gridPhysDesMgr=",
+                 static_cast<const void*>(gridDesMgr),
+                 " requestedPhysDesMgr=", static_cast<const void*>(desMgr)));
+    return false;
+  }
   eUNL::Design* settingDesign = fillerSettings.getDesign();
   eUNL::PhysDesMgr* settingDesMgr
       = settingDesign != nullptr ? settingDesign->getPhysDesMgr() : nullptr;
@@ -1697,12 +1711,6 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " requestedPhysDesMgr=", static_cast<const void*>(desMgr)));
     return false;
   }
-  // There is deliberately no "is this the Session current design?" gate. It
-  // existed only because the private oracle checker used to take its design
-  // from the global Session, so anything but the current design would have
-  // silently scanned the wrong one. The oracle is now constructed with this
-  // exact PhysDesMgr, which makes the engine self-consistent by construction
-  // and leaves no reason to reject a design that is not Session's current.
   if (fillerSettings.getFillerPhysCells().empty()) {
     failInit("empty_filler_allow_list",
              cat("fatal: fillerSetting::getFillerPhysCells() is empty: "
@@ -1791,10 +1799,8 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   config_.verbose = debug_logging_;
   config_.repair.verbose = debug_logging_;
   log_.setEnabled(debug_logging_);
-  // Bind the private oracle to the design this engine was initialized with,
-  // not to whatever Session happens to consider current.
-  checker_ =
-      std::make_unique<ipl::ImplantLayerChecker>(grid_, network_, des_mgr_);
+  // bindInfrastructure already proved the engine and Grid managers agree.
+  checker_ = std::make_unique<ipl::ImplantLayerChecker>(grid_, network_);
   buildPlannerData();
   bool checkerReady = true;
   for (const ipl::Diagnostic& diagnostic : checker_->getDiags()) {

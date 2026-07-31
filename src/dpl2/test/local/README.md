@@ -1,10 +1,10 @@
 # Repository-local fillerRepair harness
 
-Updated: 2026-07-28.
+Updated: 2026-07-31.
 
 **Not part of the migration payload.** It exists so the feature can be
 developed and gated with no real UDM present. It owns the UDM-compatible
-include tree (`fake_udm/`), the 74-case engine regression and its
+include tree (`fake_udm/`), the 98-case engine regression and its
 `E2ETestProvider`, and the runner scripts. No fake header or provider crosses
 into `src/dpl2/src/fillerRepair/`.
 
@@ -14,10 +14,10 @@ objects directly. Everything else it links is the same runtime chain a
 destination builds.
 
 ```sh
-ALL=1 ./run_fake_udm_e2e.sh                     # whole suite, 220 cases
+ALL=1 ./run_fake_udm_e2e.sh                     # whole suite, 260 cases
 SANITIZE=address ALL=1 ./run_fake_udm_e2e.sh
 ./run_fake_udm_e2e.sh                           # engine regression only
-./run_migration_gate.sh                         # destination code path, 146
+./run_migration_gate.sh                         # destination code path, 162
 SANITIZE=address ./run_migration_gate.sh
 ```
 

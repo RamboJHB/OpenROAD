@@ -1,8 +1,8 @@
 # Portable fillerRepair tests
 
-Updated: 2026-07-29.
+Updated: 2026-07-31.
 
-These move with `fillerRepair/` and are the migration gate: **160 tests**, none
+These move with `fillerRepair/` and are the migration gate: **162 tests**, none
 of which construct a UDM object, include the repository's fake UDM tree, or
 need a fixture provider from the destination. They run before a design exists.
 
@@ -32,7 +32,7 @@ fallback when the primary side is blocked); ranking into filler domains;
 subset enumeration and member caps; the oracle-gate protocol and its error
 paths; both budgets; determinism; guard quantization; and cache invariants.
 
-## 75 real-checker cases — `FillerRepairCheckerE2ETest.cpp`
+## 77 real-checker cases — `FillerRepairCheckerE2ETest.cpp`
 
 Drive the **real `ImplantLayerChecker`** over `ImplantLayerCheckerHelper`-built
 input. No fake checker, no fake placement view, no fake UDM. The small

@@ -269,12 +269,6 @@ class ImplantLayerChecker final : public DRCChecker
 {
 public:
     ImplantLayerChecker(Grid* grid, Network* network);
-    // [fillerRepair-fix] Bind to an explicit design instead of the global
-    // Session current design. fillerRepair owns a private oracle checker and
-    // already knows the PhysDesMgr its engine was initialized with; taking it
-    // from Session made that oracle depend on global state it does not
-    // control. Same initialization otherwise.
-    ImplantLayerChecker(Grid* grid, Network* network, PhysDesMgr* desMgr);
     ~ImplantLayerChecker();
 
     bool check(const Node* cell, GridX x, GridY y,
@@ -396,6 +390,9 @@ private:
     std::vector<MasterItem> masterItems_;
 
     std::vector<Diagnostic> diagnostics_; // Initialization diagnostics.
+    // Production initialization requires Grid, Network, and Grid's retained
+    // PhysDesMgr. The portable helper sets this after injecting synthetic data.
+    bool designContextReady_ = false;
     Layer::Polar basePolar_ = Layer::Polar::P; // polarity at
     //bottom band of row 0; polarity alternates per row.
     Dbu rowHeight_ = 0;
@@ -403,8 +400,8 @@ private:
     int maxRuleValue_ = 1; // the maxValue for all rules' minValue
     mutable int nextCandShapeId_ = -1; // Temporary candidate shape ids.
 
-    // Filler repair (lazy). desMgr_ is remembered by init(); the setting
-    // comes from setFillerRepairContext() or the registered provider.
+    // Filler repair (lazy). desMgr_ is bound from Grid; the setting comes from
+    // setFillerRepairContext() or the registered provider.
     PhysDesMgr* desMgr_ = nullptr;
     const fillerSetting* repairSetting_ = nullptr;
     mutable std::unique_ptr<fillerRepair::FillerRepairEngine> repairEngine_;

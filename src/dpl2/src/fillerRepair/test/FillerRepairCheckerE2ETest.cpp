@@ -14,6 +14,8 @@
 #include <drc/ImplantLayerChecker.h>
 #include <drc/ImplantLayerCheckerHelper.h>
 #include <fillerRepair/RepairPlanner.h>
+#include <infrastructure/Grid.h>
+#include <infrastructure/network.h>
 
 namespace dpl2 {
 namespace ipl {
@@ -25,6 +27,40 @@ namespace {
                 UvDist(static_cast<int64_t>(yl)),
                 UvDist(static_cast<int64_t>(xh)),
                 UvDist(static_cast<int64_t>(yh)));
+}
+
+bool hasDiagnostic(const std::vector<Diagnostic>& diagnostics,
+                   const std::string& status)
+{
+  return std::any_of(
+      diagnostics.begin(),
+      diagnostics.end(),
+      [&](const Diagnostic& diagnostic) {
+        return diagnostic.status == status;
+      });
+}
+
+TEST(ImplantLayerCheckerInitializationTest,
+     MissingGridNetworkOrManagerFailsClosed)
+{
+  Grid grid;
+  Network network;
+  CheckRequest request;
+
+  ImplantLayerChecker missingGrid(nullptr, &network);
+  EXPECT_TRUE(hasDiagnostic(missingGrid.getDiags(), "missing_grid"));
+  EXPECT_FALSE(missingGrid.checkDirect(request).isLegal);
+
+  ImplantLayerChecker missingNetwork(&grid, nullptr);
+  EXPECT_TRUE(hasDiagnostic(missingNetwork.getDiags(), "missing_network"));
+  EXPECT_FALSE(missingNetwork.checkDirect(request).isLegal);
+
+  ImplantLayerChecker missingManager(&grid, &network);
+  EXPECT_TRUE(hasDiagnostic(missingManager.getDiags(),
+                            "missing_grid_phys_des_mgr"));
+  const CheckResult result = missingManager.checkDirect(request);
+  EXPECT_FALSE(result.isLegal);
+  EXPECT_TRUE(hasDiagnostic(result.diagnostics, "missing_grid_phys_des_mgr"));
 }
 
 constexpr Dbu SITE_WIDTH = 10;

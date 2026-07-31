@@ -212,9 +212,9 @@ class CheckerHarness
     checker_ = std::make_unique<dpl2::ipl::ImplantLayerChecker>(
         objects_.infrastructure().grid(),
         objects_.infrastructure().network());
-    // The checker self-initializes from the activated Session design; the
-    // repair engine is created lazily on the first failing check. The seam
-    // presets what production obtains from the DePlace-registered provider.
+    // The checker self-initializes from Grid's retained manager; the repair
+    // engine is created lazily on the first failing check. This presets what
+    // production obtains from the DePlace-registered provider.
     if (presetContext) {
       checker_->setFillerRepairContext(objects_.design().desMgr(),
                                        filler_setting_.get());
@@ -806,11 +806,10 @@ TEST_P(FillerRepairEngineE2E, MissingInfrastructureErrorsOut)
   EXPECT_TRUE(hasDiagnostic(repair.diagnostics, "missing_infrastructure"));
 }
 
-// The engine binds its private oracle checker to the PhysDesMgr it is given,
-// so a design that is not Session's current one is repaired normally. This
-// used to be a fatal init diagnostic ("active_design_mismatch") purely
-// because the oracle took its design from the global Session.
-TEST_P(FillerRepairEngineE2E, InitBindsRequestedDesignNotSessionCurrent)
+// Grid is the only design authority for checker construction. Changing the
+// global current design after infrastructure creation must not redirect either
+// the checker or the engine's private checker.
+TEST_P(FillerRepairEngineE2E, GridManagerDrivesCheckerWithoutGlobalSession)
 {
   auto provider = frt::makeE2ETestProvider();
   ASSERT_NE(provider, nullptr);
@@ -821,9 +820,16 @@ TEST_P(FillerRepairEngineE2E, InitBindsRequestedDesignNotSessionCurrent)
   ASSERT_NE(infrastructure, nullptr);
   // A different design becomes Session's current one AFTER infrastructure was
   // built for `requested`.
-  auto active = provider->createDesign({});
+  frt::DesignSetup unrelatedSetup;
+  unrelatedSetup.usedLayerMissingRule = true;
+  auto active = provider->createDesign(unrelatedSetup);
   ASSERT_NE(active, nullptr);
   active->activate();
+  ASSERT_EQ(infrastructure->grid()->getDesMgr(), requested->desMgr());
+  dpl2::ipl::ImplantLayerChecker checker(infrastructure->grid(),
+                                         infrastructure->network());
+  EXPECT_TRUE(checker.getDiags().empty()) << diagnosticText(checker.getDiags());
+  EXPECT_EQ(checker.siteWidth(), infrastructure->grid()->getSiteWidth().v);
   dpl2::fillerSetting setting(requested->design());
   setting.addFillerCell(kDefaultFillers);
   dpl2::fillerRepair::FillerRepairEngine engine(infrastructure->grid(),
@@ -834,6 +840,32 @@ TEST_P(FillerRepairEngineE2E, InitBindsRequestedDesignNotSessionCurrent)
       requested->master(frt::MasterRole::TargetNew));
   EXPECT_TRUE(repair.hasSolution);
   EXPECT_FALSE(hasDiagnostic(repair.diagnostics, "active_design_mismatch"));
+}
+
+TEST_P(FillerRepairEngineE2E, GridManagerMismatchFailsClosed)
+{
+  auto provider = frt::makeE2ETestProvider();
+  ASSERT_NE(provider, nullptr);
+  auto requested = provider->createDesign(GetParam().setup);
+  ASSERT_NE(requested, nullptr);
+  auto infrastructure
+      = provider->createInfrastructure(*requested, GetParam().setup);
+  ASSERT_NE(infrastructure, nullptr);
+  auto other = provider->createDesign({});
+  ASSERT_NE(other, nullptr);
+
+  dpl2::fillerSetting setting(requested->design());
+  setting.addFillerCell(kDefaultFillers);
+  dpl2::fillerRepair::FillerRepairEngine engine(infrastructure->grid(),
+                                                 infrastructure->network());
+  EXPECT_FALSE(engine.init(other->desMgr(), setting));
+  const auto repair = engine.repair(
+      requested->cell(frt::CellRole::Target),
+      requested->master(frt::MasterRole::TargetNew));
+  EXPECT_FALSE(repair.hasSolution);
+  EXPECT_TRUE(hasDiagnostic(repair.diagnostics,
+                            "grid_phys_des_mgr_mismatch"))
+      << diagnosticText(repair.diagnostics);
 }
 
 // set_filler_option must precede checker and repair initialization. Missing

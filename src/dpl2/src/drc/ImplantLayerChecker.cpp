@@ -199,23 +199,25 @@ Layer::Polar ImplantLayerChecker::getPolar(RowId rowA, RowId rowB) const
 ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network)
     : DRCChecker(grid), network_(network)
 {
-    if (grid_ && network_) {
-        eUNL::Session& sess = eUNL::Session::getSession();
-        eUNL::Design* design = sess.getCurrentDesign();
-        if (design) {
-            init(design->getPhysDesMgr());
-        }
+    if (grid_ == nullptr) {
+        diagnostics_.push_back({"missing_grid",
+            "fatal: ImplantLayerChecker requires an initialized Grid"});
+        return;
     }
-}
-
-// [fillerRepair-fix] Explicit-design constructor; see the header.
-ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network,
-    PhysDesMgr* desMgr)
-    : DRCChecker(grid), network_(network)
-{
-    if (grid_ && network_ && desMgr) {
-        init(desMgr);
+    if (network_ == nullptr) {
+        diagnostics_.push_back({"missing_network",
+            "fatal: ImplantLayerChecker requires an initialized Network"});
+        return;
     }
+    desMgr_ = grid_->getDesMgr();
+    if (desMgr_ == nullptr) {
+        diagnostics_.push_back({"missing_grid_phys_des_mgr",
+            "fatal: ImplantLayerChecker requires Grid to retain the PhysDesMgr"
+            " used to initialize it"});
+        return;
+    }
+    designContextReady_ = true;
+    init(desMgr_);
 }
 
 ImplantLayerChecker::~ImplantLayerChecker()
@@ -769,7 +771,7 @@ bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
     const eUTL::PhysOrientation& orient,
     std::vector<CellChangeRecord>& fcRecord) const
 {
-    if (!node || !network_ || !grid_) {
+    if (!node || !designContextReady_) {
         return false;
     }
     CheckRequest request;
@@ -789,9 +791,18 @@ bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
 void ImplantLayerChecker::setFillerRepairContext(PhysDesMgr* desMgr,
     const fillerSetting* setting)
 {
-    desMgr_ = desMgr;
     repairSetting_ = setting;
     repairEngine_.reset();
+    PhysDesMgr* const gridDesMgr
+        = grid_ != nullptr ? grid_->getDesMgr() : nullptr;
+    if (!designContextReady_ || desMgr == nullptr || gridDesMgr == nullptr
+        || desMgr != gridDesMgr) {
+        repairEngineFailed_ = true;
+        fillerRepair::reportRepairUnavailable(
+            "repair PhysDesMgr must match the manager retained by Grid");
+        return;
+    }
+    desMgr_ = gridDesMgr;
     repairEngineFailed_ = false;
 }
 
@@ -856,6 +867,11 @@ bool ImplantLayerChecker::repairFillers(const CheckRequest& request,
 CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
 {
     CheckResult result;
+    if (!designContextReady_) {
+        result.isLegal = false;
+        result.diagnostics = diagnostics_;
+        return result;
+    }
     // [fillerRepair-fix] A candidate master registered in Network after this
     // checker's init (DePlace::isLegal does addMaster+updateNode before
     // checkDRC) has no MasterItem yet; getNodeShape would index out of
@@ -928,6 +944,9 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
 // Run checkDirect on every placed instance in parallel.
 std::vector<CheckResult> ImplantLayerChecker::checkAllNodesDirect() const
 {
+    if (!designContextReady_) {
+        return {};
+    }
     const std::vector<std::unique_ptr<Node>>& nodes = getNodes();
     std::vector<CheckResult> results(nodes.size());
     auto run_job = [&](size_t i) {
@@ -1948,6 +1967,13 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
     {
         unsigned size = fillerChanges.size();
         std::vector<CheckResult> results(size);
+        if (!designContextReady_) {
+            for (CheckResult& result : results) {
+                result.isLegal = false;
+                result.diagnostics = diagnostics_;
+            }
+            return results;
+        }
         const std::vector<Violation> oldViolations = checkOverlayRegion(request,
             guardRegion, {}, false).violations;
         auto run_job = [&](int i) {

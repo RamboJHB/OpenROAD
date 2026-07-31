@@ -47,8 +47,8 @@ consumed.
 
 ### Lazy engine and initialization failures
 
-The engine is created on the first failing check. Context comes from the
-checker's own `init()` (`PhysDesMgr`) plus either
+The engine is created on the first failing check. The checker reads its
+`PhysDesMgr` from `Grid::getDesMgr()` plus either
 `setFillerRepairContext()` (harnesses) or the provider registered through
 `setFillerRepairSettingProvider()` (production — dependency inversion, so the
 checker never names `DePlace`).
@@ -96,12 +96,12 @@ approved sequence from each result. A count-based single-prefix strip is wrong.
    `repairEngine_`, `repairEngineFailed_`, plus `setFillerRepairContext()` and
    the static `setFillerRepairSettingProvider()`.
 
-2. **Explicit-design constructor**
-   `ImplantLayerChecker(Grid*, Network*, PhysDesMgr*)` — additive. The
-   two-argument form takes its design from the global `Session`; fillerRepair
-   owns a private oracle checker and already knows the `PhysDesMgr` its engine
-   was initialized with, so taking it from `Session` made that oracle depend on
-   global state it does not control. Same initialization otherwise.
+2. **Grid-bound design context**
+   `ImplantLayerChecker(Grid*, Network*)` is the only constructor. It reads the
+   manager retained by `Grid::getDesMgr()` and fails closed when `Grid`,
+   `Network`, or that manager is absent. `FillerRepairEngine::init()` also
+   rejects a manager that differs from Grid's manager before creating its
+   private two-argument checker. No global design state is consulted.
 
 3. **`checkDirect()` extends `masterItems_` lazily** when the request master
    was registered in Network after checker init — the
@@ -294,10 +294,10 @@ partial repair; it never reinterprets or bypasses checker legality.
 
 ## 6. Verified boundary
 
-85 portable planner cases and 76 portable real-checker cases build, link and
+85 portable planner cases and 77 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
-gate (161/161, normal and ASan). Repository-local fake-UDM engine regression:
-95 cases. Full local suite 256/256, normal and ASan.
+gate (162/162, normal and ASan). Repository-local fake-UDM engine regression:
+98 cases. Full local suite 260/260, normal and ASan.
 
 The fixture invariants the real-checker cases depend on — rule and layer ids as
 container indices, the band-polarity model, the `maxRuleValue_`-sized snapshot
