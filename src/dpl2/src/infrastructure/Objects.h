@@ -242,14 +242,17 @@ enum class OpType : uint8_t {
     Add    = 2,
 };
 
-struct FillerCellRecord {
+using CellData = std::variant<std::string, LeafCellID>;
+
+struct CellChangeRecord {
     OpType    op_;
-    LeafCellID    cell_id_;
+    CellData    cell_data_;
     UvDist    origin_x_;
     UvDist    origin_y_;
     LibCellID    orig_lib_cell_;
     LibCellID    new_lib_cell_;
-};
+    PhysOrientation orientation_;
+  };
 
 /**
  * Lightweight lookup table that maps edge type name strings to integer
