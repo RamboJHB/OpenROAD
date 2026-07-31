@@ -196,6 +196,19 @@ other callers.
   lines later (`getBottomPowerType`): the node was left half-updated and the
   process died. It now returns `false` — which is what the `bool` return was
   always for — and leaves the node untouched.
+- **Network import fails before mutation on incomplete inputs.** `addNode`
+  now returns `false` for a missing manager, invalid physical cell, or
+  unregistered master; `updateNode` also rejects a null node/manager or
+  invalid physical mapping. The owned-object overloads reject null
+  `unique_ptr`s, and `addMaster` rejects missing Grid/edge-table dependencies.
+
+The shared runtime boundaries are also fail-closed: Grid row import tolerates
+a missing manager, cleared/unallocated pixel storage is bounds-checked,
+checker target/overlay requests reject missing nodes and masters, engine
+snapshot construction treats null Network slots/mappings as fatal, and the
+planner rejects an empty view or unknown target before window construction.
+These checks do not change rule evaluation, candidate generation, ranking, or
+the accepted repair wire.
 
 `network.cpp`: **`updateNode` restores `setOrient(inst.getOrient())`**, which
 the 2026-07-28 destination update replaced with a hard-coded
@@ -219,7 +232,6 @@ Not patched here; they belong to the integration owner.
 | `network.h` dropped `#include <memory>` while still using `std::unique_ptr` | currently resolves transitively |
 | **`PhysObjStatus` may carry values beyond `PLACED` / `LOC_FIXED`** | `addNode` derives `isPlaced()`/`isFixed()` from those two alone, and `setFixedGridCells`/`setPlacedGridCells` paint only nodes matching one of them. If the real enum has a third "placed and immovable" value (a DEF `COVER`, say), instances carrying it are painted by neither loop — the same hole as the filler one, on the status axis. The stand-in UDM here has only the three values, so this cannot be settled in this repository. **Confirm the real enum.** |
 | `Grid::visitCellPixels` and `Grid::paintPixel` disagree on obstruction-bearing masters | `visitCellPixels` (DePlace's initial paint) paints only OVERLAP-layer obstruction rects when the master has any, while `paintPixel` (every later repaint) always paints the whole footprint. A master whose obstruction is smaller than its outline therefore has different occupancy depending on which path last touched it, and leaves unpainted sites at init. Deliberate mechanism for macros, so not changed here |
-| `addNode` dereferences `getMaster()` without a null check | same crash `updateNode` had; it returns `void`, so the fix is not a one-liner — skipping the node silently would desynchronize ids |
 | `PlacementDRC.h` includes `<dpl2/DRCChecker.h>`; the header is at `drc/DRCChecker.h` | does not compile as shipped |
 | `PlacementDRC.h` declares `const eUNL::PhysOrientation&`; `DRCChecker` and `ImplantLayerChecker` use `eUTL::PhysOrientation` | namespace mismatch on the call into our checker |
 | `initPlacementDRC()` is declared but never defined, `drc_engine_` is never constructed, and nothing calls `PlacementDRC::addChecker` | `DePlace::isLegal` cannot reach any checker; with an empty `checkers_` it would report every candidate legal |

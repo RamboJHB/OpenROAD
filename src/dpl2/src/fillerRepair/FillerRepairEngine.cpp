@@ -449,14 +449,30 @@ void FillerRepairEngine::Impl::buildPlannerData()
 
   masters_.resize(network->getMasters().size());
   master_lib_ids_.resize(network->getMasters().size());
+  size_t networkMasterIndex = 0;
   for (const auto& masterPtr : network->getMasters()) {
     const Master* nm = masterPtr.get();
-    if (nm == nullptr || nm->getPhysLibCell() == nullptr) {
+    if (nm == nullptr) {
+      addProblem(Severity::Fatal, "NullNetworkMaster",
+                 cat("Network master slot ", networkMasterIndex,
+                     " is null"));
+      ++networkMasterIndex;
+      continue;
+    }
+    if (nm->getPhysLibCell() == nullptr) {
+      addProblem(Severity::Fatal, "MissingPhysicalMaster",
+                 cat("Network master ", nm->getId(),
+                     " has no PhysLibCell"));
+      ++networkMasterIndex;
       continue;
     }
     const eLIB::PhysLibCell* cell = nm->getPhysLibCell();
     const MasterId id = static_cast<MasterId>(nm->getId());
-    if (id < 0) {
+    if (id < 0 || static_cast<size_t>(id) >= network->getMasters().size()) {
+      addProblem(Severity::Fatal, "InvalidNetworkMasterId",
+                 cat("Network master slot ", networkMasterIndex,
+                     " has out-of-range id ", id));
+      ++networkMasterIndex;
       continue;
     }
 
@@ -504,6 +520,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
     ensureSlot(master_lib_ids_, static_cast<size_t>(id));
     masters_[id] = info;
     master_lib_ids_[id] = cell->getLibCellId();
+    ++networkMasterIndex;
   }
 
   // --- candidate universe: fillerSetting only, resolved to Network master
@@ -564,25 +581,42 @@ void FillerRepairEngine::Impl::buildPlannerData()
   // cross-frame re-validation); PhysDesMgr supplies status and origin.
   instances_.resize(network->getNodes().size());
   udm_refs_.resize(network->getNodes().size());
+  size_t networkNodeIndex = 0;
   for (const auto& nodePtr : network->getNodes()) {
     const Node* node = nodePtr.get();
-    if (node == nullptr || node->getMaster() == nullptr
+    if (node == nullptr) {
+      addProblem(Severity::Fatal, "NullNetworkNode",
+                 cat("Network node slot ", networkNodeIndex, " is null"));
+      ++networkNodeIndex;
+      continue;
+    }
+    if (node->getMaster() == nullptr
         || node->getMaster()->getPhysLibCell() == nullptr) {
+      addProblem(Severity::Fatal, "MissingNodeMaster",
+                 cat("Network node ", node->getId(),
+                     " has no usable master"));
+      ++networkNodeIndex;
       continue;
     }
     const eLIB::PhysLibCell* cell = node->getMaster()->getPhysLibCell();
     const eUNL::LeafCellID lcId = node->getDbInst();
     const eUNL::PhysCell physCell = desMgr->getPhysCell(lcId);
     if (!physCell.isValid()) {
+      addProblem(Severity::Fatal, "MissingPhysicalCell",
+                 cat("Network node ", node->getId(),
+                     " has no valid PhysCell mapping"));
+      ++networkNodeIndex;
       continue;
     }
     const eUNL::PhysObjStatus status = physCell.getStatus();
     if (status != eUNL::PhysObjStatus::PLACED
         && status != eUNL::PhysObjStatus::LOC_FIXED) {
+      ++networkNodeIndex;
       continue;
     }
     const RowId rowId = static_cast<RowId>(grid->gridSnapDownY(node).v);
     if (rowId < 0 || rowId >= static_cast<RowId>(row_frames_.size())) {
+      ++networkNodeIndex;
       continue;  // outside the core grid: context the planner cannot edit
     }
     const eUTL::Point2D origin = physCell.getOrigin();
@@ -590,12 +624,23 @@ void FillerRepairEngine::Impl::buildPlannerData()
 
     const MasterId masterId = static_cast<MasterId>(node->getMaster()->getId());
     if (masterInfo(masterId) == nullptr) {
-      continue;  // trusted Network: master tables are built from it above
+      addProblem(Severity::Fatal, "MissingNodeMasterMetadata",
+                 cat("Network node ", node->getId(), " references master ",
+                     masterId, " without planner metadata"));
+      ++networkNodeIndex;
+      continue;
     }
     const MasterInfo& info = *masters_[static_cast<size_t>(masterId)];
     const bool isFiller = node->isFiller();
 
     const InstanceId id = static_cast<InstanceId>(node->getId());
+    if (id < 0 || static_cast<size_t>(id) >= network->getNodes().size()) {
+      addProblem(Severity::Fatal, "InvalidNetworkNodeId",
+                 cat("Network node slot ", networkNodeIndex,
+                     " has out-of-range id ", id));
+      ++networkNodeIndex;
+      continue;
+    }
     PlacedInstance placed{id,
                           masterId,
                           rowId,
@@ -627,6 +672,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
       rowCopy.rowId = row;
       by_row_[row].push_back(rowCopy);
     }
+    ++networkNodeIndex;
   }
   for (std::vector<PlacedInstance>& list : by_row_) {
     std::sort(list.begin(), list.end(),
@@ -1561,11 +1607,13 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
 {
   ipl::CheckResult result;
   result.isLegal = true;
-  if (!initialized_) {
+  if (!initialized_ || des_mgr_ == nullptr || grid_ == nullptr
+      || network_ == nullptr) {
     result.isLegal = false;
     result.diagnostics.push_back(
         {"precheck_not_initialized",
-         "warning: init() must succeed before placement precheck"});
+         "warning: initialized infrastructure is required before placement "
+         "precheck"});
     return result;
   }
 
@@ -1837,7 +1885,9 @@ bool FillerRepairEngine::Impl::rebuildOracle()
 void reportRepairUnavailable(const char* reason)
 {
   DebugLog(debugLoggingDefault())
-      .msg("engine", cat("repair unavailable: ", reason));
+      .msg("engine",
+           cat("repair unavailable: ",
+               reason != nullptr ? reason : "unspecified reason"));
 }
 
 FillerRepairEngine::FillerRepairEngine(Grid* grid, Network* network)

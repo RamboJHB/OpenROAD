@@ -1181,6 +1181,53 @@ void testPlannerDoesNotRunPlacementPrecheck()
   EXPECT_EQ(checker.requestCount(), 0);
 }
 
+void testPlannerRejectsIncompletePlacementView()
+{
+  const auto hasCode = [](const fr::FillerRepairResult& result,
+                          const std::string& code) {
+    return std::any_of(
+        result.diagnostics.begin(),
+        result.diagnostics.end(),
+        [&](const fr::Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
+  };
+
+  fr::TestPlacementView empty;
+  fr::TestRepairOracle emptyChecker(empty, {});
+  fr::internal::RepairPlanner emptyPlanner(empty, emptyChecker, {});
+  fr::FillerRepairRequest request;
+  request.targetPlace = fr::TargetPlace{10, 20, 0, 0, fr::Orient::R0};
+  const fr::FillerRepairResult emptyResult = emptyPlanner.repair(request);
+  EXPECT_FALSE(emptyResult.hasSolution);
+  EXPECT_TRUE(hasCode(emptyResult, "InvalidPlacementView"));
+  EXPECT_EQ(emptyChecker.requestCount(), 0);
+
+  fr::TestPlacementView missingTarget;
+  missingTarget.setSiteWidth(1)
+      .addRow(0, 0, 10)
+      .addMaster(20, 2, 1, false, 1);
+  fr::TestRepairOracle missingTargetChecker(missingTarget, {});
+  fr::internal::RepairPlanner missingTargetPlanner(
+      missingTarget, missingTargetChecker, {});
+  const fr::FillerRepairResult targetResult =
+      missingTargetPlanner.repair(request);
+  EXPECT_FALSE(targetResult.hasSolution);
+  EXPECT_TRUE(hasCode(targetResult, "UnknownTarget"));
+  EXPECT_EQ(missingTargetChecker.requestCount(), 0);
+
+  missingTarget.place(10, 20, 0, 0);
+  request.targetPlace.masterId = 99;
+  fr::TestRepairOracle missingMasterChecker(missingTarget, {});
+  fr::internal::RepairPlanner missingMasterPlanner(
+      missingTarget, missingMasterChecker, {});
+  const fr::FillerRepairResult masterResult =
+      missingMasterPlanner.repair(request);
+  EXPECT_FALSE(masterResult.hasSolution);
+  EXPECT_TRUE(hasCode(masterResult, "UnknownTargetMaster"));
+  EXPECT_EQ(missingMasterChecker.requestCount(), 0);
+}
+
 // --- Fake candidate provider -------------------------------------------------
 
 void testCandidateProvider()
@@ -4825,6 +4872,8 @@ void registerPlannerTests()
       {"wire_conversion", testWireConversion},
       {"planner_does_not_run_placement_precheck",
        testPlannerDoesNotRunPlacementPrecheck},
+      {"planner_rejects_incomplete_placement_view",
+       testPlannerRejectsIncompletePlacementView},
       {"candidate_provider", testCandidateProvider},
       {"synthetic_catalog_describe_widths_and_vts",
        testSyntheticCatalogDescribeWidthsAndVts},

@@ -2,6 +2,7 @@
 // Copyright (c) 2021-2025, The OpenROAD Authors
 
 #pragma once
+#include <memory>
 #include <string>
 #include <unordered_map>
 
@@ -22,7 +23,7 @@ public:
   std::vector<std::unique_ptr<Node>>& getNodes() { return nodes_; }
   std::vector<std::unique_ptr<Master>>& getMasters() {return masters_;}
   // For creating and adding cells.
-  void addNode(LeafCellID cellId, const PhysDesMgr* desMgr);
+  bool addNode(LeafCellID cellId, const PhysDesMgr* desMgr);
   Node* getNode(LeafCellID cellId);
   Node* getNode(int id) const {
     return (id >= 0 && id < static_cast<int>(nodes_.size())) ?
@@ -62,14 +63,22 @@ public:
                     const Grid* grid,
                     const EdgeTypeTable* edge_types);
 
-  void addNode(std::unique_ptr<Node> n) {
+  bool addNode(std::unique_ptr<Node> n) {
+    if (n == nullptr) {
+      return false;
+    }
     inst_to_node_idx_[n->getDbInst()] = nodes_.size();
     nodes_.emplace_back(std::move(n));
     cells_cnt_++;
+    return true;
   }
-  void addMaster(std::unique_ptr<Master> m) {
+  bool addMaster(std::unique_ptr<Master> m) {
+    if (m == nullptr) {
+      return false;
+    }
     master_to_idx_[m->getDbMaster()] = masters_.size();
     masters_.emplace_back(std::move(m));
+    return true;
   }
 private:
   int cells_cnt_ = 0;

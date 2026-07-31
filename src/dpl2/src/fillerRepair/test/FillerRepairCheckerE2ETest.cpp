@@ -1098,6 +1098,9 @@ class PlannerCheckerFixture
   PortableCheckerOracle& oracle() { return *oracle_; }
 
   const ImplantLayerChecker& checker() const { return *checker_; }
+  ImplantLayerChecker& mutableChecker() { return *checker_; }
+  Grid* grid() { return helper_.getGrid(); }
+  Network* network() { return helper_.getNetwork(); }
 
   fr::OracleResult baseline(const Scenario& scn)
   {
@@ -1147,6 +1150,110 @@ class PlannerCheckerFixture
   std::unique_ptr<PortablePlacementView> view_;
   std::unique_ptr<PortableCheckerOracle> oracle_;
 };
+
+TEST(ImplantCheckerNullSafetyTest,
+     InvalidNodesAndMastersFailClosedWithoutDereference)
+{
+  PlannerCheckerFixture fixture;
+  ASSERT_TRUE(fixture.checkerDiagnostics().empty());
+  ImplantLayerChecker& checker = fixture.mutableChecker();
+  Grid* grid = fixture.grid();
+  Network* network = fixture.network();
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(network, nullptr);
+  ASSERT_FALSE(network->getNodes().empty());
+
+  std::vector<CellChangeRecord> changes;
+  EXPECT_FALSE(checker.check(nullptr,
+                             GridX{0},
+                             GridY{0},
+                             eUTL::PhysOrientationE::R0,
+                             changes));
+
+  const Node* node = network->getNodes().front().get();
+  ASSERT_NE(node, nullptr);
+  ASSERT_NE(node->getMaster(), nullptr);
+  CheckRequest request;
+  request.instanceId = node->getId();
+  request.masterId = node->getMaster()->getId();
+  request.rowId = grid->gridSnapDownY(node).v;
+  request.colId = grid->gridX(node).v;
+  request.orientation = node->getOrient();
+
+  CheckRequest unknownTarget = request;
+  unknownTarget.instanceId = 1000000;
+  const CheckResult targetResult = checker.checkDirect(unknownTarget);
+  EXPECT_FALSE(targetResult.isLegal);
+  EXPECT_TRUE(hasDiagnostic(targetResult.diagnostics,
+                            "unknown_target_instance"));
+
+  CheckRequest unknownMaster = request;
+  unknownMaster.masterId = 1000000;
+  const CheckResult masterResult = checker.checkDirect(unknownMaster);
+  EXPECT_FALSE(masterResult.isLegal);
+  EXPECT_TRUE(hasDiagnostic(masterResult.diagnostics,
+                            "unknown_target_master"));
+
+  CheckRequest outOfGrid = request;
+  outOfGrid.rowId = -1;
+  const std::vector<CheckResult> outOfGridResults =
+      checker.checkPlaceWithOverlays(
+          outOfGrid,
+          makeRect(0,
+                   0,
+                   SITE_COUNT * SITE_WIDTH,
+                   ROW_COUNT * ROW_HEIGHT),
+          std::vector<FillerChanges>{FillerChanges{}});
+  ASSERT_EQ(outOfGridResults.size(), 1u);
+  EXPECT_FALSE(outOfGridResults.front().isLegal);
+  EXPECT_TRUE(hasDiagnostic(outOfGridResults.front().diagnostics,
+                            "placement_out_of_grid"));
+
+  const std::vector<CheckResult> overlayResults =
+      checker.checkPlaceWithOverlays(
+          unknownTarget,
+          makeRect(0,
+                   0,
+                   SITE_COUNT * SITE_WIDTH,
+                   ROW_COUNT * ROW_HEIGHT),
+          std::vector<FillerChanges>{FillerChanges{}});
+  ASSERT_EQ(overlayResults.size(), 1u);
+  EXPECT_FALSE(overlayResults.front().isLegal);
+  EXPECT_TRUE(hasDiagnostic(overlayResults.front().diagnostics,
+                            "unknown_target_instance"));
+
+  Node* mutableNode = network->getNodes().front().get();
+  Master* savedMaster = mutableNode->getMaster();
+  mutableNode->setMaster(nullptr);
+  const CheckResult missingMaster = checker.checkDirect(request);
+  EXPECT_FALSE(missingMaster.isLegal);
+  EXPECT_TRUE(hasDiagnostic(missingMaster.diagnostics,
+                            "target_instance_missing_master"));
+  mutableNode->setMaster(savedMaster);
+}
+
+TEST(InfrastructureNullSafetyTest, RejectsNullOwnedObjectsAndClearedGridAccess)
+{
+  Network emptyNetwork;
+  EXPECT_FALSE(emptyNetwork.addNode(std::unique_ptr<Node>()));
+  EXPECT_FALSE(emptyNetwork.addMaster(std::unique_ptr<Master>()));
+  EXPECT_TRUE(emptyNetwork.getNodes().empty());
+  EXPECT_TRUE(emptyNetwork.getMasters().empty());
+
+  PlannerCheckerFixture fixture;
+  Grid* grid = fixture.grid();
+  ASSERT_NE(grid, nullptr);
+  ASSERT_GT(grid->getRowCount().v, 0);
+  grid->clear();
+  EXPECT_EQ(grid->gridPixel(GridX{0}, GridY{0}), nullptr);
+  EXPECT_EQ(grid->gridX(static_cast<const Node*>(nullptr)).v, 0);
+  grid->paintPixel(nullptr);
+
+  Grid uninitialized;
+  uninitialized.examineRows(nullptr);
+  EXPECT_EQ(uninitialized.getDesMgr(), nullptr);
+  EXPECT_EQ(uninitialized.getRowCount().v, 0);
+}
 
 // --- window probe -----------------------------------------------------------
 //

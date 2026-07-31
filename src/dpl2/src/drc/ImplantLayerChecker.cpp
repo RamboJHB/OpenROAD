@@ -569,17 +569,33 @@ void ImplantLayerChecker::buildMasters()
     for (const std::unique_ptr<Master>& masterPtr : network_->getMasters()) {
         const Master* nm = masterPtr.get();
         if (!nm) {
+            diagnostics_.push_back({"null_network_master",
+                "Network contains a null master slot"});
             continue;
         }
         MasterId mid = nm->getId();
-        uvAssert(mid >= 0 && mid < masterCount);
+        if (mid < 0 || mid >= masterCount) {
+            diagnostics_.push_back({"invalid_network_master_id",
+                makeMessage("master ", mid)});
+            continue;
+        }
         const eLIB::PhysLibCell* physCell = nm->getPhysLibCell();
-        uvAssert(physCell);
+        if (physCell == nullptr) {
+            diagnostics_.push_back({"missing_physical_master",
+                makeMessage("master ", mid)});
+            continue;
+        }
+        const eLIB::TechSite* techSite = physCell->getTechSite();
+        if (techSite == nullptr) {
+            diagnostics_.push_back({"missing_master_site",
+                makeMessage("master ", mid)});
+            continue;
+        }
 
         MasterItem& item = masterItems_[mid];
         item.width = physCell->getWidth().getStorage();
         item.height = physCell->getHeight().getStorage();
-        item.siteHeight = physCell->getTechSite()->getHeight().getStorage();
+        item.siteHeight = techSite->getHeight().getStorage();
         item.masterId = mid;
         item.isFiller = nm->isFiller();
 
@@ -771,7 +787,7 @@ bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
     const eUTL::PhysOrientation& orient,
     std::vector<CellChangeRecord>& fcRecord) const
 {
-    if (!node || !designContextReady_) {
+    if (!node || node->getMaster() == nullptr || !designContextReady_) {
         return false;
     }
     CheckRequest request;
@@ -889,6 +905,39 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
         return result;
     }
     Node* node = network_->getNode(request.instanceId);
+    if (node == nullptr) {
+        result.diagnostics = diagnostics_;
+        result.diagnostics.push_back({"unknown_target_instance",
+            makeMessage("instance ", request.instanceId)});
+        result.isLegal = false;
+        return result;
+    }
+    if (node->getMaster() == nullptr) {
+        result.diagnostics = diagnostics_;
+        result.diagnostics.push_back({"target_instance_missing_master",
+            makeMessage("instance ", request.instanceId)});
+        result.isLegal = false;
+        return result;
+    }
+    const bool targetHasData =
+        request.masterId >= 0 &&
+        request.masterId < static_cast<MasterId>(masterItems_.size()) &&
+        masterItems_[request.masterId].width > 0;
+    if (!targetHasData) {
+        result.diagnostics = diagnostics_;
+        result.diagnostics.push_back({"unknown_target_master",
+            makeMessage("master ", request.masterId)});
+        result.isLegal = false;
+        return result;
+    }
+    if (request.rowId < 0 || request.rowId >= grid_->getRowCount().v
+        || request.colId >= grid_->getRowSiteCount().v) {
+        result.diagnostics = diagnostics_;
+        result.diagnostics.push_back({"placement_out_of_grid",
+            makeMessage("instance ", request.instanceId)});
+        result.isLegal = false;
+        return result;
+    }
     const OverlapInfo& overlap = checkOverlap(node);
     if (overlap.diags) {
         result.diagnostics = diagnostics_;
@@ -951,6 +1000,15 @@ std::vector<CheckResult> ImplantLayerChecker::checkAllNodesDirect() const
     std::vector<CheckResult> results(nodes.size());
     auto run_job = [&](size_t i) {
         const Node* node = nodes[i].get();
+        if (node == nullptr || node->getMaster() == nullptr) {
+            results[i].isLegal = false;
+            results[i].diagnostics = diagnostics_;
+            results[i].diagnostics.push_back({
+                node == nullptr ? "null_network_node"
+                                : "target_instance_missing_master",
+                makeMessage("network node ", static_cast<int>(i))});
+            return;
+        }
         CheckRequest req;
         req.instanceId = node->getId();
         req.masterId = node->getMaster()->getId();
@@ -976,6 +1034,10 @@ CheckShapes ImplantLayerChecker::getSnapshot(const CheckRequest& request,
 CheckShapes snapshot;
 
     const Node* tgtNode = network_->getNode(request.instanceId);
+    if (tgtNode == nullptr || tgtNode->getMaster() == nullptr
+        || siteWidth_ <= 0 || rowHeight_ <= 0) {
+        return snapshot;
+    }
     int width = tgtNode->getWidth().v / siteWidth_;
     int height = tgtNode->getHeight().v / rowHeight_;
     RowId row0 = std::max(request.rowId - 1, 0);
@@ -990,6 +1052,9 @@ CheckShapes snapshot;
                 const Node* node = p->cell;
                 const InstanceId nodeId = node->getId();
                 if (excludedNodes.find(nodeId) != excludedNodes.end()) {
+                    continue;
+                }
+                if (node->getMaster() == nullptr) {
                     continue;
                 }
                 const std::pair<GridX, GridY> coord = grid_->gridXY(node);
@@ -1028,6 +1093,9 @@ CheckShapes ImplantLayerChecker::getOverlaySnapshot(const CheckRequest& request,
                 if (excludedNodes.find(nodeId) != excludedNodes.end()) {
                     continue;
                 }
+                if (node->getMaster() == nullptr) {
+                    continue;
+                }
                 const std::pair<GridX, GridY> coord = grid_->gridXY(node);
                 const CheckShapes& shapes = getNodeShape(nodeId,
                   node->getMaster()->getId(), coord.second.v,
@@ -1049,7 +1117,7 @@ CheckShapes ImplantLayerChecker::getOverlaySnapshot(const CheckRequest& request,
         }
         const InstanceId fillerInstId = network_->getNodeId(*cellId);
         const Node* fillerNode = network_->getNode(fillerInstId);
-        if (!fillerNode) {
+        if (!fillerNode || fillerNode->getMaster() == nullptr) {
             continue;
         }
         const RowId fillerRowId = grid_ ? grid_->gridSnapDownY(fillerNode).v : 0;
@@ -1074,6 +1142,11 @@ CheckShapes ImplantLayerChecker::getNodeShape(InstanceId instanceId,
     bool isCandidate) const
 {
     CheckShapes shapes;
+    if (masterId < 0
+        || static_cast<size_t>(masterId) >= masterItems_.size()
+        || siteWidth_ <= 0 || rowHeight_ <= 0) {
+        return shapes;
+    }
     Dbu originX = colId * siteWidth_;
     Dbu originY = rowId * rowHeight_;
     const MasterItem& master = masterItems_[masterId];
@@ -1590,6 +1663,11 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
     OverlapInfo ImplantLayerChecker::checkOverlap(const Node* node) const
     {
         OverlapInfo info;
+        if (node == nullptr) {
+            info.diags = Diagnostic{"unknown_target_instance",
+                "cannot check overlap for a null node"};
+            return info;
+        }
 
         for (GridX x = grid_->gridX(node); x < grid_->gridEndX(node); x++) {
             for (GridY y = grid_->gridSnapDownY(node);
@@ -1616,8 +1694,27 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
         const FillerChanges& fillerChanges) const
     {
         std::vector<Diagnostic> diagnostics;
+        if (network_ == nullptr) {
+            diagnostics.push_back({"missing_network",
+                "overlay validation requires an initialized Network"});
+            return diagnostics;
+        }
         if (siteWidth_ <= 0) {
             diagnostics.push_back({"placement_not_site_aligned",
+                makeMessage("instance ", request.instanceId)});
+        }
+        if (grid_ == nullptr || request.rowId < 0 || request.colId < 0
+            || request.rowId >= grid_->getRowCount().v
+            || request.colId >= grid_->getRowSiteCount().v) {
+            diagnostics.push_back({"placement_out_of_grid",
+                makeMessage("instance ", request.instanceId)});
+        }
+        const Node* targetNode = network_->getNode(request.instanceId);
+        if (targetNode == nullptr) {
+            diagnostics.push_back({"unknown_target_instance",
+                makeMessage("instance ", request.instanceId)});
+        } else if (targetNode->getMaster() == nullptr) {
+            diagnostics.push_back({"target_instance_missing_master",
                 makeMessage("instance ", request.instanceId)});
         }
         const bool targetHasData =
@@ -1658,6 +1755,11 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
             if (!fillerNode) {
                 diagnostics.push_back({"unknown_filler_instance",
                     makeMessage("unknown filler instance ", fillerInstId)});
+                continue;
+            }
+            if (fillerNode->getMaster() == nullptr) {
+                diagnostics.push_back({"filler_instance_missing_master",
+                    makeMessage("filler instance ", fillerInstId)});
                 continue;
             }
             if (!fillerNode->isFiller()) {
@@ -1974,6 +2076,16 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
             }
             return results;
         }
+        const DiagVec targetDiagnostics = validateOverlayRequest(request, {});
+        if (!targetDiagnostics.empty()) {
+            for (CheckResult& result : results) {
+                result.isLegal = false;
+                result.diagnostics = diagnostics_;
+                result.diagnostics.insert(result.diagnostics.end(),
+                    targetDiagnostics.begin(), targetDiagnostics.end());
+            }
+            return results;
+        }
         const std::vector<Violation> oldViolations = checkOverlayRegion(request,
             guardRegion, {}, false).violations;
         auto run_job = [&](int i) {
@@ -2054,6 +2166,14 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
         std::set<InstanceId> excludedNodes;
         excludedNodes.insert(request.instanceId);
         Node* node = network_->getNode(request.instanceId);
+        if (node == nullptr || node->getMaster() == nullptr) {
+            result.diagnostics.push_back({
+                node == nullptr ? "unknown_target_instance"
+                                : "target_instance_missing_master",
+                makeMessage("instance ", request.instanceId)});
+            result.isLegal = false;
+            return result;
+        }
         const OverlapInfo& overlap = checkOverlap(node);
         if (overlap.diags) {
             result.diagnostics.push_back(*overlap.diags);

@@ -1130,6 +1130,61 @@ TEST_P(FillerRepairEngineE2E, UpdateNodeRefusesAnUnregisteredMaster)
   EXPECT_EQ(target->isFiller(), wasFiller);
 }
 
+TEST_P(FillerRepairEngineE2E, NetworkRejectsNullImportDependencies)
+{
+  ProviderObjects objects(GetParam().setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::Network* network = objects.infrastructure().network();
+  dpl2::Grid* grid = objects.infrastructure().grid();
+  ASSERT_NE(network, nullptr);
+  ASSERT_NE(grid, nullptr);
+
+  dpl2::Node* target
+      = network->getNode(objects.design().cell(frt::CellRole::Target));
+  ASSERT_NE(target, nullptr);
+  ASSERT_NE(target->getMaster(), nullptr);
+  ASSERT_NE(target->getMaster()->getPhysLibCell(), nullptr);
+  const eLIB::PhysLibCell& master = *target->getMaster()->getPhysLibCell();
+  const dpl2::Master* before = target->getMaster();
+  const size_t nodeCount = network->getNodes().size();
+
+  EXPECT_FALSE(network->addNode(
+      objects.design().cell(frt::CellRole::Target), nullptr));
+  EXPECT_EQ(network->getNodes().size(), nodeCount);
+  EXPECT_FALSE(network->updateNode(nullptr, objects.design().desMgr(), master));
+  EXPECT_FALSE(network->updateNode(target, nullptr, master));
+  EXPECT_EQ(target->getMaster(), before);
+
+  dpl2::fillerSetting setting(objects.design().design());
+  setting.addFillerCell(kDefaultFillers);
+  static const dpl2::EdgeTypeTable kNoEdgeTypes;
+  EXPECT_EQ(network->addMaster(master, setting, nullptr, &kNoEdgeTypes),
+            nullptr);
+  EXPECT_EQ(network->addMaster(master, setting, grid, nullptr), nullptr);
+}
+
+TEST_P(FillerRepairEngineE2E, EngineRejectsNullNetworkNode)
+{
+  ProviderObjects objects(GetParam().setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::Network* network = objects.infrastructure().network();
+  ASSERT_NE(network, nullptr);
+  network->getNodes().emplace_back(nullptr);
+
+  dpl2::fillerSetting setting(objects.design().design());
+  setting.addFillerCell(kDefaultFillers);
+  dpl2::fillerRepair::FillerRepairEngine engine(
+      objects.infrastructure().grid(), network);
+  EXPECT_FALSE(engine.init(objects.design().desMgr(), setting));
+  const auto repair = engine.repair(
+      objects.design().cell(frt::CellRole::Target),
+      objects.design().master(frt::MasterRole::TargetNew));
+  EXPECT_FALSE(repair.hasSolution);
+  EXPECT_TRUE(hasDiagnostic(repair.diagnostics, "NullNetworkNode"));
+}
+
 INSTANTIATE_TEST_SUITE_P(
     FiveRowLayouts,
     FillerRepairEngineE2E,

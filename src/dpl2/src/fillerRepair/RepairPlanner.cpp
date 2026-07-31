@@ -180,9 +180,14 @@ SwapGenerationResult generateSwaps(
       });
     }
     log.msg("swapgen",
-            cat("filler ", fillerId, " (row=",
-                view.instance(fillerId)->rowId, " x=",
-                view.instance(fillerId)->x, ") -> ", emitted, " swap(s)"));
+            [&] {
+              const PlacedInstance* filler = view.instance(fillerId);
+              return filler != nullptr
+                         ? cat("filler ", fillerId, " (row=", filler->rowId,
+                               " x=", filler->x, ") -> ", emitted, " swap(s)")
+                         : cat("filler ", fillerId,
+                               " disappeared from PlacementView");
+            });
   }
 
   log.msg("swapgen",
@@ -875,7 +880,9 @@ std::vector<FillerDomain> rankFillers(
     // Domain order: anchor's new VT -> neighbor majority -> stable master id;
     // the third VT (neither) last -- demoted within THIS domain only, so it
     // stays reachable in every subset the filler joins.
-    const VtId majorityVt = neighborMajorityVt(view, *view.instance(id));
+    const PlacedInstance* filler = view.instance(id);
+    const VtId majorityVt =
+        filler != nullptr ? neighborMajorityVt(view, *filler) : kUnknownVt;
     const auto optionKey = [&](const Swap& s) {
       const bool third = s.newVt != anchorVt && s.newVt != majorityVt;
       const int anchorVote = s.newVt == anchorVt ? 0 : 1;
@@ -1591,6 +1598,45 @@ FillerRepairResult RepairPlanner::repair(
     std::atomic<bool>& flag;
     ~ActiveGuard() { flag.store(false, std::memory_order_release); }
   } activeGuard{repair_active_};
+
+  const std::vector<RowId>& viewRows = view_.rows();
+  if (viewRows.empty() || view_.siteWidth() <= 0) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Fatal,
+        "InvalidPlacementView",
+        cat("placement view has no usable grid: rows=", viewRows.size(),
+            " siteWidth=", view_.siteWidth())));
+    return result;
+  }
+  const PlacedInstance* currentTarget =
+      view_.instance(request.targetPlace.instanceId);
+  if (currentTarget == nullptr) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Fatal,
+        "UnknownTarget",
+        cat("target instance ", request.targetPlace.instanceId,
+            " is absent from the placement view")));
+    return result;
+  }
+  if (view_.masterInfo(currentTarget->masterId) == nullptr
+      || view_.masterInfo(request.targetPlace.masterId) == nullptr) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Fatal,
+        "UnknownTargetMaster",
+        cat("target instance ", request.targetPlace.instanceId,
+            " references unavailable current/replacement master metadata")));
+    return result;
+  }
+  if (std::find(viewRows.begin(), viewRows.end(), request.targetPlace.rowId)
+          == viewRows.end()
+      || request.targetPlace.x < 0) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Fatal,
+        "InvalidTargetPlacement",
+        cat("target placement is outside the view: row=",
+            request.targetPlace.rowId, " x=", request.targetPlace.x)));
+    return result;
+  }
 
   // The transcript starts with both the immutable request and every search
   // knob. This makes a runtime failure reproducible from one captured log

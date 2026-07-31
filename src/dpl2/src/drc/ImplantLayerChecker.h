@@ -289,7 +289,10 @@ public:
     int getMaxRuleValue() const {return maxRuleValue_;}
     void setMaxRuleValue();
     const std::vector<std::unique_ptr<Node>>& getNodes() const
-    {return network_->getNodes();}
+    {
+        static const std::vector<std::unique_ptr<Node>> empty;
+        return network_ != nullptr ? network_->getNodes() : empty;
+    }
     const std::vector<Layer>& getLayers() const {return layers_;}
     const std::vector<Diagnostic>& getDiags() const {return diagnostics_;}
     size_t mergedShapeCount() const;

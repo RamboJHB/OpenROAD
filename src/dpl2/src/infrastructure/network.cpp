@@ -114,6 +114,9 @@ std::pair<int, int> getMasterPwrs(const eLIB::PhysLibCell& master)
   bool isGnd = false;
 
   for (const eLIB::PhysLibPort* port : master.getPorts()) {
+    if (port == nullptr) {
+      continue;
+    }
     if (port->getUse() == eLIB::SignalTypeE::POWER) {
       isVdd = true;
       for (const eLIB::PhysLibTerm& pin : port->getLibTermIter()) {
@@ -156,7 +159,8 @@ std::pair<int, int> getMasterPwrs(const eLIB::PhysLibCell& master)
 Master* Network::getMaster(LibCellID db_master)
 {
   auto it = master_to_idx_.find(db_master);
-  if (it == master_to_idx_.end()) {
+  if (it == master_to_idx_.end() || it->second < 0
+      || static_cast<size_t>(it->second) >= masters_.size()) {
     return nullptr;
   }
   return masters_[it->second].get();
@@ -167,6 +171,9 @@ Master* Network::addMaster(const PhysLibCell& db_master,
                            const Grid* grid,
                            const EdgeTypeTable* edge_types)
 {
+  if (grid == nullptr || edge_types == nullptr) {
+    return nullptr;
+  }
   LibCellID masterId = db_master.getLibCellId();
   const auto it = master_to_idx_.find(masterId);
   if (it != master_to_idx_.end()) {
@@ -256,20 +263,31 @@ Master* Network::addMaster(const PhysLibCell& db_master,
 Node* Network::getNode(LeafCellID cellId)
 {
   auto it = inst_to_node_idx_.find(cellId);
-  if (it == inst_to_node_idx_.end()) {
+  if (it == inst_to_node_idx_.end() || it->second < 0
+      || static_cast<size_t>(it->second) >= nodes_.size()) {
     return nullptr;
   }
   return nodes_[it->second].get();
 }
 
-void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
+bool Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
 {
+  if (desMgr == nullptr) {
+    return false;
+  }
+  const PhysCell& inst = desMgr->getPhysCell(cellId);
+  if (!inst.isValid()) {
+    return false;
+  }
+  Master* master = getMaster(inst.getPhysMaster().getLibCellId());
+  if (master == nullptr) {
+    return false;
+  }
+
   Node ndi;
   const int id = nodes_.size();
-  const PhysCell& inst = desMgr->getPhysCell(cellId);
   ndi.setId(id);
   ndi.setDbInst(cellId);
-  auto master = getMaster(inst.getPhysMaster().getLibCellId());
   ndi.setType(master->isFiller() ? Node::FILLER : Node::CELL);
   ndi.setMaster(master);
   ndi.setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
@@ -290,14 +308,21 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
   nodes_.emplace_back(std::make_unique<Node>(ndi));
   inst_to_node_idx_[cellId] = id;
   ++cells_cnt_;
+  return true;
 }
 
 bool Network::updateNode(Node* ndi,
                          const PhysDesMgr* desMgr,
                          const PhysLibCell& physLibCell)
 {
+  if (ndi == nullptr || desMgr == nullptr) {
+    return false;
+  }
   LeafCellID cellId = ndi->getDbInst();
   const PhysCell& inst = desMgr->getPhysCell(cellId);
+  if (!inst.isValid()) {
+    return false;
+  }
   auto master = getMaster(physLibCell.getLibCellId());
   // [fillerRepair-fix] this is what the bool return was for. An unregistered
   // master used to be stored and then dereferenced a few lines down

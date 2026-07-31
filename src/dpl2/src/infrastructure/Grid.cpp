@@ -64,6 +64,19 @@ void Grid::allocateGrid()
 void Grid::examineRows(PhysDesMgr* desMgr)
 {
   desMgr_ = desMgr;
+  pixels_.clear();
+  row_y_dbu_to_index_.clear();
+  row_index_to_y_dbu_.clear();
+  row_index_to_pixel_height_.clear();
+  row_sites_.clear();
+  uniform_row_height_.reset();
+  site_width_ = DbuX{0};
+  row_count_ = GridY{0};
+  row_site_count_ = GridX{0};
+  if (desMgr_ == nullptr) {
+    return;
+  }
+
   const TechSite* first_site = nullptr;
 
   visitDbRows(desMgr, [&](const PhysRow& row) {
@@ -121,8 +134,14 @@ void Grid::examineRows(PhysDesMgr* desMgr)
       uniform_row_height_ = DbuY{site_height};
     }
   });
-  row_site_count_ = GridX{divFloor(getCore().dx().getStorage(), getSiteWidth().v)};
-  row_count_ = GridY{static_cast<int>(row_y_dbu_to_index_.size() - 1)};
+  if (site_width_.v > 0) {
+    row_site_count_
+        = GridX{divFloor(getCore().dx().getStorage(), getSiteWidth().v)};
+  }
+  if (!row_y_dbu_to_index_.empty()) {
+    row_count_
+        = GridY{static_cast<int>(row_y_dbu_to_index_.size() - 1)};
+  }
 }
 
 std::unordered_set<int> Grid::getRowCoordinates() const
@@ -138,6 +157,11 @@ void Grid::markHopeless(PhysDesMgr* desMgr,
                         const int max_displacement_x,
                         const int max_displacement_y)
 {
+  if (desMgr == nullptr || site_width_.v <= 0 || row_count_ <= 0
+      || row_site_count_ <= 0) {
+    return;
+  }
+
   namespace gtl = boost::polygon;
   using gtl::operators::operator+=;
   using gtl::operators::operator-=;
@@ -153,9 +177,14 @@ void Grid::markHopeless(PhysDesMgr* desMgr,
     const GridX x_end{x_start + db_row.getSiteCnt()};
     const GridY y_row{gridSnapDownY(DbuY{(orig.getY()
         - core_.getYL()).getStorage()})};
+    if (y_row.v < 0 || static_cast<size_t>(y_row.v) >= row_sites_.size()) {
+      return;
+    }
     for (GridX x{x_start}; x < x_end; x++) {
       Pixel* pixel = gridPixel(x, y_row);
-      pixel->is_valid = true;
+      if (pixel != nullptr) {
+        pixel->is_valid = true;
+      }
     }
     row_sites_[y_row.v].add(
         {{x_start.v, x_end.v},
@@ -184,6 +213,9 @@ void Grid::markHopeless(PhysDesMgr* desMgr,
 
 void Grid::markBlocked(PhysDesMgr* desMgr)
 {
+  if (desMgr == nullptr) {
+    return;
+  }
   const Rect core = getCore();
   std::function<void(const Rect&, TechLayer)> addBlockedLayers
       = [&](Rect wire_rect, TechLayer tech_layer) {
@@ -247,7 +279,7 @@ struct ShieldWireVisitor :
 tbb::task_arena arena;
 ShieldWireVisitor swVisitor{addBlockedLayers, desMgr};
 desMgr->iterateAllPhysNets(arena, swVisitor, /*inclFlat=*/true, /*inclPg=*/false);
-for (const PhysBlockage& blockage : desMgr_->getPhysBlockageIter()) {
+for (const PhysBlockage& blockage : desMgr->getPhysBlockageIter()) {
   if (blockage.isSoft()) {
     continue;
   }
@@ -276,6 +308,9 @@ void Grid::initGrid(PhysDesMgr* desMgr,
                     int max_displacement_x,
                     int max_displacement_y)
 {
+  if (desMgr == nullptr || desMgr_ != desMgr || padding == nullptr) {
+    return;
+  }
   padding_ = std::move(padding);
 
   allocateGrid();
@@ -287,7 +322,9 @@ void Grid::initGrid(PhysDesMgr* desMgr,
 Pixel* Grid::gridPixel(GridX grid_x, GridY grid_y) const
 {
   if (grid_x >= 0 && grid_x < row_site_count_ && grid_y >= 0
-    && grid_y < row_count_) {
+      && grid_y < row_count_
+      && static_cast<size_t>(grid_y.v) < pixels_.size()
+      && static_cast<size_t>(grid_x.v) < pixels_[grid_y.v].size()) {
     return const_cast<Pixel*>(&pixels_[grid_y.v][grid_x.v]);
   }
   return nullptr;
@@ -296,7 +333,10 @@ Pixel* Grid::gridPixel(GridX grid_x, GridY grid_y) const
 void Grid::visitDbRows(const PhysDesMgr* desMgr,
                     const std::function<void(const PhysRow&)>& func) const
 {
-  for (const auto& row : desMgr_->getPhysRowIter()) {
+  if (desMgr == nullptr || !func) {
+    return;
+  }
+  for (const auto& row : desMgr->getPhysRowIter()) {
     if (row.getSite().getIsPad() == false) {
       func(row);
     }
@@ -327,6 +367,9 @@ void Grid::applyCellContribution(Node* node,
                                  GridY y_end,
                                  float scale)
 {
+  if (node == nullptr) {
+    return;
+  }
   const int cell_pixel_count = countValidPixels(x_begin, y_begin, x_end, y_end);
   if (cell_pixel_count == 0) {
     return;
@@ -363,36 +406,47 @@ void Grid::applyCellContribution(Node* node,
 
 GridX Grid::gridX(DbuX x) const
 {
-  return GridX{x.v / getSiteWidth().v};
+  return getSiteWidth().v > 0 ? GridX{x.v / getSiteWidth().v} : GridX{0};
 }
 
 GridX Grid::gridEndX(DbuX x) const
 {
-  return GridX{divCeil(x.v, getSiteWidth().v)};
+  return getSiteWidth().v > 0 ? GridX{divCeil(x.v, getSiteWidth().v)}
+                              : GridX{0};
 }
 
 GridX Grid::gridX(const Node* cell) const
 {
-  return gridX(cell->getLeft());
+  return cell != nullptr ? gridX(cell->getLeft()) : GridX{0};
 }
 
 GridX Grid::gridEndX(const Node* cell) const
 {
+  if (cell == nullptr || getSiteWidth().v <= 0) {
+    return GridX{0};
+  }
   return GridX{
       divCeil((cell->getLeft() + cell->getWidth()).v, getSiteWidth().v)};
 }
 
 GridX Grid::gridPaddedX(const Node* cell) const
 {
-  return gridX(cell->getLeft()
-             - gridToDbu(padding_->padLeft(cell), getSiteWidth()));
+  if (cell == nullptr) {
+    return GridX{0};
+  }
+  const GridX pad = padding_ != nullptr ? padding_->padLeft(cell) : GridX{0};
+  return gridX(cell->getLeft() - gridToDbu(pad, getSiteWidth()));
 }
 
 GridX Grid::gridPaddedEndX(const Node* cell) const
 {
+  if (cell == nullptr || getSiteWidth().v <= 0) {
+    return GridX{0};
+  }
   const DbuX site_width = getSiteWidth();
+  const GridX pad = padding_ != nullptr ? padding_->padRight(cell) : GridX{0};
   const DbuX end_x = cell->getLeft() + cell->getWidth()
-                 + gridToDbu(padding_->padRight(cell), site_width);
+                     + gridToDbu(pad, site_width);
   return GridX{divCeil(end_x.v, site_width.v)};
 }
 
@@ -411,6 +465,9 @@ GridY Grid::gridSnapDownY(DbuY y) const
 
 GridY Grid::gridRoundY(DbuY y) const
 {
+  if (row_index_to_y_dbu_.empty()) {
+    return GridY{0};
+  }
   const auto grid_y = gridSnapDownY(y);
   if (grid_y < row_index_to_y_dbu_.size() - 1) {
     const auto grid_next = grid_y + 1;
@@ -436,13 +493,15 @@ GridY Grid::gridEndY(DbuY y) const
 
 GridY Grid::gridSnapDownY(const Node* cell) const
 {
-  return gridSnapDownY(cell->getBottom());
+  return cell != nullptr ? gridSnapDownY(cell->getBottom()) : GridY{0};
 }
 
 // [fillerRepair-fix] see Grid.h: (column, row) of a placed node.
 std::pair<GridX, GridY> Grid::gridXY(const Node* cell) const
 {
-  return {gridX(cell), gridSnapDownY(cell)};
+  return cell != nullptr
+             ? std::make_pair(gridX(cell), gridSnapDownY(cell))
+             : std::make_pair(GridX{0}, GridY{0});
 }
 
 // See Grid.h. Walks pixels outward and counts DISTINCT placed cells; a cell
@@ -529,30 +588,45 @@ Rect Grid::getBoundingBox(const Rect& region, int rings) const
 
 GridY Grid::gridRoundY(const Node* cell) const
 {
-  return gridRoundY(cell->getBottom());
+  return cell != nullptr ? gridRoundY(cell->getBottom()) : GridY{0};
 }
 
 GridY Grid::gridEndY(const Node* cell) const
 {
-  return gridEndY(cell->getBottom() + cell->getHeight());
+  return cell != nullptr
+             ? gridEndY(cell->getBottom() + cell->getHeight())
+             : GridY{0};
 }
 
 DbuY Grid::gridYToDbu(GridY y) const
 {
+  if (y.v < 0 || row_index_to_y_dbu_.empty()) {
+    return DbuY{0};
+  }
   if (y == row_index_to_y_dbu_.size()) {
     return DbuY{core_.getYH().getStorage() - core_.getYL().getStorage()};
+  }
+  if (static_cast<size_t>(y.v) > row_index_to_y_dbu_.size()) {
+    return DbuY{0};
   }
   return row_index_to_y_dbu_.at(y.v);
 }
 
 GridX Grid::gridPaddedWidth(const Node* cell) const
 {
-  return GridX{divCeil(padding_->paddedWidth(cell).v, getSiteWidth().v)};
+  if (cell == nullptr || getSiteWidth().v <= 0) {
+    return GridX{0};
+  }
+  const DbuX width = padding_ != nullptr ? padding_->paddedWidth(cell)
+                                        : cell->getWidth();
+  return GridX{divCeil(width.v, getSiteWidth().v)};
 }
 
 GridX Grid::gridWidth(const Node* cell) const
 {
-  return GridX{divCeil(cell->getWidth().v, getSiteWidth().v)};
+  return cell != nullptr && getSiteWidth().v > 0
+             ? GridX{divCeil(cell->getWidth().v, getSiteWidth().v)}
+             : GridX{0};
 }
 
 GridY Grid::gridHeight(const PhysLibCell& master) const
@@ -572,6 +646,9 @@ GridY Grid::gridHeight(const PhysLibCell& master) const
 
 GridY Grid::gridHeight(const Node* cell) const
 {
+  if (cell == nullptr) {
+    return GridY{1};
+  }
   if (uniform_row_height_) {
     DbuY row_height = uniform_row_height_.value();
     return GridY{std::max(1, divCeil(cell->getHeight().v, row_height.v))};
@@ -579,7 +656,11 @@ GridY Grid::gridHeight(const Node* cell) const
   if (!cell->getDbInst().isValid()) {
     return GridY{1};
   }
-  const PhysLibCell* master = cell->getMaster()->getPhysLibCell();
+  const Master* networkMaster = cell->getMaster();
+  if (networkMaster == nullptr || networkMaster->getPhysLibCell() == nullptr) {
+    return GridY{1};
+  }
+  const PhysLibCell* master = networkMaster->getPhysLibCell();
   if (!master->hasSitePattern()) {
     return GridY{1};
   }
@@ -640,8 +721,18 @@ void Grid::visitCellPixels(
     bool padded,
     const std::function<void(Pixel* pixel, bool padded)>& visitor) const
 {
+  if (cell == nullptr || desMgr_ == nullptr || !visitor) {
+    return;
+  }
+  const Master* networkMaster = cell->getMaster();
+  if (networkMaster == nullptr || networkMaster->getPhysLibCell() == nullptr) {
+    return;
+  }
   const PhysCell& inst = desMgr_->getPhysCell(cell->getDbInst());
-  auto obstructions = cell->getMaster()->getPhysLibCell()->getObstruction();
+  if (!inst.isValid()) {
+    return;
+  }
+  auto obstructions = networkMaster->getPhysLibCell()->getObstruction();
   bool have_obstructions = false;
   const Rect core = getCore();
 
@@ -668,8 +759,10 @@ void Grid::visitCellPixels(
   }
   if (!have_obstructions) {
     const auto grid_box = gridCovering(cell);
-    auto pad_left = padded ? padding_->padLeft(cell) : GridX{0};
-    auto pad_right = padded ? padding_->padRight(cell) : GridX{0};
+    auto pad_left = padded && padding_ != nullptr ? padding_->padLeft(cell)
+                                                  : GridX{0};
+    auto pad_right = padded && padding_ != nullptr ? padding_->padRight(cell)
+                                                   : GridX{0};
 
     auto x_start = grid_box.xlo - pad_left;
     auto x_end = grid_box.xhi + pad_right;
@@ -692,7 +785,14 @@ void Grid::visitCellBoundaryPixels(
         void(Pixel* pixel, int edgeDirection, GridX x, GridY y)>& visitor)
 const
 {
+  if (desMgr_ == nullptr || !visitor || cell.getMaster() == nullptr
+      || cell.getMaster()->getPhysLibCell() == nullptr) {
+    return;
+  }
   const PhysCell& inst = desMgr_->getPhysCell(cell.getDbInst());
+  if (!inst.isValid()) {
+    return;
+  }
 
   auto visit = [&visitor, this](const GridX x_start,
                                 const GridX x_end,
@@ -755,11 +855,17 @@ const
 
 void Grid::paintPixel(Node* cell)
 {
+  if (cell == nullptr) {
+    return;
+  }
   paintPixel(cell, gridX(cell), gridSnapDownY(cell));
 }
 
 void Grid::erasePixel(Node* cell)
 {
+  if (cell == nullptr) {
+    return;
+  }
   const auto grid_rect = gridCoveringPadded(cell);
   // debugPrint(logger_,
   //           DPL,
@@ -801,6 +907,9 @@ void Grid::erasePixel(Node* cell)
 
 void Grid::paintPixel(Node* cell, GridX grid_x, GridY grid_y)
 {
+  if (cell == nullptr) {
+    return;
+  }
   // Paint the actual cell footprint (not including padding)
   GridX cell_x_end = grid_x + gridWidth(cell);
   GridY cell_y_end = gridEndY(gridYToDbu(grid_y) + cell->getHeight());
@@ -821,6 +930,9 @@ void Grid::paintPixel(Node* cell, GridX grid_x, GridY grid_y)
 }
 void Grid::paintCellPadding(Node* cell)
 {
+  if (cell == nullptr) {
+    return;
+  }
   auto grid_x_begin = gridX(cell);
   auto grid_y_begin = gridSnapDownY(cell);
   auto grid_x_end = grid_x_begin + gridWidth(cell);
@@ -834,6 +946,9 @@ void Grid::paintCellPadding(Node* cell,
                             const GridX grid_x_end,
                             const GridY grid_y_end)
 {
+  if (cell == nullptr || padding_ == nullptr) {
+    return;
+  }
   GridX left_pad = padding_->padLeft(cell);
   GridX right_pad = padding_->padRight(cell);
 
@@ -870,6 +985,9 @@ GridRect Grid::gridCovering(const Rect& rect) const
 
 GridRect Grid::gridCovering(const Node* cell) const
 {
+  if (cell == nullptr) {
+    return GridRect{GridX{0}, GridY{0}, GridX{0}, GridY{0}};
+  }
   return {.xlo = gridX(cell),
           .ylo = gridSnapDownY(cell),
           .xhi = gridEndX(cell),
@@ -878,6 +996,9 @@ GridRect Grid::gridCovering(const Node* cell) const
 
 GridRect Grid::gridCoveringPadded(const Node* cell) const
 {
+  if (cell == nullptr) {
+    return GridRect{GridX{0}, GridY{0}, GridX{0}, GridY{0}};
+  }
   return {.xlo = gridPaddedX(cell),
           .ylo = gridSnapDownY(cell),
           .xhi = gridPaddedEndX(cell),
@@ -895,6 +1016,9 @@ GridRect Grid::gridWithin(const DbuRect& rect) const
 std::optional<PhysOrientation>
 Grid::getSiteOrientation(GridX x, GridY y, std::string site_name) const
 {
+  if (y.v < 0 || static_cast<size_t>(y.v) >= row_sites_.size()) {
+    return {};
+  }
   const RowSitesMap& sites_map = row_sites_[y.v];
   auto interval_it = sites_map.find(x.v);
   if (interval_it == sites_map.end()) {
