@@ -543,12 +543,17 @@ LibCellID libCellId(MasterId masterId)
 // One candidate: recolour the scenario's bridge filler to `masterId`.
 FillerChanges bridgeSwap(const Scenario& scn, MasterId masterId)
 {
-  return FillerChanges{FillerCellRecord{OpType::Replace,
-                                        leafCellId(scn.row, scn.bridgeCol),
+  return FillerChanges{CellChangeRecord{OpType::Replace,
+                                        CellData{leafCellId(
+                                            scn.row, scn.bridgeCol)},
                                         UvDist(0),
                                         UvDist(0),
                                         LibCellID(),
-                                        libCellId(masterId)}};
+                                        libCellId(masterId),
+                                        PhysOrientation(
+                                            (scn.row % 2) != 0
+                                                ? PhysOrientationE::MX
+                                                : PhysOrientationE::R0)}};
 }
 
 bool hasViolation(const CheckResult& result,
@@ -756,26 +761,28 @@ class PortablePlacementView final : public fr::PlacementView
     return filler_master_ids_;
   }
 
-  FillerCellRecord fillerCellRecord(fr::InstanceId instanceId,
+  CellChangeRecord cellChangeRecord(fr::InstanceId instanceId,
                                     fr::MasterId newMasterId) const override
   {
     const fr::PlacedInstance* placed = instance(instanceId);
     if (placed == nullptr) {
-      return FillerCellRecord{OpType::Replace,
-                              LeafCellID(0, 0),
+      return CellChangeRecord{OpType::Replace,
+                              CellData{LeafCellID(0, 0)},
                               UvDist(static_cast<int64_t>(0)),
                               UvDist(static_cast<int64_t>(0)),
                               LibCellID(0, 0),
-                              LibCellID(0, 0)};
+                              LibCellID(0, 0),
+                              PhysOrientation(PhysOrientationE::R0)};
     }
-    return FillerCellRecord{
+    return CellChangeRecord{
         OpType::Replace,
-        leafCellId(placed->rowId,
-                   static_cast<ColId>(placed->x / siteWidth())),
+        CellData{leafCellId(
+            placed->rowId, static_cast<ColId>(placed->x / siteWidth()))},
         UvDist(placed->x),
         UvDist(placed->rowId * ROW_HEIGHT),
         libCellId(placed->masterId),
-        libCellId(newMasterId)};
+        libCellId(newMasterId),
+        toCheckerOrient(placed->orientation)};
   }
 
  private:
@@ -972,7 +979,7 @@ bool sameChanges(const dpl2::ipl::FillerChanges& left,
     return false;
   }
   for (size_t index = 0; index < left.size(); ++index) {
-    if (!fr::sameFillerCellRecord(left[index], right[index])) {
+    if (!fr::sameCellChangeRecord(left[index], right[index])) {
       return false;
     }
   }
@@ -1341,6 +1348,30 @@ TEST_P(ImplantCheckerOverlayDensityTest, BatchResultsCorrelateByInputOrder)
   }
 }
 
+TEST(ImplantCheckerOverlayTest, ReplaceRejectsNamedCellData)
+{
+  const Scenario& scn = SCN_MID;
+  const FillerChanges invalidChange{
+      CellChangeRecord{OpType::Replace,
+                       CellData{std::string("future_added_filler")},
+                       UvDist(0),
+                       UvDist(0),
+                       LibCellID(),
+                       libCellId(bridgeRepairMaster(scn)),
+                       PhysOrientation(PhysOrientationE::R0)}};
+  const std::vector<CheckResult> results
+      = check(retargeted(scn), {invalidChange}, FILLER_50_STD_50);
+
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_FALSE(results.front().isLegal);
+  EXPECT_TRUE(std::any_of(
+      results.front().diagnostics.begin(),
+      results.front().diagnostics.end(),
+      [](const Diagnostic& diagnostic) {
+        return diagnostic.status == "changed_cell_data_not_leaf_id";
+      }));
+}
+
 TEST(ImplantCheckerOverlayTest,
      TargetViolationIsDetectedWhenChangedNeighborIsOutsideGuard)
 {
@@ -1363,12 +1394,14 @@ TEST(ImplantCheckerOverlayTest,
                                       (scn.col + 4) * SITE_WIDTH,
                                       targetY + ROW_HEIGHT);
   const FillerChanges outsideGuard{
-      FillerCellRecord{OpType::Replace,
-                       leafCellId(OLD_UNRELATED_ROW, OLD_UNRELATED_COL + 1),
+      CellChangeRecord{OpType::Replace,
+                       CellData{leafCellId(
+                           OLD_UNRELATED_ROW, OLD_UNRELATED_COL + 1)},
                        UvDist(0),
                        UvDist(0),
                        LibCellID(),
-                       libCellId(F3_FILL_MASTER)}};
+                       libCellId(F3_FILL_MASTER),
+                       PhysOrientation(PhysOrientationE::R0)}};
   const std::vector<CheckResult> results = checker.checkPlaceWithOverlays(
       retargeted(scn), scenarioGuard, {outsideGuard});
 
@@ -1543,9 +1576,9 @@ TEST_P(FillerRepairCheckerDensityE2ETest, PrefersTheSingleBridgeSwap)
   ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
   EXPECT_EQ(result.changes.size(), 1u);
   ASSERT_FALSE(result.changes.empty());
-  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes.front()),
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes.front()),
             bridgeInstance(scn));
-  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes.front()),
+  EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes.front()),
             bridgeRepairMaster(scn));
 }
 
@@ -1669,8 +1702,8 @@ TEST(FillerRepairCheckerE2ETest, SingleAllowedFillerMasterRemainsReachable)
   ASSERT_FALSE(result.changes.empty());
   EXPECT_TRUE(std::all_of(result.changes.begin(),
                           result.changes.end(),
-                          [only](const dpl2::FillerCellRecord& change) {
-                            return fr::fillerRecordNewMasterId(change) == only;
+                          [only](const dpl2::CellChangeRecord& change) {
+                            return fr::cellChangeRecordNewMasterId(change) == only;
                           }));
   EXPECT_TRUE(fixture.verify(SCN_MID, result.changes).isLegal);
 }
@@ -1844,15 +1877,15 @@ TEST(FillerRepairCheckerE2ETest, ReturnedChangesTouchOnlySameSizeFillers)
       = fixture.repair(SCN_LEFT_EDGE, baseline.violations);
   ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
   ASSERT_FALSE(result.changes.empty());
-  for (const dpl2::FillerCellRecord& change : result.changes) {
+  for (const dpl2::CellChangeRecord& change : result.changes) {
     const fr::PlacedInstance* instance
-        = fixture.view().instance(fr::fillerRecordInstanceId(change));
+        = fixture.view().instance(fr::cellChangeRecordInstanceId(change));
     ASSERT_NE(instance, nullptr);
     EXPECT_TRUE(instance->isFiller);
     const fr::MasterInfo* oldMaster
         = fixture.view().masterInfo(instance->masterId);
     const fr::MasterInfo* newMaster
-        = fixture.view().masterInfo(fr::fillerRecordNewMasterId(change));
+        = fixture.view().masterInfo(fr::cellChangeRecordNewMasterId(change));
     ASSERT_NE(oldMaster, nullptr);
     ASSERT_NE(newMaster, nullptr);
     EXPECT_EQ(oldMaster->width, newMaster->width);
@@ -1873,9 +1906,9 @@ TEST(FillerRepairCheckerE2ETest, ChangesStayInsideTheRepairWindow)
     const fr::FillerRepairResult result
         = fixture.repair(scn, baseline.violations);
     ASSERT_TRUE(result.hasSolution) << plannerDiagnostics(result);
-    for (const dpl2::FillerCellRecord& change : result.changes) {
+    for (const dpl2::CellChangeRecord& change : result.changes) {
       const fr::PlacedInstance* placed
-          = fixture.view().instance(fr::fillerRecordInstanceId(change));
+          = fixture.view().instance(fr::cellChangeRecordInstanceId(change));
       ASSERT_NE(placed, nullptr);
       EXPECT_LE(std::abs(placed->rowId - scn.row), 1);
       EXPECT_LE(std::abs(placed->x - scn.col * SITE_WIDTH),
@@ -1928,9 +1961,9 @@ TEST(FillerRepairCheckerE2ETest,
   // Contiguous with the retargeted cell: a run is only as wide as its
   // uninterrupted sites, so a scattered triple could not have been accepted.
   std::vector<ColId> columns{SCN_WIDE_RULE.col};
-  for (const dpl2::FillerCellRecord& change : result.changes) {
+  for (const dpl2::CellChangeRecord& change : result.changes) {
     const fr::PlacedInstance* placed
-        = fixture.view().instance(fr::fillerRecordInstanceId(change));
+        = fixture.view().instance(fr::cellChangeRecordInstanceId(change));
     ASSERT_NE(placed, nullptr);
     EXPECT_EQ(placed->rowId, SCN_WIDE_RULE.row);
     columns.push_back(static_cast<ColId>(placed->x / SITE_WIDTH));

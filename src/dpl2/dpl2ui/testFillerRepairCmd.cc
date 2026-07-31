@@ -186,7 +186,7 @@ const eLIB::PhysLibCell* findMaster(Network* network, int masterId)
 struct ProposalResult
 {
   bool legal = false;
-  std::vector<FillerCellRecord> changes;
+  std::vector<CellChangeRecord> changes;
 };
 
 ProposalResult evaluateProposal(const ipl::ImplantLayerChecker& checker,
@@ -206,13 +206,19 @@ ProposalResult evaluateProposal(const ipl::ImplantLayerChecker& checker,
   return result;
 }
 
-void printChanges(const std::vector<FillerCellRecord>& changes,
+void printChanges(const std::vector<CellChangeRecord>& changes,
                   const std::function<std::string(LibCellID)>& nameOf,
                   const char* indent)
 {
-  for (const FillerCellRecord& record : changes) {
-    std::cout << indent << "filler cell=" << record.cell_id_.getIndexValue()
-              << " at (" << record.origin_x_.getStorage() << ","
+  for (const CellChangeRecord& record : changes) {
+    std::cout << indent << "filler cell=";
+    if (const LeafCellID* cellId
+        = std::get_if<LeafCellID>(&record.cell_data_)) {
+      std::cout << cellId->getIndexValue();
+    } else {
+      std::cout << std::get<std::string>(record.cell_data_);
+    }
+    std::cout << " at (" << record.origin_x_.getStorage() << ","
               << record.origin_y_.getStorage() << ")  master "
               << record.orig_lib_cell_.getIndexValue() << " ("
               << nameOf(record.orig_lib_cell_) << ") -> "
@@ -412,7 +418,7 @@ bool TestFillerRepairCmd::exec()
       continue;
     }
     ++baselineChecked;
-    std::vector<FillerCellRecord> fcRecord;
+    std::vector<CellChangeRecord> fcRecord;
     const bool legal = checker.check(node.get(), grid->gridX(node.get()),
                                      grid->gridSnapDownY(node.get()),
                                      node->getOrient(), fcRecord);

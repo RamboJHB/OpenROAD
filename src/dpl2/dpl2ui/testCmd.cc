@@ -47,7 +47,7 @@ class TestEcoFlowCmd::FakeDrcFixer
       LibCellID currentLcId = node->getMaster()->getDbMaster();
       checked++;
 
-      std::vector<FillerCellRecord> fcRecord;
+      std::vector<CellChangeRecord> fcRecord;
 
       // Check if the current placement has a DRC violation
       if (!de_place_->isLegal(cellId, currentLcId, fcRecord)) {
@@ -115,7 +115,7 @@ private:
   // Persist the libcell swap in the DePlace internal cache
   // !! not commit to udm
   void persistSwap(LeafCellID cellId, LibCellID origLcId,
-      LibCellID newLcId, const std::vector<FillerCellRecord>& fcRecord)
+      LibCellID newLcId, const std::vector<CellChangeRecord>& fcRecord)
   {
     const PhysLibCell& newPhysCell = design_->getLibAcc().getPhysLibCell(newLcId);
     Node* cell = de_place_->getNetwork()->getNode(cellId);

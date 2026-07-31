@@ -22,7 +22,7 @@ Checker DRC rules, shapes, scan behaviour and blocking-violation logic are
 ```cpp
 bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
                                 const PhysOrientation& orient,
-                                std::vector<FillerCellRecord>& fcRecord) const;
+                                std::vector<CellChangeRecord>& fcRecord) const;
 ```
 
 The caller (opto) owns the vector. On a DRC-illegal candidate the checker
@@ -65,8 +65,11 @@ integrations that replace the context.
 - checker `InstanceId` = `Node::getId()`; `MasterId` = `Master::getId()`;
 - physical handles: `LeafCellID` / `LibCellID`;
 - shared record (owned by `infrastructure/Objects.h`):
-  `FillerCellRecord{Replace, cell_id_, origin_x_, origin_y_, orig_lib_cell_,
-  new_lib_cell_}`; `ipl::FillerChanges` is the checker-side vector alias.
+  `CellChangeRecord{Replace, CellData{LeafCellID}, origin_x_, origin_y_,
+  orig_lib_cell_, new_lib_cell_, orientation_}`; `ipl::FillerChanges` is the
+  checker-side vector alias. `CellData` may also carry a `std::string` for a
+  future named `Add`, but the current swap-only overlay rejects anything other
+  than `Replace + LeafCellID`.
 
 Planner requests, checker calls and the public result all carry that **same**
 record — there is no second representation to drift.
@@ -291,10 +294,10 @@ partial repair; it never reinterprets or bypasses checker legality.
 
 ## 6. Verified boundary
 
-85 portable planner cases and 75 portable real-checker cases build, link and
+85 portable planner cases and 76 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
-gate (160/160, normal and ASan). Repository-local fake-UDM engine regression:
-95 cases. Full local suite 255/255, normal and ASan.
+gate (161/161, normal and ASan). Repository-local fake-UDM engine regression:
+95 cases. Full local suite 256/256, normal and ASan.
 
 The fixture invariants the real-checker cases depend on — rule and layer ids as
 container indices, the band-polarity model, the `maxRuleValue_`-sized snapshot

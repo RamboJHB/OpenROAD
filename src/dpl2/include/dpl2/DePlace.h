@@ -72,7 +72,7 @@ class PlacementDRC;
 class Architecture;
 class fillerSetting;
 enum class OpType : uint8_t;
-struct FillerCellRecord;
+struct CellChangeRecord;
 
 template <typename T>
 struct TypedCoordinate;
@@ -123,7 +123,7 @@ std::pair<int, int> findLeg(LeafCellID cellId, int diameter,
     std::string moduleName);
 std::pair<int, int> findLeg(LeafCellID cellId, std::string moduleName);
 bool isLegal(LeafCellID cellId, LibCellID lcId,
-    std::vector<FillerCellRecord>& fcRecord);
+    std::vector<CellChangeRecord>& fcRecord);
 PhysDesMgr* getDesMgr() {return desMgr_;};
 Grid* getGrid() {return grid_.get();};
 const Grid* getGrid() const {return grid_.get();};

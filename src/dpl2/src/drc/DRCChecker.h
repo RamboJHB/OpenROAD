@@ -55,7 +55,7 @@ class DRCChecker
                      GridX x,
                      GridY y,
                      const eUTL::PhysOrientation& orient,
-                     std::vector<FillerCellRecord>& fcRecord) const
+                     std::vector<CellChangeRecord>& fcRecord) const
   {
     (void) fcRecord;
     return check(cell, x, y, orient);

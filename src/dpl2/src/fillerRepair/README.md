@@ -1,16 +1,22 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-07-29.
+Updated: 2026-07-31.
 
 `ImplantLayerChecker::check()` is the caller-facing entry. Opto owns the
-`FillerCellRecord` vector; the checker appends checker-verified repair swaps
+`CellChangeRecord` vector; the checker appends checker-verified repair swaps
 into that reference and keeps **no** filler-change member state. The
 `FillerRepairEngine` is created **lazily** on the first DRC-illegal check —
 a run whose checks all pass never pays engine initialization.
 
+The shared wire is
+`CellChangeRecord{Replace, CellData{LeafCellID}, origin_x_, origin_y_,
+orig_lib_cell_, new_lib_cell_, orientation_}`. The generic `CellData` protocol
+also reserves a string name for future add operations; this swap-only engine
+emits and accepts only the existing-cell `LeafCellID` alternative.
+
 ```cpp
 // production (set_filler_option ran; DePlace registered the setting provider)
-std::vector<FillerCellRecord> fcRecord;
+std::vector<CellChangeRecord> fcRecord;
 bool legal = deplace->isLegal(cellId, lcId, fcRecord);   // -> checker.check(...)
 if (legal && !fcRecord.empty()) {
   commitFillerSwaps(fcRecord);   // commit stays with opto/infrastructure
@@ -114,7 +120,7 @@ nothing else, which is what keeps it database-free and portable.
 | `CMakeLists.txt` | the module's own targets — `dpl2::fillerRepair` (payload, C++20) and `dpl2::fillerRepairPlanner` (pure pipeline, C++17); a destination adds the directory and links a target rather than listing sources |
 | `test/CMakeLists.txt` | the portable tests, added when `DPL2_FILLER_REPAIR_BUILD_TESTS=ON` |
 | `test/RepairPlannerTest.cpp` | 85 portable database-free planner cases; the two seam doubles and the synthetic master catalog are folded into this one file |
-| `test/FillerRepairCheckerE2ETest.cpp` | 75 portable real-checker, repair-window and planner-to-checker cases (see the fixture model below) |
+| `test/FillerRepairCheckerE2ETest.cpp` | 76 portable real-checker, repair-window and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript
 
@@ -210,12 +216,12 @@ Full migration instructions, including the destination checklist, are in
 
 ## Verification
 
-- portable planner: 85 cases; portable checker E2E: 75 cases (both compile,
+- portable planner: 85 cases; portable checker E2E: 76 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
 - repository-local fake-UDM engine regression: 95 cases under
   `src/dpl2/test/local/`.
-- 2026-07-30 full local suite: 255/255 normal and ASan; migration gate
-  160/160 normal and ASan; standalone module build 160/160.
+- 2026-07-31 full local suite: 256/256 normal and ASan; migration gate
+  161/161 normal and ASan; standalone module build 161/161.
 
 ### Search cost
 

@@ -6,7 +6,7 @@
 // trivial accessors, and no dependency on the two seams (PlacementView,
 // RepairOracle) or on the search pipeline -- everything else includes this.
 //
-// The change record is the infrastructure-owned dpl2::FillerCellRecord;
+// The change record is the infrastructure-owned dpl2::CellChangeRecord;
 // checker APIs group records as ipl::FillerChanges. Test builds provide the
 // same UDM ID/value types through their test-only UDM shim.
 //
@@ -24,7 +24,7 @@
 #include <utility>
 #include <vector>
 
-// dpl2::FillerCellRecord is used by value below, so include its owning header
+// dpl2::CellChangeRecord is used by value below, so include its owning header
 // directly instead of relying on the checker header to carry it transitively:
 // drc/DRCChecker.h reaches dpl2/DePlace.h, which only forward-declares it.
 #include <infrastructure/Objects.h>
@@ -175,25 +175,35 @@ struct Violation
 
 // Exact shared-wire helpers. The record itself is deliberately not duplicated
 // in fillerRepair: the planner, oracle and public result all carry the
-// infrastructure-owned dpl2::FillerCellRecord unchanged.
-inline InstanceId fillerRecordInstanceId(const FillerCellRecord& change)
+// infrastructure-owned dpl2::CellChangeRecord unchanged.
+inline const eUNL::LeafCellID* cellChangeRecordLeafCellId(
+    const CellChangeRecord& change)
 {
-  return static_cast<InstanceId>(change.cell_id_.getIndexValue());
+  return std::get_if<eUNL::LeafCellID>(&change.cell_data_);
 }
 
-inline MasterId fillerRecordNewMasterId(const FillerCellRecord& change)
+inline InstanceId cellChangeRecordInstanceId(const CellChangeRecord& change)
+{
+  const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(change);
+  return cellId != nullptr
+             ? static_cast<InstanceId>(cellId->getIndexValue())
+             : static_cast<InstanceId>(-1);
+}
+
+inline MasterId cellChangeRecordNewMasterId(const CellChangeRecord& change)
 {
   return static_cast<MasterId>(change.new_lib_cell_.getIndexValue());
 }
 
-inline bool sameFillerCellRecord(const FillerCellRecord& left,
-                                 const FillerCellRecord& right)
+inline bool sameCellChangeRecord(const CellChangeRecord& left,
+                                 const CellChangeRecord& right)
 {
-  return left.op_ == right.op_ && left.cell_id_ == right.cell_id_
+  return left.op_ == right.op_ && left.cell_data_ == right.cell_data_
          && left.origin_x_ == right.origin_x_
          && left.origin_y_ == right.origin_y_
          && left.orig_lib_cell_ == right.orig_lib_cell_
-         && left.new_lib_cell_ == right.new_lib_cell_;
+         && left.new_lib_cell_ == right.new_lib_cell_
+         && left.orientation_.getValue() == right.orientation_.getValue();
 }
 
 // --- Planner entry types ----------------------------------------------------

@@ -108,12 +108,13 @@ ipl::FillerChanges toFillerChanges(const Overlay& overlay,
   changes.reserve(overlay.size());
   for (const Swap& swap : overlay) {
     changes.push_back(
-        dataSource.fillerCellRecord(swap.instanceId, swap.newMasterId));
+        dataSource.cellChangeRecord(swap.instanceId, swap.newMasterId));
   }
   std::sort(changes.begin(),
             changes.end(),
-            [](const FillerCellRecord& a, const FillerCellRecord& b) {
-              return a.cell_id_.getIndexValue() < b.cell_id_.getIndexValue();
+            [](const CellChangeRecord& a, const CellChangeRecord& b) {
+              return cellChangeRecordInstanceId(a)
+                     < cellChangeRecordInstanceId(b);
             });
   return changes;
 }

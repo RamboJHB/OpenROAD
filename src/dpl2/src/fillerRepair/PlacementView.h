@@ -102,7 +102,7 @@ class PlacementView
   virtual const std::vector<MasterId>& fillerMasterIds() const = 0;
   // Build the exact checker/public wire record for one planner swap. This is
   // the sole mapping point from dense planner ids to UDM ids and coordinates.
-  virtual FillerCellRecord fillerCellRecord(InstanceId instanceId,
+  virtual CellChangeRecord cellChangeRecord(InstanceId instanceId,
                                             MasterId newMasterId) const = 0;
   virtual MasterCandidateResult getUsableMasterCandidates(
       const MasterCandidateRequest& request) const;

@@ -2,6 +2,9 @@
 // Copyright (c) 2024-2025, The OpenROAD Authors
 
 #pragma once
+#include <string>
+#include <variant>
+
 #include <Coordinates.h>
 #include <dpl2/DePlace.h>
 

@@ -179,7 +179,7 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId, std::string moduleName)
  * (likely insufficient space or incompatible master footprint).
  */
 bool DePlace::isLegal(LeafCellID cellId, LibCellID lcId,
-    std::vector<FillerCellRecord>& fcRecord)
+    std::vector<CellChangeRecord>& fcRecord)
 {
   Rect rect = this->core_;
   const PhysLibCell& physLibCell = design_->getLibAcc().getPhysLibCell(lcId);

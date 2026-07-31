@@ -52,8 +52,11 @@ bool sameChanges(const dpl2::ipl::FillerChanges& lhs,
     return false;
   }
   for (size_t i = 0; i < lhs.size(); ++i) {
-    if (lhs[i].op_ != rhs[i].op_ || lhs[i].cell_id_ != rhs[i].cell_id_
-        || lhs[i].new_lib_cell_ != rhs[i].new_lib_cell_) {
+    if (lhs[i].op_ != rhs[i].op_
+        || lhs[i].cell_data_ != rhs[i].cell_data_
+        || lhs[i].new_lib_cell_ != rhs[i].new_lib_cell_
+        || lhs[i].orientation_.getValue()
+               != rhs[i].orientation_.getValue()) {
       return false;
     }
   }
@@ -276,7 +279,7 @@ class CheckerHarness
                               fc_record_);
   }
 
-  const std::vector<dpl2::FillerCellRecord>& fillerChanges() const
+  const std::vector<dpl2::CellChangeRecord>& fillerChanges() const
   {
     return fc_record_;
   }
@@ -285,7 +288,7 @@ class CheckerHarness
   ProviderObjects objects_;
   std::unique_ptr<dpl2::fillerSetting> filler_setting_;
   std::unique_ptr<dpl2::ipl::ImplantLayerChecker> checker_;
-  std::vector<dpl2::FillerCellRecord> fc_record_;
+  std::vector<dpl2::CellChangeRecord> fc_record_;
   bool checker_ready_ = false;
 };
 
@@ -575,10 +578,17 @@ TEST_P(FillerRepairEngineE2E, ViolatingTargetOverlayFindsFillerSwap)
   EXPECT_EQ(change.new_lib_cell_,
             harness.design().master(frt::MasterRole::RepairFiller)
                 .getLibCellId());
+  const auto* cellId
+      = std::get_if<eUNL::LeafCellID>(&change.cell_data_);
+  ASSERT_NE(cellId, nullptr);
   EXPECT_TRUE(
-      change.cell_id_ == harness.design().cell(frt::CellRole::TargetLeftFiller)
-      || change.cell_id_
+      *cellId == harness.design().cell(frt::CellRole::TargetLeftFiller)
+      || *cellId
              == harness.design().cell(frt::CellRole::TargetRightFiller));
+  const dpl2::Node* changedNode = harness.network().getNode(*cellId);
+  ASSERT_NE(changedNode, nullptr);
+  EXPECT_EQ(change.orientation_.getValue(),
+            changedNode->getOrient().getValue());
   EXPECT_GE(harness.network().getMasterId(targetMaster.getLibCellId()), 0);
   EXPECT_EQ(harness.design().snapshot(), before);
 }

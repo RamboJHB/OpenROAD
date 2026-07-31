@@ -31,8 +31,8 @@ Verified at that commit:
 | | |
 |---|---|
 | local suite | 253/253, normal and ASan |
-| migration gate (destination code path) | 160/160, normal and ASan |
-| standalone module | 160/160 — configure, build and test with no harness |
+| migration gate (destination code path) | 161/161, normal and ASan |
+| standalone module | 161/161 — configure, build and test with no harness |
 | `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
 
 ---
@@ -58,12 +58,18 @@ documentation and travels with it.
 the checker appends into it and keeps no filler-change member state.
 
 ```cpp
-std::vector<FillerCellRecord> fcRecord;
+std::vector<CellChangeRecord> fcRecord;
 bool legal = deplace->isLegal(cellId, lcId, fcRecord);   // -> checker.check(...)
 if (legal && !fcRecord.empty()) {
   commitFillerSwaps(fcRecord);   // commit stays with opto/infrastructure
 }
 ```
+
+Each current repair entry is
+`CellChangeRecord{Replace, CellData{LeafCellID}, origin_x_, origin_y_,
+orig_lib_cell_, new_lib_cell_, orientation_}`. `CellData` can represent a
+future named cell with `std::string`, but filler VT repair remains swap-only
+and does not emit that alternative.
 
 There is no `initFillerRepair`, `precheckFillerRepair`, `updateFillerRepair` or
 `getFillerChanges` to call — those are gone. The engine is built **lazily** on
@@ -227,9 +233,9 @@ it.
 | Portable planner tests | 85 |
 | Portable real-checker E2E | 75 |
 | Repository-local engine regression | 95 (fake UDM, not migrated) |
-| Full local suite | 255/255, normal and ASan |
-| Migration gate (destination code path) | 160/160, normal and ASan |
-| Standalone module build | 160/160 |
+| Full local suite | 256/256, normal and ASan |
+| Migration gate (destination code path) | 161/161, normal and ASan |
+| Standalone module build | 161/161 |
 
 The migration gate builds the payload the way a destination does
 (`DPL2_TEST_USE_FAKE_UDM=OFF`, no fake-only target, no test provider) with the

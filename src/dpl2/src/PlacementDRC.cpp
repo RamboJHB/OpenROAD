@@ -27,7 +27,7 @@ PlacementDRC::~PlacementDRC()
   }
 }
 
-bool PlacementDRC::checkDRC(const Node* cell, std::vector<FillerCellRecord>&
+bool PlacementDRC::checkDRC(const Node* cell, std::vector<CellChangeRecord>&
     fcRecord) const
 {
   return checkDRC(
@@ -39,7 +39,7 @@ bool PlacementDRC::checkDRC(const Node* cell,
                             const GridX x,
                             const GridY y,
                             const eUNL::PhysOrientation& orient,
-                            std::vector<FillerCellRecord>& fcRecord) const
+                            std::vector<CellChangeRecord>& fcRecord) const
 {
   for (auto& checker : checkers_) {
     if (!checker->check(cell, x, y, orient, fcRecord)) {

@@ -20,10 +20,10 @@ class PlacementDRC
     ~PlacementDRC();
 
     void addChecker(DRCCheckerType type, std::unique_ptr<DRCChecker> checker);
-    bool checkDRC(const Node* cell, std::vector<FillerCellRecord>& fcRecord) const;
+    bool checkDRC(const Node* cell, std::vector<CellChangeRecord>& fcRecord) const;
     bool checkDRC(const Node* cell, GridX x, GridY y,
                   const eUNL::PhysOrientation& orient,
-                  std::vector<FillerCellRecord>& fcRecord) const;
+                  std::vector<CellChangeRecord>& fcRecord) const;
 
     DRCChecker* getChecker(DRCCheckerType type) const;
 

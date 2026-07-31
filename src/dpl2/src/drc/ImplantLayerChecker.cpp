@@ -24,6 +24,11 @@ namespace ipl {
 
 constexpr Dbu ADJACENT_ROW_VERTICAL_SPACING = 1;
 
+const LeafCellID* cellChangeLeafCellId(const CellChangeRecord& change)
+{
+    return std::get_if<LeafCellID>(&change.cell_data_);
+}
+
 inline Layer::Polar opposite(Layer::Polar p)
 {
     return (p == Layer::Polar::N) ? Layer::Polar::P : Layer::Polar::N;
@@ -756,13 +761,13 @@ void ImplantLayerChecker::rebuildMasterShapes()
 bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
     const eUTL::PhysOrientation& orient) const
 {
-    std::vector<FillerCellRecord> fcRecord;
+    std::vector<CellChangeRecord> fcRecord;
     return check(node, x, y, orient, fcRecord);
 }
 
 bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
     const eUTL::PhysOrientation& orient,
-    std::vector<FillerCellRecord>& fcRecord) const
+    std::vector<CellChangeRecord>& fcRecord) const
 {
     if (!node || !network_ || !grid_) {
         return false;
@@ -803,7 +808,7 @@ void ImplantLayerChecker::setFillerRepairSettingProvider(
 // Lazy: most checks are legal and never reach here, so the engine (and its
 // whole-design snapshot) is only built once a candidate actually fails.
 bool ImplantLayerChecker::repairFillers(const CheckRequest& request,
-    std::vector<FillerCellRecord>& fcRecord) const
+    std::vector<CellChangeRecord>& fcRecord) const
 {
     if (repairEngineFailed_) {
         return false;  // structural init failure: fail closed from now on
@@ -1018,8 +1023,12 @@ CheckShapes ImplantLayerChecker::getOverlaySnapshot(const CheckRequest& request,
         request.orientation, true);
     snapshot.insert(snapshot.end(), targetShapes.begin(), targetShapes.end());
 
-    for (const FillerCellRecord& change : fillerChanges) {
-        const InstanceId fillerInstId = network_->getNodeId(change.cell_id_);
+    for (const CellChangeRecord& change : fillerChanges) {
+        const LeafCellID* cellId = cellChangeLeafCellId(change);
+        if (cellId == nullptr) {
+            continue;
+        }
+        const InstanceId fillerInstId = network_->getNodeId(*cellId);
         const Node* fillerNode = network_->getNode(fillerInstId);
         if (!fillerNode) {
             continue;
@@ -1030,9 +1039,11 @@ CheckShapes ImplantLayerChecker::getOverlaySnapshot(const CheckRequest& request,
         if (useNewFillers) {
             fillerMasterId =  network_->getMasterId(change.new_lib_cell_);
         }
+        const PhysOrientation fillerOrientation
+            = useNewFillers ? change.orientation_ : fillerNode->getOrient();
         const CheckShapes& fillerShapes = getNodeShape(fillerInstId,
             fillerMasterId, fillerRowId, fillerColId,
-            fillerNode->getOrient(), true);
+            fillerOrientation, true);
         snapshot.insert(snapshot.end(), fillerShapes.begin(), fillerShapes.end());
     }
     return snapshot;
@@ -1600,8 +1611,19 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
         }
 
         std::set<InstanceId> seen;
-        for (const FillerCellRecord& change : fillerChanges) {
-            const InstanceId fillerInstId = network_->getNodeId(change.cell_id_);
+        for (const CellChangeRecord& change : fillerChanges) {
+            if (change.op_ != OpType::Replace) {
+                diagnostics.push_back({"unsupported_cell_change_operation",
+                    "filler overlay supports Replace records only"});
+                continue;
+            }
+            const LeafCellID* cellId = cellChangeLeafCellId(change);
+            if (cellId == nullptr) {
+                diagnostics.push_back({"changed_cell_data_not_leaf_id",
+                    "Replace record must identify an existing LeafCellID"});
+                continue;
+            }
+            const InstanceId fillerInstId = network_->getNodeId(*cellId);
 
             if (!seen.insert(fillerInstId).second) {
                 diagnostics.push_back({"duplicate_filler_change",
@@ -2014,8 +2036,11 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
         }
         excludedNodes.insert(overlap.fillers.begin(),
             overlap.fillers.end());
-        for (const FillerCellRecord& change : fillerChanges) {
-            excludedNodes.insert(network_->getNodeId(change.cell_id_));
+        for (const CellChangeRecord& change : fillerChanges) {
+            const LeafCellID* cellId = cellChangeLeafCellId(change);
+            if (cellId != nullptr) {
+                excludedNodes.insert(network_->getNodeId(*cellId));
+            }
         }
 
         const CheckShapes& snapshot = getOverlaySnapshot(request, guardRegion,
@@ -2036,8 +2061,13 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
         tgtItv.xl = request.colId * siteWidth_;
         tgtItv.xh = tgtItv.xl + node->getWidth().v;
         std::vector<XInterval> itvs{tgtItv};
-        for (const FillerCellRecord& change : fillerChanges) {
-            Node* filler = network_->getNode(change.cell_id_);
+        for (const CellChangeRecord& change : fillerChanges) {
+            const LeafCellID* cellId = cellChangeLeafCellId(change);
+            Node* filler = cellId != nullptr ? network_->getNode(*cellId)
+                                             : nullptr;
+            if (filler == nullptr) {
+                continue;
+            }
             XInterval itv;
             itv.xl = grid_->gridX(filler).v * siteWidth_;
             itv.xh = itv.xl + filler->getWidth().v;

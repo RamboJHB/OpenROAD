@@ -41,7 +41,7 @@ using ShapeId = int32_t;
 using RowId = int32_t;
 using ColId = int32_t;
 using GroupId = int32_t;
-using FillerChanges = std::vector<FillerCellRecord>;
+using FillerChanges = std::vector<CellChangeRecord>;
 
 enum class BandSlot {Bottom, Top};
 enum class RuleSource {Width, Spacing, Lef58Width, Lef58Spacing, Count};
@@ -281,7 +281,7 @@ public:
         const eUTL::PhysOrientation& orient) const override;
     bool check(const Node* cell, GridX x, GridY y,
         const eUTL::PhysOrientation& orient,
-        std::vector<FillerCellRecord>& fcRecord) const override;
+        std::vector<CellChangeRecord>& fcRecord) const override;
 
     CheckResult checkDirect(const CheckRequest& request) const;
     std::vector<CheckResult> checkPlaceWithOverlays(const CheckRequest& request,
@@ -325,7 +325,7 @@ private:
     // failure the repair records are APPENDED to the caller's fcRecord; the
     // checker keeps no filler-change member state.
     bool repairFillers(const CheckRequest& request,
-        std::vector<FillerCellRecord>& fcRecord) const;
+        std::vector<CellChangeRecord>& fcRecord) const;
     void buildLayers(PhysDesMgr* desMgr);
     static void parseLayerName(const std::string& name,
         Layer::Vt& vt, Layer::Polar& polar);

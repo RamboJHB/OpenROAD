@@ -69,7 +69,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
   {
     return filler_master_ids_;
   }
-  FillerCellRecord fillerCellRecord(InstanceId instanceId,
+  CellChangeRecord cellChangeRecord(InstanceId instanceId,
                                     MasterId newMasterId) const override;
   OracleResult checkPlaceWithOverlay(const OracleRequest& request) override;
   std::vector<OracleResult> checkPlaceWithOverlays(
@@ -127,6 +127,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
     eLIB::LibCellID libCellId;
     eUTL::UvDist originX;
     eUTL::UvDist originY;
+    eUTL::PhysOrientation orientation;
   };
   std::vector<std::optional<UdmRef>> udm_refs_;
   std::vector<eLIB::LibCellID> master_lib_ids_;  // valid iff masters_[id]
@@ -609,8 +610,11 @@ void FillerRepairEngine::Impl::buildPlannerData()
     ensureSlot(instances_, static_cast<size_t>(id));
     ensureSlot(udm_refs_, static_cast<size_t>(id));
     instances_[id] = placed;
-    udm_refs_[id] = UdmRef{lcId, cell->getLibCellId(), origin.getX(),
-                           origin.getY()};
+    udm_refs_[id] = UdmRef{lcId,
+                           cell->getLibCellId(),
+                           origin.getX(),
+                           origin.getY(),
+                           physCell.getOrient()};
     // Multi-row instances appear in every row they occupy (one shared x
     // frame, so the copy keeps the same x).
     const DbCoord heightRows = std::max<DbCoord>(info.height, 1);
@@ -848,25 +852,28 @@ Violation FillerRepairEngine::Impl::toPlannerViolation(const ipl::Violation& v,
   return out;
 }
 
-FillerCellRecord FillerRepairEngine::Impl::fillerCellRecord(
+CellChangeRecord FillerRepairEngine::Impl::cellChangeRecord(
     InstanceId instanceId,
     MasterId newMasterId) const
 {
-  FillerCellRecord record{dpl2::OpType::Replace,
-                          eUNL::LeafCellID(0, 0),
+  CellChangeRecord record{dpl2::OpType::Replace,
+                          dpl2::CellData{eUNL::LeafCellID(0, 0)},
                           eUTL::UvDist(static_cast<int64_t>(0)),
                           eUTL::UvDist(static_cast<int64_t>(0)),
                           eLIB::LibCellID(0, 0),
-                          eLIB::LibCellID(0, 0)};
+                          eLIB::LibCellID(0, 0),
+                          eUTL::PhysOrientation(
+                              eUTL::PhysOrientationE::R0)};
   const bool haveRef = instanceId >= 0
                        && static_cast<size_t>(instanceId) < udm_refs_.size()
                        && udm_refs_[instanceId].has_value();
   if (haveRef) {
     const UdmRef& ref = *udm_refs_[instanceId];
-    record.cell_id_ = ref.cellId;
+    record.cell_data_ = dpl2::CellData{ref.cellId};
     record.orig_lib_cell_ = ref.libCellId;
     record.origin_x_ = ref.originX;
     record.origin_y_ = ref.originY;
+    record.orientation_ = ref.orientation;
   }
   if (masterInfo(newMasterId) != nullptr) {
     record.new_lib_cell_ = master_lib_ids_[newMasterId];
@@ -934,8 +941,10 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   bool precheckFiltered = false;
   for (size_t i = 0; i < requests.size(); ++i) {
     Region influence = initialInfluence;
-    for (const FillerCellRecord& change : requests[i].fillerChanges) {
-      const Node* node = network_->getNode(change.cell_id_);
+    for (const CellChangeRecord& change : requests[i].fillerChanges) {
+      const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(change);
+      const Node* node = cellId != nullptr ? network_->getNode(*cellId)
+                                           : nullptr;
       const PlacedInstance* placed
           = node != nullptr ? instance(node->getId()) : nullptr;
       if (placed != nullptr) {
@@ -1471,9 +1480,11 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   }
 
   // The planner request, checker request and public result all use this same
-  // FillerCellRecord wire. Validate the accepted records, then copy directly.
-  for (const FillerCellRecord& change : planned.changes) {
-    if (!change.cell_id_.isValid() || !change.new_lib_cell_.isValid()) {
+  // CellChangeRecord wire. Validate the accepted records, then copy directly.
+  for (const CellChangeRecord& change : planned.changes) {
+    const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(change);
+    if (change.op_ != dpl2::OpType::Replace || cellId == nullptr
+        || !cellId->isValid() || !change.new_lib_cell_.isValid()) {
       result.hasSolution = false;
       result.changes.clear();
       addDiagnostic(Severity::Fatal,

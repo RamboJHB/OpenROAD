@@ -54,6 +54,21 @@
 
 namespace dpl2::fillerRepair {
 
+eUTL::PhysOrientation toCellChangeOrientation(Orient orientation)
+{
+  switch (orientation) {
+    case Orient::R180:
+      return eUTL::PhysOrientationE::R180;
+    case Orient::MX:
+      return eUTL::PhysOrientationE::MX;
+    case Orient::MY:
+      return eUTL::PhysOrientationE::MY;
+    case Orient::R0:
+      break;
+  }
+  return eUTL::PhysOrientationE::R0;
+}
+
 class TestPlacementView : public PlacementView
 {
  public:
@@ -138,18 +153,21 @@ class TestPlacementView : public PlacementView
     return filler_master_list_;
   }
 
-  FillerCellRecord fillerCellRecord(InstanceId instanceId,
+  CellChangeRecord cellChangeRecord(InstanceId instanceId,
                                     MasterId newMasterId) const override
   {
     const PlacedInstance* placed = instance(instanceId);
     const MasterId originalMaster
         = placed != nullptr ? placed->masterId : MasterId{};
-    return FillerCellRecord{OpType::Replace,
-                            eUNL::LeafCellID(0, instanceId),
+    return CellChangeRecord{OpType::Replace,
+                            CellData{eUNL::LeafCellID(0, instanceId)},
                             eUTL::UvDist(placed != nullptr ? placed->x : 0),
                             eUTL::UvDist(placed != nullptr ? placed->rowId : 0),
                             eLIB::LibCellID(0, originalMaster),
-                            eLIB::LibCellID(0, newMasterId)};
+                            eLIB::LibCellID(0, newMasterId),
+                            toCellChangeOrientation(
+                                placed != nullptr ? placed->orientation
+                                                  : Orient::R0)};
   }
 
  private:
@@ -793,8 +811,8 @@ OracleResult TestRepairOracle::evaluate(const OracleRequest& request) const
     return invalid(cat("target instance ", request.targetPlace.instanceId,
                        " not found"));
   }
-  for (const FillerCellRecord& change : request.fillerChanges) {
-    const InstanceId instanceId = change.cell_id_.getIndexValue();
+  for (const CellChangeRecord& change : request.fillerChanges) {
+    const InstanceId instanceId = cellChangeRecordInstanceId(change);
     const MasterId newMasterId = change.new_lib_cell_.getIndexValue();
     const PlacedInstance* inst = design_.instance(instanceId);
     if (inst == nullptr) {
@@ -1135,10 +1153,10 @@ void testWireConversion()
   const auto changes = fr::toFillerChanges({m1, m2}, f.design);
   EXPECT_EQ(changes.size(), 2u);
   // Deterministic order: sorted by instanceId.
-  EXPECT_EQ(fr::fillerRecordInstanceId(changes[0]), 100);
-  EXPECT_EQ(fr::fillerRecordNewMasterId(changes[0]), fillerMaster(4, kVt3));
-  EXPECT_EQ(fr::fillerRecordInstanceId(changes[1]), 101);
-  EXPECT_EQ(fr::fillerRecordNewMasterId(changes[1]), fillerMaster(2, kVt2));
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(changes[0]), 100);
+  EXPECT_EQ(fr::cellChangeRecordNewMasterId(changes[0]), fillerMaster(4, kVt3));
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(changes[1]), 101);
+  EXPECT_EQ(fr::cellChangeRecordNewMasterId(changes[1]), fillerMaster(2, kVt2));
 }
 
 void testPlannerDoesNotRunPlacementPrecheck()
@@ -1369,8 +1387,8 @@ void testPlannerSolvesWithSyntheticCatalog()
   const auto result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 601);
-  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), 21);  // w2 VTL
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[0]), 601);
+  EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[0]), 21);  // w2 VTL
 }
 
 // --- Fake checker protocol ---------------------------------------------------
@@ -1417,8 +1435,8 @@ void testCheckerInvalidIsolated()
   auto invalid = baselineRequest(f.design, f.anchor, 2);
   // Duplicate instance in one overlay -> InvalidOverlay for this request only.
   invalid.fillerChanges = {
-      f.design.fillerCellRecord(101, fillerMaster(2, kVt2)),
-      f.design.fillerCellRecord(101, fillerMaster(2, kVt3))};
+      f.design.cellChangeRecord(101, fillerMaster(2, kVt2)),
+      f.design.cellChangeRecord(101, fillerMaster(2, kVt3))};
   auto valid2 = baselineRequest(f.design, f.anchor, 3);
 
   const auto results = checker.checkPlaceWithOverlays({valid, invalid, valid2});
@@ -1451,7 +1469,7 @@ void testCheckerIntraMsDetectAndClear()
   // Overlay: recolor 103 to VT1 -> single VT1 run [0,16) -> clean.
   auto overlay = baselineRequest(f.design, 100, 2);
   overlay.fillerChanges = {
-      f.design.fillerCellRecord(103, fillerMaster(2, kVt1))};
+      f.design.cellChangeRecord(103, fillerMaster(2, kVt1))};
   const auto fixed = checker.checkPlaceWithOverlay(overlay);
   EXPECT_TRUE(fixed.status == fr::OracleStatus::Checked);
   EXPECT_TRUE(fr::isOracleSnapshotClean(fixed));
@@ -1566,7 +1584,7 @@ void testCheckerTargetOverrideSeedsViolation()
   auto repaired = changed;
   repaired.requestId = 3;
   repaired.fillerChanges = {
-      design.fillerCellRecord(203, fillerMaster(2, kVt1))};
+      design.cellChangeRecord(203, fillerMaster(2, kVt1))};
   const auto fixed = checker.checkPlaceWithOverlay(repaired);
   EXPECT_TRUE(fr::isOracleSnapshotClean(fixed));
 }
@@ -2750,8 +2768,8 @@ void testPlannerSolvesSingleSwap()
   const auto result = planner.repair(sc.request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 203);
-  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt1));
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[0]), 203);
+  EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt1));
   // One baseline + at most one batch (clean overlay is the top-ranked
   // candidate; the final check is a cache hit, not a new request).
   EXPECT_TRUE(checker.requestCount() <= 1 + config.batchSize);
@@ -2762,8 +2780,8 @@ void testPlannerSolvesSingleSwap()
   const auto result2 = planner2.repair(sc.request);
   EXPECT_TRUE(result2.hasSolution);
   EXPECT_EQ(result2.changes.size(), result.changes.size());
-  EXPECT_EQ(fr::fillerRecordInstanceId(result2.changes[0]), fr::fillerRecordInstanceId(result.changes[0]));
-  EXPECT_EQ(fr::fillerRecordNewMasterId(result2.changes[0]), fr::fillerRecordNewMasterId(result.changes[0]));
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result2.changes[0]), fr::cellChangeRecordInstanceId(result.changes[0]));
+  EXPECT_EQ(fr::cellChangeRecordNewMasterId(result2.changes[0]), fr::cellChangeRecordNewMasterId(result.changes[0]));
   EXPECT_EQ(checker2.requestCount(), checker.requestCount());
 }
 
@@ -2804,10 +2822,10 @@ void testPlannerSolvesPairNonMonotone()
   const auto result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 2u);
-  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 110);
-  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt2));
-  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[1]), 111);
-  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[1]), fillerMaster(2, kVt2));
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[0]), 110);
+  EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt2));
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[1]), 111);
+  EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[1]), fillerMaster(2, kVt2));
   // All size-1 candidates were evaluated and rejected before the pair won:
   // 6 swaps (3 fillers x 2 usable VTs) + baseline at least.
   EXPECT_TRUE(checker.requestCount() >= 7);
@@ -2832,12 +2850,12 @@ class RequiredChangesChecker : public fr::RepairOracle
     const bool solved = std::all_of(
         required.begin(),
         required.end(),
-        [&](const dpl2::FillerCellRecord& need) {
+        [&](const dpl2::CellChangeRecord& need) {
           return std::any_of(
               request.fillerChanges.begin(),
               request.fillerChanges.end(),
-              [&](const dpl2::FillerCellRecord& change) {
-                return fr::sameFillerCellRecord(change, need);
+              [&](const dpl2::CellChangeRecord& change) {
+                return fr::sameCellChangeRecord(change, need);
               });
         });
     if (!solved) {
@@ -2942,8 +2960,8 @@ void testPlannerComplexRankedPairFast()
   RequiredChangesChecker checker;
   checker.originals = fixture.request.violations;
   checker.required = {
-      fixture.design.fillerCellRecord(102, fillerMaster(2, kVt2)),
-      fixture.design.fillerCellRecord(202, fillerMaster(2, kVt2))};
+      fixture.design.cellChangeRecord(102, fillerMaster(2, kVt2)),
+      fixture.design.cellChangeRecord(202, fillerMaster(2, kVt2))};
   fr::RepairConfig config;
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
@@ -2955,10 +2973,10 @@ void testPlannerComplexRankedPairFast()
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 2u);
   if (result.changes.size() == 2) {
-    EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 102);
-    EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt2));
-    EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[1]), 202);
-    EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[1]), fillerMaster(2, kVt2));
+    EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[0]), 102);
+    EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt2));
+    EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[1]), 202);
+    EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[1]), fillerMaster(2, kVt2));
   }
   // The correct fillers are the two highest-ranked direct participants and
   // VT2 is the anchor-follow first option. Even with many decoys, the planner
@@ -2980,10 +2998,10 @@ void testPlannerComplexRankedPairFast()
   EXPECT_EQ(again.changes.size(), result.changes.size());
   if (again.changes.size() == result.changes.size()) {
     for (size_t index = 0; index < result.changes.size(); ++index) {
-      EXPECT_EQ(fr::fillerRecordInstanceId(again.changes[index]),
-               fr::fillerRecordInstanceId(result.changes[index]));
-      EXPECT_EQ(fr::fillerRecordNewMasterId(again.changes[index]),
-               fr::fillerRecordNewMasterId(result.changes[index]));
+      EXPECT_EQ(fr::cellChangeRecordInstanceId(again.changes[index]),
+               fr::cellChangeRecordInstanceId(result.changes[index]));
+      EXPECT_EQ(fr::cellChangeRecordNewMasterId(again.changes[index]),
+               fr::cellChangeRecordNewMasterId(result.changes[index]));
     }
   }
   EXPECT_EQ(checkerAgain.requestCount(), checker.requestCount());
@@ -2998,8 +3016,8 @@ void testPlannerComplexThirdVtStillSucceeds()
   // Both fillers require the domain-tail third VT. This is deliberately a
   // harder solution than anchor-follow and proves demotion does not prune it.
   checker.required = {
-      fixture.design.fillerCellRecord(102, fillerMaster(2, kVt3)),
-      fixture.design.fillerCellRecord(202, fillerMaster(2, kVt3))};
+      fixture.design.cellChangeRecord(102, fillerMaster(2, kVt3)),
+      fixture.design.cellChangeRecord(202, fillerMaster(2, kVt3))};
   fr::RepairConfig config;
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
@@ -3011,10 +3029,10 @@ void testPlannerComplexThirdVtStillSucceeds()
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 2u);
   if (result.changes.size() == 2) {
-    EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 102);
-    EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt3));
-    EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[1]), 202);
-    EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[1]), fillerMaster(2, kVt3));
+    EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[0]), 102);
+    EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt3));
+    EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[1]), 202);
+    EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[1]), fillerMaster(2, kVt3));
   }
   EXPECT_TRUE(checker.requestCount() <= 21);
   EXPECT_TRUE(checker.batchCount() <= 7);
@@ -3072,7 +3090,7 @@ void testPlannerIgnoresUnrelatedHaloViolation()
   // being unrelated to any changed filler it must not veto the fix.
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 203);
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[0]), 203);
 }
 
 // mwIntra=100 makes every run violate: no overlay can ever be clean. The
@@ -3223,8 +3241,8 @@ void testPlannerOrderIndependentBatches()
   const auto result = planner.repair(sc.request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 203);
-  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt1));
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[0]), 203);
+  EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt1));
 }
 
 bool sameChanges(const dpl2::ipl::FillerChanges& a,
@@ -3234,7 +3252,7 @@ bool sameChanges(const dpl2::ipl::FillerChanges& a,
     return false;
   }
   for (size_t i = 0; i < a.size(); ++i) {
-    if (!fr::sameFillerCellRecord(a[i], b[i])) {
+    if (!fr::sameCellChangeRecord(a[i], b[i])) {
       return false;
     }
   }
@@ -3353,7 +3371,7 @@ void testPlannerNeverEditsGuardOnly()
   EXPECT_TRUE(!checker.requests.empty());
   for (const auto& request : checker.requests) {
     for (const auto& change : request.fillerChanges) {
-      const fr::InstanceId instanceId = fr::fillerRecordInstanceId(change);
+      const fr::InstanceId instanceId = fr::cellChangeRecordInstanceId(change);
       EXPECT_TRUE(l0.containsEditable(instanceId));
       EXPECT_TRUE(instanceId != 100);
       EXPECT_TRUE(instanceId != 200);
@@ -3373,18 +3391,18 @@ class ScriptedChecker : public fr::RepairOracle
   {
     dpl2::ipl::FillerChanges sorted = changes;
     std::sort(sorted.begin(), sorted.end(),
-              [](const dpl2::FillerCellRecord& a, const dpl2::FillerCellRecord& b) {
-                const fr::InstanceId aId = fr::fillerRecordInstanceId(a);
-                const fr::InstanceId bId = fr::fillerRecordInstanceId(b);
+              [](const dpl2::CellChangeRecord& a, const dpl2::CellChangeRecord& b) {
+                const fr::InstanceId aId = fr::cellChangeRecordInstanceId(a);
+                const fr::InstanceId bId = fr::cellChangeRecordInstanceId(b);
                 return aId != bId
                            ? aId < bId
-                           : fr::fillerRecordNewMasterId(a)
-                                 < fr::fillerRecordNewMasterId(b);
+                           : fr::cellChangeRecordNewMasterId(a)
+                                 < fr::cellChangeRecordNewMasterId(b);
               });
     std::string key;
     for (const auto& c : sorted) {
-      key += std::to_string(fr::fillerRecordInstanceId(c)) + ">"
-             + std::to_string(fr::fillerRecordNewMasterId(c)) + "|";
+      key += std::to_string(fr::cellChangeRecordInstanceId(c)) + ">"
+             + std::to_string(fr::cellChangeRecordNewMasterId(c)) + "|";
     }
     return key;
   }
@@ -3782,8 +3800,8 @@ class AdaptiveSolutionChecker : public fr::RepairOracle
     const bool solved = std::any_of(
         request.fillerChanges.begin(),
         request.fillerChanges.end(),
-        [&](const dpl2::FillerCellRecord& change) {
-          return fr::fillerRecordInstanceId(change) == solutionInstance;
+        [&](const dpl2::CellChangeRecord& change) {
+          return fr::cellChangeRecordInstanceId(change) == solutionInstance;
         });
     if (!solved) {
       result.violations = {original};
@@ -3836,7 +3854,7 @@ void testPlannerAdaptiveSolvesBeyondRing()
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
   if (!result.changes.empty()) {
-    EXPECT_EQ(fr::fillerRecordInstanceId(result.changes.front()), 141);
+    EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes.front()), 141);
   }
   bool sawAdaptiveSolution = false;
   for (const auto& diagnostic : result.diagnostics) {
@@ -3887,7 +3905,7 @@ void testPlannerAdaptiveL1FindsFarFiller()
   const fr::FillerRepairResult result = planner.repair(request);
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes.front()), 141);
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes.front()), 141);
   bool sawAdaptiveSolution = false;
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
     sawAdaptiveSolution |= diagnostic.code == "Solution"
@@ -4787,8 +4805,8 @@ void testPlannerUserGridMwMs1()
   // newInWindow=0, relatedInHalo=0.
   EXPECT_TRUE(result.hasSolution);
   EXPECT_EQ(result.changes.size(), 1u);
-  EXPECT_EQ(fr::fillerRecordInstanceId(result.changes[0]), 2012);
-  EXPECT_EQ(fr::fillerRecordNewMasterId(result.changes[0]), grid::filler(4, 0));
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes[0]), 2012);
+  EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[0]), grid::filler(4, 0));
 
   // Same input -> identical result (planner determinism).
   fr::TestRepairOracle checker2(design, rules);
@@ -4796,7 +4814,7 @@ void testPlannerUserGridMwMs1()
   const auto result2 = planner2.repair(request);
   EXPECT_TRUE(result2.hasSolution);
   EXPECT_EQ(result2.changes.size(), 1u);
-  EXPECT_EQ(fr::fillerRecordInstanceId(result2.changes[0]), 2012);
+  EXPECT_EQ(fr::cellChangeRecordInstanceId(result2.changes[0]), 2012);
 }
 
 void registerPlannerTests()
