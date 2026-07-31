@@ -34,7 +34,7 @@ Swap-only repair, complete and migration-ready.
    `std::vector<CellChangeRecord>`; the checker keeps no member state, and
    commit belongs to opto/infrastructure. Repair never mutates UDM.
 4. **`fillerSetting::core_` is the only filler authority.**
-   `fillerSetting::isFiller(LibCellID)` classifies registered Masters;
+   `fillerSetting::isFillerCell(LibCellID)` classifies registered Masters;
    Nodes inherit that stored Master type. Candidates come from the same list.
    No production path re-derives filler identity from UDM macro flags.
 5. **Trust infrastructure.** RowId is the Grid row, x is core-left-relative.

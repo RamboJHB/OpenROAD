@@ -225,7 +225,7 @@ bool isStandardCellMaster(const eLIB::PhysLibCell& cell,
                           const fillerSetting& filler_settings)
 {
   return cell.getType().isCore() && !cell.getType().isBlock()
-         && !filler_settings.isFiller(cell.getLibCellId());
+         && !filler_settings.isFillerCell(cell.getLibCellId());
 }
 
 ViolationKind toKind(ipl::RuleSource source)

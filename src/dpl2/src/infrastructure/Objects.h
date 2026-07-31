@@ -43,7 +43,7 @@ class Master
 {
  public:
   bool isMultiRow() const;
-  // Master classification is assigned from fillerSetting::isFiller() when
+  // Master classification is assigned from fillerSetting::isFillerCell() when
   // infrastructure imports or refreshes the configured filler core list.
   bool isFiller() const;
   void setFiller(bool filler) { is_filler_ = filler; }

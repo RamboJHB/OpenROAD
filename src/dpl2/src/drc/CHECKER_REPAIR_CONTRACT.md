@@ -124,7 +124,7 @@ unaffected.
 
 ### `infrastructure/Objects.h`
 
-**One filler authority**: `fillerSetting::isFiller(LibCellID)`, which checks
+**One filler authority**: `fillerSetting::isFillerCell(LibCellID)`, which checks
 membership in its configured `core_` list. `Network::addMaster` stores that
 answer on `Master`; `addNode` and `updateNode` inherit the Master type.
 `set_filler_option` runs before filler placement, checker initialization and
@@ -181,7 +181,7 @@ other callers.
 
 `network.cpp`, three fixes beyond the orientation one below:
 
-- **`addMaster` classifies only with `fillerSetting::isFiller()`**.
+- **`addMaster` classifies only with `fillerSetting::isFillerCell()`**.
   `set_filler_option` has already configured the core list before filler
   placement, and `addNode` inherits the stored Master type.
 - **`updateNode` sets the type.** It refreshed master, size, orientation and

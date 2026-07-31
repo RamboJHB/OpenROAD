@@ -81,7 +81,7 @@ std::vector<const eLIB::PhysLibCell*> fillerSetting::getFillerPhysCells() const
     return result;
 }
 
-bool fillerSetting::isFiller(eLIB::LibCellID libCellId) const
+bool fillerSetting::isFillerCell(eLIB::LibCellID libCellId) const
 {
     return std::find(core_.begin(), core_.end(), libCellId) != core_.end();
 }

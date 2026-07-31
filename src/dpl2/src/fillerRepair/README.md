@@ -88,7 +88,7 @@ is that same pointer, then creates its private checker with only `Grid` and
 `Network`. There is no explicit-design checker constructor and no global
 design lookup.
 
-**One filler authority.** `fillerSetting::isFiller(LibCellID)` answers whether
+**One filler authority.** `fillerSetting::isFillerCell(LibCellID)` answers whether
 a master belongs to the configured `core_` list. Infrastructure stores that
 answer on `Master`; `Node` inherits it whenever it is added, updated or
 updated. `set_filler_option` runs before filler placement, checker

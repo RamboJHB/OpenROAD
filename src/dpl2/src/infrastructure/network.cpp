@@ -178,7 +178,7 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   const auto it = master_to_idx_.find(masterId);
   if (it != master_to_idx_.end()) {
     Master* master = masters_[it->second].get();
-    master->setFiller(filler_setting.isFiller(masterId));
+    master->setFiller(filler_setting.isFillerCell(masterId));
     return master;
   }
   std::unique_ptr<Master> umaster = std::make_unique<Master>();
@@ -189,7 +189,7 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   master->setId(id);
   master->setDbMaster(masterId);
   master->setPhysLibCell(&db_master);
-  master->setFiller(filler_setting.isFiller(masterId));
+  master->setFiller(filler_setting.isFillerCell(masterId));
 
   Rect bbox(UvDist(0), UvDist(0), db_master.getWidth(), db_master.getHeight());
 
