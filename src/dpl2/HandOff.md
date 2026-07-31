@@ -1,6 +1,6 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-07-29. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-07-31. Branch: `claude/wizardly-carson-secahu`.
 
 What this feature does: opto changes one standard cell's VT. The fillers around
 it still carry the old implant type, which is an MW/MS violation. This finds a
@@ -14,9 +14,10 @@ Masters and Nodes from `fillerSetting::core_`.
 
 ## 0. Migration snapshot
 
-**`bfe8642f23`** — take the payload from this commit. Everything below
-describes exactly that state. (This section is the only thing that changed
-afterwards, to record the id.)
+**`bfe8642f23`** is the base payload reference. It remains useful for
+identifying the original portable module, but it is no longer the complete
+migration state. Apply the required null-safety delta from **`8ca27117c6`**
+described in Section 1 as part of the port.
 
 ```sh
 git tag fillerRepair-migration-20260729 bfe8642f23
@@ -31,9 +32,9 @@ migration reference point):
 
 | | |
 |---|---|
-| local suite | 260/260, normal and ASan |
-| migration gate (destination code path) | 162/162, normal and ASan |
-| standalone module | 162/162 — configure, build and test with no harness |
+| local suite | 269/269, normal and ASan |
+| migration gate (destination code path) | 165/165, normal |
+| standalone module | 165/165 — configure, build and test with no harness |
 | `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
 
 ---
@@ -50,6 +51,31 @@ migration reference point):
 The payload needs no DEF/LEF reader, no fake UDM, and no fixture provider from
 the destination. `src/dpl2/src/fillerRepair/README.md` is the module's own
 documentation and travels with it.
+
+### Null-safety patch must travel
+
+The destination infrastructure and `ImplantLayerChecker` do **not** yet
+contain the fail-closed null handling present on this branch. Keep the current
+infrastructure changes here, and port commit **`8ca27117c6`** (or an equivalent
+destination-native implementation) together with the repair payload.
+
+The destination-side portion is:
+
+- `infrastructure/Grid.cpp`
+- `infrastructure/network.{h,cpp}`
+- `drc/ImplantLayerChecker.{h,cpp}`
+
+The payload already carries its matching guards in
+`FillerRepairEngine.cpp` and `RepairPlanner.cpp`. The destination patch must
+reject missing managers, invalid physical mappings, null Network slots,
+missing masters, unallocated/out-of-range Grid access, and invalid checker
+targets/overlays before dereference. `Network::addNode` also changes from
+`void` to `bool`, so destination callers must compile against that contract.
+
+This is a migration dependency, not optional cleanup. Porting only the
+`fillerRepair/` directory leaves earlier infrastructure/checker dereferences
+outside the engine's control. After adapting the patch, rerun the portable
+suite, migration gate, and an ASan full run before enabling repair.
 
 ---
 
@@ -235,12 +261,12 @@ it.
 
 | | |
 |---|---|
-| Portable planner tests | 85 |
-| Portable real-checker E2E | 77 |
-| Repository-local engine regression | 98 (fake UDM, not migrated) |
-| Full local suite | 260/260, normal and ASan |
-| Migration gate (destination code path) | 162/162, normal and ASan |
-| Standalone module build | 162/162 |
+| Portable planner tests | 86 |
+| Portable real-checker E2E | 79 |
+| Repository-local engine regression | 104 (fake UDM, not migrated) |
+| Full local suite | 269/269, normal and ASan |
+| Migration gate (destination code path) | 165/165, normal |
+| Standalone module build | 165/165 |
 
 The migration gate builds the payload the way a destination does
 (`DPL2_TEST_USE_FAKE_UDM=OFF`, no fake-only target, no test provider) with the
