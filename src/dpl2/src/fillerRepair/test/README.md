@@ -1,8 +1,8 @@
 # Portable fillerRepair tests
 
-Updated: 2026-07-31.
+Updated: 2026-08-02.
 
-These move with `fillerRepair/` and are the migration gate: **162 tests**, none
+These move with `fillerRepair/` and are the migration gate: **170 tests**, none
 of which construct a UDM object, include the repository's fake UDM tree, or
 need a fixture provider from the destination. They run before a design exists.
 
@@ -18,7 +18,7 @@ With `DPL2_RUNTIME_LIBRARIES` empty the E2E compiles the adjacent
 infrastructure/checker sources itself, so the suite still runs before any
 destination wiring exists.
 
-## 85 planner cases — `RepairPlannerTest.cpp`
+## 91 planner cases — `RepairPlannerTest.cpp`
 
 Database-free. The two seam doubles and the synthetic master catalog are folded
 into that same file — it is self-contained. They implement the two seams
@@ -32,7 +32,7 @@ fallback when the primary side is blocked); ranking into filler domains;
 subset enumeration and member caps; the oracle-gate protocol and its error
 paths; both budgets; determinism; guard quantization; and cache invariants.
 
-## 77 real-checker cases — `FillerRepairCheckerE2ETest.cpp`
+## 79 real-checker cases — `FillerRepairCheckerE2ETest.cpp`
 
 Drive the **real `ImplantLayerChecker`** over `ImplantLayerCheckerHelper`-built
 input. No fake checker, no fake placement view, no fake UDM. The small

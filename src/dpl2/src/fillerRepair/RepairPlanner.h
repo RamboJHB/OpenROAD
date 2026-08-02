@@ -16,6 +16,8 @@
 
 #pragma once
 
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -95,17 +97,54 @@ std::optional<Swap> makeSwap(const PlacementView& view,
 // batch, so building it must not allocate a stream or a formatted key.
 struct OverlayKey
 {
+  using Entry = std::pair<InstanceId, MasterId>;
+  // One key is built per candidate, and a candidate holds one swap per
+  // filler in the subset -- `maxSubsetSize` of them, or the whole (small)
+  // window when its space is enumerated completely. Small subsets therefore
+  // cover the search, and they must not each cost a heap allocation. Larger
+  // ones still work: they spill to `overflow`.
+  static constexpr std::size_t kInlineSwaps = 8;
+
   DbCoord guardXl = 0;
   DbCoord guardXh = 0;
   RowId guardRowLo = 0;
   RowId guardRowHi = 0;
-  std::vector<std::pair<InstanceId, MasterId>> swaps;  // sorted, unique
+
+  std::size_t count = 0;
+  std::array<Entry, kInlineSwaps> inlineSwaps{};
+  std::vector<Entry> overflow;  // used iff count > kInlineSwaps
+
+  const Entry* data() const
+  {
+    return count > kInlineSwaps ? overflow.data() : inlineSwaps.data();
+  }
+  Entry* data()
+  {
+    return count > kInlineSwaps ? overflow.data() : inlineSwaps.data();
+  }
+  std::size_t size() const { return count; }
+  const Entry* begin() const { return data(); }
+  const Entry* end() const { return data() + count; }
+
+  // Grows to `n` entries; the caller then writes them through data().
+  void resize(std::size_t n)
+  {
+    if (n > kInlineSwaps) {
+      overflow.resize(n);
+      if (count <= kInlineSwaps) {
+        std::copy(inlineSwaps.begin(), inlineSwaps.begin() + count,
+                  overflow.begin());
+      }
+    }
+    count = n;
+  }
 
   bool operator==(const OverlayKey& other) const
   {
     return guardXl == other.guardXl && guardXh == other.guardXh
            && guardRowLo == other.guardRowLo && guardRowHi == other.guardRowHi
-           && swaps == other.swaps;
+           && count == other.count
+           && std::equal(begin(), end(), other.begin());
   }
   bool operator!=(const OverlayKey& other) const { return !(*this == other); }
 };
@@ -164,6 +203,46 @@ std::vector<NormalizedViolation> normalizeViolations(
 
 // Pinned signature match across two checker snapshots (see file header).
 bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth);
+
+// The exact-equality prefix of `sameSignature`: two violations whose classes
+// differ can never match. Comparing the packed class first turns the delta
+// classifier's O(originals x findings) scan into integer compares for every
+// pair that cannot match, without touching which pair is chosen -- the scan
+// order and the one-to-one consumption rule are unchanged.
+struct SignatureClass
+{
+  int ruleId = 0;
+  ViolationKind kind = ViolationKind::MinWidth;
+  ViolationRelation relation = ViolationRelation::IntraRow;
+  LayerId primaryLayer = 0;
+  bool hasSecondaryLayer = false;
+  LayerId secondaryLayer = 0;
+
+  bool operator==(const SignatureClass& other) const
+  {
+    return ruleId == other.ruleId && kind == other.kind
+           && relation == other.relation
+           && primaryLayer == other.primaryLayer
+           && hasSecondaryLayer == other.hasSecondaryLayer
+           && secondaryLayer == other.secondaryLayer;
+  }
+  bool operator!=(const SignatureClass& other) const
+  {
+    return !(*this == other);
+  }
+};
+
+inline SignatureClass signatureClass(const Violation& v)
+{
+  SignatureClass c;
+  c.ruleId = v.ruleId;
+  c.kind = v.kind;
+  c.relation = v.relation;
+  c.primaryLayer = v.primaryLayer;
+  c.hasSecondaryLayer = v.secondaryLayer.has_value();
+  c.secondaryLayer = v.secondaryLayer.value_or(0);
+  return c;
+}
 
 // Pinned relatedness: participants touch a changed instance, or xWindow is
 // within `ruleDistance` of a changed span on the same/adjacent row.
@@ -253,10 +332,24 @@ struct EnumerationPlan
   std::vector<Overlay> overlays;  // enumeration order, capped at budget
 };
 
+// `freshFillers` (sorted instance ids) makes the enumeration INCREMENTAL
+// across adaptive levels: a combination that contains none of them was already
+// emitted -- and answered -- at the previous level. Re-emitting it re-asks a
+// question whose answer cannot have changed, because under an unchanged guard
+// a candidate that was not clean at level L cannot become clean at L+1: the
+// window only grows, so a halo finding can migrate into the window (still
+// blocking) but no blocker can disappear, and a clean candidate would have
+// ended the search at L. Skipping them is therefore not an approximation --
+// it spends the window budget on questions the search has not asked yet.
+//
+// Empty = no filtering: L0, and any level whose quantized guard moved (a new
+// guard is a different checker question, so every candidate is new again).
 EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
                                   const RepairConfig& config,
                                   int budget,
-                                  const DebugLog& log);
+                                  const DebugLog& log,
+                                  const std::vector<InstanceId>& freshFillers
+                                  = {});
 
 // --- oracle gate: baseline-delta accept -------------------------------------
 
@@ -353,6 +446,19 @@ class OracleGate
   // only find/emplace/size, so bucket order cannot affect search order.
   std::unordered_map<OverlayKey, OracleResult, OverlayKeyHash> cache_;
   const OracleResult* baseline_ = nullptr;  // points into cache_
+
+  // Signature classes of the fixed original snapshot and of the current
+  // baseline, so classify() compares packed ints instead of re-deriving them
+  // for every candidate. Rebuilt with the baseline, which changes only when
+  // the guard does.
+  std::vector<SignatureClass> original_classes_;
+  std::vector<SignatureClass> baseline_classes_;
+  // classify() scratch, reused across candidates: one repair runs one search
+  // at a time, so these never overlap. Keeps the delta classifier allocation
+  // free on a path that runs once per candidate.
+  mutable std::vector<char> consumed_scratch_;
+  mutable std::vector<char> baseline_consumed_scratch_;
+  mutable std::vector<SignatureClass> result_classes_scratch_;
   OracleRequestId next_request_id_ = 0;
   int requests_sent_ = 0;
   int batches_sent_ = 0;

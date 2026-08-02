@@ -1,6 +1,6 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-07-31.
+Updated: 2026-08-02.
 
 `ImplantLayerChecker::check()` is the caller-facing entry. Opto owns the
 `CellChangeRecord` vector; the checker appends checker-verified repair swaps
@@ -58,6 +58,17 @@ A side effect worth knowing: a repeated guard makes that level's baseline a
 cache hit, so `checkerCallBudgetPerWindow` now buys candidate evaluations
 instead of re-buying a baseline already held
 (`CachedBaselineFreesWindowBudget`).
+
+**A repeated guard also makes the enumeration incremental.** Under an
+unchanged guard, a candidate that was not clean at level L cannot become
+clean at L+1: the window only grows, so a halo finding can migrate into it
+(still blocking) but no blocker can disappear, and a clean candidate would
+have ended the search at L. So level L+1 enumerates only the combinations
+that contain a filler it just gained — the rest are questions the previous
+level already answered. This is not a heuristic prune: the skipped
+candidates still count as covered, so a level that skips them is still
+reported *complete*. When the quantized guard does move, every candidate is a
+new checker question again and the filter switches off for that level.
 
 **Overlay identity is a value, not a string.** Two candidates are the same
 checker question when they propose the same `(instance -> new master)` set
@@ -127,7 +138,7 @@ nothing else, which is what keeps it database-free and portable.
 | `Debug.h` | `[fr][stage]` transcript (`cat`, `show`, `DebugLog`) |
 | `CMakeLists.txt` | the module's own targets — `dpl2::fillerRepair` (payload, C++20) and `dpl2::fillerRepairPlanner` (pure pipeline, C++17); a destination adds the directory and links a target rather than listing sources |
 | `test/CMakeLists.txt` | the portable tests, added when `DPL2_FILLER_REPAIR_BUILD_TESTS=ON` |
-| `test/RepairPlannerTest.cpp` | 85 portable database-free planner cases; the two seam doubles and the synthetic master catalog are folded into this one file |
+| `test/RepairPlannerTest.cpp` | 91 portable database-free planner cases; the two seam doubles and the synthetic master catalog are folded into this one file |
 | `test/FillerRepairCheckerE2ETest.cpp` | 77 portable real-checker, repair-window and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript
@@ -224,12 +235,12 @@ Full migration instructions, including the destination checklist, are in
 
 ## Verification
 
-- portable planner: 85 cases; portable checker E2E: 77 cases (both compile,
+- portable planner: 91 cases; portable checker E2E: 79 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
-- repository-local fake-UDM engine regression: 98 cases under
+- repository-local fake-UDM engine regression: 104 cases under
   `src/dpl2/test/local/`.
-- 2026-07-31 full local suite: 260/260 normal and ASan; migration gate
-  162/162 normal and ASan; standalone module build 162/162.
+- 2026-08-02 full local suite: 274/274 normal and ASan; migration gate
+  170/170 normal and ASan; standalone module build 170/170.
 
 ### Search cost
 
@@ -242,27 +253,56 @@ matters in production**, where each one is real DRC work:
 |---|---|---|---|
 | baseline | 15 633 | 523 | 63.5 |
 | value-typed key, no per-call allocation | 15 633 | 523 | 22.5 |
-| quantized guard | **2 972** | **189** | **9.8** |
+| quantized guard | 2 972 | 189 | 9.8 |
+| incremental enumeration + allocation-free classify | **4 230** | **151** | **4.5** |
 
 (call and batch counts are per repair; the ms column is over 20 repeats)
 
-The first step removed overhead only — identical call count. The second is
-algorithmic: the same ~1 525 distinct overlays are still explored, they are
-simply no longer re-asked once per adaptive level (33 distinct guards became
-5). **5.3x fewer checker calls, 6.5x less planner time.** At any realistic
-per-call cost the call count dominates, so the end-to-end factor is ~5x.
+The first step removed overhead only — identical call count. The second was
+algorithmic on the **oracle** side: the same ~1 525 distinct overlays are
+still explored, they are simply no longer re-asked once per adaptive level
+(33 distinct guards became 5).
 
-The common case (a solution a few fillers away) went 30 -> 27 calls: it never
-escalated far enough to pay the old re-check tax.
+The third is algorithmic on the **planner** side, and it is the one that
+explains the odd-looking call count. Guard quantization stopped the repeats
+from reaching the checker, but the search still *generated* them: 15 660
+candidate resolutions of which 12 688 (81%) were cache hits, each one paying
+for an overlay, a key, a hash lookup and a full delta classification. From
+step 3 of the escalation onward every level enumerated its whole 512-candidate
+budget and was ~18% productive — **the budget was being spent re-asking rather
+than exploring.** Enumerating only combinations that touch a newly editable
+filler removes them at the source (cache hits: 12 688 -> 28), so the same
+budget reaches deeper into the space. That is why calls go *up* while time
+goes down: the search now explores 42% more distinct overlays for less work.
 
-With the transcript on (the default) the pre-quantization case cost 30.9 ms
-rather than 40.3 ms after dropping the per-line flush.
+At the shipped `checkerCallBudgetPerRepair` (2048) the comparison is direct —
+both stop at the same call ceiling:
+
+| | checker calls | batches | planner ms/repair |
+|---|---|---|---|
+| quantized guard | 2 048 | 127 | 2.7 |
+| + incremental enumeration | 2 048 | **66** | **1.5** |
+
+Same DRC work, **1.8x less planner time and half the batches** (fuller
+batches, so fewer round trips), and the calls buy distinct questions.
+
+The common case (a solution a few fillers away) is unaffected: it never
+escalates far enough for any of this to apply.
+
+Supporting constant-factor work, all on paths that run once per candidate:
+`OverlayKey` carries its swap list inline up to `kInlineSwaps` (spilling to
+the heap beyond that, so it is an optimization and not a capacity limit); the
+delta classifier reuses its scratch buffers instead of allocating two vectors
+per candidate, and compares a packed `SignatureClass` before calling
+`sameSignature`, which turns the O(originals x findings) scan into integer
+compares for every pair that cannot match. Allocation was ~46% of all
+retired instructions before this work.
 
 **Evaluated and not done:** coalescing uncached candidates across chunks into
-full batches. Batches are smaller now that most candidates hit the cache
-(mean 15.7 rather than 29.9 per batch), and `checkPlaceWithOverlays` has a
-per-batch fixed cost — one empty-overlay region scan — with the candidates
-themselves run through `parallelFor`. Whether refilling batches wins depends
-on the production thread count and on how much a speculatively-sent candidate
-costs when an earlier one turns out clean; that needs measurement on real
-hardware, not a guess here.
+full batches. `checkPlaceWithOverlays` has a per-batch fixed cost — one
+empty-overlay region scan — with the candidates themselves run through
+`parallelFor`. Batches are already fuller now that the search stops
+generating cache hits (mean 28 rather than 16 per batch). Whether refilling
+them further wins depends on the production thread count and on how much a
+speculatively-sent candidate costs when an earlier one turns out clean; that
+needs measurement on real hardware, not a guess here.

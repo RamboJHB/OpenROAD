@@ -12,6 +12,7 @@
 // oracle double, then the cases.
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -4677,6 +4678,102 @@ fr::FillerDomain makeDomain(const fr::TestPlacementView& design,
   return domain;
 }
 
+// The gate's counters are reported on the NoCleanOverlay diagnostic; they are
+// not otherwise reachable from outside repair().
+struct GateCounters
+{
+  bool found = false;
+  long requests = 0;
+  long cacheHits = 0;
+};
+
+GateCounters parseGateCounters(const fr::FillerRepairResult& result)
+{
+  GateCounters counters;
+  for (const fr::Diagnostic& diagnostic : result.diagnostics) {
+    if (diagnostic.code != "NoCleanOverlay") {
+      continue;
+    }
+    const auto readAfter = [&](const std::string& tag) -> long {
+      const size_t at = diagnostic.message.find(tag);
+      return at == std::string::npos
+                 ? -1
+                 : std::strtol(diagnostic.message.c_str() + at + tag.size(),
+                               nullptr, 10);
+    };
+    counters.requests = readAfter("checker requests=");
+    counters.cacheHits = readAfter("cacheHits=");
+    counters.found = counters.requests >= 0 && counters.cacheHits >= 0;
+    break;
+  }
+  return counters;
+}
+
+bool sameOverlay(const fr::Overlay& a, const fr::Overlay& b)
+{
+  if (a.size() != b.size()) {
+    return false;
+  }
+  for (size_t i = 0; i < a.size(); ++i) {
+    if (a[i].instanceId != b[i].instanceId
+        || a[i].newMasterId != b[i].newMasterId) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Never solves, and records the exact question -- guard plus sorted swap set
+// -- behind every request, so a test can assert nothing was asked twice.
+class RecordingUnsolvedChecker : public fr::RepairOracle
+{
+ public:
+  fr::Violation original;
+  std::vector<std::string> questions;
+
+  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& r) override
+  {
+    questions.push_back(describe(r));
+    fr::OracleResult res;
+    res.requestId = r.requestId;
+    res.status = fr::OracleStatus::Checked;
+    res.violations = {original};
+    res.isLegal = false;
+    return res;
+  }
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& rs) override
+  {
+    std::vector<fr::OracleResult> out;
+    out.reserve(rs.size());
+    for (const auto& r : rs) {
+      out.push_back(checkPlaceWithOverlay(r));
+    }
+    return out;
+  }
+
+ private:
+  static std::string describe(const fr::OracleRequest& r)
+  {
+    std::vector<std::pair<int, int>> swaps;
+    for (const dpl2::CellChangeRecord& change : r.fillerChanges) {
+      swaps.emplace_back(
+          static_cast<int>(fr::cellChangeRecordInstanceId(change)),
+          static_cast<int>(fr::cellChangeRecordNewMasterId(change)));
+    }
+    std::sort(swaps.begin(), swaps.end());
+    std::string out = "g[" + std::to_string(r.guardRegion.x.xl) + ','
+                      + std::to_string(r.guardRegion.x.xh) + ")r"
+                      + std::to_string(r.guardRegion.rowLo) + '-'
+                      + std::to_string(r.guardRegion.rowHi) + ':';
+    for (const auto& [instanceId, masterId] : swaps) {
+      out += ' ' + std::to_string(instanceId) + "->"
+             + std::to_string(masterId);
+    }
+    return out;
+  }
+};
+
 void testEnumerateCompleteBudgetBoundary()
 {
   fr::TestPlacementView design = makeLibrary();
@@ -4748,6 +4845,223 @@ void testEnumerateSize3CapAndProducts()
   EXPECT_EQ(plan.overlays.back()[1].instanceId, 801);
   EXPECT_EQ(plan.overlays.back()[2].instanceId, 802);
   EXPECT_EQ(plan.overlays.back()[2].newMasterId, fillerMaster(2, kVt3));
+}
+
+// --- incremental enumeration ------------------------------------------------
+//
+// Adaptive levels reuse the quantized guard, so most levels re-ask what the
+// previous one already answered. `freshFillers` removes exactly those, and
+// nothing else: a combination is emitted iff it contains a filler the level
+// just gained.
+
+void testEnumerateIncrementalSkipsAlreadyAskedCombinations()
+{
+  fr::TestPlacementView design = makeLibrary();
+  design.addRow(0, 0, 8)
+      .place(800, fillerMaster(2, kVt1), 0, 0)
+      .place(801, fillerMaster(2, kVt1), 0, 2)
+      .place(802, fillerMaster(2, kVt1), 0, 4);
+  const std::vector<fr::FillerDomain> domains = {
+      makeDomain(design, 800, {fillerMaster(2, kVt2)}),
+      makeDomain(design, 801, {fillerMaster(2, kVt2)}),
+      makeDomain(design, 802, {fillerMaster(2, kVt2)}),
+  };
+  fr::RepairConfig config;
+  config.maxSubsetSize = 3;
+
+  // Full space over three single-option fillers: 3 + 3 + 1 = 7 subsets.
+  const auto full =
+      fr::enumerateOverlays(domains, config, 100, fr::DebugLog(verbose()));
+  EXPECT_TRUE(full.complete);
+  EXPECT_EQ(full.overlays.size(), 7u);
+
+  // 802 is the only filler this level gained: exactly the subsets containing
+  // it survive -- {802}, {800,802}, {801,802}, {800,801,802} = 4.
+  const auto incremental = fr::enumerateOverlays(
+      domains, config, 100, fr::DebugLog(verbose()), {802});
+  EXPECT_EQ(incremental.overlays.size(), 4u);
+  for (const fr::Overlay& overlay : incremental.overlays) {
+    EXPECT_TRUE(std::any_of(overlay.begin(),
+                            overlay.end(),
+                            [](const fr::Swap& s) {
+                              return s.instanceId == 802;
+                            }));
+  }
+  // The skipped ones are covered, not lost: the level is still definitive.
+  EXPECT_TRUE(incremental.complete);
+
+  // Emission order is a subsequence of the unfiltered order, so a filtered
+  // level cannot reorder the search.
+  size_t f = 0;
+  for (const fr::Overlay& overlay : full.overlays) {
+    if (f < incremental.overlays.size()
+        && sameOverlay(overlay, incremental.overlays[f])) {
+      ++f;
+    }
+  }
+  EXPECT_EQ(f, incremental.overlays.size());
+}
+
+void testEnumerateIncrementalWithNoFreshFillerEmitsNothing()
+{
+  fr::TestPlacementView design = makeLibrary();
+  design.addRow(0, 0, 4).place(800, fillerMaster(2, kVt1), 0, 0);
+  const std::vector<fr::FillerDomain> domains = {
+      makeDomain(design, 800, {fillerMaster(2, kVt2), fillerMaster(2, kVt3)}),
+  };
+  fr::RepairConfig config;
+  // A fresh id that is not in the window: every combination was already
+  // asked, so there is no new question to put to the checker.
+  const auto plan = fr::enumerateOverlays(
+      domains, config, 100, fr::DebugLog(verbose()), {999});
+  EXPECT_TRUE(plan.overlays.empty());
+  EXPECT_TRUE(plan.complete);
+}
+
+// The whole point of the incremental filter. The answer cache always kept
+// REPEATS off the checker, so oracle traffic alone cannot show whether the
+// search is re-asking: the tell is how many resolutions the cache had to
+// absorb. On a row wide enough for the quantized guard to sit still across
+// many levels, escalation used to re-enumerate the same low-index subsets at
+// every level and hand the cache thousands of hits; enumerating only the
+// combinations that touch a newly editable filler removes them at the source,
+// so the window budget buys questions the search has not asked yet.
+void testAdaptiveEscalationDoesNotReEnumerateAnsweredCandidates()
+{
+  // Wide enough that the quantized guard STAYS PUT for several consecutive
+  // levels -- that is the situation the incremental filter exists for, and a
+  // narrow row where the guard moves every level would not exercise it.
+  constexpr int kFillers = 60;
+  fr::TestPlacementView design = makeLibrary();
+  design.addRow(0, 0, 2 * kFillers + 8).place(100, cellMaster(kVt2), 0, 0);
+  for (int i = 0; i < kFillers; ++i) {
+    design.place(140 + i, fillerMaster(2, kVt1), 0, 4 + 2 * i);
+  }
+
+  fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0},
+      {0, 6});
+  fr::ViolationParticipant participant;
+  participant.instanceId = 140;
+  participant.masterId = fillerMaster(2, kVt1);
+  participant.rowId = 0;
+  participant.xRange = {4, 6};
+  participant.isFiller = true;
+  original.participants = {participant};
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 100);
+  request.violations = {original};
+
+  RecordingUnsolvedChecker checker;
+  checker.original = original;
+  fr::RepairConfig config;
+  config.checkerCallBudgetPerRepair = 0;  // let the escalation run
+  config.verbose = verbose();
+  fr::internal::RepairPlanner planner(design, checker, config);
+  const fr::FillerRepairResult result = planner.repair(request);
+  EXPECT_TRUE(!result.hasSolution);
+
+  // The cache still guarantees the checker is never asked twice ...
+  std::set<std::string> seen;
+  for (const std::string& question : checker.questions) {
+    EXPECT_TRUE(seen.insert(question).second)
+        << "checker was asked the same question twice: " << question;
+  }
+  EXPECT_TRUE(checker.questions.size() > 1);
+
+  // ... and the search no longer generates the repeats for it to absorb.
+  // Escalation covers many levels under a handful of distinct guards, so
+  // without the filter the hits run into the thousands and outnumber the
+  // real questions several times over.
+  const auto counters = parseGateCounters(result);
+  EXPECT_TRUE(counters.found) << "NoCleanOverlay diagnostic is missing";
+  EXPECT_TRUE(counters.requests > 100);
+  EXPECT_TRUE(counters.cacheHits < counters.requests / 10)
+      << "the search re-enumerated answered candidates: requests="
+      << counters.requests << " cacheHits=" << counters.cacheHits;
+}
+
+// --- OverlayKey storage -----------------------------------------------------
+
+// The inline buffer is an optimization, not a capacity limit: a subset wider
+// than it must still compare and hash by value.
+void testOverlayKeySpillsPastTheInlineBuffer()
+{
+  const size_t wide = fr::OverlayKey::kInlineSwaps + 3;
+  fr::TestPlacementView design = makeLibrary();
+  design.addRow(0, 0, static_cast<fr::DbCoord>(2 * wide + 2));
+  fr::Overlay overlay;
+  for (size_t i = 0; i < wide; ++i) {
+    const fr::InstanceId id = static_cast<fr::InstanceId>(700 + i);
+    design.place(id, fillerMaster(2, kVt1), 0, static_cast<fr::DbCoord>(2 * i));
+    overlay.push_back(*fr::makeSwap(design, id, fillerMaster(2, kVt2)));
+  }
+  const fr::Region guard{{0, 40}, 0, 0};
+  const fr::OverlayKey key = fr::overlayKey(guard, overlay);
+  EXPECT_EQ(key.size(), wide);
+
+  // Same set in a different order is the same question.
+  fr::Overlay shuffled(overlay.rbegin(), overlay.rend());
+  const fr::OverlayKey shuffledKey = fr::overlayKey(guard, shuffled);
+  EXPECT_TRUE(key == shuffledKey);
+  EXPECT_EQ(fr::OverlayKeyHash{}(key), fr::OverlayKeyHash{}(shuffledKey));
+
+  // One different master is a different question.
+  fr::Overlay altered = overlay;
+  altered.back() = *fr::makeSwap(design,
+                                 altered.back().instanceId,
+                                 fillerMaster(2, kVt3));
+  EXPECT_TRUE(key != fr::overlayKey(guard, altered));
+  // ... and so is the same set under a different guard.
+  EXPECT_TRUE(key != fr::overlayKey(fr::Region{{0, 80}, 0, 0}, overlay));
+}
+
+// --- signature classes ------------------------------------------------------
+
+// classify() compares packed classes before calling sameSignature. That is a
+// pure short-circuit only while a class mismatch implies a signature
+// mismatch; if sameSignature ever stops testing one of these fields first,
+// the classifier would silently start missing matches.
+void testSignatureClassMismatchImpliesSignatureMismatch()
+{
+  fr::Violation base = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0},
+      {10, 14});
+  base.primaryLayer = 2;
+  base.secondaryLayer = 5;
+
+  std::vector<fr::Violation> variants;
+  {
+    fr::Violation v = base; v.ruleId = 2; variants.push_back(v);
+  }
+  {
+    fr::Violation v = base; v.kind = fr::ViolationKind::MinSpacing;
+    variants.push_back(v);
+  }
+  {
+    fr::Violation v = base; v.relation = fr::ViolationRelation::InterRow;
+    variants.push_back(v);
+  }
+  {
+    fr::Violation v = base; v.primaryLayer = 3; variants.push_back(v);
+  }
+  {
+    fr::Violation v = base; v.secondaryLayer = 6; variants.push_back(v);
+  }
+  {
+    fr::Violation v = base; v.secondaryLayer.reset(); variants.push_back(v);
+  }
+
+  for (const fr::Violation& v : variants) {
+    EXPECT_TRUE(fr::signatureClass(base) != fr::signatureClass(v));
+    // Same geometry, so only the class fields can reject it -- which is what
+    // makes the class a sound pre-filter.
+    EXPECT_TRUE(!fr::sameSignature(base, v, 1));
+  }
+  // Identical class, identical signature: the pre-filter lets it through.
+  EXPECT_TRUE(fr::signatureClass(base) == fr::signatureClass(base));
+  EXPECT_TRUE(fr::sameSignature(base, base, 1));
 }
 
 // --- User-provided realistic grid ------------------------------------------
@@ -4982,6 +5296,16 @@ void registerPlannerTests()
       {"enumerate_complete_budget_boundary", testEnumerateCompleteBudgetBoundary},
       {"enumerate_overflow_clamp", testEnumerateOverflowClamp},
       {"enumerate_size3_cap_and_products", testEnumerateSize3CapAndProducts},
+      {"enumerate_incremental_skips_already_asked",
+       testEnumerateIncrementalSkipsAlreadyAskedCombinations},
+      {"enumerate_incremental_no_fresh_filler_emits_nothing",
+       testEnumerateIncrementalWithNoFreshFillerEmitsNothing},
+      {"adaptive_escalation_does_not_reenumerate_answered",
+       testAdaptiveEscalationDoesNotReEnumerateAnsweredCandidates},
+      {"overlay_key_spills_past_inline_buffer",
+       testOverlayKeySpillsPastTheInlineBuffer},
+      {"signature_class_mismatch_implies_signature_mismatch",
+       testSignatureClassMismatchImpliesSignatureMismatch},
       {"planner_user_grid_mw_ms_1", testPlannerUserGridMwMs1},
   };
 

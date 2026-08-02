@@ -1,6 +1,6 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-07-31. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-08-02. Branch: `claude/wizardly-carson-secahu`.
 
 What this feature does: opto changes one standard cell's VT. The fillers around
 it still carry the old implant type, which is an MW/MS violation. This finds a
@@ -27,14 +27,14 @@ git tag fillerRepair-migration-20260729 bfe8642f23
 the working branch and refuses tag refs, so the commit id is the reference
 that actually travels.)
 
-Current branch verification (2026-07-31; the commit above remains the
+Current branch verification (2026-08-02; the commit above remains the
 migration reference point):
 
 | | |
 |---|---|
-| local suite | 269/269, normal and ASan |
-| migration gate (destination code path) | 165/165, normal |
-| standalone module | 165/165 — configure, build and test with no harness |
+| local suite | 274/274, normal and ASan |
+| migration gate (destination code path) | 170/170, normal and ASan |
+| standalone module | 170/170 — configure, build and test with no harness |
 | `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
 
 ---
@@ -261,12 +261,12 @@ it.
 
 | | |
 |---|---|
-| Portable planner tests | 86 |
+| Portable planner tests | 91 |
 | Portable real-checker E2E | 79 |
 | Repository-local engine regression | 104 (fake UDM, not migrated) |
-| Full local suite | 269/269, normal and ASan |
-| Migration gate (destination code path) | 165/165, normal |
-| Standalone module build | 165/165 |
+| Full local suite | 274/274, normal and ASan |
+| Migration gate (destination code path) | 170/170, normal and ASan |
+| Standalone module build | 170/170 |
 
 The migration gate builds the payload the way a destination does
 (`DPL2_TEST_USE_FAKE_UDM=OFF`, no fake-only target, no test provider) with the

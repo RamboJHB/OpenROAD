@@ -3,6 +3,7 @@
 
 #include <fillerRepair/RepairPlanner.h>
 
+#include <iterator>
 #include <algorithm>
 #include <map>
 #include <set>
@@ -75,7 +76,7 @@ std::size_t OverlayKeyHash::operator()(const OverlayKey& key) const
   mix(key.guardXh);
   mix(key.guardRowLo);
   mix(key.guardRowHi);
-  for (const auto& [instanceId, masterId] : key.swaps) {
+  for (const auto& [instanceId, masterId] : key) {
     mix(instanceId);
     mix(masterId);
   }
@@ -91,13 +92,14 @@ OverlayKey overlayKey(const Region& guard, const Overlay& overlay)
   key.guardXh = guard.x.xh;
   key.guardRowLo = guard.rowLo;
   key.guardRowHi = guard.rowHi;
-  key.swaps.reserve(overlay.size());
-  for (const Swap& swap : overlay) {
-    key.swaps.emplace_back(swap.instanceId, swap.newMasterId);
+  key.resize(overlay.size());
+  OverlayKey::Entry* entries = key.data();
+  for (std::size_t i = 0; i < overlay.size(); ++i) {
+    entries[i] = {overlay[i].instanceId, overlay[i].newMasterId};
   }
-  std::sort(key.swaps.begin(), key.swaps.end());
-  key.swaps.erase(std::unique(key.swaps.begin(), key.swaps.end()),
-                  key.swaps.end());
+  std::sort(entries, entries + key.size());
+  key.resize(static_cast<std::size_t>(
+      std::unique(entries, entries + key.size()) - entries));
   return key;
 }
 
@@ -965,7 +967,8 @@ long long fullSpaceSize(const std::vector<FillerDomain>& ranked, long long cap)
 EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
                                   const RepairConfig& config,
                                   int budget,
-                                  const DebugLog& log)
+                                  const DebugLog& log,
+                                  const std::vector<InstanceId>& freshFillers)
 {
   EnumerationPlan plan;
   if (ranked.empty() || budget <= 0) {
@@ -973,6 +976,21 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
             cat("skip enumeration: domains=", ranked.size(),
                 " budget=", budget));
     return plan;
+  }
+
+  // Rank-indexed mirror of `freshFillers`, so the leaf test is one array read
+  // rather than a search. See the header for why skipping the rest is exact.
+  const bool incremental = !freshFillers.empty();
+  std::vector<char> rankIsFresh;
+  if (incremental) {
+    rankIsFresh.assign(ranked.size(), 0);
+    for (size_t i = 0; i < ranked.size(); ++i) {
+      rankIsFresh[i] = std::binary_search(freshFillers.begin(),
+                                          freshFillers.end(),
+                                          ranked[i].instanceId)
+                           ? 1
+                           : 0;
+    }
   }
 
   const int fillerTotal = static_cast<int>(ranked.size());
@@ -1001,7 +1019,13 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
 
   std::vector<int> combo;  // filler indices of the current combination
   Overlay current;         // one option per chosen filler, filler-rank order
+  // The emitted count is bounded by the budget, so the candidate list is
+  // sized once instead of doubling its way there.
+  plan.overlays.reserve(static_cast<size_t>(
+      std::min<long long>(space, static_cast<long long>(budget))));
   bool budgetHit = false;
+  int comboFresh = 0;      // fresh members in `combo`, maintained incrementally
+  long long skippedAsAsked = 0;  // candidates the previous level already asked
 
   // Both recursions pass themselves as `self` rather than going through
   // std::function: this is the innermost loop of enumeration (millions of
@@ -1038,12 +1062,32 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
       return;
     }
     if (static_cast<int>(combo.size()) == size) {
+      // Already emitted -- and answered -- at the previous level: its whole
+      // Cartesian product is skipped, so no key is built and no oracle
+      // question is repeated.
+      if (incremental && comboFresh == 0) {
+        // Count what its Cartesian product WOULD have been: those candidates
+        // are covered (by the previous level), so completeness accounting
+        // must not treat the level as truncated.
+        long long product = 1;
+        for (const int rank : combo) {
+          product *= static_cast<long long>(ranked[rank].options.size());
+        }
+        skippedAsAsked += product;
+        return;
+      }
       emitProducts(emitProducts, 0);
       return;
     }
     for (int i = from; i < cap; ++i) {
       combo.push_back(i);
+      if (incremental) {
+        comboFresh += rankIsFresh[i];
+      }
       self(self, size, i + 1, cap);
+      if (incremental) {
+        comboFresh -= rankIsFresh[i];
+      }
       combo.pop_back();
       if (budgetHit) {
         return;
@@ -1064,10 +1108,20 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   }
   // Reaching the budget on the final element is still a complete search.
   // Derive completeness from what was actually emitted so space == budget
-  // cannot be mislabeled as truncated.
-  plan.complete = space <= budget
-                  && static_cast<long long>(plan.overlays.size()) == space;
+  // cannot be mislabeled as truncated. Incrementally skipped candidates count
+  // as covered: the previous level asked them under this same guard and the
+  // answer was not clean, which cannot change (see the header).
+  plan.complete
+      = space <= budget
+        && static_cast<long long>(plan.overlays.size()) + skippedAsAsked
+               == space;
 
+  if (incremental) {
+    log.msg("enumerate",
+            cat("incremental: fresh filler(s)=", freshFillers.size(), '/',
+                fillerTotal, " -> skipped ", skippedAsAsked,
+                " candidate(s) already answered at the previous level"));
+  }
   log.msg("enumerate",
           cat(fillerTotal, " filler domain(s), ", optionTotal,
               " option(s), space=", space,
@@ -1138,6 +1192,10 @@ OracleGate::OracleGate(const PlacementView& dataSource,
       config_(config),
       log_(log)
 {
+  original_classes_.reserve(originals_.size());
+  for (const Violation& original : originals_) {
+    original_classes_.push_back(signatureClass(original));
+  }
 }
 
 bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
@@ -1178,6 +1236,13 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
   }
 
   baseline_ = &it->second;
+  // Classes follow the baseline: it changes only when the guard does, so this
+  // is paid once per distinct guard rather than once per candidate.
+  baseline_classes_.clear();
+  baseline_classes_.reserve(baseline_->violations.size());
+  for (const Violation& v : baseline_->violations) {
+    baseline_classes_.push_back(signatureClass(v));
+  }
   if (baseline_->status != OracleStatus::Checked) {
     diagnostics_.push_back(makeDiag(Severity::Error, "BaselineUnusable",
                                     "baseline check did not complete"));
@@ -1283,13 +1348,25 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   // rejected as not clean.
   summary.inconsistent = (result.isLegal != result.violations.empty());
 
+  // Signature classes of this result, computed once instead of once per
+  // (original, finding) and (finding, baseline) pair below.
+  const size_t resultCount = result.violations.size();
+  result_classes_scratch_.clear();
+  result_classes_scratch_.reserve(resultCount);
+  for (const Violation& v : result.violations) {
+    result_classes_scratch_.push_back(signatureClass(v));
+  }
+
   // Residual originals: match each original to a DISTINCT result finding, so
   // two originals cannot both claim the same one (one-to-one).
   {
-    std::vector<char> consumed(result.violations.size(), 0);
-    for (const Violation& original : originals_) {
-      for (size_t i = 0; i < result.violations.size(); ++i) {
-        if (!consumed[i]
+    consumed_scratch_.assign(resultCount, 0);
+    std::vector<char>& consumed = consumed_scratch_;
+    for (size_t o = 0; o < originals_.size(); ++o) {
+      const Violation& original = originals_[o];
+      const SignatureClass& originalClass = original_classes_[o];
+      for (size_t i = 0; i < resultCount; ++i) {
+        if (!consumed[i] && originalClass == result_classes_scratch_[i]
             && sameSignature(original, result.violations[i], site_width_)) {
           consumed[i] = 1;
           ++summary.residualOriginals;
@@ -1306,11 +1383,14 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   // (P/N bands + the one-site signature tolerance make duplicates real). Inside
   // the repair window a new violation always rejects; in the guard halo only
   // when related to this overlay.
-  std::vector<char> baselineConsumed(baseline_->violations.size(), 0);
-  for (const Violation& v : result.violations) {
+  baseline_consumed_scratch_.assign(baseline_->violations.size(), 0);
+  std::vector<char>& baselineConsumed = baseline_consumed_scratch_;
+  for (size_t r = 0; r < resultCount; ++r) {
+    const Violation& v = result.violations[r];
+    const SignatureClass& vClass = result_classes_scratch_[r];
     bool preExisting = false;
     for (size_t i = 0; i < baseline_->violations.size(); ++i) {
-      if (!baselineConsumed[i]
+      if (!baselineConsumed[i] && vClass == baseline_classes_[i]
           && sameSignature(v, baseline_->violations[i], site_width_)) {
         baselineConsumed[i] = 1;
         preExisting = true;
@@ -1353,6 +1433,8 @@ bool OracleGate::resolve(const Overlay* chunk,
   // land in `out` directly, misses are filled in from the batch below.
   std::vector<OracleRequest> requests;
   std::vector<std::size_t> pending;  // chunk indices, parallel to `requests`
+  requests.reserve(count);
+  pending.reserve(count);
   int cachedInChunk = 0;
   int skippedForBudget = 0;
   const int budgetBefore = budget;
@@ -1698,6 +1780,14 @@ FillerRepairResult RepairPlanner::repair(
                                     ruleDistance,
                                     log_);
 
+  // Previous level's search question, so enumeration can be incremental: the
+  // guard is quantized and therefore repeats across most levels, and under a
+  // repeated guard every combination without a newly editable filler is one
+  // the previous level already asked. See enumerateOverlays in the header.
+  Region searchedGuard;
+  std::vector<InstanceId> searchedEditable;
+  bool haveSearchedLevel = false;
+
   for (;;) {
     const std::string label = windowLabel(window);
     std::vector<Violation> blockingForExpansion = request.violations;
@@ -1775,8 +1865,21 @@ FillerRepairResult RepairPlanner::repair(
           return result;
         }
 
+        // Incremental only when the quantized guard did not move: a new guard
+        // makes every candidate a new checker question again.
+        std::vector<InstanceId> freshFillers;
+        if (haveSearchedLevel && window.guardRegion == searchedGuard) {
+          std::set_difference(window.editableFillers.begin(),
+                              window.editableFillers.end(),
+                              searchedEditable.begin(),
+                              searchedEditable.end(),
+                              std::back_inserter(freshFillers));
+        }
         const EnumerationPlan plan =
-            enumerateOverlays(ranked, config_, budget, log_);
+            enumerateOverlays(ranked, config_, budget, log_, freshFillers);
+        searchedGuard = window.guardRegion;
+        searchedEditable = window.editableFillers;
+        haveSearchedLevel = true;
         OracleGate::SearchResult sr =
             gate.search(plan.overlays, window, window.guardRegion, budget);
         if (sr.protocolError) {

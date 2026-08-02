@@ -96,6 +96,12 @@ struct Region
   RowId rowHi = -1;  // empty when rowHi < rowLo
 
   bool containsRow(RowId r) const { return r >= rowLo && r <= rowHi; }
+  bool operator==(const Region& other) const
+  {
+    return x.xl == other.x.xl && x.xh == other.x.xh && rowLo == other.rowLo
+           && rowHi == other.rowHi;
+  }
+  bool operator!=(const Region& other) const { return !(*this == other); }
 };
 
 enum class Severity
