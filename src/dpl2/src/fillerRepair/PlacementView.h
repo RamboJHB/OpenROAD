@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// The planner's read-only view of the placement: the first of the two seams
-// the runtime engine implements (the other is RepairOracle).
+// Seam 1 of 2: how the search sees the design. (Seam 2 is RepairOracle --
+// whether something is legal.) The runtime engine implements both; the search
+// itself knows nothing about UDM, Grid or Network.
 //
-// It answers "what is placed where, and which masters may replace a filler" --
-// nothing else. The planner never mutates the design; commit stays with the
-// infrastructure owner.
+// It answers exactly two questions -- "what is placed where?" and "which
+// masters could replace this filler?" -- and it is read-only. Nothing here
+// changes the design; committing an answer is the caller's job.
 //
-// Thread model: ONE repair at a time. The const methods here are not required
-// to be safe for concurrent readers -- the runtime implementation fills lazy
-// per-row caches (legal spans) from inside them, and calls on one
-// engine/checker pair must not overlap in the first place. What const does
-// guarantee is that a call never changes what a later call answers, and that
-// returned references stay valid for the view's lifetime. Test
-// implementations may use mutable builders but are test-only.
+// Threading: one repair at a time, so these const methods are NOT required to
+// be safe for concurrent readers -- the runtime fills per-row caches lazily
+// from inside them. What const does promise is that calling one never changes
+// what a later call answers, and that any reference handed out stays alive as
+// long as the view does.
 
 #pragma once
 
@@ -26,7 +25,7 @@
 
 namespace dpl2::fillerRepair {
 
-// --- Infrastructure candidate query ---------------------------------------
+// --- "which masters could replace this filler?" -----------------------------
 
 struct MasterCandidateRequest
 {
@@ -104,6 +103,9 @@ class PlacementView
   // the sole mapping point from dense planner ids to UDM ids and coordinates.
   virtual CellChangeRecord cellChangeRecord(InstanceId instanceId,
                                             MasterId newMasterId) const = 0;
+  // Has a working default built from the accessors above; virtual so a view
+  // that already knows its usable replacements can answer directly instead of
+  // being re-derived.
   virtual MasterCandidateResult getUsableMasterCandidates(
       const MasterCandidateRequest& request) const;
 
@@ -120,12 +122,12 @@ inline XInterval instanceSpan(const PlacementView& view, const PlacedInstance& i
   return XInterval{inst.x, inst.x + width};
 }
 
-// `instancesInRow` is x-sorted and, on the planner path (which only runs after
-// a clean gap/overlap snapshot), non-overlapping -- so each instance's right
-// edge is non-decreasing. That lets a window scan binary-search to the
-// relevant x-range instead of walking the whole row, which is decisive on
-// 100%-utilization designs where a row holds thousands of instances but only a
-// sparse minority are editable fillers near the target.
+// A row on a real design holds thousands of instances; we care about the
+// handful near the target. `instancesInRow` is sorted by x and -- on this path,
+// which only runs once the region is known gap- and overlap-free -- the
+// instances do not overlap, so their right edges rise monotonically too. That
+// is what lets the two searches below jump straight to the range of interest
+// instead of walking the row.
 
 // First index whose right edge lies strictly right of `bound` (the first
 // instance not entirely to the left of it).
@@ -161,15 +163,17 @@ inline int firstStartAtOrAfter(const std::vector<PlacedInstance>& all,
   return lo;
 }
 
-// Instances of one row overlapping `x`, plus up to `ring` whole instances
-// beyond each side -- the shared "cell ring" primitive. Selection is by INDEX,
-// so it counts cells of every kind: a std cell is a ring member like any other
-// and never stops the walk.
+// Everything in one row that overlaps `x`, plus `ring` more whole instances
+// off each end:
 //
-// The instances overlapping x are the contiguous index range [lo, hi):
-// lo = first whose right edge exceeds x.xl, hi = first that starts at/after
-// x.xh. When nothing overlaps, lo == hi at the gap and the +/- ring extension
-// yields exactly the nearest instances on each side.
+//     x:                 [-------)
+//     row:  [ A ][ B ][ C ][ D ][ E ][ F ][ G ]
+//     ring=1 gives:      B  C  D  E  F     (C..E overlap, B and F are the ring)
+//
+// Counted by INDEX, so every kind of cell counts -- a std cell is a ring
+// member like any other and never stops the walk. When `x` falls in a gap the
+// overlap range is empty and the ring simply yields the nearest instance on
+// each side, which is what a caller looking for neighbours wants.
 inline std::vector<PlacedInstance> instancesInRing(const PlacementView& view,
                                                    RowId rowId,
                                                    const XInterval& x,

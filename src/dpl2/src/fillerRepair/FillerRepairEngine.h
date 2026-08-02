@@ -1,9 +1,16 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Filler-repair entry point. It borrows the Grid/Network already owned
-// by dpl2, and privately owns the checker/snapshot needed for one physical-
-// design revision. repair() never mutates UDM.
+// The runtime half of filler repair: everything that touches the database.
+//
+// It borrows the Grid and Network dpl2 already owns, builds a snapshot of
+// them, and privately owns one checker to ask questions of -- all pinned to a
+// single design revision. It then feeds the pure search (RepairPlanner) by
+// implementing its two seams: PlacementView and RepairOracle.
+//
+// repair() answers with a list of proposed filler swaps and changes nothing.
+// UDM, Grid and Network come out exactly as they went in; committing is the
+// caller's decision.
 
 #pragma once
 

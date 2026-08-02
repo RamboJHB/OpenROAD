@@ -1,18 +1,41 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// The deterministic search pipeline, in the order a repair flows through it:
-// a repair flows through it:
-//   swap model -> violation signatures -> repair window -> ranking ->
-//   subset enumeration -> oracle gate -> pipeline driver.
+// The search. Opto retargeted one standard cell to a different VT; the
+// checker says that is now a DRC violation; this finds which surrounding
+// FILLERS to recolour so it stops being one.
 //
-// These stages only make sense together -- each consumes the previous one's
-// output -- so they share a module. The two things that are NOT stages live
-// on their own because the runtime engine implements them: PlacementView
-// (data in) and RepairOracle (legality out).
+// A worked example -- one row, `[ 2F2 ]` is a cell on VT family F2:
 //
-// The planner owns no state between repair() calls and never mutates the
-// design; the final checker stays the only legality oracle.
+//     built (legal):   ... [ 3F3 ][ cF3 ][ 2F2 ][ bF2 ][ 3F3 ][ cF3 ] ...
+//     opto retargets           the 2F2 cell to F3      ^^^^^^
+//     now:             ... [ 3F3 ][ cF3 ][ 3F3 ][ bF2 ][ 3F3 ][ cF3 ] ...
+//                                          ^^^^^^ one site wide  -> min WIDTH
+//                                          and one site away from the F3 run
+//                                          on its right          -> min SPACING
+//     we answer:                   recolour [ bF2 ] to F3, and the two runs
+//                                  merge into one four-site run.
+//
+// That filler in the middle is the "bridge", and finding it is the easy case.
+// The hard cases need several fillers at once, or fillers further out, which
+// is what the stages below are for. They run in this order, each consuming the
+// previous one's output:
+//
+//   makeSwap        one legal (filler -> new master) move
+//   normalize       what the checker reported, in the planner's terms
+//   buildWindow     which fillers we may edit, and how far the checker must look
+//   generateSwaps   every legal move inside that window
+//   rankFillers     which moves to try first
+//   enumerate       combinations of moves = candidates
+//   OracleGate      ask the checker, accept only a candidate that is clean
+//   RepairPlanner   drive all of the above, growing the window when stuck
+//
+// Two things here are NOT stages, because the runtime engine supplies them:
+// PlacementView (what is placed where) and RepairOracle (is this legal).
+//
+// We never decide legality ourselves -- the real checker does, every time.
+// The planner keeps no state between repair() calls and never touches the
+// design; committing the answer is the caller's job.
 
 #pragma once
 
@@ -35,34 +58,39 @@
 
 namespace dpl2::fillerRepair {
 
-// Search parameters. All knobs live here so tests and diagnostics can
-// diagnostics can print the exact configuration used.
+// Every search knob, in one place, so the transcript can print the exact
+// configuration a run used.
 struct RepairConfig
 {
-  int checkerCallBudgetPerWindow = 512;  // includes the baseline request
-  // Ceiling on checker calls for ONE repair() across every adaptive level.
-  // Without it the worst case is maxAdaptiveLevels windows each spending a
-  // full per-window budget (32 x 512 = 16384 calls), which is exactly the
-  // path a no-solution case at 100% utilization with sparse fillers takes.
-  // Reaching it ends the search with the existing "truncated" semantics --
-  // never a wrong answer, only a bounded give-up. <= 0 disables the cap.
+  // Checker calls one window may spend, the baseline request included.
+  int checkerCallBudgetPerWindow = 512;
+  // Checker calls ONE repair() may spend in total. Without it the worst case
+  // is every growth step spending a full window budget -- 32 x 512 = 16384
+  // real DRC calls -- which is exactly what a no-solution case on a fully
+  // filled design does. Hitting either budget ends the search as *truncated*:
+  // never a wrong answer, only a bounded give-up. <= 0 disables this one.
   int checkerCallBudgetPerRepair = 2048;
+  // Candidates per checker batch.
   int batchSize = 32;
-  int maxSubsetSize = 4;          // large-window truncation only
-  int memberCapSize2 = 24;        // N_2
-  int memberCapSize3 = 12;        // N_3
-  int memberCapSize4 = 8;         // N_4
-  int adaptiveStepFillers = 2;    // K per relevant row/side
-  // Safety valve for the NO-SOLUTION path: without it adaptive expansion
-  // keeps adding fillers until the window rows are exhausted (levels ~
-  // fillers/(2K), each level up to one window budget of checker calls).
-  // Reaching the cap ends the search with the existing "truncated"
-  // semantics -- never a wrong answer, only a bounded give-up.
+  // How many fillers one candidate may change at once. Only bites on windows
+  // too large to enumerate exhaustively.
+  int maxSubsetSize = 4;
+  // ... and, for each of those sizes, how many of the best-ranked fillers may
+  // take part. Combinations grow as C(members, size), so these are what keep
+  // a wide window from exploding.
+  int memberCapSize2 = 24;
+  int memberCapSize3 = 12;
+  int memberCapSize4 = 8;
+  // Fillers one growth step adds, per row, per side.
+  int adaptiveStepFillers = 2;
+  // How many times the window may grow before giving up. Without it a
+  // no-solution case keeps growing until the rows run out, paying a window
+  // budget each time. Also truncation, never a wrong answer.
   int maxAdaptiveLevels = 32;
   bool verbose = true;            // [fr] transcript; FR_VERBOSE=0 silences
 };
 
-// --- Swap: the atomic operation ---------------------------------------------
+// --- Swap: one filler changes master ---------------------------------------
 
 struct RepairWindow;
 
@@ -79,10 +107,10 @@ struct Swap
 
 using Overlay = std::vector<Swap>;
 
-// Builds a validated Swap or explains why it cannot exist: the instance must
-// be a placed filler and the new master a same-width/same-height filler
-// master different from the current one. On failure *error (if given)
-// receives the reason.
+// The one move the planner can make. Refuses anything else: the instance must
+// be a placed filler, and the new master a DIFFERENT filler master of exactly
+// the same width and height -- so the cell keeps its site, and nothing has to
+// be re-placed. `*error` (if given) says which of those failed.
 std::optional<Swap> makeSwap(const PlacementView& view,
                              InstanceId instanceId,
                              MasterId newMasterId,
@@ -90,11 +118,11 @@ std::optional<Swap> makeSwap(const PlacementView& view,
 
 // --- Overlay identity ------------------------------------------------------
 //
-// Two candidates are the SAME checker question when they propose the same
-// (instance -> new master) set under the same guard: overlay order and
-// duplicate swaps must never buy a second checker call. That identity is a
-// value, not a serialized string -- the search asks it once per candidate per
-// batch, so building it must not allocate a stream or a formatted key.
+// Two candidates are the SAME question to the checker when they change the
+// same fillers to the same masters and ask about the same guard. Listing
+// those swaps in a different order, or twice, must not buy a second real DRC
+// call. This is that identity -- as a value, not a formatted string: the
+// search builds one per candidate, so it has to be cheap.
 struct OverlayKey
 {
   using Entry = std::pair<InstanceId, MasterId>;
@@ -175,10 +203,11 @@ SwapGenerationResult generateSwaps(
     const PlacementView& view,
     const DebugLog& log);
 
-// --- violation signatures / relatedness ------------------------------------
+// --- what the checker reported, in the planner's terms ----------------------
 
-// A violation with the derived fields the planner works on. `raw` is kept by
-// value: normalization must outlive the request's snapshot vector.
+// One checker violation with the few things the planner keeps asking about
+// pre-computed. `raw` is a copy on purpose: the caller's snapshot vector does
+// not have to outlive the search.
 struct NormalizedViolation
 {
   Violation raw;
@@ -186,29 +215,35 @@ struct NormalizedViolation
   std::vector<RowId> rowIds;  // sorted unique, never empty
   bool rowIdFallback = false;  // rowIds were missing; anchor row substituted
 
-  // xWindow united with all participant x ranges: the geometric footprint
-  // used for windowing and the unfixable fast check.
+  // How much x this violation actually covers: its own xWindow plus the span
+  // of everyone involved. For a SPACING violation xWindow is only the gap, so
+  // without this the window would miss the runs on either side of it.
   XInterval xRange;
 
-  std::vector<InstanceId> cellAnchors;        // target + non-filler participants
-  std::vector<InstanceId> fillerParticipants;  // filler participants
+  // Who is involved, split by what we can do about them: cells we cannot
+  // touch (the retargeted target and its neighbours) and fillers we can.
+  std::vector<InstanceId> cellAnchors;
+  std::vector<InstanceId> fillerParticipants;
 };
 
-// Normalizes the initial snapshot. Deterministic; logs one line per
-// violation (signature summary -> derived footprint).
+// Deterministic; one transcript line per violation, showing what it was and
+// what footprint it turned into.
 std::vector<NormalizedViolation> normalizeViolations(
     const FillerRepairRequest& request,
     const PlacementView& view,
     const DebugLog& log);
 
-// Pinned signature match across two checker snapshots (see file header).
+// "Are these two the same violation?", across two separate checker runs. Not
+// pointer or index identity -- the checker rebuilds its findings every call --
+// but same rule, same kind, same layers, same rows, and x windows that overlap
+// or sit within a site of each other. That last tolerance is what lets us tell
+// "the original violation is still there" from "a new one appeared nearby".
 bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth);
 
-// The exact-equality prefix of `sameSignature`: two violations whose classes
-// differ can never match. Comparing the packed class first turns the delta
-// classifier's O(originals x findings) scan into integer compares for every
-// pair that cannot match, without touching which pair is chosen -- the scan
-// order and the one-to-one consumption rule are unchanged.
+// The part of sameSignature that is a plain equality test. Two violations
+// whose classes differ can never match, so comparing this first skips the
+// real call for every pair that was never going to match. Pure speed: it
+// changes no answer, no scan order, and no matching rule.
 struct SignatureClass
 {
   int ruleId = 0;
@@ -244,30 +279,34 @@ inline SignatureClass signatureClass(const Violation& v)
   return c;
 }
 
-// Pinned relatedness: participants touch a changed instance, or xWindow is
-// within `ruleDistance` of a changed span on the same/adjacent row.
+// "Did WE cause this?" -- true when a violation involves one of the fillers
+// this candidate changed, or sits within `ruleDistance` of one on the same or
+// an adjacent row. A new violation we caused blocks the candidate; one that
+// was already there, or is too far away to be our doing, does not.
 bool isRelatedToOverlay(const Violation& violation,
                         const Overlay& overlay,
                         DbCoord ruleDistance);
 
-// Rule-distance estimate for geometry heuristics: the largest requiredValue
-// in the snapshot, falling back to one site. Only used for windows and
-// relatedness margins -- never for legality decisions (checker-as-oracle).
+// Roughly how far a rule can reach: the largest requiredValue the checker
+// reported, or one site if it reported none. Used only to size windows and
+// relatedness margins. It never decides legality -- the checker does.
 DbCoord estimateRuleDistance(const std::vector<Violation>& violations,
                              DbCoord siteWidth);
 
-// --- repair window: L0 + adaptive-L1 ----------------------------------------
+// --- repair window: where the search is allowed to edit ---------------------
 
 struct RepairWindow
 {
+  // 0 = the starting window; N = grown N times.
   int level = 0;
-  std::vector<RowId> rows;  // sorted; rows the planner may edit fillers in
-  XInterval x;              // editable x range (snapped to whole instances)
+  std::vector<RowId> rows;  // rows we may edit fillers in, sorted
+  XInterval x;              // x range we may edit, snapped to whole instances
 
-  // Fillers inside rows/x, sorted by (row, x): the move-generation universe.
+  // Every filler inside rows/x, sorted by (row, x). This is the complete set
+  // of moves available at this level -- nothing outside it can be changed.
   std::vector<InstanceId> editableFillers;
-  // Subset of editableFillers flagged as bridge fillers (default-mandatory
-  // candidates).
+  // The subset that sits BETWEEN the runs a violation is about: recolouring
+  // one of these is what merges them, so they are tried first.
   std::vector<InstanceId> bridgeFillers;
 
   Region area() const
@@ -278,27 +317,31 @@ struct RepairWindow
     return Region{x, rows.front(), rows.back()};
   }
 
-  Region guardRegion;  // two-cell ring around area()
+  // What the checker is asked to look at: area() plus a ring wide enough that
+  // its own rule reach never runs off the edge of the snapshot. A guard
+  // narrower than that reach truncates the run at the boundary and the
+  // checker reports a min-width violation that does not exist.
+  Region guardRegion;
 
   bool containsEditable(InstanceId id) const;
 };
 
-// Builds L0 for the (single) violation cluster around the anchor.
-// `ruleDistance` widens bridge detection margins only. `level` is retained for
-// source compatibility and must be 0; adaptive growth uses the API below.
-RepairWindow buildWindow(int level,
-                         const TargetPlace& anchor,
+// The starting window: the fillers around the violation the checker just
+// reported. `ruleDistance` only widens how far a bridge filler is looked for.
+// Growing the window is a separate, stateful step -- see below.
+RepairWindow buildWindow(const TargetPlace& anchor,
                          const std::vector<NormalizedViolation>& violations,
                          const PlacementView& view,
                          DbCoord ruleDistance,
                          const DebugLog& log);
 
-// One adaptive-L1 step. `blocking` is the best non-clean
-// candidate's residual/new-related violation set. Direction is derived from
-// those x windows relative to `current`; when no directional finding exists,
-// both sides are tried. The step is deterministic and never sweeps an entire
-// filler run: each selected side adds at most `fillersPerRow` adjacent fillers
-// per relevant row, stopping at a non-filler boundary.
+// Nothing in this window worked, so reach a little further. `blocking` is
+// what stopped the best candidate we found; where those violations sit tells
+// us which side to grow -- and if they say nothing, both sides grow.
+//
+// Deliberately small steps: each side gains at most `fillersPerRow` fillers
+// per row and stops at the first non-filler, so a long filler run is walked
+// a few sites at a time instead of being swallowed whole.
 RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                   const TargetPlace& anchor,
                                   const std::vector<Violation>& blocking,
@@ -306,10 +349,11 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                   int fillersPerRow,
                                   const DebugLog& log);
 
-// --- ranking into filler domains --------------------------------------------
+// --- which moves to try first -----------------------------------------------
 
-// One editable filler with its full, preference-ordered candidate domain.
-// Ranking never truncates a domain.
+// One editable filler and every master it could take, best guess first.
+// Ranking only ORDERS -- it never drops an option, so a repair that needs an
+// unlikely-looking swap is still reachable.
 struct FillerDomain
 {
   InstanceId instanceId = 0;
@@ -324,26 +368,33 @@ std::vector<FillerDomain> rankFillers(
     const PlacementView& view,
     const DebugLog& log);
 
-// --- subset enumeration -----------------------------------------------------
+// --- turning moves into candidates ------------------------------------------
 
 struct EnumerationPlan
 {
-  bool complete = false;          // full space emitted -> definitive result
-  std::vector<Overlay> overlays;  // enumeration order, capped at budget
+  // True when everything the window could offer was emitted, so a
+  // no-solution answer from this level is definitive rather than a give-up.
+  bool complete = false;
+  std::vector<Overlay> overlays;  // try in this order, capped by the budget
 };
 
-// `freshFillers` (sorted instance ids) makes the enumeration INCREMENTAL
-// across adaptive levels: a combination that contains none of them was already
-// emitted -- and answered -- at the previous level. Re-emitting it re-asks a
-// question whose answer cannot have changed, because under an unchanged guard
-// a candidate that was not clean at level L cannot become clean at L+1: the
-// window only grows, so a halo finding can migrate into the window (still
-// blocking) but no blocker can disappear, and a clean candidate would have
-// ended the search at L. Skipping them is therefore not an approximation --
-// it spends the window budget on questions the search has not asked yet.
+// Combinations of moves: first every single swap, then every pair, and so on
+// up to `maxSubsetSize`, with the member caps keeping a wide window from
+// exploding.
 //
-// Empty = no filtering: L0, and any level whose quantized guard moved (a new
-// guard is a different checker question, so every candidate is new again).
+// `freshFillers` is what makes growth cheap. When the window grows but the
+// guard does not move, most combinations are ones the previous level already
+// put to the checker -- and their answer cannot have changed:
+//
+//   the window only ever GROWS, so a violation in the halo can move inside it
+//   (still blocking) but nothing that blocked can stop blocking; and a
+//   candidate that had been clean would have ended the search back then.
+//
+// So a level only needs the combinations touching a filler it just gained.
+// This is not a heuristic prune -- the skipped ones still count as covered,
+// so a level that skips them is still `complete`. Pass it empty for the
+// starting window, and for any level where the guard moved: a new guard is a
+// different question, so every candidate is new again.
 EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
                                   const RepairConfig& config,
                                   int budget,
@@ -351,20 +402,24 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
                                   const std::vector<InstanceId>& freshFillers
                                   = {});
 
-// --- oracle gate: baseline-delta accept -------------------------------------
+// --- asking the checker, and reading its answer -----------------------------
 
-// Delta classification of one checker result against the baseline.
+// What one checker answer means for one candidate. Acceptance is NOT "the
+// design is now violation-free" -- a design can have violations elsewhere
+// that are none of our business. It is a delta against the baseline: did we
+// fix what we were asked to fix, without breaking anything?
 struct DeltaSummary
 {
-  bool usable = false;
-  bool inconsistent = false;   // isLegal disagrees with violations-empty (#1)
-  int residualOriginals = 0;   // originals still matched in the result
-  int newInWindow = 0;
-  int relatedInHalo = 0;
-  int unrelatedInHalo = 0;     // reported, never blocking
-  // Actual residual/new-related findings that prevented acceptance. Adaptive
-  // L1 uses their rows/x windows to choose the next growth side.
+  bool usable = false;         // the checker actually answered
+  bool inconsistent = false;   // it said legal but listed violations, or v.v.
+  int residualOriginals = 0;   // violations we were asked to fix, still there
+  int newInWindow = 0;         // we broke something where we were editing
+  int relatedInHalo = 0;       // we broke something just outside it
+  int unrelatedInHalo = 0;     // was already broken out there; not our problem
+  // The findings that actually blocked acceptance. Where they sit is what
+  // tells the next growth step which way to reach.
   std::vector<Violation> blockingViolations;
+  // Accept: nothing left of the originals, and nothing new that we caused.
   bool clean = false;
 };
 
@@ -380,13 +435,15 @@ class OracleGate
              const RepairConfig& config,
              const DebugLog& log);
 
-  // Baseline for `window.guardRegion`; consumes budget only on a cache miss.
-  // False when the baseline is unusable (checker error) OR fails the baseline
-  // consistency gate: the baseline must reproduce every
-  // original that lies inside the guard, and must not carry an unexpected
-  // in-window violation that was not in the input snapshot. A false return is
-  // fatal for the window -- either a checker error or a stale/inconsistent
-  // snapshot, both of which the planner must not silently treat as "repaired".
+  // Asks the checker what this guard looks like with NOTHING changed. That
+  // answer is what every candidate is compared against, so it is also a
+  // sanity check on the input: the baseline must still show every violation
+  // we were asked to fix, and must not show one inside the window that the
+  // caller never told us about. Either would mean the snapshot we were handed
+  // no longer describes the design -- and a search on a stale snapshot could
+  // report "repaired" for something it never looked at. So a false return
+  // kills the window rather than degrading quietly. Costs budget only when
+  // the answer is not already cached.
   bool runBaseline(const RepairWindow& window, int& budget);
 
   struct SearchResult
@@ -395,14 +452,14 @@ class OracleGate
     Overlay cleanOverlay;
     bool protocolError = false;
     bool budgetExhausted = false;
-    // Best non-clean candidate, also used to steer adaptive-L1 growth.
+    // Best non-clean candidate, also used to steer which side to grow.
     bool hasBest = false;
     Overlay bestOverlay;
     DeltaSummary bestSummary;
   };
 
-  // Evaluates candidates in enumeration order, batched; early exit on the
-  // first delta-clean overlay. Consumes budget per checker-evaluated request.
+  // Walks the candidates in order, in batches, and stops at the first one the
+  // checker calls clean. Budget is spent per candidate actually sent.
   SearchResult search(const std::vector<Overlay>& candidates,
                       const RepairWindow& window,
                       const Region& guard,
@@ -414,11 +471,11 @@ class OracleGate
   const std::vector<Diagnostic>& diagnostics() const { return diagnostics_; }
 
  private:
-  // Answers one batch of candidates. `keys` are their identities, built once
-  // by the caller. `out` receives one entry per candidate: the cached or
-  // freshly received result, or nullptr when budget stopped it from being
-  // evaluated -- so the caller never repeats the cache lookup this already
-  // did. Returns false on a batch protocol error (diagnostics pushed).
+  // Answers one batch: cached candidates come straight back, the rest go to
+  // the checker in a single call. `out` gets one entry per candidate -- the
+  // answer, or nullptr if the budget ran out before it was asked. Handing the
+  // answers back means the caller never repeats the lookup done here.
+  // False = the checker broke the batch protocol.
   bool resolve(const Overlay* chunk,
                const OverlayKey* keys,
                std::size_t count,
@@ -428,9 +485,8 @@ class OracleGate
   DeltaSummary classify(const OracleResult& result,
                         const Overlay& overlay,
                         const RepairWindow& window) const;
-  // Baseline consistency gate. Uses the already-fetched
-  // baseline_, spends no budget. Pushes a fatal BaselineMismatch diagnostic and
-  // returns false when the snapshot is stale/inconsistent.
+  // The stale-snapshot check described on runBaseline(). Reads the baseline
+  // already in hand, so it costs nothing.
   bool checkBaselineConsistency(const RepairWindow& window);
 
   const PlacementView& data_source_;
@@ -466,10 +522,13 @@ class OracleGate
   std::vector<Diagnostic> diagnostics_;
 };
 
-// --- pipeline driver -------------------------------------------------------
+// --- the driver -------------------------------------------------------------
 
 namespace internal {
 
+// Runs the whole thing: build the starting window, search it, and when
+// nothing there works, grow it and search again -- until something is clean,
+// a budget runs out, or the window cannot grow any further.
 class RepairPlanner
 {
  public:

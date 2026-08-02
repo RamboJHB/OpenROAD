@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// The planner's legality oracle: the second of the two seams the runtime
-// engine implements (the other is PlacementView).
+// Seam 2 of 2: "if I changed these fillers, would it be legal?" (Seam 1 is
+// PlacementView -- what is placed where.)
 //
-// This is NOT a second DRC checker. The final ImplantLayerChecker remains the
-// sole source of legality; the engine translates its results into these
-// records at this boundary while the FillerChanges payload passes through
-// unchanged. Runtime callers never see an oracle request id or status.
+// This is NOT a second DRC checker, and it must never grow into one. The real
+// ImplantLayerChecker decides; the engine only translates its answers into
+// the records below, and the list of changes passes through untouched. Every
+// acceptance in this module traces back to a real checker call.
+//
+// The request id and status are bookkeeping between the search and the
+// engine -- callers of the feature never see them.
 
 #pragma once
 

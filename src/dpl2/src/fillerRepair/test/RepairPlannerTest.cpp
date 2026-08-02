@@ -1832,7 +1832,7 @@ void testWindowL0()
 
   const auto normalized =
       fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
-  const auto window = fr::buildWindow(0, request.targetPlace, normalized,
+  const auto window = fr::buildWindow(request.targetPlace, normalized,
                                       design, 1, fr::DebugLog(verbose()));
 
   // Participant 203, anchor-adjacent 101/103, bridge under anchor 204/205
@@ -1873,7 +1873,7 @@ void testWindowL0ExactMembership()
 
   const auto normalized =
       fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
-  const auto window = fr::buildWindow(0,
+  const auto window = fr::buildWindow(
                                       request.targetPlace,
                                       normalized,
                                       design,
@@ -1907,7 +1907,7 @@ void testWindowBridgeConditionsEach()
                                         footprint)};
     const auto normalized = fr::normalizeViolations(
         request, design, fr::DebugLog(verbose()));
-    return fr::buildWindow(0,
+    return fr::buildWindow(
                            request.targetPlace,
                            normalized,
                            design,
@@ -1975,7 +1975,7 @@ void testGuardQuantizationContainsWindowAndIsStable()
       fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
 
   fr::RepairWindow window = fr::buildWindow(
-      0, request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+      request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
 
   std::set<std::pair<fr::DbCoord, fr::DbCoord>> guards;
   int levels = 0;
@@ -2020,7 +2020,7 @@ void testWindowAtDesignEdges()
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {0, 1})};
   auto normalized = fr::normalizeViolations(
       bottomRequest, bottom, fr::DebugLog(verbose()));
-  const auto bottomWindow = fr::buildWindow(0,
+  const auto bottomWindow = fr::buildWindow(
                                             bottomRequest.targetPlace,
                                             normalized,
                                             bottom,
@@ -2044,7 +2044,7 @@ void testWindowAtDesignEdges()
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {2}, {7, 8})};
   normalized =
       fr::normalizeViolations(topRequest, top, fr::DebugLog(verbose()));
-  const auto topWindow = fr::buildWindow(0,
+  const auto topWindow = fr::buildWindow(
                                          topRequest.targetPlace,
                                          normalized,
                                          top,
@@ -2067,7 +2067,7 @@ void testWindowAdaptiveAddsKOnBlockingSide()
   const auto normalized =
       fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
 
-  const auto l0 = fr::buildWindow(0, request.targetPlace, normalized,
+  const auto l0 = fr::buildWindow(request.targetPlace, normalized,
                                   design, 1, fr::DebugLog(verbose()));
   // Blocking lies closer to L0's left edge. One adaptive step grows left by
   // K=2 fillers per relevant row, not to the fixed/row boundary.
@@ -2145,7 +2145,7 @@ void testWindowAdaptiveCoupledRowsAndFixedBoundary()
   const auto normalized =
       fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
   const fr::RepairWindow l0 = fr::buildWindow(
-      0, request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+      request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
   const fr::RepairWindow expanded = fr::expandWindowAdaptive(
       l0,
       request.targetPlace,
@@ -2178,7 +2178,7 @@ void testGuardRegionTwoCellRing()
   const auto normalized =
       fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
 
-  const auto window = fr::buildWindow(0, request.targetPlace, normalized,
+  const auto window = fr::buildWindow(request.targetPlace, normalized,
                                       design, 1, fr::DebugLog(verbose()));
   // Guard: rows clamped to the design (0..1); x widened by two instances
   // beyond the window on each side -> reaches the row edges here.
@@ -2317,7 +2317,7 @@ void testSwapGeneratorBasic()
 
   const auto normalized =
       fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
-  const auto window = fr::buildWindow(0, request.targetPlace, normalized,
+  const auto window = fr::buildWindow(request.targetPlace, normalized,
                                       design, 1, fr::DebugLog(verbose()));
   const auto generated = fr::generateSwaps(window, design,
                                                fr::DebugLog(verbose()));
@@ -2437,7 +2437,7 @@ void testRankerOrder()
   ScenarioA sc = makeScenarioA();
   const auto normalized =
       fr::normalizeViolations(sc.request, sc.design, fr::DebugLog(verbose()));
-  const auto window = fr::buildWindow(0, sc.request.targetPlace, normalized,
+  const auto window = fr::buildWindow(sc.request.targetPlace, normalized,
                                       sc.design, 2, fr::DebugLog(verbose()));
   const auto generated = fr::generateSwaps(window, sc.design,
                                            fr::DebugLog(verbose()));
@@ -3200,7 +3200,7 @@ void testGateCacheSingleEvaluation()
 
   const auto normalized =
       fr::normalizeViolations(sc.request, sc.design, log);
-  const auto window = fr::buildWindow(0, sc.request.targetPlace, normalized,
+  const auto window = fr::buildWindow(sc.request.targetPlace, normalized,
                                       sc.design, 2, log);
   auto swap = *fr::makeSwap(sc.design, 204, fillerMaster(2, kVt2));
   const fr::Overlay o1 = {swap};
@@ -3396,7 +3396,7 @@ void testPlannerNeverEditsGuardOnly()
   ScenarioA sc = makeScenarioA();
   const auto normalized = fr::normalizeViolations(
       sc.request, sc.design, fr::DebugLog(verbose()));
-  const auto l0 = fr::buildWindow(0,
+  const auto l0 = fr::buildWindow(
                                   sc.request.targetPlace,
                                   normalized,
                                   sc.design,
@@ -3830,7 +3830,7 @@ void testPlannerBudgetCeiling()
   EXPECT_TRUE(sawDefinitive);
 }
 
-// Scripted oracle for adaptive-L1: every overlay remains blocked until it
+// Scripted oracle for window growth: every overlay remains blocked until it
 // changes `solutionInstance`. This isolates window-growth control flow from
 // the fake DRC model while preserving the real baseline-delta protocol.
 class AdaptiveSolutionChecker : public fr::RepairOracle
@@ -3873,7 +3873,7 @@ void testPlannerAdaptiveSolvesBeyondRing()
 {
   // Vt Type: {1,2} | Widths: {2,4} | cell type: 1=std, 0=filler
   // The violation ring covers three std cells; L0 starts at filler 142 and
-  // adaptive-L1 reaches the oracle-clean filler 141.
+  // window growth reaches the oracle-clean filler 141.
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 22)
       .place(100, cellMaster(kVt1), 0, 0)
@@ -3907,7 +3907,7 @@ void testPlannerAdaptiveSolvesBeyondRing()
   bool sawAdaptiveSolution = false;
   for (const auto& diagnostic : result.diagnostics) {
     sawAdaptiveSolution |= diagnostic.code == "Solution"
-                           && diagnostic.message.find("adaptive-L1")
+                           && diagnostic.message.find("grown x")
                                   != std::string::npos;
   }
   EXPECT_TRUE(sawAdaptiveSolution);
@@ -3957,13 +3957,13 @@ void testPlannerAdaptiveL1FindsFarFiller()
   bool sawAdaptiveSolution = false;
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
     sawAdaptiveSolution |= diagnostic.code == "Solution"
-                           && diagnostic.message.find("adaptive-L1 step 1")
+                           && diagnostic.message.find("grown x1")
                                   != std::string::npos;
   }
   EXPECT_TRUE(sawAdaptiveSolution);
 }
 
-// The same fixture whose solution lives at adaptive-L1 step 1, but with the
+// The same fixture whose solution lives one growth step out, but with the
 // level cap at 0: the planner must stop after L0 with the TRUNCATED verdict
 // (never "definitive" -- unexpanded windows were not searched) and no
 // partial changes.

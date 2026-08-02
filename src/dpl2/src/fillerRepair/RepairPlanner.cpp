@@ -12,7 +12,7 @@
 namespace dpl2::fillerRepair {
 
 // --------------------------------------------------------------------------
-// Swap model
+// Swap model -- one filler, one new master, everything else unchanged.
 // --------------------------------------------------------------------------
 
 std::optional<Swap> makeSwap(const PlacementView& view,
@@ -200,7 +200,8 @@ SwapGenerationResult generateSwaps(
 }
 
 // --------------------------------------------------------------------------
-// Violation-signature stage
+// What the checker reported, turned into what the search needs: which rows,
+// how much x, and who is a filler we may touch versus a cell we may not.
 // --------------------------------------------------------------------------
 
 namespace {
@@ -391,7 +392,8 @@ DbCoord estimateRuleDistance(const std::vector<Violation>& violations,
 }
 
 // --------------------------------------------------------------------------
-// Repair-window stage
+// The window: which fillers may be edited, and how much design the checker
+// must be shown so its answer about them is trustworthy.
 // --------------------------------------------------------------------------
 
 namespace {
@@ -418,19 +420,25 @@ DbCoord snapUpPow2(DbCoord distance, DbCoord unit)
   return snapped;
 }
 
-// The guard is the region the checker is asked about, so a guard that tracks
-// the window exactly makes every distinct window a distinct checker question.
-// Adaptive expansion adds a couple of fillers per level, which moves the
-// guard a little every level and turns every previously answered overlay back
-// into a cache miss: measured on the no-solution path, 90% of checker calls
-// were an overlay already asked under a slightly different guard.
+// Why the guard is rounded rather than fitted.
 //
-// Snapping each side outward to a power-of-two distance from the ANCHOR (the
-// one point that cannot move during a repair) makes the guard change O(log)
-// times over the whole escalation instead of once per level, so the cache
-// spans levels. Enlarging a guard is always sound: a wider snapshot can only
-// remove truncation artifacts at its edge, never introduce them -- which is
-// the same direction the rule-reach halo already errs in.
+// The guard IS the question -- "check this region" -- so two candidates only
+// count as the same question if their guards match. Growth adds a couple of
+// fillers at a time, so a guard fitted to the window moves a little at every
+// step, and every answer already in hand stops matching. Measured on the
+// no-solution path, 90% of all checker calls were an overlay we had already
+// asked about, under a guard a few DBU different.
+//
+// So each side is pushed out to a power-of-two distance from the anchor --
+// the one point that cannot move during a repair:
+//
+//     window grows:  |--|  |---|  |----|  |------|  |-------|
+//     guard snaps:   |------------|       |----------------------|
+//                    (one guard for several steps, then a jump)
+//
+// 33 steps became 5 distinct guards. Rounding OUTWARD is always safe: a
+// bigger region can only remove edge artifacts from the checker's snapshot,
+// never create them.
 XInterval quantizeGuard(XInterval guard, DbCoord anchorX, DbCoord siteWidth)
 {
   const DbCoord unit = std::max<DbCoord>(siteWidth, 1);
@@ -493,7 +501,7 @@ RepairWindow finalizeWindow(int level,
                               guardRows.back()};
 
   log.msg("window",
-          cat(level == 0 ? "L0" : cat("adaptive-L1 step ", level),
+          cat(level == 0 ? cat("start") : cat("grown x", level),
               " rows=[", window.rows.front(), ",", window.rows.back(),
               "] x=", show(window.x), " editable=",
               window.editableFillers.size(), " bridge=",
@@ -510,15 +518,12 @@ bool RepairWindow::containsEditable(InstanceId id) const
          != editableFillers.end();
 }
 
-RepairWindow buildWindow(int level,
-                         const TargetPlace& anchor,
+RepairWindow buildWindow(const TargetPlace& anchor,
                          const std::vector<NormalizedViolation>& violations,
                          const PlacementView& view,
                          DbCoord ruleDistance,
                          const DebugLog& log)
 {
-  (void) level;  // adaptive-L1 growth is stateful; this builder always makes L0.
-
   const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);
   const DbCoord anchorWidth = anchorMaster != nullptr ? anchorMaster->width : 0;
   const XInterval anchorSpan{anchor.x, anchor.x + anchorWidth};
@@ -744,19 +749,19 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
 }
 
 // --------------------------------------------------------------------------
-// Ranking stage
+// Trying order. The bridge filler first, then the anchor's own VT, then the
+// neighbourhood majority -- most repairs are found in the first few tries.
 // --------------------------------------------------------------------------
 
 namespace {
 
-// Neighbor majority VT of a filler, counted PER BAND SLOT rather than per
-// cell. A master's VT family is uniform across its
-// bands (checker: master_implant_family_mismatch), so the band structure
-// shows up as WEIGHT: an x-adjacent same-row neighbor faces the filler on
-// BOTH half-row bands (two band votes), while a row +-1 neighbor interacts
-// only through the single facing band pair across the row boundary
-// (checker: activeKindByBoundary) -- one band vote.
-// Tie breaks toward the smaller VT id (deterministic).
+// Which VT do this filler's neighbours mostly have? A good guess at what to
+// recolour it to, since matching your neighbours is what merges runs.
+//
+// Votes are weighted by how much implant actually faces the filler. A
+// neighbour beside it in the same row shares both half-row bands, so it gets
+// two votes; a neighbour one row up or down only meets it across a single
+// band boundary, so it gets one. Ties go to the lower VT id, for determinism.
 VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
 {
   const XInterval span = instanceSpan(view, inst);
@@ -943,7 +948,8 @@ std::vector<FillerDomain> rankFillers(
 }
 
 // --------------------------------------------------------------------------
-// Subset-enumeration stage
+// Candidates: one swap, then two at a time, then three, ... bounded by the
+// member caps so a wide window cannot explode.
 // --------------------------------------------------------------------------
 
 namespace {
@@ -1131,7 +1137,9 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
 }
 
 // --------------------------------------------------------------------------
-// Oracle-gate stage (baseline-delta accept)
+// Asking the checker. Accept only a candidate that removes every violation we
+// were given and introduces none of its own -- measured against a baseline of
+// the same region with nothing changed.
 // --------------------------------------------------------------------------
 
 namespace {
@@ -1617,7 +1625,8 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
 }
 
 // --------------------------------------------------------------------------
-// Pipeline driver
+// The driver: search the window, and when nothing in it works, grow and
+// search again.
 // --------------------------------------------------------------------------
 
 namespace {
@@ -1641,7 +1650,8 @@ bool betterBest(const OracleGate::SearchResult& candidate,
 
 std::string windowLabel(const RepairWindow& window)
 {
-  return window.level == 0 ? "L0" : cat("adaptive-L1 step ", window.level);
+  return window.level == 0 ? cat("start")
+                           : cat("grown x", window.level);
 }
 
 }  // namespace
@@ -1773,7 +1783,7 @@ FillerRepairResult RepairPlanner::repair(
   // an earlier smaller window being complete does not prove the
   // later truncated window has no solution.
   bool lastSearchedDefinitive = false;
-  RepairWindow window = buildWindow(0,
+  RepairWindow window = buildWindow(
                                     request.targetPlace,
                                     violations,
                                     view_,

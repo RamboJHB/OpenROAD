@@ -1,20 +1,20 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Leaf data model for filler VT overlay repair: ids, geometry, the violation
-// model, diagnostics and the planner entry/exit records. No behavior beyond
-// trivial accessors, and no dependency on the two seams (PlacementView,
-// RepairOracle) or on the search pipeline -- everything else includes this.
+// The vocabulary: ids, geometry, what a violation is, what a diagnostic is,
+// and what goes in and out of a repair. Pure data -- no logic beyond trivial
+// accessors, and it depends on nothing else in the module, which is why
+// everything else can include it.
 //
-// The change record is the infrastructure-owned dpl2::CellChangeRecord;
-// checker APIs group records as ipl::FillerChanges. Test builds provide the
-// same UDM ID/value types through their test-only UDM shim.
+// The one type we do NOT define here is the change record itself. That is
+// dpl2::CellChangeRecord, owned by infrastructure, and it travels unchanged
+// from the search through the checker to the caller -- one representation, so
+// there is no second copy of it to drift.
 //
-// Conventions:
-//  - All x coordinates are DBU. Site alignment comes from
-//    PlacementView::siteWidth().
-//  - All intervals are half-open [xl, xh).
-//  - Row ranges in Region are inclusive [rowLo, rowHi].
+// Conventions used everywhere below:
+//  - x is in DBU. Sites come from PlacementView::siteWidth().
+//  - x intervals are half-open: [xl, xh).
+//  - row ranges are inclusive: [rowLo, rowHi].
 
 #pragma once
 
@@ -59,25 +59,27 @@ struct XInterval
   }
 };
 
-// VT family identity. The planner only compares VT ids; it never interprets
-// them -- rule semantics stay inside the checker (checker-as-oracle).
+// Which VT family a master belongs to. The search only ever asks "same or
+// different?" -- what a VT means, and which rules it triggers, is the
+// checker's business, not ours.
 using VtId = int32_t;
 inline constexpr VtId kUnknownVt = -1;
 
-// Implant band polarity (checker: ipl::Layer::Polar, from the LAST '_' suffix of
-// the implant layer name via parseLayerName). Each row is two half-row bands
-// with alternating polarity; a master's VT FAMILY is uniform across its bands
-// by checker construction (buildMasters: master_implant_family_mismatch), so
-// the per-band degree of freedom is polarity only.
+// N or P. Every row is two half-height bands, and the polarity alternates
+// from band to band up the design -- which is why a cell's orientation
+// matters: flipping it swaps which band its N implant lands on.
+//
+// A master's VT family is the same on both of its bands (the checker enforces
+// that), so polarity is the only thing that varies within one master.
 enum class BandPolarity : uint8_t
 {
   N,
   P
 };
 
-// Placement orientation. The checker draft uses eUTL::PhysOrientation (a
-// UDM type); the pure planner keeps this minimal enum and the runtime
-// engine boundary maps between the two.
+// Placement orientation. UDM has its own richer type; the search keeps this
+// four-value enum so it stays database-free, and the engine maps between them
+// at the boundary.
 enum class Orient : uint8_t
 {
   R0,
@@ -86,9 +88,9 @@ enum class Orient : uint8_t
   MY
 };
 
-// Planner-side guard region. The wire-level checker API uses a geometric
-// Rect; converting rows to y coordinates is the runtime boundary's concern, so the
-// pure planner keeps the row-based form everywhere.
+// A rectangle of design, counted in ROWS rather than y coordinates -- rows
+// are what the search reasons about. The checker API wants a geometric Rect;
+// turning rows into y is the engine's job at the boundary.
 struct Region
 {
   XInterval x;
@@ -112,8 +114,9 @@ enum class Severity
   Fatal
 };
 
-// Stable machine-readable code + human-readable message used inside the pure
-// planner. Runtime converts these to final-checker ipl::Diagnostic.
+// Why something happened, in two parts: a `code` that is stable enough for a
+// test or a log filter to match on, and a `message` for a human. The engine
+// converts these to the checker's own diagnostic type on the way out.
 struct Diagnostic
 {
   Severity severity = Severity::Info;
@@ -126,9 +129,11 @@ inline Diagnostic makeDiag(Severity severity, std::string code, std::string mess
   return Diagnostic{severity, std::move(code), std::move(message)};
 }
 
-// --- Shared planner model ---------------------------------------------------
+// --- what the search works on -----------------------------------------------
 
-// Anchor: the std cell changed by upstream opto/ECO. Not a repair window.
+// The cell opto retargeted: same instance, same site, new master. Everything
+// the search does is anchored to this, hence the name used for it throughout.
+// Note this is a single cell, not a region.
 struct TargetPlace
 {
   InstanceId instanceId = 0;
@@ -144,8 +149,8 @@ enum class ViolationKind
   MinSpacing
 };
 
-// Mirrors the FINAL checker's ipl::Relationship exactly (IntraInstance was
-// removed from the checker; do not reintroduce it here).
+// Whether the two things in conflict sit in the same row or across a row
+// boundary. Mirrors the checker's own enum exactly -- keep it that way.
 enum class ViolationRelation
 {
   IntraRow,
@@ -179,9 +184,10 @@ struct Violation
   std::vector<ViolationParticipant> participants;
 };
 
-// Exact shared-wire helpers. The record itself is deliberately not duplicated
-// in fillerRepair: the planner, oracle and public result all carry the
-// infrastructure-owned dpl2::CellChangeRecord unchanged.
+// Readers for the shared change record. Repair only ever emits Replace with a
+// real LeafCellID; the id accessor returns -1 for the other shape of the
+// variant rather than pretending, so a caller that meets a future Add record
+// gets an obviously-wrong id instead of a plausible one.
 inline const eUNL::LeafCellID* cellChangeRecordLeafCellId(
     const CellChangeRecord& change)
 {
@@ -214,12 +220,15 @@ inline bool sameCellChangeRecord(const CellChangeRecord& left,
 
 // --- Planner entry types ----------------------------------------------------
 
+// In: the retargeted cell, and what the checker said about it.
 struct FillerRepairRequest
 {
   TargetPlace targetPlace;
-  std::vector<Violation> violations;  // initial snapshot from the checker
+  std::vector<Violation> violations;
 };
 
+// Out: the filler swaps that make it legal -- checker-verified, or empty.
+// `hasSolution` with no changes means there was nothing to fix.
 struct FillerRepairResult
 {
   bool hasSolution = false;

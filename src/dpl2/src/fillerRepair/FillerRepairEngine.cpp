@@ -259,9 +259,12 @@ ViolationRelation toRelation(ipl::Relationship relationship)
 }  // namespace
 
 
-// --- placement coverage sweep (merged from PlacementPrecheck) --------------
-// Pure gap/overlap answer for "is each legal x interval covered exactly
-// once"; used only for the target influence rows inside repair().
+// --- is this region even placeable? -----------------------------------------
+// Answers "is every legal site in these rows covered exactly once" -- no gaps,
+// no overlaps. Repair refuses to run on a region that is not, because a swap
+// reasoned about a broken placement would be meaningless. Only the rows the
+// target can influence are checked; whole-design legality belongs to
+// infrastructure, not here.
 namespace internal {
 
 enum class CoverageFindingKind
@@ -681,22 +684,20 @@ void FillerRepairEngine::Impl::buildPlannerData()
               });
   }
 
-  // --- default snapshot halo: cover both the checker's rule reach and two
-  // widest placed instances. The latter is a conservative horizontal
-  // approximation of the two-cell guard ring.
+  // How wide a slice of design the snapshot has to cover: far enough for the
+  // checker's rules to reach, plus room for two of the widest cells around
+  // (a cheap horizontal stand-in for the two-cell guard ring).
   //
-  // Rule reach has exactly ONE source: the checker. `getMaxRuleValue()` is
-  // literally the radius (in sites) of the neighbourhood `getSnapshot` scans,
-  // so a guard at least that wide is the correctness condition -- a narrower
-  // guard truncates the checker's snapshot and can fabricate a min-width
-  // violation at the guard edge.
+  // ONE source decides rule reach: the checker. `getMaxRuleValue()` is
+  // literally how far, in sites, its own scan looks. Anything narrower cuts a
+  // run off at the edge of the snapshot, and the checker then reports a
+  // min-width violation that does not exist in the design.
   //
-  // We deliberately do NOT re-derive reach from raw TechLayer
-  // width/minSpacing. That was a second, independent derivation of the same
-  // quantity: the checker builds LEF58 rules whose minValue can exceed both
-  // raw values, so the two formulas drifted apart once and would drift again
-  // on the next rule type the checker learns. Any implant width the checker
-  // does not turn into a rule is also a width it never scans for.
+  // We deliberately do NOT compute reach ourselves from TechLayer width and
+  // spacing. That was the same number derived twice, and the two answers drift:
+  // the checker builds LEF58 rules whose minValue can exceed both raw values.
+  // It already cost us that bug once. And the converse is free -- an implant
+  // width the checker never turned into a rule is a width it never scans for.
   {
     DbCoord maxPlacedWidth = 0;
     InstanceId maxPlacedInstance = -1;
@@ -834,7 +835,7 @@ const MasterInfo* FillerRepairEngine::Impl::masterInfo(MasterId id) const
              : nullptr;
 }
 
-// --- oracle: direct calls into the final ipl checker -----------------------
+// --- seam 2: turning checker answers into oracle results --------------------
 
 ipl::CheckRequest FillerRepairEngine::Impl::toCheckRequest(const TargetPlace& place) const
 {
@@ -1075,15 +1076,15 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     return results;
   }
 
-  // The final checker copies its approved, non-blocking PERSISTENT init
-  // diagnostics into every result -- once directly (checkPlaceWithOverlay)
-  // and once more inside the
-  // embedded region result (checkOverlayRegion) -- and folds them into
-  // isLegal. Strip every leading repetition of that sequence so only
-  // request-specific findings drive the candidate status; otherwise a single
-  // benign init diagnostic (e.g. missing_rule_parameter on an unused layer)
-  // would make every candidate permanently illegal. Structural init
-  // diagnostics never reach this path because rebuildOracle() fails closed.
+  // The checker repeats its start-up diagnostics in every single result --
+  // twice, in fact, once directly and once inside the embedded region result
+  // -- and counts them against isLegal. Those are harmless things it noticed
+  // at init, like a missing rule parameter on a layer no master uses.
+  //
+  // So strip every leading copy of that known sequence, and judge each
+  // candidate only on what this request produced. Without it one benign
+  // start-up note would make every candidate illegal forever. Anything
+  // structural never gets this far: rebuildOracle() already failed closed.
   const auto& initDiags = checker_->getDiags();
   const auto requestDiagOffset =
       [&initDiags](const std::vector<ipl::Diagnostic>& diagnostics) {
@@ -1135,7 +1136,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   return results;
 }
 
-// --- repair entry -----------------------------------------------------------
+// --- the entry point --------------------------------------------------------
 
 Region FillerRepairEngine::Impl::snapshotGuard(const TargetPlace& target) const
 {
@@ -1824,16 +1825,16 @@ bool FillerRepairEngine::Impl::ensureMasterRegistered(
   if (network_->getMaster(master.getLibCellId()) != nullptr) {
     return true;
   }
-  // This is the only infrastructure-version-sensitive registration call in
-  // fillerRepair. A destination with a different addMaster signature adapts
-  // this one private seam; planner/oracle code remains unchanged.
+  // PORTING NOTE: this is the one call in fillerRepair whose signature tracks
+  // the infrastructure version. If a destination's addMaster differs, adapt
+  // it here -- nothing in the search or the oracle needs to change.
   //
-  // Edge-type decoration is deliberately empty here. addMaster dereferences
-  // the table unconditionally, so nullptr is not an option, and an empty one
-  // makes it return right after the geometry it does set -- which is all the
-  // implant oracle reads. This path is a fallback: on the production route
-  // DePlace has already registered the master WITH the real edge table before
-  // check() runs, so a Master decorated by us never reaches placement DRC.
+  // The empty edge-type table is on purpose. addMaster dereferences it without
+  // a null check, so nullptr is out; an empty one makes it return right after
+  // filling in the geometry, which is all the implant oracle reads anyway.
+  // This is only a fallback path: in production DePlace has already registered
+  // the master with the REAL edge table before check() runs, so a Master we
+  // decorated never reaches placement DRC.
   static const EdgeTypeTable kNoEdgeTypes;
   return network_->addMaster(
              master, *filler_settings_, grid_, &kNoEdgeTypes)

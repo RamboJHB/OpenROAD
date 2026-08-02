@@ -1,14 +1,16 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Debug transcript for the repair pipeline.
+// The decision trail.
 //
-// Each line states cause -> effect so a captured transcript reads as a
-// decision chain ("window L0 -> baseline -> candidate"), including the
-// concrete data that changed. Output goes to stdout with a "[fr][stage]"
-// prefix. It is ENABLED by default so a production run leaves a diagnosable
-// trail; set FR_VERBOSE=0 to silence it. Logging never changes search order
-// or acceptance.
+// Every line says what happened and why, so reading a captured run top to
+// bottom explains the answer: which window, what the baseline was, which
+// candidates were tried, what blocked them, where it grew next. Lines are
+// prefixed "[fr][stage]" and go to stdout.
+//
+// ON by default -- a production run that gets a surprising answer should
+// already have the evidence, without a rebuild and a rerun. FR_VERBOSE=0
+// silences it. Logging never changes what the search does or accepts.
 
 #pragma once
 

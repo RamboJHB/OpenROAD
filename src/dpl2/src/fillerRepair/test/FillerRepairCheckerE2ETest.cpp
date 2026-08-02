@@ -1278,7 +1278,7 @@ WindowProbe probeWindow(PlannerCheckerFixture& fixture,
   const fr::FillerRepairRequest request{plannerTarget(scn), violations};
   probe.normalized = fr::normalizeViolations(request, fixture.view(), log);
   probe.ruleDistance = fr::estimateRuleDistance(violations, SITE_WIDTH);
-  probe.window = fr::buildWindow(0,
+  probe.window = fr::buildWindow(
                                  request.targetPlace,
                                  probe.normalized,
                                  fixture.view(),
