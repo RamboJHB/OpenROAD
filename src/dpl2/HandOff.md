@@ -14,21 +14,28 @@ Masters and Nodes from `fillerSetting::core_`.
 
 ## 0. Migration snapshot
 
-**`bfe8642f23`** is the base payload reference. It remains useful for
-identifying the original portable module, but it is no longer the complete
-migration state. Apply the required null-safety delta from **`8ca27117c6`**
-described in Section 1 as part of the port.
+**Take the payload from `808c27f`** — the commit this section describes. It is
+complete: payload, the null-safety work, and the search as it now performs.
+Everything below describes exactly that state.
 
 ```sh
-git tag fillerRepair-migration-20260729 bfe8642f23
+git tag fillerRepair-migration-20260802 808c27f
 ```
 
-(The tag exists locally only; this environment's git proxy accepts writes to
-the working branch and refuses tag refs, so the commit id is the reference
-that actually travels.)
+(Tags exist locally only; this environment's git proxy accepts writes to the
+working branch and refuses tag refs, so the commit id is the reference that
+actually travels. This section is the only thing that moved afterwards, to
+record the id.)
 
-Current branch verification (2026-08-02; the commit above remains the
-migration reference point):
+Earlier reference points, for reading history only — do **not** port from
+them:
+
+| | |
+|---|---|
+| `bfe8642f23` | first complete portable module; predates the null-safety work |
+| `8ca27117c6` | the null-safety delta, now folded in |
+
+Verified at `808c27f`:
 
 | | |
 |---|---|
@@ -55,9 +62,10 @@ documentation and travels with it.
 ### Null-safety patch must travel
 
 The destination infrastructure and `ImplantLayerChecker` do **not** yet
-contain the fail-closed null handling present on this branch. Keep the current
-infrastructure changes here, and port commit **`8ca27117c6`** (or an equivalent
-destination-native implementation) together with the repair payload.
+contain the fail-closed null handling present on this branch. It is already
+part of the `808c27f` snapshot above — this section only says which files it
+lives in, so a destination that cherry-picks rather than taking the snapshot
+does not leave it behind.
 
 The destination-side portion is:
 
