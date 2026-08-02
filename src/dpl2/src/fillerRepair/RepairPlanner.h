@@ -145,13 +145,17 @@ struct OverlayKey
 {
   using Entry = std::pair<InstanceId, MasterId>;
   // One key per candidate, holding one entry per filler that candidate
-  // changes -- `maxSubsetSize` of them (4), or a whole small window when its
-  // space is enumerated exhaustively. 8 covers both without ever touching the
-  // heap; anything longer still works, it just spills to `overflow`.
+  // changes. Two things bound that: `maxSubsetSize` (4), and -- on a window
+  // small enough to enumerate exhaustively -- the whole window. Measured over
+  // the worst-case search, the distribution tops out at 5:
   //
-  // [PORT-TUNE] Only worth revisiting if you raise `maxSubsetSize`. Bigger
-  // costs memory on every cache entry for nothing; smaller silently puts an
-  // allocation back on the hottest path in the search.
+  //     swaps:  0     1      2      3      4     5
+  //     keys:  660  6 600  43 560  25 700  8 000  640
+  //
+  // so 8 covers every key without ever touching the heap, with headroom. This
+  // is a local fact about the enumerator, not something a destination needs
+  // to revisit -- and a longer key is not a limit anyway, it just spills to
+  // `overflow`. Only raising `maxSubsetSize` would move it.
   static constexpr std::size_t kInlineSwaps = 8;
 
   DbCoord guardXl = 0;

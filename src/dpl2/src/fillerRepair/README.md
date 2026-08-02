@@ -122,14 +122,17 @@ grep -rn "\[PORT-" <srcroot>/fillerRepair
 ```
 
 - **`[PORT-ADAPT]`** — will not compile, or will be quietly wrong, until you
-  change it. Five of them: `Network::addMaster`'s signature,
-  `getMaxRuleValue()`, `Grid::getDesMgr()`, the `CellChangeRecord` field
-  layout, and defining `dpl2_filler_repair_deps` in CMake. **Not optional.**
+  change it. Eleven of them, and **five compile cleanly while being wrong**:
+  the coordinate frame, the init-diagnostic strip, the overlay batch
+  semantics, `getMaxRuleValue()`, and the guard's vertical reach. Those five
+  first. **Not optional.**
 - **`[PORT-DROP]`** — you do not need it. Each one says what it costs to keep
   and what breaks if you delete it, which in production is nothing.
-- **`[PORT-TUNE]`** — a number chosen against a synthetic oracle that answers
-  instantly. Each says what to measure on real hardware first. Safe as
-  shipped; a budget can only end a search early, never give a wrong answer.
+- **`[PORT-TUNE]`** — four numbers whose answer lives on your hardware, not
+  here: the oracle these were measured against answers in ~0 ns, so the cost
+  of a real DRC call — the thing that decides them — is exactly what this
+  repository does not have. Each says what to measure. Safe as shipped; a
+  budget can only end a search early, never give a wrong answer.
 
 `src/dpl2/HandOff.md` §8 lists all of them with the trade-off for each.
 

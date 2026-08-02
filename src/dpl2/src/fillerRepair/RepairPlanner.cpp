@@ -486,6 +486,15 @@ RepairWindow finalizeWindow(int level,
   }
   window.bridgeFillers.assign(bridge.begin(), bridge.end());
 
+  // [PORT-ADAPT] Vertical reach of the guard, and an assumption worth
+  // checking against your rule deck: inter-row rules reach ONE row boundary,
+  // so a violation our edit could cause lives at most one row outside the
+  // window, and two rows of guard covers it with a margin. The horizontal
+  // reach is not guessed like this -- it comes from the checker's own
+  // getMaxRuleValue() (see FillerRepairEngine.cpp). If any implant rule of
+  // yours spans more than one row boundary, this must grow to match, and
+  // nothing will tell you: the checker would simply never be shown the row
+  // where the new violation appeared.
   const std::vector<RowId> guardRows =
       clampRows(view, window.rows.front() - 2, window.rows.back() + 2);
   XInterval guardX = x;

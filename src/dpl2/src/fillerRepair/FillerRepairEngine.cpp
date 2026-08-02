@@ -402,11 +402,17 @@ void FillerRepairEngine::Impl::buildPlannerData()
     return;
   }
 
-  // --- rows: RowId = Grid row index; x is core-left-relative. Grid is the
-  // single row/frame authority (the checker builds CheckRequest.rowId/colId
-  // from the same Grid calls), and infrastructure data is trusted as-is: the
-  // engine no longer re-validates site widths, row spans, origins or per-node
-  // frame coherence.
+  // [PORT-ADAPT] The coordinate frame, and the biggest silent-wrongness risk
+  // in the port. RowId is the Grid row index and x is relative to the core's
+  // left edge, because that is the frame the checker builds its
+  // CheckRequest.rowId/colId in -- from these same Grid calls. Both sides
+  // must agree; nothing here re-derives or re-validates it.
+  //
+  // If your Grid indexes rows differently, or measures x from the die rather
+  // than the core, every lookup still compiles and every answer is about the
+  // wrong place. CHECKER_REPAIR_CONTRACT.md "Row/column frames" spells out
+  // the envelope this assumes (no pad row before a standard row, y-sorted
+  // rows, one shared row origin X at the core edge).
   site_width_ = grid->getSiteWidth().v;
   core_xl_ = grid->getCore().getXL().getStorage();
   core_yl_ = grid->getCore().getYL().getStorage();
@@ -440,6 +446,13 @@ void FillerRepairEngine::Impl::buildPlannerData()
   // the master's implant shapes exactly like the checker (layer identity via
   // the checker's TechLayerRelativeID, band anchored at the bottommost
   // implant rect -- the rebuildMasterShapes rule).
+  // [PORT-ADAPT] The snapshot reads master implant shapes the same way the
+  // checker does -- layer identity through the checker's own
+  // TechLayerRelativeID, band anchored at the bottommost implant rect. That
+  // mirroring is deliberate: the two must agree about which shape sits on
+  // which band, or the planner ranks against geometry the checker does not
+  // see. If the checker's rebuildMasterShapes rule changes, this changes with
+  // it.
   const auto implantLayerOf =
       [&](eLIB::TechLayerRelativeID relId) -> const ipl::Layer* {
     for (const ipl::Layer& layer : checker->getLayers()) {
@@ -479,6 +492,12 @@ void FillerRepairEngine::Impl::buildPlannerData()
       continue;
     }
 
+    // [PORT-ADAPT] Filler identity comes from infrastructure -- Master and
+    // Node carry it, assigned from the configured filler list. The payload
+    // never re-derives it from UDM macro flags, and must not start: the two
+    // disagree (a CORE_FILLER is also isCore()), and that disagreement was a
+    // real bug. Whatever your infrastructure's single filler authority is,
+    // this must read it.
     MasterInfo info;
     info.id = id;
     info.width = cell->getWidth().getStorage();
@@ -1054,6 +1073,20 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     changes.push_back(requests[index].fillerChanges);
   }
 
+  // [PORT-ADAPT] ImplantLayerChecker::checkPlaceWithOverlays -- THE call the
+  // whole feature is built on, and the one with real semantics behind it, not
+  // just a signature:
+  //
+  //   * one FillerChanges = one atomic candidate;
+  //   * results correlate BY INPUT ORDER, and results.size() must equal
+  //     candidates.size() -- a short or long batch invalidates all of it, and
+  //     the code below refuses the whole batch rather than guess;
+  //   * a candidate is judged against the guard region, so the guard is part
+  //     of the question (see quantizeGuard in RepairPlanner.cpp).
+  //
+  // If your checker batches differently, adapt here and keep those three
+  // properties. Dropping the count check to "salvage" a partial batch would
+  // silently mis-attribute answers to candidates.
   std::vector<ipl::CheckResult> raw;
   {
     // Serialize the checker (its const overlay path mutates internal ids).
@@ -1088,6 +1121,13 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     return results;
   }
 
+  // [PORT-ADAPT] Depends on checker BEHAVIOUR, not on a signature, so it will
+  // compile happily while being wrong. If your checker does not repeat its
+  // init diagnostics into every result, this strip is harmless. If it repeats
+  // them differently -- a different count, or not as a leading run -- every
+  // candidate comes back illegal and repair silently never finds anything.
+  // The engine classifies that sequence once at init; check it matches.
+  //
   // The checker repeats its start-up diagnostics in every single result --
   // twice, in fact, once directly and once inside the embedded region result
   // -- and counts them against isLegal. Those are harmless things it noticed

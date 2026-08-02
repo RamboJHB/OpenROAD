@@ -258,15 +258,25 @@ conventions, so it is the first thing a reader of the payload meets:
 | **`[PORT-DROP]`** | You do not need this. Each says what it costs to keep and what breaks if you delete it — which is nothing in production. | Yes |
 | **`[PORT-TUNE]`** | A number or a strategy chosen from measurements taken *here*, against a synthetic oracle. Each says what to measure on your hardware first. | Yes — safe as shipped |
 
-### The four ADAPTs
+### The eleven ADAPTs
 
-| Where | What it depends on |
-|---|---|
-| `FillerRepairEngine.cpp` `ensureMasterRegistered` | `Network::addMaster`'s signature — the only version-sensitive call in the payload, and it has already changed twice |
-| `FillerRepairEngine.cpp` halo sizing | `ImplantLayerChecker::getMaxRuleValue()` meaning "reach, in sites". Re-spell it if you must; **do not** replace it with your own reach formula — that is the bug it exists to prevent |
-| `FillerRepairEngine.cpp` `init` | `Grid::getDesMgr()`, so Grid/Network/checker/engine provably describe one design revision. A mismatch here is wrong answers, not a crash — keep the check |
-| `FillerRepairEngine.cpp` `cellChangeRecord` | `CellChangeRecord`'s shape. Fill **every** field; `orientation_` in particular is read when the checker evaluates the swapped filler |
-| `fillerRepair/CMakeLists.txt` | Defining `dpl2_filler_repair_deps` — that target *is* the integration |
+Sorted by what happens if you get them wrong. **The first five compile
+cleanly and are silently wrong** — no crash, no diagnostic, just answers about
+the wrong thing. Read those first.
+
+| Where | What it depends on | If wrong |
+|---|---|---|
+| `FillerRepairEngine.cpp` `buildPlannerData` — row frame | RowId is the Grid row, x is core-left-relative — the same frame the checker builds `CheckRequest` in. Nothing re-derives or re-validates it | **silent**: every lookup is about the wrong place |
+| `FillerRepairEngine.cpp` — init-diagnostic strip | Checker *behaviour*: it repeats its init diagnostics into every result. A different count, or not as a leading run | **silent**: every candidate comes back illegal, repair never finds anything |
+| `FillerRepairEngine.cpp` `checkPlaceWithOverlays` | Batch semantics: one `FillerChanges` = one candidate, results correlate **by input order**, count must match | **silent**: answers mis-attributed to candidates |
+| `FillerRepairEngine.cpp` — halo sizing | `getMaxRuleValue()` meaning "reach, in **sites**". Re-spell it if you must; **never** substitute your own reach formula — that is the bug it exists to prevent | **silent**: truncated snapshot invents min-width violations |
+| `RepairPlanner.cpp` `finalizeWindow` — guard rows | Inter-row rules reach **one** row boundary, so ±2 rows of guard covers it. Horizontal reach is not guessed like this; it comes from the checker | **silent**: the checker is never shown the row a new violation appeared in |
+| `FillerRepairEngine.cpp` `init` | `Grid::getDesMgr()`, so Grid/Network/checker/engine provably describe one design revision | caught: fatal init diagnostic |
+| `FillerRepairEngine.cpp` `ensureMasterRegistered` | `Network::addMaster`'s signature — the only version-sensitive *signature* in the payload, already changed twice | caught: compile error |
+| `FillerRepairEngine.cpp` `cellChangeRecord` | `CellChangeRecord`'s shape. Fill **every** field; `orientation_` is read when the checker evaluates the swapped filler | mixed |
+| `FillerRepairEngine.cpp` `buildPlannerData` — filler identity | Infrastructure's single filler authority (`Master`/`Node` carry it). Never re-derive from UDM macro flags — they disagree, and that was a real bug | mixed |
+| `FillerRepairEngine.cpp` `implantLayerOf` | Reads master implant shapes the way the checker does (layer identity via `TechLayerRelativeID`, band anchored at the bottommost rect) | mixed |
+| `fillerRepair/CMakeLists.txt` | Defining `dpl2_filler_repair_deps` — that target *is* the integration | caught: link error |
 
 ### The DROPs
 
@@ -282,15 +292,30 @@ conventions, so it is the first thing a reader of the payload meets:
 (`RepairOracle.h`) and the `PlacementView::getUsableMasterCandidates` virtual.
 Both are used by the portable tests, and those travel with the payload.
 
-### The TUNEs
+### The TUNEs — and why they are not just fixed here
 
-All five are in `RepairPlanner.{h,cpp}`: the two checker-call budgets,
-`batchSize`, `maxAdaptiveLevels`, `OverlayKey::kInlineSwaps`, and the
-not-done batch-coalescing experiment. Every default came from a synthetic
-oracle that answers instantly — in production each call is real DRC work, so
-the budgets are really "how much DRC time may one repair cost". The transcript
-already prints what you need to decide: `checker requests=` per repair, and
-which level each answer came from (`grown xN`).
+Four, all in `RepairPlanner.{h,cpp}`. Each one is a question whose answer
+lives on the destination's hardware, not in this repository: the oracle these
+were measured against is synthetic and answers in ~0 ns, so the very quantity
+that decides them is missing here.
+
+| Knob | The number that decides it | Why this repo cannot supply it |
+|---|---|---|
+| `checkerCallBudgetPerWindow` (512), `checkerCallBudgetPerRepair` (2048) | cost of one real DRC call | These are really "how much DRC time may one repair cost". At 50 µs/call 2048 is 0.1 s; at 5 ms/call it is 10 s. A 100x spread inverts the answer, and here every call is free |
+| `batchSize` (32) | the checker's `parallelFor` width, and its per-batch fixed cost | A batch is one call whose candidates run in parallel over one region scan. The synthetic oracle has neither a thread pool nor a fixed cost |
+| `maxAdaptiveLevels` (32) | how far from a target a usable filler actually sits, on real designs | A safety valve sized against synthetic fixtures. Your `grown xN` histogram answers it in one run |
+| batch coalescing (not done) | thread count **and** the cost of a speculative candidate | Trades a fixed per-batch cost against checking candidates an earlier answer may make unnecessary. Which way it lands is a hardware question |
+
+They are safe as shipped — reaching a budget only ends a search early, it
+never yields a wrong answer — and the transcript already prints what you need:
+`checker requests=` per repair, and which level each answer came from.
+
+**One was not a real TUNE and has been settled here instead.**
+`OverlayKey::kInlineSwaps` depends only on this module's own enumerator, so
+pushing it downstream would have been passing on work that was ours. Measured
+over the worst-case search, key sizes top out at 5 (of 85 160 keys: 43 560 at
+size 2, 640 at size 5), so 8 covers every one without touching the heap. That
+measurement is now in the comment in place of the tag.
 
 ### Rides along, not a dependency
 
