@@ -240,28 +240,64 @@ gate; the engine has no global precheck and does not want one.
 
 ---
 
-## 8. API the destination does not need
+## 8. Every decision the destination has to make — the `[PORT-*]` tags
 
-Public surface that exists for the repository-local regression suite, which is
-not migrated. None of it is called by the payload, by the checker, or by any
-production path — listed so a reviewer does not go looking for the caller.
+Everything that needs a yes/no from the integrator is tagged in the source.
+One grep is the complete list:
 
-| | Why it exists |
+```sh
+grep -rn "\[PORT-" <srcroot>/fillerRepair
+```
+
+The legend lives at the top of `fillerRepair/RepairTypes.h`, next to the
+conventions, so it is the first thing a reader of the payload meets:
+
+| Tag | Meaning | Optional? |
+|---|---|---|
+| **`[PORT-ADAPT]`** | Will not compile, or will be quietly wrong, until you change it. Each one names the destination-side thing it depends on. | **No.** Work through all four before the first run. |
+| **`[PORT-DROP]`** | You do not need this. Each says what it costs to keep and what breaks if you delete it — which is nothing in production. | Yes |
+| **`[PORT-TUNE]`** | A number or a strategy chosen from measurements taken *here*, against a synthetic oracle. Each says what to measure on your hardware first. | Yes — safe as shipped |
+
+### The four ADAPTs
+
+| Where | What it depends on |
 |---|---|
-| `FillerRepairEngine::update(desMgr, fillerSetting)` | Pre-dates lazy init. Production refreshes by calling `setFillerRepairContext()`, which drops the engine so the next failing check rebuilds it; there is no path that reaches `update()`. Kept because the local regression drives snapshot refresh through it. |
-| `FillerRepairEngine::repair(LeafCellID, const PhysLibCell&)` | The direct UDM-handle entry. Production enters through `ImplantLayerChecker::check()`, which uses the `CheckRequest` overload. Kept as the local regression's entry point. |
-| `FillerRepairEngine::setDebugLogging(bool)` | The transcript is on by default and `FR_VERBOSE=0` silences it globally; this is the per-engine override. |
-| `isOracleSnapshotClean()` (`RepairOracle.h`) | Assertion helper for the portable planner tests. |
+| `FillerRepairEngine.cpp` `ensureMasterRegistered` | `Network::addMaster`'s signature — the only version-sensitive call in the payload, and it has already changed twice |
+| `FillerRepairEngine.cpp` halo sizing | `ImplantLayerChecker::getMaxRuleValue()` meaning "reach, in sites". Re-spell it if you must; **do not** replace it with your own reach formula — that is the bug it exists to prevent |
+| `FillerRepairEngine.cpp` `init` | `Grid::getDesMgr()`, so Grid/Network/checker/engine provably describe one design revision. A mismatch here is wrong answers, not a crash — keep the check |
+| `FillerRepairEngine.cpp` `cellChangeRecord` | `CellChangeRecord`'s shape. Fill **every** field; `orientation_` in particular is read when the checker evaluates the swapped filler |
+| `fillerRepair/CMakeLists.txt` | Defining `dpl2_filler_repair_deps` — that target *is* the integration |
 
-Deleting them is safe for the destination and costs about sixty lines. It is
-not recommended: they are the local suite's entry points, so removing them
-weakens the ability to reproduce a destination-reported problem here.
+### The DROPs
 
-Separately, **`Grid::getBoundingBox` / `DePlace::getBoundingBox` is not a
-fillerRepair dependency** — the module never calls it. It is an independent
-feature that happens to ride in the same patch set, and can be dropped without
-affecting repair. `Grid::gridXY` in the same file must stay: the checker uses
-it.
+| Where | Costs to keep | What you lose by deleting |
+|---|---|---|
+| `FillerRepairEngine::update()` | ~30 lines | The repository-local regression's snapshot-refresh entry. Production refreshes via `setFillerRepairContext()` instead |
+| `FillerRepairEngine::repair(LeafCellID, PhysLibCell)` | ~25 lines | The same, for callers holding UDM handles and no `CheckRequest` |
+| `FillerRepairEngine::setDebugLogging()` | ~10 lines | Per-engine transcript control. `FR_VERBOSE=0` already does it globally |
+| `dpl2::fillerRepairPlanner` target | one extra compile | The guard that keeps UDM out of the search. Recommended to keep |
+| `CMakeLists.txt` standalone fallback | a `if(NOT TARGET ...)` branch + two cache vars | The ability to build and test the payload with no destination wiring at all. Keep until your build is proven |
+
+**Not droppable, despite looking like it:** `isOracleSnapshotClean()`
+(`RepairOracle.h`) and the `PlacementView::getUsableMasterCandidates` virtual.
+Both are used by the portable tests, and those travel with the payload.
+
+### The TUNEs
+
+All five are in `RepairPlanner.{h,cpp}`: the two checker-call budgets,
+`batchSize`, `maxAdaptiveLevels`, `OverlayKey::kInlineSwaps`, and the
+not-done batch-coalescing experiment. Every default came from a synthetic
+oracle that answers instantly — in production each call is real DRC work, so
+the budgets are really "how much DRC time may one repair cost". The transcript
+already prints what you need to decide: `checker requests=` per repair, and
+which level each answer came from (`grown xN`).
+
+### Rides along, not a dependency
+
+**`Grid::getBoundingBox` / `DePlace::getBoundingBox`** — the module never
+calls it. It is an independent feature that happens to be in the same patch
+set and can be dropped without affecting repair. `Grid::gridXY` in the same
+file must stay: the checker uses it.
 
 ---
 

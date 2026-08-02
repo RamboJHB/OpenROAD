@@ -10,6 +10,11 @@ they can be found with one grep:
 grep -rn "fillerRepair-fix" src/dpl2/src src/dpl2/include
 ```
 
+Two greps, two different questions. This one finds **edits we made to code we
+do not own** — every one of them must travel or the payload does not build.
+The other, `[PORT-` inside `fillerRepair/`, finds **decisions the destination
+has to make** about code we do own; see `HandOff.md` §8.
+
 Checker DRC rules, shapes, scan behaviour and blocking-violation logic are
 **unchanged**. Nothing below alters what the checker decides.
 

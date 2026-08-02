@@ -1427,6 +1427,14 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   return summary;
 }
 
+// [PORT-TUNE] Everything not already cached in this chunk goes out as ONE
+// batch. Measured here, the alternative -- topping a short batch up with
+// candidates from the next chunk so every call is full -- was evaluated and
+// not done: it trades a fixed per-batch cost (one region scan) against
+// speculatively checking candidates that an earlier answer may make
+// unnecessary, and which way that lands depends on your thread count and on
+// what one candidate actually costs. If batches show up in a real profile,
+// that is the experiment to run. See fillerRepair/README.md "Search cost".
 bool OracleGate::resolve(const Overlay* chunk,
                          const OverlayKey* chunkKeys,
                          std::size_t count,

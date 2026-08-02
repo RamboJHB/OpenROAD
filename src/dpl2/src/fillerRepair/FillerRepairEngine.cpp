@@ -714,8 +714,14 @@ void FillerRepairEngine::Impl::buildPlannerData()
       }
     }
 
-    // getMaxRuleValue() is in SITES; everything else here is in DBU. This
-    // multiplication is the only place the two units meet.
+    // [PORT-ADAPT] ImplantLayerChecker::getMaxRuleValue(). The whole guard
+    // sizing rests on this one number meaning "how far, in SITES, my scan
+    // looks". If your checker spells it differently, or returns DBU, fix it
+    // here and nowhere else -- but do not replace it with your own reach
+    // formula. See the block above for why that is the bug this avoids.
+    //
+    // Sites here, DBU everywhere else: this multiplication is the only place
+    // the two units meet.
     const int reachSites = checker->getMaxRuleValue();
     const DbCoord checkerReach =
         static_cast<DbCoord>(reachSites) * site_width_;
@@ -899,6 +905,12 @@ Violation FillerRepairEngine::Impl::toPlannerViolation(const ipl::Violation& v,
   return out;
 }
 
+// [PORT-ADAPT] CellChangeRecord's shape. This is the one place the search's
+// dense ids become UDM handles, so it is where a change to the shared record
+// -- a new field, a renamed one, a different CellData alternative -- has to
+// be absorbed. Every field must be filled: `orientation_` in particular is
+// read by the checker when it evaluates the swapped filler, so leaving it
+// default makes MX-placed rows evaluate the wrong implant band.
 CellChangeRecord FillerRepairEngine::Impl::cellChangeRecord(
     InstanceId instanceId,
     MasterId newMasterId) const
@@ -1733,6 +1745,11 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " networkMasters=", network_->getMasters().size()));
     return false;
   }
+  // [PORT-ADAPT] Grid::getDesMgr(). The engine refuses to bind to a manager
+  // other than the one Grid was initialized with, because Grid, Network, the
+  // checker and this engine must all describe ONE design revision. If your
+  // Grid does not retain its manager, give it an accessor -- do not delete
+  // this check; a mismatch here is silently wrong answers, not a crash.
   eUNL::PhysDesMgr* const gridDesMgr = grid_->getDesMgr();
   if (gridDesMgr == nullptr) {
     failInit("missing_grid_phys_des_mgr",
@@ -1825,9 +1842,11 @@ bool FillerRepairEngine::Impl::ensureMasterRegistered(
   if (network_->getMaster(master.getLibCellId()) != nullptr) {
     return true;
   }
-  // PORTING NOTE: this is the one call in fillerRepair whose signature tracks
-  // the infrastructure version. If a destination's addMaster differs, adapt
-  // it here -- nothing in the search or the oracle needs to change.
+  // [PORT-ADAPT] Network::addMaster. This is the ONLY call in the payload
+  // whose signature tracks the infrastructure version, and it has already
+  // changed twice (it gained the fillerSetting parameter, and its third
+  // parameter became const EdgeTypeTable*). If yours differs, fix it here --
+  // nothing in the search or the oracle needs to know.
   //
   // The empty edge-type table is on purpose. addMaster dereferences it without
   // a null check, so nullptr is out; an empty one makes it return right after

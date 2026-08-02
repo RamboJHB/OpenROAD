@@ -15,6 +15,31 @@
 //  - x is in DBU. Sites come from PlacementView::siteWidth().
 //  - x intervals are half-open: [xl, xh).
 //  - row ranges are inclusive: [rowLo, rowHi].
+//
+// ---------------------------------------------------------------------------
+// PORTING TAGS
+//
+// Three tags mark everything a destination has to make a decision about.
+// One grep finds all of them:
+//
+//     grep -rn "\[PORT-" <srcroot>/fillerRepair
+//
+//   [PORT-DROP]   You do not need this. Each one says what it costs to keep
+//                 and what breaks if you delete it -- which is nothing in
+//                 production; these exist for the repository-local
+//                 regression, which does not travel.
+//
+//   [PORT-ADAPT]  This will not compile or will behave wrongly until you
+//                 change it. Each one names the destination-side thing it
+//                 depends on. Work through every ADAPT before the first run.
+//
+//   [PORT-TUNE]   A number or a strategy chosen from measurements taken
+//                 HERE, on a synthetic oracle. Each one says what to measure
+//                 on your hardware before changing it. Safe to ship as-is;
+//                 revisit if repair shows up in a profile.
+//
+// DROP and TUNE are optional. ADAPT is not.
+// ---------------------------------------------------------------------------
 
 #pragma once
 

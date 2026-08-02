@@ -60,6 +60,15 @@ namespace dpl2::fillerRepair {
 
 // Every search knob, in one place, so the transcript can print the exact
 // configuration a run used.
+//
+// [PORT-TUNE] Every default below was chosen against a SYNTHETIC oracle that
+// answers instantly. In production each checker call is real DRC work, so the
+// budgets are really "how much DRC time may one repair cost", and only your
+// hardware can answer that. Before touching any of them, get the two numbers
+// the transcript already prints on a real design -- `checker requests=` and
+// the wall time of one repair() -- and change one knob at a time. They are
+// safe as shipped: reaching a budget only ever ends the search early, it
+// never produces a wrong answer.
 struct RepairConfig
 {
   // Checker calls one window may spend, the baseline request included.
@@ -70,7 +79,11 @@ struct RepairConfig
   // filled design does. Hitting either budget ends the search as *truncated*:
   // never a wrong answer, only a bounded give-up. <= 0 disables this one.
   int checkerCallBudgetPerRepair = 2048;
-  // Candidates per checker batch.
+  // Candidates per checker batch. [PORT-TUNE] The best value is roughly your
+  // checker's parallelFor width: a batch is one call whose candidates run in
+  // parallel, over a fixed per-batch cost (one region scan). Too small wastes
+  // that scan; too large speculatively checks candidates an earlier one in
+  // the same batch already made unnecessary.
   int batchSize = 32;
   // How many fillers one candidate may change at once. Only bites on windows
   // too large to enumerate exhaustively.
@@ -86,6 +99,11 @@ struct RepairConfig
   // How many times the window may grow before giving up. Without it a
   // no-solution case keeps growing until the rows run out, paying a window
   // budget each time. Also truncation, never a wrong answer.
+  //
+  // [PORT-TUNE] 32 is a safety valve, not a tuned value. What it should be is
+  // "how far from the target could a usable filler plausibly be" on your
+  // designs. The transcript names the level each answer came from
+  // ("grown xN"), so a histogram of that over a real run tells you directly.
   int maxAdaptiveLevels = 32;
   bool verbose = true;            // [fr] transcript; FR_VERBOSE=0 silences
 };
@@ -126,11 +144,14 @@ std::optional<Swap> makeSwap(const PlacementView& view,
 struct OverlayKey
 {
   using Entry = std::pair<InstanceId, MasterId>;
-  // One key is built per candidate, and a candidate holds one swap per
-  // filler in the subset -- `maxSubsetSize` of them, or the whole (small)
-  // window when its space is enumerated completely. Small subsets therefore
-  // cover the search, and they must not each cost a heap allocation. Larger
-  // ones still work: they spill to `overflow`.
+  // One key per candidate, holding one entry per filler that candidate
+  // changes -- `maxSubsetSize` of them (4), or a whole small window when its
+  // space is enumerated exhaustively. 8 covers both without ever touching the
+  // heap; anything longer still works, it just spills to `overflow`.
+  //
+  // [PORT-TUNE] Only worth revisiting if you raise `maxSubsetSize`. Bigger
+  // costs memory on every cache entry for nothing; smaller silently puts an
+  // allocation back on the hottest path in the search.
   static constexpr std::size_t kInlineSwaps = 8;
 
   DbCoord guardXl = 0;

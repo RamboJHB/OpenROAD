@@ -20,6 +20,18 @@
 #                              engine/checker boundary (C++20)
 #   dpl2::fillerRepairPlanner  the pure search pipeline alone, no database
 #                              access (C++17) -- the portability gate
+#
+# [PORT-ADAPT] Defining dpl2_filler_repair_deps is the whole integration.
+# Point it at your UDM, your dpl2 infrastructure and your implant checker,
+# and add any global flags (sanitizers, warning levels) you want the payload
+# built with. Do this BEFORE add_subdirectory; the fallback below is not for
+# you.
+#
+# [PORT-DROP] dpl2::fillerRepairPlanner exists to prove the search compiles
+# with no database in sight -- it is what keeps UDM from creeping into the
+# planner. If you only ever link dpl2::fillerRepair, it costs you one extra
+# compile of the same sources. Keeping it is recommended: it is the cheapest
+# guard against that layering eroding.
 
 cmake_minimum_required(VERSION 3.20)
 
@@ -47,11 +59,14 @@ set(DPL2_UDM_LIBRARIES "" CACHE STRING
     "UDM libraries or CMake targets (fallback deps target only)")
 
 if(NOT TARGET dpl2_filler_repair_deps)
-  # Fallback for standalone use: <fillerRepair/...>, <drc/...> and
-  # <infrastructure/...> resolve from the src/ root, <Grid.h> and friends from
-  # infrastructure/, and <dpl2/DePlace.h> from include/. UDM comes from the
-  # cache variables above. A destination that already has targets for these
-  # should define dpl2_filler_repair_deps itself and skip all of this.
+  # [PORT-DROP] Standalone fallback, used only when nobody defined
+  # dpl2_filler_repair_deps. It assumes the in-tree layout -- <fillerRepair/>,
+  # <drc/> and <infrastructure/> from the src/ root, <Grid.h> from
+  # infrastructure/, <dpl2/DePlace.h> from include/ -- and takes UDM from the
+  # cache variables above. Once your deps target exists this branch is dead
+  # code and can go, together with the two DPL2_UDM_* cache variables.
+  # It is what lets the payload build and test itself with no harness at all,
+  # so it is worth keeping until the destination build is proven.
   find_package(Boost REQUIRED)
   find_package(TBB REQUIRED)
   add_library(dpl2_filler_repair_deps INTERFACE)

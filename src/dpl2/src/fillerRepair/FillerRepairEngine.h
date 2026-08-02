@@ -52,10 +52,12 @@ class FillerRepairEngine
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
-  // Enables the [fr][stage] decision transcript. ENABLED by default (set
-  // FR_VERBOSE=0 to silence); the switch changes diagnostics output only and
-  // never changes search order or acceptance. Configure it outside
-  // concurrent repair() calls.
+  // [PORT-DROP] Per-engine override for the [fr][stage] transcript, which is
+  // ON by default and silenced globally by FR_VERBOSE=0. Nothing in the
+  // payload or in production calls this -- only the repository-local
+  // regression, which does not travel. DELETE it and the Impl method behind
+  // it (~10 lines) unless you want per-engine control that the environment
+  // variable cannot give you.
   void setDebugLogging(bool enabled);
 
   // Binds the existing infrastructure to one design and registers configured
@@ -64,11 +66,17 @@ class FillerRepairEngine
   // UDM/infrastructure objects must outlive the engine. init() is one-shot.
   bool init(eUNL::PhysDesMgr* desMgr, const fillerSetting& fillerSetting);
 
-  // Atomically replaces the private engine snapshot after infrastructure has
-  // synchronized Network with UDM. This method never changes Network Nodes.
-  // Rebuild Grid/Network first if rows, blockages or the instance set changed.
-  // A stale/incomplete Network makes update fail closed.
-  // Do not call concurrently with repair().
+  // [PORT-DROP] Rebuilds the private snapshot in place. It pre-dates lazy
+  // init and no production path reaches it: refreshing is done by calling
+  // ImplantLayerChecker::setFillerRepairContext(), which drops the engine so
+  // the next failing check builds a new one. Only the repository-local
+  // regression drives snapshot refresh through here, and that does not
+  // travel. DELETE it (~30 lines with its Impl half).
+  //
+  // Contract while it exists: never changes Network Nodes; rebuild
+  // Grid/Network first if rows, blockages or the instance set changed; a
+  // stale or incomplete Network makes it fail closed; not concurrent with
+  // repair().
   bool update(eUNL::PhysDesMgr* desMgr, const fillerSetting& fillerSetting);
 
   // Pre-commit implant overlay query. The only placement gate here is
@@ -78,9 +86,12 @@ class FillerRepairEngine
   // from the exact CheckRequest built by ImplantLayerChecker::check().
   RepairOutcome repair(const ipl::CheckRequest& request);
 
-  // Direct entry retained for focused engine tests and callers that already
-  // have UDM handles. Normal placement checking enters through
-  // ImplantLayerChecker::check().
+  // [PORT-DROP] The same repair, entered with raw UDM handles instead of a
+  // CheckRequest. Production always arrives through
+  // ImplantLayerChecker::check(), which has the CheckRequest already built;
+  // this overload exists so the repository-local regression can call the
+  // engine without a checker, and that does not travel. DELETE it (~25 lines)
+  // unless you have a caller holding UDM handles and no CheckRequest.
   RepairOutcome repair(eUNL::LeafCellID targetCell,
                        const eLIB::PhysLibCell& newMaster);
 

@@ -112,6 +112,27 @@ replacement candidate allow-list.
 (`<fillerRepair/RepairPlanner.h>`, `<infrastructure/Grid.h>`), matching the
 delivered infrastructure/checker sources.
 
+## Porting: what needs a decision
+
+Everything a destination has to decide is tagged in the source. One grep is
+the whole list, and the legend sits at the top of `RepairTypes.h`:
+
+```sh
+grep -rn "\[PORT-" <srcroot>/fillerRepair
+```
+
+- **`[PORT-ADAPT]`** — will not compile, or will be quietly wrong, until you
+  change it. Five of them: `Network::addMaster`'s signature,
+  `getMaxRuleValue()`, `Grid::getDesMgr()`, the `CellChangeRecord` field
+  layout, and defining `dpl2_filler_repair_deps` in CMake. **Not optional.**
+- **`[PORT-DROP]`** — you do not need it. Each one says what it costs to keep
+  and what breaks if you delete it, which in production is nothing.
+- **`[PORT-TUNE]`** — a number chosen against a synthetic oracle that answers
+  instantly. Each says what to measure on real hardware first. Safe as
+  shipped; a budget can only end a search early, never give a wrong answer.
+
+`src/dpl2/HandOff.md` §8 lists all of them with the trade-off for each.
+
 ## Main files
 
 The module is one runtime layer over one pure search pipeline, joined by two
