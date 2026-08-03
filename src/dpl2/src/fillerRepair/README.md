@@ -173,6 +173,15 @@ production run leaves a diagnosable trail without a rebuild or a rerun. Set
 same variable governs the planner tests. Logging never changes search order
 or acceptance.
 
+Candidate tracing uses the `[fr][candidate]` stage. During engine
+initialization it records the mapping from each `fillerSetting` entry through
+the Network id to `MasterInfo`; each provider query records the filler and
+current-master metadata plus configured and returned counts. When the result
+is empty or carries diagnostics, every configured candidate is printed with
+its VT, size, polarity and exact rejection reasons. Healthy queries print the
+returned candidates only. These lines observe `PlacementView` output and do
+not participate in candidate selection.
+
 `log.msg(stage, text)` evaluates its argument at the call site, so inside a
 loop use the deferred form -- `log.msg(stage, [&] { return cat(...); })` or a
 surrounding `if (log.enabled())` block -- and a silenced transcript costs
@@ -261,9 +270,9 @@ Full migration instructions, including the destination checklist, are in
 
 - portable planner: 91 cases; portable checker E2E: 79 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
-- repository-local fake-UDM engine regression: 106 cases under
+- repository-local fake-UDM engine regression: 107 cases under
   `src/dpl2/test/local/`.
-- 2026-08-03 full local suite: 276/276 normal and ASan; migration gate
+- 2026-08-03 full local suite: 277/277 normal and ASan; migration gate
   170/170 normal and ASan; standalone module build 170/170.
 
 ### Search cost

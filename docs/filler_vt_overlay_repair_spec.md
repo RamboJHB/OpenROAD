@@ -987,11 +987,19 @@ related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举
 `setDebugLogging(true)` 额外输出 deterministic `[fr][stage]` transcript:
 `planner` 记录 request/config/final decision,`normalize` 记录 signature 输入,
 `window` 记录 L0/adaptive-L1 方向与增量,`swapgen`/`rank`/`enumerate` 记录候选空间,
-`gate` 记录 baseline、batch、cache、budget 与 best candidate。默认关闭;开启只增加
+`gate` 记录 baseline、batch、cache、budget 与 best candidate。transcript 默认开启;
+`FR_VERBOSE=0` 可全局关闭，`setDebugLogging()` 可按 engine 控制。日志只增加
 可观测性,不改变排序、预算或 accept 结果。engine init 另记录每个 implant layer
-的 raw WIDTH/SPACING、最宽 placed master 与 `defaultHaloX` 的胜出来源；snapshot 前记录 request、
+的 raw WIDTH/SPACING、最大 configured filler master、checker reach 与
+`defaultHaloX` 的胜出来源；snapshot 前记录 request、
 engine snapshot、live Network、PhysDesMgr、master bottom-band polarity 以及同时
 覆盖 physical/request Y 的全部 PhysRow iteration records。
+
+`candidate` 在 init 时记录 `fillerSetting -> Network master id -> MasterInfo`
+映射；每次 query 记录 filler/current-master metadata、configured/returned 数量。
+零候选或 provider diagnostic 时逐项输出 configured candidate 的 VT、width、
+height、bottom polarity 与拒绝原因；正常 query 只输出 returned candidates。
+这些信息只观察 `PlacementView` 的真实返回，不参与筛选。
 
 初始化 Fatal diagnostics 不依赖 `setDebugLogging()`。row/site 类失败必须输出
 reference/observed row 的 site name、pad flag、site width/height/count、origin 与

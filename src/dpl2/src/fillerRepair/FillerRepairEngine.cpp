@@ -549,13 +549,24 @@ void FillerRepairEngine::Impl::buildPlannerData()
   // ids. Entries the Network does not know cannot be validated by the
   // checker either (it builds masters from the Network) -> Warning + skip.
   {
+    log_.msg("candidate",
+             cat("provider source: fillerSetting configuredCount=",
+                 fillerMasters.size(), " networkMasters=",
+                 network->getMasters().size()));
     size_t configuredIndex = 0;
     for (const eLIB::PhysLibCell* cell : fillerMasters) {
       if (cell == nullptr) {
+        log_.msg("candidate",
+                 cat("configured[", configuredIndex,
+                     "] physLibCell=null decision=skip"));
         ++configuredIndex;
         continue;
       }
       const int id = network->getMasterId(cell->getLibCellId());
+      log_.msg("candidate", [&] {
+        return cat("configured[", configuredIndex, "] {",
+                   masterDebug(*cell), "} networkMasterId=", id);
+      });
       if (id < 0) {
         // Fatal: the checker validates candidates against Network masters, so
         // a configured master the Network never imported means the snapshot
@@ -580,6 +591,12 @@ void FillerRepairEngine::Impl::buildPlannerData()
         ++configuredIndex;
         continue;
       }
+      log_.msg("candidate", [&] {
+        return cat("configured[", configuredIndex, "] accepted master=", id,
+                   " filler=", info->isFiller, " vt=", info->vt,
+                   " width=", info->width, " heightRows=", info->height,
+                   " bottom=", polarityName(info->bottomBandPolarity));
+      });
       filler_master_ids_.push_back(static_cast<MasterId>(id));
       ++configuredIndex;
     }
@@ -587,6 +604,17 @@ void FillerRepairEngine::Impl::buildPlannerData()
     filler_master_ids_.erase(
         std::unique(filler_master_ids_.begin(), filler_master_ids_.end()),
         filler_master_ids_.end());
+    log_.msg("candidate", [&] {
+      std::string ids;
+      for (const MasterId id : filler_master_ids_) {
+        if (!ids.empty()) {
+          ids += ',';
+        }
+        ids += std::to_string(id);
+      }
+      return cat("provider ready: acceptedCount=", filler_master_ids_.size(),
+                 " masterIds=[", ids, ']');
+    });
   }
   if (filler_master_ids_.empty()) {
     // Empty allow list (or nothing usable in it) means repair could never

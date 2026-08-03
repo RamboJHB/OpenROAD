@@ -235,6 +235,9 @@ gate; the engine has no global precheck and does not want one.
   wrong answer, only a bounded give-up.
 - **The transcript is on by default.** `FR_VERBOSE=0` silences it. A
   production run leaves a diagnosable `[fr][stage]` trail without a rebuild.
+  The `[fr][candidate]` stage traces `fillerSetting` entries through Network
+  master ids and prints per-candidate metadata and rejection reasons whenever
+  a provider query returns no usable master.
 - **Determinism.** Same input, same output — ordering is pinned at every
   stage, and the answer cache is never iterated.
 
@@ -332,8 +335,8 @@ file must stay: the checker uses it.
 |---|---|
 | Portable planner tests | 91 |
 | Portable real-checker E2E | 79 |
-| Repository-local engine regression | 106 (fake UDM, not migrated) |
-| Full local suite | 276/276, normal and ASan |
+| Repository-local engine regression | 107 (fake UDM, not migrated) |
+| Full local suite | 277/277, normal and ASan |
 | Migration gate (destination code path) | 170/170, normal and ASan |
 | Standalone module build | 170/170 |
 

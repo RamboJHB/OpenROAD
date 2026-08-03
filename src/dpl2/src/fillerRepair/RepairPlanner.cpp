@@ -121,6 +121,151 @@ ipl::FillerChanges toFillerChanges(const Overlay& overlay,
   return changes;
 }
 
+namespace {
+
+const char* candidateOrientName(Orient orientation)
+{
+  switch (orientation) {
+    case Orient::R180: return "R180";
+    case Orient::MX: return "MX";
+    case Orient::MY: return "MY";
+    case Orient::R0: return "R0";
+  }
+  return "UNKNOWN";
+}
+
+const char* candidatePolarityName(BandPolarity polarity)
+{
+  return polarity == BandPolarity::P ? "P" : "N";
+}
+
+void appendCandidateReason(std::string& reasons, const char* reason)
+{
+  if (!reasons.empty()) {
+    reasons += ',';
+  }
+  reasons += reason;
+}
+
+bool providerReturned(const MasterCandidateResult& result, MasterId id)
+{
+  return std::any_of(result.candidates.begin(), result.candidates.end(),
+                     [id](const MasterCandidate& candidate) {
+                       return candidate.masterId == id;
+                     });
+}
+
+void logCandidateProviderTrace(const PlacementView& view,
+                               InstanceId fillerId,
+                               const MasterCandidateResult& result,
+                               const DebugLog& log)
+{
+  if (!log.enabled()) {
+    return;
+  }
+
+  const PlacedInstance* inst = view.instance(fillerId);
+  const MasterInfo* current
+      = inst != nullptr ? view.masterInfo(inst->masterId) : nullptr;
+  log.msg("candidate", [&] {
+    const std::string instanceInfo
+        = inst == nullptr
+              ? "instance=MISSING"
+              : cat("instance{row=", inst->rowId, " x=", inst->x,
+                    " orient=", candidateOrientName(inst->orientation),
+                    " filler=", inst->isFiller,
+                    " currentMaster=", inst->masterId, '}');
+    const std::string currentInfo
+        = current == nullptr
+              ? "current{metadata=MISSING}"
+              : cat("current{master=", current->id,
+                    " filler=", current->isFiller, " vt=", current->vt,
+                    " width=", current->width, " height=", current->height,
+                    " bottom=",
+                    candidatePolarityName(current->bottomBandPolarity), '}');
+    return cat("provider request filler=", fillerId, ' ', instanceInfo, ' ',
+               currentInfo, " configuredCount=", view.fillerMasterIds().size(),
+               " returnedCount=", result.candidates.size(),
+               " diagnosticCount=", result.diagnostics.size());
+  });
+
+  // A zero result gets the full rejection matrix. On the normal path, avoid
+  // repeating the whole configured library for every editable filler and log
+  // only the candidates the provider actually returned.
+  const bool logRejected
+      = result.candidates.empty() || !result.diagnostics.empty();
+  for (const MasterId id : view.fillerMasterIds()) {
+    const MasterInfo* candidate = view.masterInfo(id);
+    const bool returned = providerReturned(result, id);
+    if (!returned && !logRejected) {
+      continue;
+    }
+    std::string reasons;
+    if (inst == nullptr) {
+      appendCandidateReason(reasons, "UNKNOWN_INSTANCE");
+    } else if (!inst->isFiller) {
+      appendCandidateReason(reasons, "INSTANCE_NOT_FILLER");
+    }
+    if (current == nullptr) {
+      appendCandidateReason(reasons, "CURRENT_MASTER_METADATA_MISSING");
+    } else if (current->vt == kUnknownVt) {
+      appendCandidateReason(reasons, "CURRENT_VT_UNKNOWN");
+    }
+    if (candidate == nullptr) {
+      appendCandidateReason(reasons, "CONFIGURED_MASTER_METADATA_MISSING");
+    } else if (current != nullptr) {
+      if (id == inst->masterId) {
+        appendCandidateReason(reasons, "CURRENT_MASTER");
+      }
+      if (!candidate->isFiller) {
+        appendCandidateReason(reasons, "NOT_FILLER");
+      }
+      if (candidate->vt == kUnknownVt) {
+        appendCandidateReason(reasons, "VT_UNKNOWN");
+      }
+      if (candidate->vt == current->vt) {
+        appendCandidateReason(reasons, "SAME_VT");
+      }
+      if (candidate->width != current->width) {
+        appendCandidateReason(reasons, "WIDTH_MISMATCH");
+      }
+      if (candidate->height != current->height) {
+        appendCandidateReason(reasons, "HEIGHT_MISMATCH");
+      }
+      if (candidate->bottomBandPolarity != current->bottomBandPolarity) {
+        appendCandidateReason(reasons, "POLARITY_MISMATCH");
+      }
+    }
+    if (!returned && reasons.empty()) {
+      appendCandidateReason(reasons, "PROVIDER_DID_NOT_RETURN");
+    }
+    const char* decision = returned ? (reasons.empty() ? "accept"
+                                                       : "returned-with-conflict")
+                                    : "reject";
+    log.msg("candidate", [&] {
+      const std::string metadata
+          = candidate == nullptr
+                ? "metadata=MISSING"
+                : cat("filler=", candidate->isFiller,
+                      " vt=", candidate->vt, " width=", candidate->width,
+                      " height=", candidate->height, " bottom=",
+                      candidatePolarityName(candidate->bottomBandPolarity));
+      return cat("configured master=", id, ' ', metadata,
+                 " decision=", decision, " reasons=",
+                 reasons.empty() ? "NONE" : reasons);
+    });
+  }
+
+  for (const Diagnostic& diagnostic : result.diagnostics) {
+    log.msg("candidate",
+            cat("provider diagnostic filler=", fillerId,
+                " code=", diagnostic.code,
+                " message=", diagnostic.message));
+  }
+}
+
+}  // namespace
+
 SwapGenerationResult generateSwaps(
     const RepairWindow& window,
     const PlacementView& view,
@@ -131,6 +276,7 @@ SwapGenerationResult generateSwaps(
   for (const InstanceId fillerId : window.editableFillers) {
     MasterCandidateResult candidates =
         view.getUsableMasterCandidates({fillerId});
+    logCandidateProviderTrace(view, fillerId, candidates, log);
     // Provider diagnostics (unknown instance, not a filler, ...) are kept:
     // they explain why a filler contributed no moves.
     result.diagnostics.insert(result.diagnostics.end(),

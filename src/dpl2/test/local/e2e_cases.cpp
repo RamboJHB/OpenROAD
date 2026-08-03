@@ -434,6 +434,50 @@ TEST(FillerRepairInitializationDiagnostics,
   EXPECT_NE(transcript.find("defaultHaloX=6"), std::string::npos);
 }
 
+TEST(FillerRepairInitializationDiagnostics,
+     CandidateTraceExplainsZeroCandidateResult)
+{
+  frt::DesignSetup setup;
+  setup.implantRuleWidth = 6;
+  ProviderObjects objects(setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::fillerSetting setting(objects.design().design());
+  setting.addFillerCell("FL2");
+  dpl2::fillerRepair::FillerRepairEngine engine(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+  engine.setDebugLogging(true);
+
+  testing::internal::CaptureStdout();
+  const bool initialized = engine.init(objects.design().desMgr(), setting);
+  dpl2::fillerRepair::RepairOutcome outcome;
+  if (initialized) {
+    outcome = engine.repair(
+        objects.design().cell(frt::CellRole::Target),
+        objects.design().master(frt::MasterRole::TargetNew));
+  }
+  const std::string transcript = testing::internal::GetCapturedStdout();
+
+  ASSERT_TRUE(initialized) << transcript;
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_NE(transcript.find(
+                "[fr][candidate] provider source: fillerSetting "
+                "configuredCount=1"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("[fr][candidate] configured[0]"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("filler=1 vt="), std::string::npos);
+  EXPECT_NE(transcript.find("width=2 heightRows=1 bottom=N"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("configuredCount=1 returnedCount=0"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("decision=reject reasons=CURRENT_MASTER,SAME_VT"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("code=NoUsableMaster"), std::string::npos);
+  EXPECT_NE(transcript.find("-> 0 candidates, no swaps"),
+            std::string::npos);
+}
+
 
 
 
