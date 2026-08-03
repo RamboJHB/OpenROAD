@@ -741,10 +741,14 @@ guardRegion = expandByCellRing(repairWindow, 2)
 携带同一个 `guardRegion`;guard-only 区域的 filler 只参与 checking/diagnostics,
 不得出现在 `fillerChanges` 中(违反判 invalid request)。
 
-planner 建立 L0 之前的 initial target snapshot 使用横向 conservative default:
-`defaultHaloX = 2 * max(maxImplantWidthOrSpacing, maxPlacedMasterWidth)`。
-因此 rule 比 standard cell 窄时仍不会小于 two-cell ring 的宽度上界;debug
-diagnostics 同时记录 rule candidate、placed-master candidate 与最终胜出来源。
+planner 建立 L0 之前的 initial target snapshot 使用横向 default:
+`defaultHaloX = max(checkerRuleReach, maxConfiguredFillerMasterWidth)`。
+其中 `checkerRuleReach` 只取 checker 的 `getMaxRuleValue()` 并从 site 转为 DBU;
+filler 宽度只取 `fillerSetting` 接受并映射到 Network 的 replacement universe。
+standard cell 与 hard macro 不参与这个全局上界,避免 macro design 把初始 snapshot
+放大到无关区域。L0 之后的实际 `guardRegion` 仍按上文的真实 two-cell instance ring
+生成,因此这里不再用全局最宽 placed master 近似该 ring。debug diagnostics 同时记录
+checker reach、最大 configured filler master 与最终胜出来源。
 
 ### 6.4 cluster:第一版单 cluster
 

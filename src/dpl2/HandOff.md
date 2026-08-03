@@ -1,6 +1,6 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-08-02. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-08-03. Branch: `claude/wizardly-carson-secahu`.
 
 What this feature does: opto changes one standard cell's VT. The fillers around
 it still carry the old implant type, which is an MW/MS violation. This finds a
@@ -175,7 +175,7 @@ cmake -S <srcroot>/fillerRepair -B build-fr \
 cmake --build build-fr && ctest --test-dir build-fr --output-on-failure
 ```
 
-162 portable tests: 85 database-free planner cases and 77 that drive the **real
+170 portable tests: 91 database-free planner cases and 79 that drive the **real
 `ImplantLayerChecker`** through `ImplantLayerCheckerHelper`-built input. They
 build no UDM objects, so they run before any design is available.
 
@@ -269,7 +269,7 @@ the wrong thing. Read those first.
 | `FillerRepairEngine.cpp` `buildPlannerData` — row frame | RowId is the Grid row, x is core-left-relative — the same frame the checker builds `CheckRequest` in. Nothing re-derives or re-validates it | **silent**: every lookup is about the wrong place |
 | `FillerRepairEngine.cpp` — init-diagnostic strip | Checker *behaviour*: it repeats its init diagnostics into every result. A different count, or not as a leading run | **silent**: every candidate comes back illegal, repair never finds anything |
 | `FillerRepairEngine.cpp` `checkPlaceWithOverlays` | Batch semantics: one `FillerChanges` = one candidate, results correlate **by input order**, count must match | **silent**: answers mis-attributed to candidates |
-| `FillerRepairEngine.cpp` — halo sizing | `getMaxRuleValue()` meaning "reach, in **sites**". Re-spell it if you must; **never** substitute your own reach formula — that is the bug it exists to prevent | **silent**: truncated snapshot invents min-width violations |
+| `FillerRepairEngine.cpp` — initial halo sizing | `getMaxRuleValue()` means checker reach in **sites** and remains the correctness floor; the other input is the widest configured filler master, never an arbitrary placed standard cell or macro. The later planner guard uses the actual two-cell ring | **silent**: too-small reach truncates runs; global placed-master sizing makes macro designs pathologically slow |
 | `RepairPlanner.cpp` `finalizeWindow` — guard rows | Inter-row rules reach **one** row boundary, so ±2 rows of guard covers it. Horizontal reach is not guessed like this; it comes from the checker | **silent**: the checker is never shown the row a new violation appeared in |
 | `FillerRepairEngine.cpp` `init` | `Grid::getDesMgr()`, so Grid/Network/checker/engine provably describe one design revision | caught: fatal init diagnostic |
 | `FillerRepairEngine.cpp` `ensureMasterRegistered` | `Network::addMaster`'s signature — the only version-sensitive *signature* in the payload, already changed twice | caught: compile error |
@@ -332,8 +332,8 @@ file must stay: the checker uses it.
 |---|---|
 | Portable planner tests | 91 |
 | Portable real-checker E2E | 79 |
-| Repository-local engine regression | 104 (fake UDM, not migrated) |
-| Full local suite | 274/274, normal and ASan |
+| Repository-local engine regression | 106 (fake UDM, not migrated) |
+| Full local suite | 276/276, normal and ASan |
 | Migration gate (destination code path) | 170/170, normal and ASan |
 | Standalone module build | 170/170 |
 

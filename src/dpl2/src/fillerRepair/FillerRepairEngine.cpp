@@ -703,9 +703,11 @@ void FillerRepairEngine::Impl::buildPlannerData()
               });
   }
 
-  // How wide a slice of design the snapshot has to cover: far enough for the
-  // checker's rules to reach, plus room for two of the widest cells around
-  // (a cheap horizontal stand-in for the two-cell guard ring).
+  // The initial target snapshot only needs enough horizontal context for the
+  // checker's rules and the replacement-filler universe. Repair-window guards
+  // are sized later from the actual two-cell instance ring, so using the
+  // widest placed master here is both redundant and pathological when that
+  // master is a hard macro.
   //
   // ONE source decides rule reach: the checker. `getMaxRuleValue()` is
   // literally how far, in sites, its own scan looks. Anything narrower cuts a
@@ -718,18 +720,13 @@ void FillerRepairEngine::Impl::buildPlannerData()
   // It already cost us that bug once. And the converse is free -- an implant
   // width the checker never turned into a rule is a width it never scans for.
   {
-    DbCoord maxPlacedWidth = 0;
-    InstanceId maxPlacedInstance = -1;
-    MasterId maxPlacedMaster = -1;
-    for (const std::optional<PlacedInstance>& slot : instances_) {
-      if (!slot.has_value()) {
-        continue;
-      }
-      const MasterInfo* master = masterInfo(slot->masterId);
-      if (master != nullptr && master->width > maxPlacedWidth) {
-        maxPlacedWidth = master->width;
-        maxPlacedInstance = slot->id;
-        maxPlacedMaster = slot->masterId;
+    DbCoord maxFillerWidth = 0;
+    MasterId maxFillerMaster = -1;
+    for (const MasterId id : filler_master_ids_) {
+      const MasterInfo* master = masterInfo(id);
+      if (master != nullptr && master->width > maxFillerWidth) {
+        maxFillerWidth = master->width;
+        maxFillerMaster = id;
       }
     }
 
@@ -745,17 +742,16 @@ void FillerRepairEngine::Impl::buildPlannerData()
     const DbCoord checkerReach =
         static_cast<DbCoord>(reachSites) * site_width_;
 
-    const bool placedWidthWins = maxPlacedWidth > checkerReach;
-    const DbCoord haloUnit = std::max(checkerReach, maxPlacedWidth);
-    default_halo_x_ = 2 * haloUnit;
+    const bool fillerWidthWins = maxFillerWidth > checkerReach;
+    default_halo_x_ = std::max(checkerReach, maxFillerWidth);
     log_.msg(
         "engine",
         cat("default halo source: kind=",
-            placedWidthWins ? "PLACED_MASTER_WIDTH" : "CHECKER_RULE_REACH",
+            fillerWidthWins ? "FILLER_MASTER_WIDTH" : "CHECKER_RULE_REACH",
             " checkerReach{sites=", reachSites, " dbu=", checkerReach,
-            "} widestPlaced{instance=", maxPlacedInstance,
-            " master=", maxPlacedMaster, " dbu=", maxPlacedWidth,
-            "} multiplier=2 defaultHaloX=", default_halo_x_));
+            "} widestConfiguredFiller{master=", maxFillerMaster,
+            " dbu=", maxFillerWidth,
+            "} defaultHaloX=", default_halo_x_));
   }
 
   const auto placedCount = std::count_if(

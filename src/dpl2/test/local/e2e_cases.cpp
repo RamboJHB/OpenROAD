@@ -23,7 +23,7 @@ namespace frt = dpl2::fillerRepair::test;
 namespace {
 
 constexpr const char* kDefaultFillers = "FL2 FH2 FS2";
-constexpr const char* kFillersWithExtra = "FL2 FH2 FS2 FX2";
+constexpr const char* kFillersWithExtra = "FL2 FH2 FS2 FX4";
 
 bool hasDiagnostic(const std::vector<dpl2::ipl::Diagnostic>& diagnostics,
                    const std::string& status)
@@ -334,6 +334,7 @@ TEST(FillerRepairInitializationDiagnostics,
 {
   frt::DesignSetup setup;
   setup.implantRuleWidth = 2;
+  setup.row0ThirdHardMacro = true;
   ProviderObjects objects(setup);
   ASSERT_TRUE(objects.hasDesign());
   ASSERT_TRUE(objects.hasInfrastructure());
@@ -357,20 +358,80 @@ TEST(FillerRepairInitializationDiagnostics,
   EXPECT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
   EXPECT_NE(transcript.find("[fr][engine] default halo source:"),
             std::string::npos);
-  // Rule reach comes from the checker alone; the widest placed master (6)
-  // beats it here, so the halo is 2 * 6.
-  EXPECT_NE(transcript.find("kind=PLACED_MASTER_WIDTH"), std::string::npos);
-  EXPECT_NE(transcript.find("widestPlaced{"), std::string::npos);
-  EXPECT_NE(transcript.find("dbu=6}"), std::string::npos);
+  // The placed hard macro is 6 sites wide, but only configured filler
+  // masters may contribute a width floor. Both that floor and checker reach
+  // are 2 here, so the macro does not inflate the initial snapshot halo.
+  EXPECT_NE(transcript.find("kind=CHECKER_RULE_REACH"), std::string::npos);
+  EXPECT_NE(transcript.find("widestConfiguredFiller{"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("dbu=2}"), std::string::npos);
   EXPECT_NE(transcript.find("checkerReach{sites="), std::string::npos);
-  EXPECT_NE(transcript.find("defaultHaloX=12"), std::string::npos);
-  EXPECT_NE(transcript.find("guard=[-4,24) rows[1,3]"), std::string::npos);
+  EXPECT_NE(transcript.find("defaultHaloX=2"), std::string::npos);
+  EXPECT_NE(transcript.find("guard=[6,14) rows[1,3]"), std::string::npos);
   EXPECT_NE(transcript.find("[fr][engine] snapshot frame: request{"),
             std::string::npos);
   EXPECT_NE(transcript.find("engineSnapshot{"), std::string::npos);
   EXPECT_NE(transcript.find("network{"), std::string::npos);
   EXPECT_NE(transcript.find("physical{"), std::string::npos);
   EXPECT_NE(transcript.find("matchingPhysRows=["), std::string::npos);
+}
+
+TEST(FillerRepairInitializationDiagnostics,
+     WidestConfiguredFillerSetsInitialHalo)
+{
+  frt::DesignSetup setup;
+  setup.implantRuleWidth = 2;
+  setup.row0ThirdHardMacro = true;
+  ProviderObjects objects(setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::fillerSetting setting(objects.design().design());
+  setting.addFillerCell(kFillersWithExtra);
+  dpl2::fillerRepair::FillerRepairEngine engine(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+  engine.setDebugLogging(true);
+
+  testing::internal::CaptureStdout();
+  const bool initialized = engine.init(objects.design().desMgr(), setting);
+  const std::string transcript = testing::internal::GetCapturedStdout();
+
+  ASSERT_TRUE(initialized) << transcript;
+  EXPECT_NE(transcript.find("kind=FILLER_MASTER_WIDTH"), std::string::npos);
+  EXPECT_NE(transcript.find("checkerReach{sites=2 dbu=2}"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("widestConfiguredFiller{"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("dbu=4}"), std::string::npos);
+  EXPECT_NE(transcript.find("defaultHaloX=4"), std::string::npos);
+}
+
+TEST(FillerRepairInitializationDiagnostics,
+     CheckerRuleReachRemainsInitialHaloFloor)
+{
+  frt::DesignSetup setup;
+  setup.implantRuleWidth = 6;
+  setup.row0ThirdHardMacro = true;
+  ProviderObjects objects(setup);
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::fillerSetting setting(objects.design().design());
+  setting.addFillerCell(kDefaultFillers);
+  dpl2::fillerRepair::FillerRepairEngine engine(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+  engine.setDebugLogging(true);
+
+  testing::internal::CaptureStdout();
+  const bool initialized = engine.init(objects.design().desMgr(), setting);
+  const std::string transcript = testing::internal::GetCapturedStdout();
+
+  ASSERT_TRUE(initialized) << transcript;
+  EXPECT_NE(transcript.find("kind=CHECKER_RULE_REACH"), std::string::npos);
+  EXPECT_NE(transcript.find("checkerReach{sites=6 dbu=6}"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("widestConfiguredFiller{"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("dbu=2}"), std::string::npos);
+  EXPECT_NE(transcript.find("defaultHaloX=6"), std::string::npos);
 }
 
 

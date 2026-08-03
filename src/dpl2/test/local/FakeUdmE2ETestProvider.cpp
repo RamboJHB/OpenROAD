@@ -110,7 +110,7 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
     fake_udm::DesignDb::addShape(
         cell, spec.pLayerRel, kRowHeight / 2, kRowHeight);
   }
-  eLIB::PhysLibCell& extra = db.addMaster("FX2", 6, 2, kRowHeight, true);
+  eLIB::PhysLibCell& extra = db.addMaster("FX4", 6, 4, kRowHeight, true);
   fake_udm::DesignDb::addShape(extra, 2, 0, kRowHeight / 2);
   fake_udm::DesignDb::addShape(extra, 3, kRowHeight / 2, kRowHeight);
 
