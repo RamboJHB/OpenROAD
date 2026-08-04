@@ -29,9 +29,11 @@ namespace dpl2 {
 // Prerequisite: run `set_filler_option` first. The repair engine's candidate
 // universe is exactly the resulting fillerSetting allow list, so with an empty
 // one the command refuses to run rather than reporting a misleading pass.
+// Before constructing its checker, the command asks DePlace to register every
+// configured filler master with the infrastructure-owned edge table.
 //
-// Nothing is committed. Node masters are swapped to a proposal, checked, and
-// restored; UDM is never written.
+// No placement is committed. Master registration may extend Network's catalog;
+// proposal Node masters are restored and UDM is never written.
 class TestFillerRepairCmd : public uvTCL::CciCommand
 {
  public:

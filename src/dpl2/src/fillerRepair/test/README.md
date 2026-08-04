@@ -1,6 +1,6 @@
 # Portable fillerRepair tests
 
-Updated: 2026-08-04.
+Updated: 2026-08-05.
 
 These tests travel with the full `fillerRepair/` verification directory. They
 construct no UDM object and do not include the repository's fake-UDM headers.
@@ -52,7 +52,8 @@ while fake UDM only supplies data. Important boundary cases include:
 
 - configured and target masters registered by test infrastructure before
   engine init; the engine only refreshes `setFiller(true)`;
-- missing registered masters fail closed without Network mutation;
+- unexpectedly missing configured masters are skipped without engine-side
+  Network mutation, while an entirely unavailable candidate set fails closed;
 - mixed-height rows use the smallest base height;
 - legal row segments exclude blockage/halo whitespace;
 - committed UDM master wins over a transient Node candidate;
@@ -71,3 +72,5 @@ SANITIZE=address src/dpl2/test/local/run_migration_gate.sh
 
 Current local total is 287/287. All local targets use
 `-Wall -Wextra -Werror`; ASan is applied through the common dependency target.
+The repository compile-check target also compiles `DePlace.cpp`, including the
+real-edge-table configured-master registration entry used by the command.

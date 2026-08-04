@@ -164,10 +164,11 @@ add_subdirectory("${DPL2_SRC}/fillerRepair" fillerRepair)
 # real UDM. Note a STATIC compile-check library would NOT have caught it --
 # archives do not resolve symbols; only linking an executable does.
 
-# architecture.cpp is supplied infrastructure that no test entry point pulls
-# in; this keeps it in the compile gate for both modes.
+# DePlace.cpp and architecture.cpp are supplied infrastructure that no test
+# entry point pulls in; keep both in the strict compile gate for both modes.
 add_library(
   dpl2_filler_repair_compile_check STATIC
+  "${DPL2_SRC}/DePlace.cpp"
   "${DPL2_SRC}/infrastructure/architecture.cpp")
 target_link_libraries(
   dpl2_filler_repair_compile_check PRIVATE

@@ -241,6 +241,11 @@ bool TestFillerRepairCmd::exec()
   }
   std::cout << "configured filler masters: "
             << setting->getFillerPhysCells().size() << "\n";
+  if (!de_place->registerFillerRepairMasters()) {
+    std::cout << "ERROR: could not register configured filler masters in "
+                 "Network with the DePlace edge table\n";
+    return false;
+  }
 
   const auto nameOf = [design](LibCellID lcId) -> std::string {
     return design->getLibAcc().getPhysLibCell(lcId).getLibCell().getName();

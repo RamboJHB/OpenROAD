@@ -1,6 +1,6 @@
 # fillerRepair — checker-guided filler VT repair
 
-Updated: 2026-08-04.
+Updated: 2026-08-05.
 
 ## Purpose
 
@@ -68,8 +68,11 @@ change representation.
 
 ## Master and filler contract
 
-Infrastructure must register masters with its real edge table before repair.
-The engine never creates a Network Master.
+After the filler allow-list changes, infrastructure calls
+`DePlace::registerFillerRepairMasters()` to register every configured filler
+master with its real edge table and refresh existing Node filler types. The
+existing opto path registers target replacement masters. The engine never
+creates a Network Master.
 
 During `init()`, `ensureMasterRegistered()` performs only:
 
@@ -80,11 +83,11 @@ if (master != nullptr) {
 }
 ```
 
-A configured master missing from Network is logged and omitted from that
-engine snapshot. This is safe because it only reduces the search space;
-`init()` fails if no registered configured master remains. The target master
-id in `CheckRequest` must resolve consistently in Network and in the engine
-snapshot.
+A configured master unexpectedly missing from Network is logged and omitted
+from that engine snapshot as a defensive fallback. This is safe because it
+only reduces the search space; `init()` fails if no registered configured
+master remains. The target master id in `CheckRequest` must resolve
+consistently in Network and in the engine snapshot.
 
 Candidate identity comes from `fillerSetting::getFillerPhysCells()`; placed
 identity comes from `Node::isFiller()`. UDM macro-type filler flags do not

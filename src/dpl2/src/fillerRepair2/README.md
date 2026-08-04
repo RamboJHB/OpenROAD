@@ -1,6 +1,6 @@
 # fillerRepair2 — copy-only runtime payload
 
-Updated: 2026-08-04.
+Updated: 2026-08-05.
 
 Copy this directory's contents into the destination's existing
 `src/dpl2/src/fillerRepair/`, add the directory, and link its target:
@@ -22,11 +22,14 @@ bool init(PhysDesMgr*, const fillerSetting&);
 RepairOutcome repair(const ipl::CheckRequest&);
 ```
 
-Infrastructure registers filler and target replacement masters in Network
-with its real edge table. The engine never calls `Network::addMaster`;
+After filler configuration, infrastructure calls
+`DePlace::registerFillerRepairMasters()` to register configured masters in
+Network with its real edge table and refresh existing Node filler types; target
+registration stays on the existing opto path. The engine never calls
+`Network::addMaster`;
 `ensureMasterRegistered()` only sets an existing configured master's filler
-flag. Unregistered configured masters are skipped, and initialization fails
-only when the registered candidate subset is empty.
+flag. Unexpectedly unregistered configured masters are skipped, and
+initialization fails when the registered candidate subset is empty.
 
 The eight runtime/API files are byte-identical to the corresponding files in
 `../fillerRepair/`. The repository test CMake compares SHA-256 hashes at

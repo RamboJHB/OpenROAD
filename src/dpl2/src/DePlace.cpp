@@ -6,18 +6,19 @@
 #include <infrastructure/network.h>
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
-#include <drc/PaddingChecker.h>
 #include <drc/ImplantLayerChecker.h>
 #include <PlacementDRC.h>
+
+#include <algorithm>
 
 namespace dpl2 {
 
 DePlace::DePlace(PhysDesMgr* desMgr)
     : desMgr_(desMgr),
+      arch_(std::make_unique<Architecture>()),
       network_(std::make_unique<Network>()),
       padding_(std::make_shared<Padding>()),
-      grid_(std::make_unique<Grid>()),
-      arch_(std::make_unique<Architecture>())
+      grid_(std::make_unique<Grid>())
 {
   design_ = eUNL::Session::getSession().getCurrentDesign();
   padding_->setDesginManager(desMgr);
@@ -25,10 +26,10 @@ DePlace::DePlace(PhysDesMgr* desMgr)
 }
 
 DePlace::DePlace()
-    : network_(std::make_unique<Network>()),
+    : arch_(std::make_unique<Architecture>()),
+      network_(std::make_unique<Network>()),
       padding_(std::make_shared<Padding>()),
-      grid_(std::make_unique<Grid>()),
-      arch_(std::make_unique<Architecture>())
+      grid_(std::make_unique<Grid>())
 {
   eUNL::Session& sess = eUNL::Session::getSession();
   eUNL::Design* design = sess.getCurrentDesign();
@@ -55,6 +56,46 @@ DePlace::DePlace()
 }
 
 DePlace::~DePlace() = default;
+
+bool DePlace::registerFillerRepairMasters()
+{
+  if (filler_setting_ == nullptr || network_ == nullptr || grid_ == nullptr
+      || edge_type_table_ == nullptr) {
+    return false;
+  }
+
+  const std::vector<const PhysLibCell*> masters
+      = filler_setting_->getFillerPhysCells();
+  if (masters.empty()
+      || std::any_of(masters.begin(), masters.end(),
+                     [](const PhysLibCell* master) {
+                       return master == nullptr;
+                     })) {
+    return false;
+  }
+
+  for (const PhysLibCell* master : masters) {
+    if (network_->addMaster(*master,
+                            *filler_setting_,
+                            grid_.get(),
+                            edge_type_table_.get()) == nullptr) {
+      return false;
+    }
+  }
+
+  // addMaster refreshes an existing Master's classification, but Nodes keep
+  // the type captured when they were imported. set_filler_option commonly
+  // runs after that import, so synchronize placed instances as part of the
+  // same infrastructure-owned registration step.
+  for (const auto& node : network_->getNodes()) {
+    if (node != nullptr && node->getMaster() != nullptr
+        && filler_setting_->isFillerCell(
+            node->getMaster()->getDbMaster())) {
+      node->setType(Node::FILLER);
+    }
+  }
+  return true;
+}
 
 void DePlace::setPaddingGlobal(const int left, const int right)
 {
@@ -181,7 +222,6 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId, std::string moduleName)
 bool DePlace::isLegal(LeafCellID cellId, LibCellID lcId,
     std::vector<CellChangeRecord>& fcRecord)
 {
-  Rect rect = this->core_;
   const PhysLibCell& physLibCell = design_->getLibAcc().getPhysLibCell(lcId);
 
   Node* cell = this->network_->getNode(cellId);

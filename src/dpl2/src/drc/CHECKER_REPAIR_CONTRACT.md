@@ -1,6 +1,6 @@
 # fillerRepair ↔ checker/infrastructure contract
 
-Updated: 2026-08-04.
+Updated: 2026-08-05.
 
 This file records every boundary assumption and checker/infrastructure change
 needed by filler repair. The planner does not reproduce implant DRC. Rule
@@ -66,16 +66,23 @@ Node's possibly temporary opto master as committed placement.
 ## 3. Master ownership and filler classification
 
 Infrastructure owns Network Master construction because it owns the real edge
-table. Before repair begins it must register:
+table. After the filler allow-list changes,
+`DePlace::registerFillerRepairMasters()` registers:
 
-- every configured filler master that should participate in repair;
-- every standard-cell master that opto may place as the target candidate.
+- every configured filler master, including an uninstantiated spare.
+
+It also refreshes the `Node::FILLER` type for already-imported instances that
+reference those masters; changing only `Master::isFiller()` would leave the
+engine's placed-instance classification stale.
+
+The existing opto/infrastructure path separately registers every standard-cell
+master that opto may place as the target candidate.
 
 `FillerRepairEngine::ensureMasterRegistered()` never calls
 `Network::addMaster`. It only resolves an existing configured master and calls
-`setFiller(true)`. Missing configured masters are safely omitted because that
-can only shrink the search space; `init()` fails when no registered configured
-master remains.
+`setFiller(true)`. An unexpectedly missing configured master is safely omitted
+because that can only shrink the search space; `init()` fails when no
+registered configured master remains.
 
 The request target master must resolve by Network index, carry the same
 `Master::getId()`, and map back through `getMasterId(LibCellID)` to that index.
@@ -201,7 +208,9 @@ The portable checker suite locks:
 - PlacementDRC all-or-nothing record publication;
 - exact ordered batch behavior and real-checker repair outcomes.
 
-The local engine suite additionally verifies that missing configured masters
-are skipped without mutating Network, an entirely unavailable candidate list
-and missing target masters fail closed, stale configured flags are refreshed
-with `setFiller(true)`, and repair leaves UDM/Grid/Network placement unchanged.
+The local engine suite additionally verifies that the infrastructure
+registration path supplies configured masters before engine init, missing
+configured masters are still skipped without engine-side Network mutation, an
+entirely unavailable candidate list and missing target masters fail closed,
+stale configured flags are refreshed with `setFiller(true)`, and repair leaves
+UDM/Grid/Network placement unchanged.

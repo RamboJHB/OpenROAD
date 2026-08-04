@@ -1,6 +1,6 @@
 # AGENTS.md — dpl2 filler repair project memory
 
-Updated: 2026-08-04. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-08-05. Branch: `claude/wizardly-carson-secahu`.
 
 Read before changing this feature:
 
@@ -20,7 +20,7 @@ Swap-only repair, complete and migration-ready.
 | Area | State |
 |---|---|
 | Planner | `internal::RepairPlanner`: adaptive window, filler domains, per-band ranking, subset enumeration, baseline-delta oracle gate. Deterministic, non-mutating |
-| Engine | `FillerRepairEngine` coordinates placement snapshot, filler catalog and checker overlay components; it borrows Grid/Network and never constructs Network Masters |
+| Engine | `FillerRepairEngine` coordinates placement snapshot, filler catalog and checker overlay components; DePlace registers configured filler Masters with its real edge table before the engine borrows Grid/Network |
 | Checker | `ImplantLayerChecker(Grid*, Network*)` uses Grid's retained `PhysDesMgr`; a fresh engine handles each failing check and appends only verified changes |
 | Build | `fillerRepair/CMakeLists.txt` owns the full verification package; `fillerRepair2/CMakeLists.txt` owns only the C++20 runtime target. Both use `dpl2_filler_repair_deps` when supplied |
 | Tests | 93 planner + 83 real-checker + 111 local fake-UDM engine cases; 287/287 local strict build |
@@ -51,9 +51,11 @@ Swap-only repair, complete and migration-ready.
    *truncated*, which is a bounded give-up — never a wrong acceptance.
 9. **Two seams, no third abstraction.** `PlacementView` in, `RepairOracle`
    out. Do not add another runtime layer beside the checker-owned engine.
-10. **Infrastructure constructs Masters.** Every configured filler and target
-    master is registered with the real edge table before repair. Engine init
-    only refreshes existing configured Masters with `setFiller(true)`.
+10. **Infrastructure constructs Masters.** After filler configuration,
+    `DePlace::registerFillerRepairMasters()` registers every configured filler
+    with the real edge table and refreshes existing Node filler types; target
+    masters follow the existing opto path. Engine init only refreshes existing
+    Masters with `setFiller(true)`.
 
 ## Change rules
 

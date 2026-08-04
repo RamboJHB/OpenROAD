@@ -1,7 +1,7 @@
 # 功能规格 — Filler VT Overlay 修复 V2.1(checker-guided,本阶段 swap-only)
 
 状态:**V2.1 定稿**。分支:`claude/wizardly-carson-secahu`。基线:`2023-base`。
-最后更新 2026-08-04。`src/dpl2/src/fillerRepair` 是完整 verification source of
+最后更新 2026-08-05。`src/dpl2/src/fillerRepair` 是完整 verification source of
 truth；`src/dpl2/src/fillerRepair2` 是从它裁出的 runtime-only migration payload。
 接口与行为同时对齐 `src/dpl2/src/drc` checker 源码。
 
@@ -238,10 +238,13 @@ opto/infrastructure: commit target + fcRecord
 ```
 
 checker request 的 master 来自 `Node::getMaster()->getId()`,必须已由 infrastructure
-使用真实 edge table 注册在 Network 中。configured filler master 只有已注册子集
-能参与搜索；engine 的 `ensureMasterRegistered()` 只执行 existing-master lookup 与
-`setFiller(true)`，绝不调用 `Network::addMaster`。缺失项只缩小搜索空间并被跳过，
-若已注册子集为空则 init 失败。snapshot、candidate catalog 与
+使用真实 edge table 注册在 Network 中。`set_filler_option` 更新 allow-list 后，
+infrastructure 调用 `DePlace::registerFillerRepairMasters()` 注册全部 configured filler
+masters 并同步已有 Node 的 filler type；`test_filler_repair` 也在构造 checker 前
+执行该步骤。engine 的
+`ensureMasterRegistered()` 仍只执行 existing-master lookup 与 `setFiller(true)`，绝不
+调用 `Network::addMaster`。缺失项作为防御性 fallback 被跳过；若已注册子集为空则
+init 失败。snapshot、candidate catalog 与
 checker overlay client 都是
 `FillerRepairEngine::Impl` 的 private component，不增加 public API。
 planner-only `OracleRequest`/`OracleStatus`/`requestId`
@@ -294,9 +297,12 @@ runtime 目录，复制其内容到目的地已有的 `fillerRepair/` 路径。�
   master 是否进入 planner candidate universe 只采用 fillerSetting allow-list。
   engine init 不再用 UDM macro-type filler flag 交叉否决这两项。非 pad PhysRow
   可以有不同 site height，但每个 height 必须是最小 base height 的整数倍。
+- `DePlace::registerFillerRepairMasters()` 在 filler 配置后使用自己持有的 Grid 与真实
+  edge table 把 configured masters 注册到 Network，并同步引用这些 masters 的既有
+  Node filler type；这是 infrastructure setup，不属于 repair。
 - `ensureMasterRegistered()` 只允许 lookup existing master 并执行
-  `setFiller(true)`。engine 不拥有 edge table，也不调用 `Network::addMaster`；
-  缺失 configured master 安全跳过（只减少候选），全部缺失或 target master 缺失时
+  `setFiller(true)`。engine 不拥有 edge table，也不调用 `Network::addMaster`；意外
+  缺失的 configured master 安全跳过（只减少候选），全部缺失或 target master 缺失时
   fail closed。
 - checker/planner instance/master ID 固定为 `Node::getId()` / `Master::getId()`;
   `LeafCellID` / `LibCellID` 是 runtime `CellChangeRecord` handle。
@@ -572,8 +578,9 @@ diagnostic，避免进入注定无解的组合搜索。
 runtime engine 的候选 universe 必须由
 `fillerSetting::getFillerPhysCells()` 取得,再解析为 `Network::Master::getId()`;
 不得从 placed-instance 枚举猜测,也不得解析 master 名。configured master 即使
-尚未实例化也必须由 infrastructure 使用真实 edge table 注册进 Network；engine
-只在 init 中对既有 configured master 执行 `setFiller(true)`。
+尚未实例化也由 infrastructure 的 `DePlace::registerFillerRepairMasters()` 使用真实
+edge table 注册进 Network；已有实例的 Node type 在同一步刷新。engine 只在 init 中
+对既有 configured master 执行 `setFiller(true)`。
 
 **band polarity layout 约束(2026-07-15 落地)**:候选还必须与当前 master 的
 **R0 系 bottom-band polarity** 一致(`MasterInfo.bottomBandPolarity`,来源 =
@@ -611,7 +618,9 @@ manager 缺失时 checker fail closed。每个 DRC 不合法的 check 创建 fre
 从 `fillerSetting::getDesign()` 验证其 manager 与 engine/Grid 一致，确认 configured
 filler masters 已在 Network 并刷新其 filler flag，再创建私有 oracle checker。
 
-`set_filler_option`、Grid/Network 初始化和 checker 初始化都早于 repair，因此缺少
+`set_filler_option` 更新 allow-list 后必须调用
+`DePlace::registerFillerRepairMasters()`；Grid/Network 初始化和 checker 初始化都早于
+repair，因此缺少
 `fillerSetting`/`PhysDesMgr` 是 integration error：发出清晰 diagnostic，并关闭该
 checker 的 repair，直到 `setFillerRepairContext()` 显式 reset。engine 数据错误只让
 当前 request fail closed；infrastructure 修复数据后，下一次 fresh init 可以重试。
@@ -1126,7 +1135,8 @@ swap-only 功能已实现并于 2026-08-04 重新验证:
   (batch、canonical cache、baseline-delta、best-overlay 记录)、
   last-window definitive 语义。
 - checker-owned `FillerRepairEngine` 借用 supplied Grid/Network,私有拥有
-  oracle checker/snapshot;所有 master 由 infrastructure 预注册，engine 只刷新
+  oracle checker/snapshot;configured filler masters 由 DePlace 使用真实 edge table
+  注册，其他 master 继续由 infrastructure 现有路径注册，engine 只刷新
   configured filler flag；每个 failing check 使用 fresh committed snapshot；
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译由模块自己的 `src/dpl2/src/fillerRepair/CMakeLists.txt` 拥有
