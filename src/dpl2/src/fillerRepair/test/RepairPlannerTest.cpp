@@ -1236,14 +1236,14 @@ void testCandidateProvider()
   RowFixture f = makeCoveredRow();
 
   // Filler 101 is w2 vt1 -> exactly the two other w2 VTs, ascending order.
-  const auto result = f.design.getUsableMasterCandidates({101});
+  const auto result = f.design.getUsableMasterCandidates(101);
   EXPECT_EQ(result.candidates.size(), 2u);
-  EXPECT_EQ(result.candidates[0].masterId, fillerMaster(2, kVt2));
-  EXPECT_EQ(result.candidates[1].masterId, fillerMaster(2, kVt3));
+  EXPECT_EQ(result.candidates[0], fillerMaster(2, kVt2));
+  EXPECT_EQ(result.candidates[1], fillerMaster(2, kVt3));
 
   // Std cell input: empty + diagnostic, not an error.
   f.design.remove(103).place(103, cellMaster(kVt1), 0, 10);
-  const auto cellResult = f.design.getUsableMasterCandidates({103});
+  const auto cellResult = f.design.getUsableMasterCandidates(103);
   EXPECT_TRUE(cellResult.candidates.empty());
   EXPECT_TRUE(!cellResult.diagnostics.empty());
 }
@@ -1354,18 +1354,18 @@ void testSyntheticCatalogCandidatesContract()
 
   // Filler: exactly the two other w4 filler VTs, ascending id; the same-size
   // NON-filler master 942 must not appear.
-  const auto result = design.getUsableMasterCandidates({500});
+  const auto result = design.getUsableMasterCandidates(500);
   EXPECT_EQ(result.candidates.size(), 2u);
-  EXPECT_EQ(result.candidates[0].masterId, 41);  // w4 VTL
-  EXPECT_EQ(result.candidates[1].masterId, 43);  // w4 VTUL
+  EXPECT_EQ(result.candidates[0], 41);  // w4 VTL
+  EXPECT_EQ(result.candidates[1], 43);  // w4 VTUL
 
   // Std cell input: empty + warning, not an error.
-  const auto cellResult = design.getUsableMasterCandidates({501});
+  const auto cellResult = design.getUsableMasterCandidates(501);
   EXPECT_TRUE(cellResult.candidates.empty());
   EXPECT_TRUE(!cellResult.diagnostics.empty());
 
   // Unknown instance: error diagnostic.
-  const auto unknown = design.getUsableMasterCandidates({777});
+  const auto unknown = design.getUsableMasterCandidates(777);
   EXPECT_TRUE(unknown.candidates.empty());
   EXPECT_TRUE(!unknown.diagnostics.empty());
 
@@ -1688,7 +1688,7 @@ void testNormalizeViolations()
   request.violations = {v, noRows};
 
   const auto normalized =
-      fr::normalizeViolations(request, f.design, fr::DebugLog(verbose()));
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
   EXPECT_EQ(normalized.size(), 2u);
 
   EXPECT_TRUE(normalized[0].xRange == (fr::XInterval{10, 16}));
@@ -1831,7 +1831,7 @@ void testWindowL0()
   request.violations = {v};
 
   const auto normalized =
-      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
   const auto window = fr::buildWindow(request.targetPlace, normalized,
                                       design, 1, fr::DebugLog(verbose()));
 
@@ -1872,7 +1872,7 @@ void testWindowL0ExactMembership()
   request.violations = {violation};
 
   const auto normalized =
-      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
   const auto window = fr::buildWindow(
                                       request.targetPlace,
                                       normalized,
@@ -1906,7 +1906,7 @@ void testWindowBridgeConditionsEach()
                                         {request.targetPlace.rowId},
                                         footprint)};
     const auto normalized = fr::normalizeViolations(
-        request, design, fr::DebugLog(verbose()));
+        request, fr::DebugLog(verbose()));
     return fr::buildWindow(
                            request.targetPlace,
                            normalized,
@@ -1972,7 +1972,7 @@ void testGuardQuantizationContainsWindowAndIsStable()
   request.targetPlace = anchorPlace(design, 2);
   request.violations = {original};
   const auto normalized =
-      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
 
   fr::RepairWindow window = fr::buildWindow(
       request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
@@ -2019,7 +2019,7 @@ void testWindowAtDesignEdges()
   bottomRequest.violations = {makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {0, 1})};
   auto normalized = fr::normalizeViolations(
-      bottomRequest, bottom, fr::DebugLog(verbose()));
+      bottomRequest, fr::DebugLog(verbose()));
   const auto bottomWindow = fr::buildWindow(
                                             bottomRequest.targetPlace,
                                             normalized,
@@ -2043,7 +2043,7 @@ void testWindowAtDesignEdges()
   topRequest.violations = {makeViolation(
       1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {2}, {7, 8})};
   normalized =
-      fr::normalizeViolations(topRequest, top, fr::DebugLog(verbose()));
+      fr::normalizeViolations(topRequest, fr::DebugLog(verbose()));
   const auto topWindow = fr::buildWindow(
                                          topRequest.targetPlace,
                                          normalized,
@@ -2065,7 +2065,7 @@ void testWindowAdaptiveAddsKOnBlockingSide()
                          fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
   request.violations = {v};
   const auto normalized =
-      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
 
   const auto l0 = fr::buildWindow(request.targetPlace, normalized,
                                   design, 1, fr::DebugLog(verbose()));
@@ -2143,7 +2143,7 @@ void testWindowAdaptiveCoupledRowsAndFixedBoundary()
       {11, 14});
   request.violations = {original};
   const auto normalized =
-      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
   const fr::RepairWindow l0 = fr::buildWindow(
       request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
   const fr::RepairWindow expanded = fr::expandWindowAdaptive(
@@ -2176,7 +2176,7 @@ void testGuardRegionTwoCellRing()
   v.participants = {pf};
   request.violations = {v};
   const auto normalized =
-      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
 
   const auto window = fr::buildWindow(request.targetPlace, normalized,
                                       design, 1, fr::DebugLog(verbose()));
@@ -2316,7 +2316,7 @@ void testSwapGeneratorBasic()
   request.violations = {v};
 
   const auto normalized =
-      fr::normalizeViolations(request, design, fr::DebugLog(verbose()));
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
   const auto window = fr::buildWindow(request.targetPlace, normalized,
                                       design, 1, fr::DebugLog(verbose()));
   const auto generated = fr::generateSwaps(window, design,
@@ -2365,11 +2365,10 @@ class MixedValidityPlacementView : public fr::TestPlacementView
 {
  public:
   fr::MasterCandidateResult getUsableMasterCandidates(
-      const fr::MasterCandidateRequest&) const override
+      fr::InstanceId) const override
   {
     fr::MasterCandidateResult result;
-    result.candidates = {{fillerMaster(4, kVt2)},
-                         {fillerMaster(2, kVt2)}};
+    result.candidates = {fillerMaster(4, kVt2), fillerMaster(2, kVt2)};
     return result;
   }
 };
@@ -2436,7 +2435,7 @@ void testRankerOrder()
 {
   ScenarioA sc = makeScenarioA();
   const auto normalized =
-      fr::normalizeViolations(sc.request, sc.design, fr::DebugLog(verbose()));
+      fr::normalizeViolations(sc.request, fr::DebugLog(verbose()));
   const auto window = fr::buildWindow(sc.request.targetPlace, normalized,
                                       sc.design, 2, fr::DebugLog(verbose()));
   const auto generated = fr::generateSwaps(window, sc.design,
@@ -2626,10 +2625,10 @@ void testCandidatesBandPolarityLayoutMustMatch()
       .addMaster(12, 2, 1, /*isFiller=*/true, kVt3, fr::BandPolarity::P);
   design.addRow(0, 0, 2).place(100, 10, 0, 0);
 
-  const auto result = design.getUsableMasterCandidates({100});
+  const auto result = design.getUsableMasterCandidates(100);
   EXPECT_EQ(result.candidates.size(), 1u);
   if (!result.candidates.empty()) {
-    EXPECT_EQ(result.candidates.front().masterId, 11);
+    EXPECT_EQ(result.candidates.front(), 11);
   }
 }
 
@@ -2644,7 +2643,7 @@ void testCandidatesPolarityOnlyFilterDiagnosed()
       .addMaster(12, 2, 1, /*isFiller=*/true, kVt3, fr::BandPolarity::P);
   design.addRow(0, 0, 2).place(100, 10, 0, 0);
 
-  const auto result = design.getUsableMasterCandidates({100});
+  const auto result = design.getUsableMasterCandidates(100);
   EXPECT_TRUE(result.candidates.empty());
   bool sawPolarity = false;
   for (const auto& diag : result.diagnostics) {
@@ -3199,7 +3198,7 @@ void testGateCacheSingleEvaluation()
                       1, 2, config, log);
 
   const auto normalized =
-      fr::normalizeViolations(sc.request, sc.design, log);
+      fr::normalizeViolations(sc.request, log);
   const auto window = fr::buildWindow(sc.request.targetPlace, normalized,
                                       sc.design, 2, log);
   auto swap = *fr::makeSwap(sc.design, 204, fillerMaster(2, kVt2));
@@ -3395,7 +3394,7 @@ void testPlannerNeverEditsGuardOnly()
 {
   ScenarioA sc = makeScenarioA();
   const auto normalized = fr::normalizeViolations(
-      sc.request, sc.design, fr::DebugLog(verbose()));
+      sc.request, fr::DebugLog(verbose()));
   const auto l0 = fr::buildWindow(
                                   sc.request.targetPlace,
                                   normalized,

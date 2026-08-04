@@ -58,12 +58,14 @@ namespace dpl2{
 namespace dpl2 {
 class Grid;
 class Node;
-class Pixel;
+// [fillerRepair-fix] Match the infrastructure definitions so strict Clang
+// builds do not reject the declarations as mismatched tags.
+struct Pixel;
 class PixelPt;
-class GridPt;
-class GridRect;
-class DbuPt;
-class DbuRect;
+struct GridPt;
+struct GridRect;
+struct DbuPt;
+struct DbuRect;
 class Padding;
 class EdgeTypeTable;
 class Network;

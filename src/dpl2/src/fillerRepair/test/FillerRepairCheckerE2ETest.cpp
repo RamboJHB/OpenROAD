@@ -100,14 +100,6 @@ constexpr int F1_WIDTH_RULE = 0;    // N-band width, F1 family
 constexpr int F1_SPACING_RULE = 3;  // N-band spacing, F1 family
 constexpr int P_RULE_OFFSET = 6;    // same rule on the P-band partner layer
 
-// Inter-row interactions run through the facing band pair across the row
-// boundary. An even->odd boundary faces two P-band shapes; an odd->even
-// boundary faces two N-band shapes.
-constexpr int interRule(int baseRule, RowId topRowOfBoundary)
-{
-  return (topRowOfBoundary % 2) == 0 ? baseRule + P_RULE_OFFSET : baseRule;
-}
-
 // --- Scenarios ------------------------------------------------------------
 //
 // The placed layout is LEGAL as built: columns run in same-VT pairs
@@ -1276,7 +1268,7 @@ WindowProbe probeWindow(PlannerCheckerFixture& fixture,
   WindowProbe probe;
   const fr::DebugLog log(false);
   const fr::FillerRepairRequest request{plannerTarget(scn), violations};
-  probe.normalized = fr::normalizeViolations(request, fixture.view(), log);
+  probe.normalized = fr::normalizeViolations(request, log);
   probe.ruleDistance = fr::estimateRuleDistance(violations, SITE_WIDTH);
   probe.window = fr::buildWindow(
                                  request.targetPlace,
@@ -1845,7 +1837,7 @@ TEST(FillerRepairCheckerE2ETest, SingleAllowedFillerMasterRemainsReachable)
   ASSERT_FALSE(result.changes.empty());
   EXPECT_TRUE(std::all_of(result.changes.begin(),
                           result.changes.end(),
-                          [only](const dpl2::CellChangeRecord& change) {
+                          [](const dpl2::CellChangeRecord& change) {
                             return fr::cellChangeRecordNewMasterId(change) == only;
                           }));
   EXPECT_TRUE(fixture.verify(SCN_MID, result.changes).isLegal);

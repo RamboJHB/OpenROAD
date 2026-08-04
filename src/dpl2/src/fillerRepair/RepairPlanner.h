@@ -44,9 +44,9 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <map>
 #include <optional>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -255,7 +255,6 @@ struct NormalizedViolation
 // what footprint it turned into.
 std::vector<NormalizedViolation> normalizeViolations(
     const FillerRepairRequest& request,
-    const PlacementView& view,
     const DebugLog& log);
 
 // "Are these two the same violation?", across two separate checker runs. Not
@@ -269,39 +268,16 @@ bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth);
 // whose classes differ can never match, so comparing this first skips the
 // real call for every pair that was never going to match. Pure speed: it
 // changes no answer, no scan order, and no matching rule.
-struct SignatureClass
-{
-  int ruleId = 0;
-  ViolationKind kind = ViolationKind::MinWidth;
-  ViolationRelation relation = ViolationRelation::IntraRow;
-  LayerId primaryLayer = 0;
-  bool hasSecondaryLayer = false;
-  LayerId secondaryLayer = 0;
-
-  bool operator==(const SignatureClass& other) const
-  {
-    return ruleId == other.ruleId && kind == other.kind
-           && relation == other.relation
-           && primaryLayer == other.primaryLayer
-           && hasSecondaryLayer == other.hasSecondaryLayer
-           && secondaryLayer == other.secondaryLayer;
-  }
-  bool operator!=(const SignatureClass& other) const
-  {
-    return !(*this == other);
-  }
-};
+using SignatureClass =
+    std::tuple<int,
+               ViolationKind,
+               ViolationRelation,
+               LayerId,
+               std::optional<LayerId>>;
 
 inline SignatureClass signatureClass(const Violation& v)
 {
-  SignatureClass c;
-  c.ruleId = v.ruleId;
-  c.kind = v.kind;
-  c.relation = v.relation;
-  c.primaryLayer = v.primaryLayer;
-  c.hasSecondaryLayer = v.secondaryLayer.has_value();
-  c.secondaryLayer = v.secondaryLayer.value_or(0);
-  return c;
+  return {v.ruleId, v.kind, v.relation, v.primaryLayer, v.secondaryLayer};
 }
 
 // "Did WE cause this?" -- true when a violation involves one of the fillers

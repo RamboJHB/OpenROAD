@@ -1,6 +1,6 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-08-03. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-08-04. Branch: `claude/wizardly-carson-secahu`.
 
 What this feature does: opto changes one standard cell's VT. The fillers around
 it still carry the old implant type, which is an MW/MS violation. This finds a
@@ -12,36 +12,22 @@ Masters and Nodes from `fillerSetting::core_`.
 
 ---
 
-## 0. Migration snapshot
+## 0. Current baseline
 
-**Take the payload from `808c27f`** — the commit this section describes. It is
-complete: payload, the null-safety work, and the search as it now performs.
-Everything below describes exactly that state.
+The branch was synchronized through `d0c3efe3e` before this cleanup. That
+includes the shared `CellChangeRecord`, fillerSetting-based classification,
+null-safety, adaptive halo tightening, and candidate-provider diagnostics.
+Do not port from the older `808c27f` snapshot; it predates those changes.
 
-```sh
-git tag fillerRepair-migration-20260802 808c27f
-```
-
-(Tags exist locally only; this environment's git proxy accepts writes to the
-working branch and refuses tag refs, so the commit id is the reference that
-actually travels. This section is the only thing that moved afterwards, to
-record the id.)
-
-Earlier reference points, for reading history only — do **not** port from
-them:
+The current tree then removes parallel snapshot tables and one-field candidate
+wrappers, fixes rebuild cache reset, and adds the runtime-only
+`src/dpl2/src/fillerRepair2/` package. Verification results are recorded below:
 
 | | |
 |---|---|
-| `bfe8642f23` | first complete portable module; predates the null-safety work |
-| `8ca27117c6` | the null-safety delta, now folded in |
-
-Verified at `808c27f`:
-
-| | |
-|---|---|
-| local suite | 274/274, normal and ASan |
+| local suite | 277/277, normal and ASan |
 | migration gate (destination code path) | 170/170, normal and ASan |
-| standalone module | 170/170 — configure, build and test with no harness |
+| `fillerRepair2` strict syntax gate | both runtime sources, C++20, `-Wall -Wextra -Werror` |
 | `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
 
 ---
@@ -50,22 +36,22 @@ Verified at `808c27f`:
 
 | | |
 |---|---|
-| **Payload** | `src/dpl2/src/fillerRepair/` — whole directory, including its `CMakeLists.txt` and `test/` |
+| **Minimal payload (recommended)** | Copy the **contents** of `src/dpl2/src/fillerRepair2/` into the destination's existing `src/dpl2/src/fillerRepair/`. It contains only runtime source/headers and a 16-line CMake target; the existing checker include and namespace need no edit |
+| **Verification package** | `src/dpl2/src/fillerRepair/` — runtime code plus portable tests, standalone dependency handshake, detailed comments and audit tags |
 | **Test command** | `src/dpl2/dpl2ui/testFillerRepairCmd.{hh,cc}` — `test_filler_repair`, optional. Run `set_filler_option` first, then `test_filler_repair` to sweep, or `test_filler_repair -inst <instance id> -master <master id>` for one VT swap. Both options take id numbers — the same `LeafCellID` / `LibCellID` handles `DePlace::isLegal` takes — and the sweep prints its findings as the `-inst`/`-master` pair that reproduces them |
 | **Patches to delivered code** | **not in either path above** — eleven files, all tagged `[fillerRepair-fix]`, itemised with reasons in `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`: `drc/DRCChecker.h`, `drc/ImplantLayerChecker.{h,cpp}`, `drc/ImplantLayerCheckerHelper.cpp`, `infrastructure/Objects.h`, `infrastructure/Object.cpp`, `infrastructure/Grid.{h,cpp}`, `infrastructure/network.cpp`, `DePlace.cpp`, `include/dpl2/DePlace.h`. Without them the payload does not build. The `DePlace` / `Grid::isFullUtil` pair is a **correctness fix in delivered code, independent of repair** — grid occupancy was missing every filler |
 | **Not part of the payload** | `src/dpl2/test/` — the repository-local harness (fake UDM tree, engine regression, runner scripts). It exists so this can be developed and gated without a real UDM. |
 
-The payload needs no DEF/LEF reader, no fake UDM, and no fixture provider from
-the destination. `src/dpl2/src/fillerRepair/README.md` is the module's own
-documentation and travels with it.
+Neither payload needs a DEF/LEF reader, fake UDM, or fixture provider at the
+destination. `fillerRepair2/README.md` is the minimal copy/link instruction;
+`fillerRepair/README.md` keeps the full design and verification record.
 
 ### Null-safety patch must travel
 
 The destination infrastructure and `ImplantLayerChecker` do **not** yet
-contain the fail-closed null handling present on this branch. It is already
-part of the `808c27f` snapshot above — this section only says which files it
-lives in, so a destination that cherry-picks rather than taking the snapshot
-does not leave it behind.
+contain the fail-closed null handling present on this branch. This section says
+which files it lives in, so a destination that copies only the minimal payload
+does not leave the matching infrastructure guards behind.
 
 The destination-side portion is:
 
@@ -245,8 +231,13 @@ gate; the engine has no global precheck and does not want one.
 
 ## 8. Every decision the destination has to make — the `[PORT-*]` tags
 
-Everything that needs a yes/no from the integrator is tagged in the source.
-One grep is the complete list:
+This audit applies to the full verification package. The minimal
+`fillerRepair2/` package targets the already-aligned destination and therefore
+contains no `[PORT-*]` tags. For a destination with different Grid, checker or
+record contracts, use the full package and work through this audit first.
+
+Everything that needs a yes/no is tagged in the full source. One grep is the
+complete list:
 
 ```sh
 grep -rn "\[PORT-" <srcroot>/fillerRepair
@@ -257,7 +248,7 @@ conventions, so it is the first thing a reader of the payload meets:
 
 | Tag | Meaning | Optional? |
 |---|---|---|
-| **`[PORT-ADAPT]`** | Will not compile, or will be quietly wrong, until you change it. Each one names the destination-side thing it depends on. | **No.** Work through all four before the first run. |
+| **`[PORT-ADAPT]`** | Will not compile, or will be quietly wrong, until you change it. Each one names the destination-side thing it depends on. | **No.** Work through all eleven before the first run. |
 | **`[PORT-DROP]`** | You do not need this. Each says what it costs to keep and what breaks if you delete it — which is nothing in production. | Yes |
 | **`[PORT-TUNE]`** | A number or a strategy chosen from measurements taken *here*, against a synthetic oracle. Each says what to measure on your hardware first. | Yes — safe as shipped |
 
@@ -283,6 +274,9 @@ the wrong thing. Read those first.
 
 ### The DROPs
 
+All three engine entries and the standalone/test build branches in this table
+are already absent from `fillerRepair2/`.
+
 | Where | Costs to keep | What you lose by deleting |
 |---|---|---|
 | `FillerRepairEngine::update()` | ~30 lines | The repository-local regression's snapshot-refresh entry. Production refreshes via `setFillerRepairContext()` instead |
@@ -291,9 +285,9 @@ the wrong thing. Read those first.
 | `dpl2::fillerRepairPlanner` target | one extra compile | The guard that keeps UDM out of the search. Recommended to keep |
 | `CMakeLists.txt` standalone fallback | a `if(NOT TARGET ...)` branch + two cache vars | The ability to build and test the payload with no destination wiring at all. Keep until your build is proven |
 
-**Not droppable, despite looking like it:** `isOracleSnapshotClean()`
-(`RepairOracle.h`) and the `PlacementView::getUsableMasterCandidates` virtual.
-Both are used by the portable tests, and those travel with the payload.
+`isOracleSnapshotClean()` is test-only and is absent from `fillerRepair2/`.
+`PlacementView::getUsableMasterCandidates(InstanceId)` remains because it is
+the planner's candidate seam, not a test helper.
 
 ### The TUNEs — and why they are not just fixed here
 

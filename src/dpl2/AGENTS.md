@@ -1,6 +1,6 @@
 # AGENTS.md — dpl2 filler repair project memory
 
-Updated: 2026-07-28. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-08-04. Branch: `claude/wizardly-carson-secahu`.
 
 Read before changing this feature:
 
@@ -8,6 +8,7 @@ Read before changing this feature:
 |---|---|
 | `docs/filler_vt_overlay_repair_spec.md` | what the feature must do |
 | `src/dpl2/src/fillerRepair/README.md` | how the module is built and why |
+| `src/dpl2/src/fillerRepair2/README.md` | minimal destination-only copy/link package |
 | `src/dpl2/HandOff.md` | how to migrate it |
 | `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md` | what we changed outside fillerRepair |
 | `src/dpl2/src/fillerRepair/test/README.md` | what the portable tests cover |
@@ -21,8 +22,8 @@ Swap-only repair, complete and migration-ready.
 | Planner | `internal::RepairPlanner`: adaptive window, filler domains, per-band ranking, subset enumeration, baseline-delta oracle gate. Deterministic, non-mutating |
 | Engine | `FillerRepairEngine` implements both seams (`PlacementView`, `RepairOracle`), owns a private oracle checker, borrows Grid/Network |
 | Checker | repair wiring in `check()` writes into the caller's `fcRecord`; engine built lazily on first failing check |
-| Build | `fillerRepair/CMakeLists.txt` owns `dpl2::fillerRepair` (C++20) and `dpl2::fillerRepairPlanner` (C++17); externals arrive through the single `dpl2_filler_repair_deps` interface target |
-| Tests | 85 portable planner + 77 portable real-checker + 98 local fake-UDM engine cases; 260/260 local and 162/162 migration gate, normal and ASan |
+| Build | `fillerRepair/CMakeLists.txt` owns the full verification package; `fillerRepair2/CMakeLists.txt` owns only the C++20 runtime target. Both use `dpl2_filler_repair_deps` when supplied |
+| Tests | 91 planner + 79 real-checker + 107 local fake-UDM engine cases; 277/277 local and 170/170 migration gate, normal and ASan |
 
 ## Fixed decisions
 

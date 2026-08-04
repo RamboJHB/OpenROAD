@@ -15,7 +15,7 @@ repair 在局部窗口内生成 **swap move**
 成批交给 checker overlay API 验证**,用同一 `guardRegion` 下的 baseline-delta clean 作为
 唯一 accept 标准。找到 clean 解返回 `ipl::FillerChanges`,由 opto/infrastructure
 commit;修不了则返回 diagnostics。`precheck()` 与 `repair()` 都不修改 DB,且
-修复成功 commit 后可通过 `update()` 刷新同一实例集合的 runtime engine snapshot。
+commit 后由 checker context reset 丢弃 runtime engine,下一次失败检查再懒创建快照。
 
 ---
 
@@ -525,12 +525,9 @@ id 分配流程等契约细节仍依赖未定稿的设计,现在拍板是投机�
 第一版(per-instance,与 V1 相同):
 
 ```cpp
-struct MasterCandidateRequest { InstanceId fillerInstanceId = 0; };
-struct MasterCandidate       { MasterId masterId = 0; };
-
 struct MasterCandidateResult
 {
-    std::vector<MasterCandidate> candidates;
+    std::vector<MasterId> candidates;
     std::vector<Diagnostic> diagnostics;
 };
 
@@ -539,7 +536,7 @@ class PlannerDataSource
  public:
   virtual const std::vector<MasterId>& fillerMasterIds() const = 0;
   virtual MasterCandidateResult getUsableMasterCandidates(
-      const MasterCandidateRequest& request) const;
+      InstanceId fillerInstanceId) const;
 };
 ```
 

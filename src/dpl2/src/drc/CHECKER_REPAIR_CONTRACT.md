@@ -1,6 +1,6 @@
 # fillerRepair ↔ delivered code: contract and change list
 
-Updated: 2026-08-02.
+Updated: 2026-08-04.
 
 Everything fillerRepair needs from outside itself, and every edit it required
 in code it does not own. Edits are tagged `[fillerRepair-fix]` in the source so
@@ -259,6 +259,11 @@ runs, so a Master decorated by us never reaches placement DRC.
 Registers the setting provider in its constructor, and forwards
 `getBoundingBox`. It is the only place that knows both `DePlace` and the
 checker.
+
+`include/dpl2/DePlace.h` now forward-declares `Pixel`, `GridPt`, `GridRect`,
+`DbuPt`, and `DbuRect` as `struct`, matching their infrastructure definitions.
+This is declaration-only: it removes Clang `-Wmismatched-tags` failures under
+`-Werror` and does not alter layout or runtime behavior.
 
 ---
 

@@ -22,6 +22,11 @@ build_name=migration-gate
 if [[ "${SANITIZE:-}" == "address" ]]; then
   asan=ON
   build_name=migration-gate-asan
+  if [[ "$(uname -s)" == "Darwin" ]]; then
+    # Homebrew GoogleTest is an unsanitized static archive. libc++ container
+    # annotations otherwise report inside discovery rather than project code.
+    export ASAN_OPTIONS="${ASAN_OPTIONS:+$ASAN_OPTIONS:}detect_container_overflow=0"
+  fi
 fi
 build_dir="$dpl2_root/test/build/$build_name"
 
