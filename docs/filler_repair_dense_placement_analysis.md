@@ -9,7 +9,7 @@
 | §5 Window/Ranker 的有界扫描 | 已落地 |
 | §4.3 #1 提到的全局 `precheckFillerRepair()` | **已移除**。engine 只保留区域 gate;全设计 placement 合法性归 infrastructure |
 | `updateFillerRepair()` 快照刷新 | **已移除**。engine 改为懒初始化,快照随下一次懒建重建 |
-| §5 的 254/254 CTest 与时间数据 | 已过期。当前为 277/277 本地 + 170/170 migration gate;最新性能数据见 `src/dpl2/src/fillerRepair/README.md` 的 "Search cost" |
+| §5 的 254/254 CTest 与时间数据 | 已过期。当前为 278/278 本地 + 170/170 migration gate;最新性能数据见 `src/dpl2/src/fillerRepair/README.md` 的 "Search cost" |
 | §4.1 influence closure / §4.2 Tier 2 span rewrite | **未实现**,仍是未来方向 |
 
 原始更新: 2026-07-23。

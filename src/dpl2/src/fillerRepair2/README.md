@@ -30,7 +30,7 @@ include/link dependencies to it.
 runtime-only projection, not generated output. Mirror every runtime algorithm,
 API, shared-wire or diagnostic change here before migration.
 
-The repository's 277-test local suite, 170-test migration gate and standalone
+The repository's 278-test local suite, 170-test migration gate and standalone
 module build compile the full `fillerRepair/` directory. They do not compile or
 compare this projection automatically. Build this directory against the
 destination dependency target, or run an equivalent C++20 strict syntax check,
@@ -51,6 +51,16 @@ Design
 from `fillerSetting`, verifies its manager against the explicit `PhysDesMgr`
 and Grid manager, and passes it to the private checker. Neither path reads
 Session.
+
+Initialization replays every configured filler master through
+`Network::addMaster(..., fillerSetting, ...)`, including masters already in
+Network, so `Master::isFiller` is refreshed before the private checker is
+constructed. The runtime remains one file but separates three private
+responsibilities: placement snapshot, compatible filler catalog, and serialized
+checker overlay calls. The catalog is built once using same width/height,
+different known VT and matching bottom-band polarity. When no placed filler
+has a catalog entry, the engine returns `NoCompatibleFillerCandidate` after the
+baseline result and skips window/search work.
 
 `ImplantLayerChecker::check()` remains the caller-facing entry. Repair is
 non-mutating and returns the shared `ipl::FillerChanges`/`CellChangeRecord`

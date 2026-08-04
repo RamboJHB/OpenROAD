@@ -14,19 +14,21 @@ Masters and Nodes from `fillerSetting::core_`.
 
 ## 0. Current baseline
 
-The branch baseline reviewed for this handoff is `4fd2e8108a`. It includes the
+The branch baseline reviewed for this handoff is `ac90340c63`. It includes the
 shared `CellChangeRecord`, fillerSetting-based classification, null-safety,
 adaptive halo tightening, candidate-provider diagnostics, removal of parallel
 snapshot tables and one-field candidate wrappers, rebuild-cache reset, and the
-runtime-only `src/dpl2/src/fillerRepair2/` package. The current update changes
-`ImplantLayerChecker` to receive and retain the caller's explicit `eUNL::Design*`,
-passes the `fillerSetting` design through both repair packages, and removes any
-need for a global Session lookup. Do not port from the older `808c27f` snapshot;
-it predates those changes. Verification results follow:
+runtime-only `src/dpl2/src/fillerRepair2/` package plus the explicit-Design
+checker contract. The current update refreshes existing Network masters from
+`fillerSetting`, precomputes same-footprint/different-VT/same-polarity filler
+pairs, skips search when the placed catalog is empty, and separates placement,
+candidate and checker-call state into private engine components. Do not port
+from the older `808c27f` snapshot; it predates those changes. Verification
+results follow:
 
 | | |
 |---|---|
-| local suite | 277/277, normal and ASan |
+| local suite | 278/278, normal and ASan |
 | migration gate (destination code path) | 170/170, normal and ASan |
 | `fillerRepair2` manual strict syntax check | both runtime sources, C++20, `-Wall -Wextra -Werror`; not part of CTest |
 | `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
@@ -49,7 +51,7 @@ destination. `fillerRepair2/README.md` is the minimal copy/link instruction;
 
 `fillerRepair/` is the source of truth. `fillerRepair2/` is a hand-maintained
 runtime projection, not a generated directory: every runtime algorithm, API,
-wire or diagnostic change must be mirrored before migration. The 277-test local
+wire or diagnostic change must be mirrored before migration. The 278-test local
 suite, 170-test migration gate and standalone module build all compile the full
 directory. They do **not** establish parity with `fillerRepair2/`; build that
 payload against the destination dependencies before copying it into place.
@@ -232,8 +234,9 @@ gate; the engine has no global precheck and does not want one.
 - **The transcript is on by default.** `FR_VERBOSE=0` silences it. A
   production run leaves a diagnosable `[fr][stage]` trail without a rebuild.
   The `[fr][candidate]` stage traces `fillerSetting` entries through Network
-  master ids and prints per-candidate metadata and rejection reasons whenever
-  a provider query returns no usable master.
+  master ids, then reports compatible-pair and reject counts. An empty placed
+  catalog returns `NoCompatibleFillerCandidate` after the baseline check and
+  does not enter Planner window/search work.
 - **Determinism.** Same input, same output — ordering is pinned at every
   stage, and the answer cache is never iterated.
 
@@ -276,7 +279,7 @@ the wrong thing. Read those first.
 | `FillerRepairEngine.cpp` — initial halo sizing | `getMaxRuleValue()` means checker reach in **sites** and remains the correctness floor; the other input is the widest configured filler master, never an arbitrary placed standard cell or macro. The later planner guard uses the actual two-cell ring | **silent**: too-small reach truncates runs; global placed-master sizing makes macro designs pathologically slow |
 | `RepairPlanner.cpp` `finalizeWindow` — guard rows | Inter-row rules reach **one** row boundary, so ±2 rows of guard covers it. Horizontal reach is not guessed like this; it comes from the checker | **silent**: the checker is never shown the row a new violation appeared in |
 | `FillerRepairEngine.cpp` `init` | `fillerSetting::getDesign()`, its `PhysDesMgr`, and `Grid::getDesMgr()` must agree before the explicit Design is passed to the private checker | caught: fatal init diagnostic |
-| `FillerRepairEngine.cpp` `ensureMasterRegistered` | `Network::addMaster`'s signature — the only version-sensitive *signature* in the payload, already changed twice | caught: compile error |
+| `FillerRepairEngine.cpp` `ensureMasterRegistered` | `Network::addMaster`'s signature and existing-master refresh semantics. Never return early merely because the master exists; `Master::isFiller` must be refreshed before rebuilding the checker | mixed: compile error or every replacement rejected as `NOT_FILLER` |
 | `FillerRepairEngine.cpp` `cellChangeRecord` | `CellChangeRecord`'s shape. Fill **every** field; `orientation_` is read when the checker evaluates the swapped filler | mixed |
 | `FillerRepairEngine.cpp` `buildPlannerData` — filler identity | Infrastructure's single filler authority (`Master`/`Node` carry it). Never re-derive from UDM macro flags — they disagree, and that was a real bug | mixed |
 | `FillerRepairEngine.cpp` `implantLayerOf` | Reads master implant shapes the way the checker does (layer identity via `TechLayerRelativeID`, band anchored at the bottommost rect) | mixed |
@@ -339,8 +342,8 @@ file must stay: the checker uses it.
 |---|---|
 | Portable planner tests | 91 |
 | Portable real-checker E2E | 79 |
-| Repository-local engine regression | 107 (fake UDM, not migrated) |
-| Full local suite | 277/277, normal and ASan |
+| Repository-local engine regression | 108 (fake UDM, not migrated) |
+| Full local suite | 278/278, normal and ASan |
 | Migration gate (destination code path) | 170/170, normal and ASan |
 | Standalone module build | 170/170 |
 | Runtime-only `fillerRepair2` | manual strict syntax check; no automated parity/build gate |

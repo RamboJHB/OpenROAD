@@ -159,9 +159,11 @@ opto 改动次数,所以"好排序让首批候选命中"比"搜索策略高级"�
   runtime `PlacementView` 从这些 Objects 构建 per-instance candidate；未来
   per-span tiling 查询见 §5.3。repair 不 commit。
 - **checker-owned engine (`FillerRepairEngine`)**:借用 Grid/Network,负责
-  区域 precheck、请求校验、private oracle snapshot 生命周期与 diagnostics;
-  `ImplantLayerChecker::check()` 用原始 `CheckRequest` 调用它。它不实现搜索算法,
-  也不修改 DB。
+  生命周期、初始化与调度；内部 `PlacementSnapshot` 保存 planner 只读数据，
+  `FillerCandidateCatalog` 管理初始化期 master 配对，`CheckerOverlayClient`
+  持有并串行化 private checker overlay 调用。区域 precheck、请求校验和
+  diagnostics 仍由 runtime boundary 负责；`ImplantLayerChecker::check()` 用原始
+  `CheckRequest` 调用它。它不实现搜索算法,也不修改 DB。
 - **pure planner (`internal::RepairPlanner`)**:负责 violation 归一化、开窗、
   swap 生成、排序、子集搜索、baseline-delta 判定及搜索结果。它只依赖
   `PlacementView`/`RepairOracle`,保持 deterministic 且不接触 UDM 生命周期。
@@ -238,7 +240,8 @@ checker request 的 master 来自 `Node::getMaster()->getId()`,因此已在 Netw
 engine 先验证 std-cell/type/width/height;若 DePlace 在 init 后才注册该 master,
 则重建 private checker/planner snapshot。完整 verification package 的 direct
 UDM-handle overload 只供 focused engine tests；推荐迁移的 `fillerRepair2` 不包含
-它。snapshot/oracle 全部在 `FillerRepairEngine::Impl` 内。
+它。snapshot、candidate catalog 与 checker overlay client 都是
+`FillerRepairEngine::Impl` 的 private component，不增加 public API。
 planner-only `OracleRequest`/`OracleStatus`/`requestId`
 abstraction 位于 `RepairOracle.h`,只供 `internal::RepairPlanner` 与 unit-test
 fake 使用；其 change payload 与 public result 都直接使用 final checker 的
@@ -284,10 +287,18 @@ runtime-only 投影，复制其内容到目的地已有的 `fillerRepair/` 路�
   与 hard macro 必须作为 Network Node 导入;placement blockage 属于 Grid,不作为 Node。
 - candidate universe 只来自 `fillerSetting::getFillerPhysCells()`;repair 内部过滤
   同宽同高、异 VT、filler-only 与相同 bottom-band polarity layout。
+  engine init 对每个 placed filler master 预计算 compatible master id 列表；query
+  只查 catalog，不再为每个 window filler 重扫整个 allow-list。若所有 placed
+  filler 的 catalog 都为空，baseline 仍有 violation 时直接返回
+  `NoCompatibleFillerCandidate`，不建 window、不枚举 swap。
 - placed instance 是否为 filler 只采用 `Node::isFiller()`；configured replacement
   master 是否进入 planner candidate universe 只采用 fillerSetting allow-list。
   engine init 不再用 UDM macro-type filler flag 交叉否决这两项。非 pad PhysRow
   可以有不同 site height，但每个 height 必须是最小 base height 的整数倍。
+- `ensureMasterRegistered()` 对已经存在的 master 也必须调用
+  `Network::addMaster(..., fillerSetting, ...)`，由 infrastructure 刷新
+  `Master::isFiller`。所有 configured master 刷新完成后才能构造 private checker，
+  保证 PlacementView 与 checker 使用同一 filler classification。
 - checker/planner instance/master ID 固定为 `Node::getId()` / `Master::getId()`;
   `LeafCellID` / `LibCellID` 是 runtime `CellChangeRecord` handle。
 - placed masters 来自既有 Network;configured filler masters 在 init 时注册;
@@ -299,7 +310,7 @@ runtime-only 投影，复制其内容到目的地已有的 `fillerRepair/` 路�
 - 79 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 7-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
-- 107 个 checker/engine cases、fake UDM include
+- 108 个 checker/engine cases、fake UDM include
   tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
 - 完整目录的 CMake 暴露 `dpl2::fillerRepair`(runtime,C++20)和
   `dpl2::fillerRepairPlanner`(pure pipeline,C++17)，并拥有 portable tests 与
@@ -555,14 +566,16 @@ class PlacementView
 语义:输入必须是 filler instance;candidates 不含当前 master，只保留 same width /
 same height、已知且不同 VT、相同 R0 bottom-band polarity 的 configured filler
 master。swap record 原样保留 instance 的位置与 orientation；没有可用替换时返回
-empty candidates + diagnostics，不是 error。
-当前工艺下每个 filler 恒有 2 个同尺寸候选(3 VT − 当前,附录 A);
-empty candidates 保留为防御性路径,不是常态。
+empty candidates + diagnostics，不是 error。不能假设工艺库的每个 width 都同时
+提供所有 VT；真实配置可以只有不同宽度的两个 VT master。runtime 因此在 init
+阶段建立 catalog，并把 width/height/same-VT/polarity/not-filler reject count 放入
+diagnostic，避免进入注定无解的组合搜索。
 
 runtime engine 的候选 universe 必须由
 `fillerSetting::getFillerPhysCells()` 取得,再解析为 `Network::Master::getId()`;
 不得从 placed-instance 枚举猜测,也不得解析 master 名。configured master 即使
-尚未实例化也必须在 checker 构造前注册进 Network。
+尚未实例化也必须在 checker 构造前注册进 Network；即使已经存在也要重新经过
+`addMaster(..., fillerSetting, ...)` 刷新 filler classification。
 
 **band polarity layout 约束(2026-07-15 落地)**:候选还必须与当前 master 的
 **R0 系 bottom-band polarity** 一致(`MasterInfo.bottomBandPolarity`,来源 =
@@ -1005,10 +1018,10 @@ engine snapshot、live Network、PhysDesMgr、master bottom-band polarity 以及
 覆盖 physical/request Y 的全部 PhysRow iteration records。
 
 `candidate` 在 init 时记录 `fillerSetting -> Network master id -> MasterInfo`
-映射；每次 query 记录 filler/current-master metadata、configured/returned 数量。
-零候选或 provider diagnostic 时逐项输出 configured candidate 的 VT、width、
-height、bottom polarity 与拒绝原因；正常 query 只输出 returned candidates。
-这些信息只观察 `PlacementView` 的真实返回，不参与筛选。
+映射，并输出 catalog compatible pair 总数以及 not-filler、unknown/same-VT、
+width、height、polarity mismatch 计数。每次 query 直接读取按 current master
+建好的 id list；空 entry 给出 `NoCompatibleFillerMaster` 和该 source 的 reject
+count。catalog 只做 swap 必要条件过滤，最终合法性仍完全由 checker oracle 决定。
 
 初始化 Fatal diagnostics 不依赖 transcript 是否开启；完整 verification package
 的测试也不依赖 `setDebugLogging()`。row/site 类失败必须输出
@@ -1034,8 +1047,8 @@ filler:std-cell 比例。dense placement 风险、快速失败与 span-rewrite �
 `docs/filler_repair_dense_placement_analysis.md`;它是 future design note,不改变本阶段
 swap-only normative contract。
 
-107 个 checker/engine fake-UDM cases、provider 与完整 local fake regression 均位于
-`src/dpl2/test/local`,不进入迁移目录。完整 suite 为 277/277；portable migration
+108 个 checker/engine fake-UDM cases、provider 与完整 local fake regression 均位于
+`src/dpl2/test/local`,不进入迁移目录。完整 suite 为 278/278；portable migration
 gate 为 170/170，normal 与 ASan 均通过。两套 gate 构建完整 `fillerRepair/`，不自动
 覆盖 runtime-only `fillerRepair2/` 镜像。
 
@@ -1126,14 +1139,14 @@ swap-only 功能已实现并于 2026-08-04 重新验证:
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译由模块自己的 `src/dpl2/src/fillerRepair/CMakeLists.txt` 拥有
   (target `dpl2::fillerRepair` / `dpl2::fillerRepairPlanner`)。
-- 91 个 planner unit tests、79 个 portable checker/planner/precheck cases 与 107 个
+- 91 个 planner unit tests、79 个 portable checker/planner/precheck cases 与 108 个
   fake-UDM checker/engine tests 全为 GoogleTest;
   91 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
   和 helper-built portable E2E 一起迁移;fake UDM checker/engine suite 留在 local;
   regional precheck/repair 均 non-mutating;
   runtime integration 使用 checker `check()` 预留点与 fillerRepair;
   Network Node 同步由 infrastructure 独立负责,checker DRC 算法未修改。
-  2026-08-04 完整 local suite 为 277/277、migration gate 为 170/170，normal 与
+  2026-08-04 完整 local suite 为 278/278、migration gate 为 170/170，normal 与
   ASan 均通过。
 - `fillerRepair2/` 提供 destination-only runtime projection：只保留 C++20 runtime
   target，移除 tests、standalone discovery 与 test-only APIs。它必须随完整目录的
@@ -1188,13 +1201,12 @@ shape 与 checker layer 通过 `Layer::TechLayerId` 关联,不依赖 master 或 
 对算法的推论(备注性质,算法不 hard-code 这张表,一切以
 `PlacementView::getUsableMasterCandidates` 运行时返回为准):
 
-1. **枚举预算充裕**:每个 filler 恒有 2 个同尺寸替换候选(3 VT − 当前),
-   分支因子小且均匀,窗口内 move 总数很小,§6.7 的排序枚举远够用——这张表是
-   该选型的直接佐证。
-2. **无 VT 覆盖缺口**:任意宽度都可换到任意 VT。因此 swap-only 下
-   `hasSolution=false` 只会来自 DRC 不可满足(搜索无 clean 解),不会来自缺
-   master;"no usable master"路径保留为防御性处理(库变化时行为可控),
-   不是常态路径。
+1. **枚举预算由 catalog 决定**:初始化只保留同尺寸、异 VT、相同 polarity 的
+   配对。非空 entry 的分支因子通常很小；placed catalog 全空时直接返回
+   `NoCompatibleFillerCandidate`，不消耗窗口与组合枚举预算。
+2. **不能假设 VT 覆盖完整**:真实 `fillerSetting` 可能只包含不同宽度的 VT
+   master，同一 footprint 没有替换项。因此 `hasSolution=false` 既可能来自 DRC
+   不可满足，也可能来自缺少 compatible master；两者通过 diagnostic 区分。
 3. **tiling 宽度约束**(future work):库中宽度集合为 {2,3,4,8},没有宽
    1/5/6/7 的 master。任何 span-rewrite tiling 的每一段宽度必须取自该集合,
    不得留宽 1 残段;宽 5/6/7 的 span 无法 merge 成单个 master,只能多 master

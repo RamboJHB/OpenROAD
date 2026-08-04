@@ -436,7 +436,7 @@ TEST(FillerRepairInitializationDiagnostics,
 }
 
 TEST(FillerRepairInitializationDiagnostics,
-     CandidateTraceExplainsZeroCandidateResult)
+     CandidateCatalogFastRejectsWidthMismatch)
 {
   frt::DesignSetup setup;
   setup.implantRuleWidth = 6;
@@ -444,7 +444,7 @@ TEST(FillerRepairInitializationDiagnostics,
   ASSERT_TRUE(objects.hasDesign());
   ASSERT_TRUE(objects.hasInfrastructure());
   dpl2::fillerSetting setting(objects.design().design());
-  setting.addFillerCell("FL2");
+  setting.addFillerCell("FX4");
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
   engine.setDebugLogging(true);
@@ -468,15 +468,56 @@ TEST(FillerRepairInitializationDiagnostics,
   EXPECT_NE(transcript.find("[fr][candidate] configured[0]"),
             std::string::npos);
   EXPECT_NE(transcript.find("filler=1 vt="), std::string::npos);
-  EXPECT_NE(transcript.find("width=2 heightRows=1 bottom=N"),
+  EXPECT_NE(transcript.find("width=4 heightRows=1 bottom=N"),
             std::string::npos);
-  EXPECT_NE(transcript.find("configuredCount=1 returnedCount=0"),
+  EXPECT_NE(transcript.find("[fr][candidate] catalog ready:"),
             std::string::npos);
-  EXPECT_NE(transcript.find("decision=reject reasons=CURRENT_MASTER,SAME_VT"),
+  EXPECT_NE(transcript.find("compatiblePairs=0 placedCandidate=0"),
             std::string::npos);
-  EXPECT_NE(transcript.find("code=NoUsableMaster"), std::string::npos);
-  EXPECT_NE(transcript.find("-> 0 candidates, no swaps"),
-            std::string::npos);
+  EXPECT_NE(transcript.find("widthMismatch=1"), std::string::npos);
+  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics,
+                            "NoCompatibleFillerCandidate"));
+  EXPECT_EQ(transcript.find("[fr][swapgen]"), std::string::npos);
+}
+
+TEST(FillerRepairInitializationDiagnostics,
+     ExistingCandidateMasterRefreshesFillerClassificationForChecker)
+{
+  ProviderObjects objects(frt::DesignSetup{});
+  ASSERT_TRUE(objects.hasDesign());
+  ASSERT_TRUE(objects.hasInfrastructure());
+  dpl2::Grid* grid = objects.infrastructure().grid();
+  dpl2::Network* network = objects.infrastructure().network();
+  ASSERT_NE(grid, nullptr);
+  ASSERT_NE(network, nullptr);
+
+  // Pre-register FH2 under a stale setting that does not classify it as a
+  // filler. This reproduces the early-return bug in ensureMasterRegistered.
+  dpl2::fillerSetting staleSetting(objects.design().design());
+  staleSetting.addFillerCell("FL2");
+  const eLIB::PhysLibCell& repairMaster
+      = objects.design().master(frt::MasterRole::RepairFiller);
+  dpl2::Master* stale = network->addMaster(
+      repairMaster, staleSetting, grid, &noEdgeTypes());
+  ASSERT_NE(stale, nullptr);
+  ASSERT_FALSE(stale->isFiller());
+
+  dpl2::fillerSetting repairSetting(objects.design().design());
+  repairSetting.addFillerCell(kDefaultFillers);
+  dpl2::fillerRepair::FillerRepairEngine engine(grid, network);
+  ASSERT_TRUE(engine.init(objects.design().desMgr(), repairSetting));
+  EXPECT_EQ(network->getMaster(repairMaster.getLibCellId()), stale);
+  EXPECT_TRUE(stale->isFiller());
+
+  const auto outcome = engine.repair(
+      objects.design().cell(frt::CellRole::Target),
+      objects.design().master(frt::MasterRole::TargetNew));
+  ASSERT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  ASSERT_EQ(outcome.changes.size(), 1U);
+  EXPECT_EQ(outcome.changes.front().new_lib_cell_,
+            repairMaster.getLibCellId());
+  EXPECT_FALSE(hasDiagnostic(outcome.diagnostics,
+                             "replacement_master_not_filler"));
 }
 
 

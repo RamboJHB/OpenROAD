@@ -312,12 +312,17 @@ not Network Nodes. The engine borrows the initialized Grid/Network, registers
 all `fillerSetting::getFillerPhysCells()` candidates, retains
 `fillerSetting::getDesign()`, verifies its manager equals the supplied manager
 and `Grid::getDesMgr()`, then constructs its private checker from
-Grid/Design/Network. No Session fallback is allowed. Calls on one checker/engine
-pair must not overlap.
+Grid/Design/Network. Registration is not skipped for an existing master:
+`Network::addMaster(..., fillerSetting, ...)` must refresh
+`Master::isFiller` before checker construction. No Session fallback is
+allowed. Calls on one checker/engine pair must not overlap.
 
-The engine may still receive `replacement_master_not_filler` for a candidate
-the checker's own metadata rejects. It treats that as blocking and returns no
-partial repair; it never reinterprets or bypasses checker legality.
+Initialization builds a compatibility catalog keyed by placed filler master.
+Only configured masters with identical width/height, different known VT and
+matching bottom-band polarity enter a catalog entry. A globally empty placed
+catalog is non-fatal to checker initialization, but a failing baseline returns
+`NoCompatibleFillerCandidate` without planner enumeration. Any later checker
+metadata disagreement still blocks and returns no partial repair.
 
 ---
 
@@ -326,7 +331,7 @@ partial repair; it never reinterprets or bypasses checker legality.
 91 portable planner cases and 79 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
 gate (170/170, normal and ASan). Repository-local fake-UDM engine regression:
-107 cases. Full local suite 277/277, normal and ASan.
+108 cases. Full local suite 278/278, normal and ASan.
 
 Those counts build the full `fillerRepair/` verification package. The sibling
 `fillerRepair2/` runtime-only projection is not compiled or compared by these

@@ -20,10 +20,10 @@ Swap-only repair, complete and migration-ready.
 | Area | State |
 |---|---|
 | Planner | `internal::RepairPlanner`: adaptive window, filler domains, per-band ranking, subset enumeration, baseline-delta oracle gate. Deterministic, non-mutating |
-| Engine | `FillerRepairEngine` implements both seams (`PlacementView`, `RepairOracle`), owns a private oracle checker, borrows Grid/Network and `fillerSetting`'s Design |
+| Engine | `FillerRepairEngine` coordinates internal placement-snapshot, filler-catalog and checker-overlay components; it implements the two stable seams and borrows Grid/Network plus `fillerSetting`'s Design |
 | Checker | `ImplantLayerChecker(Grid*, eUNL::Design*, Network*)` stores explicit Design; repair wiring writes into caller's `fcRecord`; engine is lazy |
 | Build | `fillerRepair/CMakeLists.txt` owns the full verification package; `fillerRepair2/CMakeLists.txt` owns only the C++20 runtime target. Both use `dpl2_filler_repair_deps` when supplied |
-| Tests | 91 planner + 79 real-checker + 107 local fake-UDM engine cases; 277/277 local and 170/170 migration gate, normal and ASan |
+| Tests | 91 planner + 79 real-checker + 108 local fake-UDM engine cases; 278/278 local and 170/170 migration gate, normal and ASan |
 | Mirror rule | `fillerRepair/` is the source of truth. Mirror every runtime/API change into `fillerRepair2/`; existing CTest gates build the full directory, not the runtime-only copy |
 
 ## Fixed decisions
