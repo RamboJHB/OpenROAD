@@ -101,8 +101,7 @@ Node* findNode(Network* network,
       continue;
     }
     const PhysCell cell = desMgr->getPhysCell(node->getDbInst());
-    if (cell.isValid()
-        && cell.getPhysMaster().getLibCell().getName() == instance) {
+    if (cell.isValid() && cell.getName() == instance) {
       return node.get();
     }
   }
@@ -137,6 +136,7 @@ const eLIB::PhysLibCell* findMaster(eUNL::Design* design,
 // exactly one definition of "swap it in, ask, put it back".
 struct ProposalResult
 {
+  bool evaluated = false;
   bool legal = false;
   std::vector<CellChangeRecord> changes;
 };
@@ -150,13 +150,20 @@ ProposalResult evaluateProposal(const ipl::ImplantLayerChecker& checker,
                                 const eLIB::PhysLibCell& candidate)
 {
   ProposalResult result;
-  // network->updateNode(node, desMgr, candidate);
+  if (!network->updateNode(node, desMgr, candidate)) {
+    return result;
+  }
+  result.evaluated = true;
   result.legal = checker.check(node, grid->gridX(node),
                                grid->gridSnapDownY(node), node->getOrient(),
                                result.changes);
-  // network->updateNode(node, desMgr, original);
-  // if (result.legal)
-    // network->updateNode(node, desMgr, candidate);
+  // The command is observational: restore the shared Network view even when
+  // the proposal is illegal. UDM was never changed.
+  if (!network->updateNode(node, desMgr, original)) {
+    result.evaluated = false;
+    result.legal = false;
+    result.changes.clear();
+  }
   return result;
 }
 
@@ -295,7 +302,7 @@ bool TestFillerRepairCmd::exec()
     if (setting->isFillerCell(candidate->getLibCellId())) {
       std::cout << "ERROR: replacement master is a filler; the target of a "
                    "repair is a standard cell\n";
-      // return false;
+      return false;
     }
     if (!(footprintOf(*candidate) == footprintOf(*original))) {
       std::cout << "ERROR: replacement changes the footprint ("
@@ -323,6 +330,10 @@ bool TestFillerRepairCmd::exec()
 
     const ProposalResult proposal = evaluateProposal(
         checker, grid, network, desMgr, node, *original, *candidate);
+    if (!proposal.evaluated) {
+      std::cout << "ERROR: could not apply and restore the Network proposal\n";
+      return false;
+    }
 
     std::cout << "\n--- Result ---\n";
     if (proposal.legal && proposal.changes.empty()) {
@@ -414,6 +425,11 @@ bool TestFillerRepairCmd::exec()
       ++proposals;
       const ProposalResult proposal = evaluateProposal(
           checker, grid, network, desMgr, node.get(), *original, *candidate);
+      if (!proposal.evaluated) {
+        std::cout << "ERROR: could not apply and restore proposal for node="
+                  << node->getId() << "\n";
+        return false;
+      }
 
       if (proposal.legal && proposal.changes.empty()) {
         ++cleanRightAway;

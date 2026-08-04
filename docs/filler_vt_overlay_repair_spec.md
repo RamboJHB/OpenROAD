@@ -238,9 +238,10 @@ opto/infrastructure: commit target + fcRecord
 ```
 
 checker request 的 master 来自 `Node::getMaster()->getId()`,必须已由 infrastructure
-使用真实 edge table 注册在 Network 中。configured filler masters 也必须预注册；
-engine 的 `ensureMasterRegistered()` 只执行 existing-master lookup 与
-`setFiller(true)`，绝不调用 `Network::addMaster`。snapshot、candidate catalog 与
+使用真实 edge table 注册在 Network 中。configured filler master 只有已注册子集
+能参与搜索；engine 的 `ensureMasterRegistered()` 只执行 existing-master lookup 与
+`setFiller(true)`，绝不调用 `Network::addMaster`。缺失项只缩小搜索空间并被跳过，
+若已注册子集为空则 init 失败。snapshot、candidate catalog 与
 checker overlay client 都是
 `FillerRepairEngine::Impl` 的 private component，不增加 public API。
 planner-only `OracleRequest`/`OracleStatus`/`requestId`
@@ -295,7 +296,8 @@ runtime 目录，复制其内容到目的地已有的 `fillerRepair/` 路径。�
   可以有不同 site height，但每个 height 必须是最小 base height 的整数倍。
 - `ensureMasterRegistered()` 只允许 lookup existing master 并执行
   `setFiller(true)`。engine 不拥有 edge table，也不调用 `Network::addMaster`；
-  configured 或 target master 缺失时 fail closed。
+  缺失 configured master 安全跳过（只减少候选），全部缺失或 target master 缺失时
+  fail closed。
 - checker/planner instance/master ID 固定为 `Node::getId()` / `Master::getId()`;
   `LeafCellID` / `LibCellID` 是 runtime `CellChangeRecord` handle。
 - placed masters、configured filler masters 和 checker request master 都来自既有

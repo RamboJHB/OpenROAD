@@ -716,16 +716,18 @@ void FillerRepairEngine::Impl::buildPlannerData()
                    masterDebug(*cell), "} networkMasterId=", id);
       });
       if (id < 0) {
-        // Fatal: the checker validates candidates against Network masters, so
-        // a configured master the Network never imported means the snapshot
-        // was built against different inputs -- refuse instead of silently
-        // shrinking the candidate universe.
-        addProblem(Severity::Fatal, "ConfiguredMasterNotInNetwork",
+        // Network master construction belongs to infrastructure because it
+        // requires the real edge table. An uninstantiated configured master
+        // is therefore unavailable to this snapshot, but safely omitting it
+        // can only reduce the search space; it cannot make an illegal overlay
+        // pass. Initialization fails below only if no registered candidate
+        // remains at all.
+        addProblem(Severity::Warning, "ConfiguredMasterNotInNetwork",
                    cat("configured filler master is not in Network: "
                        "configuredIndex=",
                        configuredIndex, " {", masterDebug(*cell),
                        "} networkMasters=", network->getMasters().size(),
-                       " networkMasterId=", id));
+                       " networkMasterId=", id, " decision=skip"));
         continue;
       }
       const MasterInfo* info = masterInfo(static_cast<MasterId>(id));
@@ -1928,6 +1930,7 @@ void FillerRepairEngine::Impl::failInit(const std::string& status,
                                         const std::string& message)
 {
   init_diagnostics_.push_back({status, message});
+  log_.msg("engine", cat(status, ": ", message));
 }
 
 bool FillerRepairEngine::Impl::bindInfrastructure(
@@ -2024,14 +2027,11 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
       continue;
     }
     if (!ensureMasterRegistered(*master)) {
-      failInit("filler_master_not_registered",
-               cat("fatal: configured filler master is absent from Network; "
-                   "infrastructure must register it with the real edge table: "
-                   "configuredIndex=",
+      log_.msg("engine",
+               cat("configured filler master unavailable: configuredIndex=",
                    configuredIndex, " {", masterDebug(*master),
                    "} networkMasters=", network_->getMasters().size(),
-                   " gridSiteWidth=", grid_->getSiteWidth().v,
-                   " gridRows=", grid_->getRowCount().v));
+                   " decision=skip"));
     }
   }
   return init_diagnostics_.empty();

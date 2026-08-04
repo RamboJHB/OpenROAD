@@ -23,6 +23,8 @@ namespace dpl2 {
 // PlacementDRC: this command must be usable before that wiring exists, and
 // keeping it out of the way means a failure here is the checker or the repair
 // engine, never the dispatch layer around them.
+// Because this command constructs its own checker, exec() also supplies that
+// instance's repair context before the first check.
 //
 // Prerequisite: run `set_filler_option` first. The repair engine's candidate
 // universe is exactly the resulting fillerSetting allow list, so with an empty

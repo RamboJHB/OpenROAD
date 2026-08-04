@@ -1055,7 +1055,8 @@ TEST_P(FillerRepairEngineE2E,
 }
 
 
-TEST_P(FillerRepairEngineE2E, MissingConfiguredMasterFailsWithoutRegistration)
+TEST_P(FillerRepairEngineE2E,
+       MissingConfiguredMasterIsSafelySkippedWithoutRegistration)
 {
   ProviderObjects objects(GetParam().setup);
   ASSERT_TRUE(objects.hasDesign());
@@ -1068,8 +1069,25 @@ TEST_P(FillerRepairEngineE2E, MissingConfiguredMasterFailsWithoutRegistration)
   setting.addFillerCell(kFillersWithExtra);
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
-  EXPECT_FALSE(engine.init(objects.design().desMgr(), setting));
+  engine.setDebugLogging(true);
+
+  testing::internal::CaptureStdout();
+  const bool initialized = engine.init(objects.design().desMgr(), setting);
+  const std::string transcript = testing::internal::GetCapturedStdout();
+
+  EXPECT_TRUE(initialized) << transcript;
   EXPECT_EQ(objects.infrastructure().network()->getMasterId(extraId), -1);
+  EXPECT_NE(transcript.find("ConfiguredMasterNotInNetwork"),
+            std::string::npos);
+  EXPECT_NE(transcript.find("decision=skip"), std::string::npos);
+
+  // The safe omission is not permission to initialize with no candidate
+  // universe at all.
+  dpl2::fillerSetting onlyMissing(objects.design().design());
+  onlyMissing.addFillerCell("FX4");
+  dpl2::fillerRepair::FillerRepairEngine emptyEngine(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+  EXPECT_FALSE(emptyEngine.init(objects.design().desMgr(), onlyMissing));
 }
 
 TEST_P(FillerRepairEngineE2E, EmptyFillerAllowListErrorsOut)
@@ -1196,6 +1214,12 @@ TEST_P(FillerRepairEngineE2E, MissingConfigurationFailsClosed)
   g_providedSetting = harness.fillerSetting();
   EXPECT_FALSE(harness.checkTarget());
   EXPECT_TRUE(harness.fillerChanges().empty());
+
+  // A command/harness-created checker owns this explicit reset. DePlace-owned
+  // checkers obtain the same setting through the provider.
+  ASSERT_TRUE(harness.resetContext());
+  EXPECT_TRUE(harness.checkTarget());
+  EXPECT_FALSE(harness.fillerChanges().empty());
 
   dpl2::ipl::ImplantLayerChecker::setFillerRepairSettingProvider(nullptr);
   g_providedSetting = nullptr;

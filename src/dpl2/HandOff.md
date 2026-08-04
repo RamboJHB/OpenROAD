@@ -69,15 +69,17 @@ Before a failing checker call:
 1. Grid and Network describe the same Design revision as `PhysDesMgr`.
 2. Grid retains that manager through `Grid::getDesMgr()`.
 3. `fillerSetting` has an active Design and a non-empty configured filler list.
-4. Infrastructure has registered every configured filler master and every
-   possible target replacement master in Network using its real edge table.
+4. Infrastructure has registered every filler master that should be available
+   to repair, and every possible target replacement master, using its real
+   edge table.
 5. `DePlace` has registered the active setting provider, or a harness has
    called `setFillerRepairContext(desMgr, &setting)`.
 
 `FillerRepairEngine::ensureMasterRegistered()` never calls
 `Network::addMaster`. It only finds an existing configured master and executes
-`setFiller(true)`. A missing configured master makes `init()` fail closed;
-an absent or inconsistently indexed target master makes `repair()` fail closed.
+`setFiller(true)`. Missing configured masters are omitted; `init()` fails if
+none remain. An absent or inconsistently indexed target master makes
+`repair()` fail closed.
 
 Filler identity has one boundary:
 

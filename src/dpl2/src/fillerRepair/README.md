@@ -80,9 +80,11 @@ if (master != nullptr) {
 }
 ```
 
-A configured master missing from Network is a fatal initialization error.
-The target master id in `CheckRequest` must also resolve consistently in
-Network and in the engine snapshot.
+A configured master missing from Network is logged and omitted from that
+engine snapshot. This is safe because it only reduces the search space;
+`init()` fails if no registered configured master remains. The target master
+id in `CheckRequest` must resolve consistently in Network and in the engine
+snapshot.
 
 Candidate identity comes from `fillerSetting::getFillerPhysCells()`; placed
 identity comes from `Node::isFiller()`. UDM macro-type filler flags do not

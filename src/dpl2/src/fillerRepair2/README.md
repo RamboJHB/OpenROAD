@@ -22,10 +22,11 @@ bool init(PhysDesMgr*, const fillerSetting&);
 RepairOutcome repair(const ipl::CheckRequest&);
 ```
 
-Infrastructure must register configured filler masters and target replacement
-masters in Network with its real edge table. The engine never calls
-`Network::addMaster`; `ensureMasterRegistered()` only sets the existing
-configured master's filler flag.
+Infrastructure registers filler and target replacement masters in Network
+with its real edge table. The engine never calls `Network::addMaster`;
+`ensureMasterRegistered()` only sets an existing configured master's filler
+flag. Unregistered configured masters are skipped, and initialization fails
+only when the registered candidate subset is empty.
 
 The eight runtime/API files are byte-identical to the corresponding files in
 `../fillerRepair/`. The repository test CMake compares SHA-256 hashes at
