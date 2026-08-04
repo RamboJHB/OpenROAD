@@ -45,12 +45,10 @@ RepairOutcome repair(const ipl::CheckRequest&);
 ```
 
 The destination checker constructor must be
-`ImplantLayerChecker(Grid*, eUNL::Design*, Network*)`. The caller supplies
-Design to the outer checker; engine initialization obtains that same non-owning
-Design
-from `fillerSetting`, verifies its manager against the explicit `PhysDesMgr`
-and Grid manager, and passes it to the private checker. Neither path reads
-Session.
+`ImplantLayerChecker(Grid*, Network*)`. It obtains `PhysDesMgr` only from
+Grid. Engine initialization verifies the `fillerSetting` Design manager
+against the explicit `PhysDesMgr` and Grid manager before constructing its
+private checker. Neither path reads Session.
 
 Initialization replays every configured filler master through
 `Network::addMaster(..., fillerSetting, ...)`, including masters already in

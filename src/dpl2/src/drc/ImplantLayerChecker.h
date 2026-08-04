@@ -268,8 +268,7 @@ using CheckShapes = std::vector<CheckShape>;
 class ImplantLayerChecker final : public DRCChecker
 {
 public:
-    ImplantLayerChecker(Grid* grid, eUNL::Design* design,
-        Network* network);
+    ImplantLayerChecker(Grid* grid, Network* network);
     ~ImplantLayerChecker();
 
     bool check(const Node* cell, GridX x, GridY y,
@@ -299,8 +298,8 @@ public:
     size_t mergedShapeCount() const;
 
     // Presets what lazy filler-repair initialization would otherwise obtain
-    // from the registered provider (desMgr from the explicit Design,
-    // fillerSetting from set_filler_option). Call before check() in
+    // from the registered provider (Grid-bound desMgr and fillerSetting from
+    // set_filler_option). Call before check() in
     // harnesses that do not run under a DePlace owner.
     void setFillerRepairContext(PhysDesMgr* desMgr,
         const fillerSetting* setting);
@@ -387,8 +386,6 @@ private:
     Dbu queryRadius(const Rule& rule) const;
 
     Network* network_ = nullptr;
-    // Explicit non-owning design context; never sourced from Session.
-    eUNL::Design* design_ = nullptr;
     std::vector<Layer> layers_;
     std::unordered_map<std::string, std::vector<LayerId>> layerGroups_;
     std::vector<Rule> rules_;
@@ -396,10 +393,9 @@ private:
     std::vector<MasterItem> masterItems_;
 
     std::vector<Diagnostic> diagnostics_; // Initialization diagnostics.
-    // Production initialization requires Grid, explicit Design, Network, and
-    // matching Design/Grid managers. The portable helper sets this after
-    // injecting synthetic data.
-    bool designContextReady_ = false;
+    // Production initialization requires Grid, its retained manager, and
+    // Network. The portable helper sets this after injecting synthetic data.
+    bool infrastructureReady_ = false;
     Layer::Polar basePolar_ = Layer::Polar::P; // polarity at
     //bottom band of row 0; polarity alternates per row.
     Dbu rowHeight_ = 0;

@@ -215,10 +215,9 @@ class CheckerOverlayClient
 {
  public:
   void clear() { checker_.reset(); }
-  void reset(Grid* grid, eUNL::Design* design, Network* network)
+  void reset(Grid* grid, Network* network)
   {
-    checker_ = std::make_unique<ipl::ImplantLayerChecker>(
-        grid, design, network);
+    checker_ = std::make_unique<ipl::ImplantLayerChecker>(grid, network);
   }
   ipl::ImplantLayerChecker* get() { return checker_.get(); }
   const ipl::ImplantLayerChecker* get() const { return checker_.get(); }
@@ -321,7 +320,6 @@ class FillerRepairEngine::Impl final : private PlacementView,
 
   Grid* grid_ = nullptr;
   Network* network_ = nullptr;
-  eUNL::Design* design_ = nullptr;
   eUNL::PhysDesMgr* des_mgr_ = nullptr;
   const fillerSetting* filler_settings_ = nullptr;
   std::vector<const eLIB::PhysLibCell*> filler_masters_;
@@ -1187,8 +1185,8 @@ CellChangeRecord FillerRepairEngine::Impl::cellChangeRecord(
         = placement_.instances[instanceId]->udm;
     record.cell_data_ = dpl2::CellData{ref.cellId};
     record.orig_lib_cell_ = ref.libCellId;
-    record.origin_x_ = ref.originX;
-    record.origin_y_ = ref.originY;
+    record.x_ = ref.originX;
+    record.y_ = ref.originY;
     record.orientation_ = ref.orientation;
   }
   if (masterInfo(newMasterId) != nullptr) {
@@ -1894,8 +1892,7 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
 {
   ipl::CheckResult result;
   result.isLegal = true;
-  if (!initialized_ || design_ == nullptr || des_mgr_ == nullptr
-      || grid_ == nullptr
+  if (!initialized_ || des_mgr_ == nullptr || grid_ == nullptr
       || network_ == nullptr) {
     result.isLegal = false;
     result.diagnostics.push_back(
@@ -2082,7 +2079,6 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
   // (DePlace::isLegal updates the Node before checkDRC). Nodes whose master
   // or physical record is unusable are simply skipped by buildPlannerData.
 
-  design_ = settingDesign;
   filler_settings_ = &fillerSettings;
   filler_masters_ = fillerSettings.getFillerPhysCells();
   for (size_t configuredIndex = 0;
@@ -2142,8 +2138,8 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   checker_overlay_.clear();
   oracle_diagnostics_.clear();
   repair_config_.verbose = log_.enabled();
-  // bindInfrastructure proved the explicit Design, engine and Grid agree.
-  checker_overlay_.reset(grid_, design_, network_);
+  // bindInfrastructure proved the engine manager and Grid manager agree.
+  checker_overlay_.reset(grid_, network_);
   buildPlannerData();
   bool checkerReady = true;
   for (const ipl::Diagnostic& diagnostic : checker_overlay_.get()->getDiags()) {

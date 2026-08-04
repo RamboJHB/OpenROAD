@@ -41,25 +41,27 @@ bool hasDiagnostic(const std::vector<Diagnostic>& diagnostics,
 }
 
 TEST(ImplantLayerCheckerInitializationTest,
-     MissingGridDesignOrNetworkFailsClosed)
+     MissingGridNetworkOrManagerFailsClosed)
 {
   Grid grid;
   Network network;
   CheckRequest request;
 
-  ImplantLayerChecker missingGrid(nullptr, nullptr, &network);
+  ImplantLayerChecker missingGrid(nullptr, &network);
   EXPECT_TRUE(hasDiagnostic(missingGrid.getDiags(), "missing_grid"));
   EXPECT_FALSE(missingGrid.checkDirect(request).isLegal);
 
-  ImplantLayerChecker missingNetwork(&grid, nullptr, nullptr);
+  ImplantLayerChecker missingNetwork(&grid, nullptr);
   EXPECT_TRUE(hasDiagnostic(missingNetwork.getDiags(), "missing_network"));
   EXPECT_FALSE(missingNetwork.checkDirect(request).isLegal);
 
-  ImplantLayerChecker missingDesign(&grid, nullptr, &network);
-  EXPECT_TRUE(hasDiagnostic(missingDesign.getDiags(), "missing_design"));
-  const CheckResult result = missingDesign.checkDirect(request);
+  ImplantLayerChecker missingManager(&grid, &network);
+  EXPECT_TRUE(hasDiagnostic(missingManager.getDiags(),
+                            "missing_grid_phys_des_mgr"));
+  const CheckResult result = missingManager.checkDirect(request);
   EXPECT_FALSE(result.isLegal);
-  EXPECT_TRUE(hasDiagnostic(result.diagnostics, "missing_design"));
+  EXPECT_TRUE(hasDiagnostic(result.diagnostics,
+                            "missing_grid_phys_des_mgr"));
 }
 
 constexpr Dbu SITE_WIDTH = 10;
@@ -638,7 +640,7 @@ std::vector<CheckResult> check(const CheckRequest& request,
   const ImplantInput in = input(density);
   ImplantLayerCheckerHelper helper;
   helper.initialize(in);
-  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
   helper.initChecker(checker);
   EXPECT_TRUE(checker.getDiags().empty());
   return checker.checkPlaceWithOverlays(request, guard(), changes);
@@ -1073,7 +1075,6 @@ class PlannerCheckerFixture
   {
     helper_.initialize(input_);
     checker_ = std::make_unique<ImplantLayerChecker>(helper_.getGrid(),
-                                                     nullptr,
                                                      helper_.getNetwork());
     helper_.initChecker(*checker_);
     view_ = std::make_unique<PortablePlacementView>(
@@ -1513,7 +1514,7 @@ TEST(ImplantCheckerOverlayTest,
   const ImplantInput in = input();
   ImplantLayerCheckerHelper helper;
   helper.initialize(in);
-  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
   helper.initChecker(checker);
   ASSERT_TRUE(checker.getDiags().empty());
 

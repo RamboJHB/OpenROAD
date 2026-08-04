@@ -197,9 +197,8 @@ Layer::Polar ImplantLayerChecker::getPolar(RowId rowA, RowId rowB) const
 }
 
 ImplantLayerChecker::ImplantLayerChecker(Grid* grid,
-    eUNL::Design* design,
     Network* network)
-    : DRCChecker(grid), network_(network), design_(design)
+    : DRCChecker(grid), network_(network)
 {
     if (grid_ == nullptr) {
         diagnostics_.push_back({"missing_grid",
@@ -211,32 +210,14 @@ ImplantLayerChecker::ImplantLayerChecker(Grid* grid,
             "fatal: ImplantLayerChecker requires an initialized Network"});
         return;
     }
-    if (design_ == nullptr) {
-        diagnostics_.push_back({"missing_design",
-            "fatal: ImplantLayerChecker requires an explicit Design"});
-        return;
-    }
-    desMgr_ = design_->getPhysDesMgr();
+    desMgr_ = grid_->getDesMgr();
     if (desMgr_ == nullptr) {
-        diagnostics_.push_back({"missing_design_phys_des_mgr",
-            "fatal: ImplantLayerChecker requires the explicit Design to own"
-            " a PhysDesMgr"});
-        return;
-    }
-    PhysDesMgr* const gridDesMgr = grid_->getDesMgr();
-    if (gridDesMgr == nullptr) {
         diagnostics_.push_back({"missing_grid_phys_des_mgr",
             "fatal: ImplantLayerChecker requires Grid to retain its"
             " initialization PhysDesMgr"});
         return;
     }
-    if (gridDesMgr != desMgr_) {
-        diagnostics_.push_back({"grid_design_mismatch",
-            "fatal: ImplantLayerChecker Design PhysDesMgr must match Grid's"
-            " initialization PhysDesMgr"});
-        return;
-    }
-    designContextReady_ = true;
+    infrastructureReady_ = true;
     init(desMgr_);
 }
 
@@ -807,7 +788,7 @@ bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
     const eUTL::PhysOrientation& orient,
     std::vector<CellChangeRecord>& fcRecord) const
 {
-    if (!node || node->getMaster() == nullptr || !designContextReady_) {
+    if (!node || node->getMaster() == nullptr || !infrastructureReady_) {
         return false;
     }
     CheckRequest request;
@@ -829,19 +810,16 @@ void ImplantLayerChecker::setFillerRepairContext(PhysDesMgr* desMgr,
 {
     repairSetting_ = setting;
     repairEngine_.reset();
-    PhysDesMgr* const designDesMgr
-        = design_ != nullptr ? design_->getPhysDesMgr() : nullptr;
     PhysDesMgr* const gridDesMgr
         = grid_ != nullptr ? grid_->getDesMgr() : nullptr;
-    if (!designContextReady_ || desMgr == nullptr || designDesMgr == nullptr
-        || gridDesMgr == nullptr || desMgr != designDesMgr
+    if (!infrastructureReady_ || desMgr == nullptr || gridDesMgr == nullptr
         || desMgr != gridDesMgr) {
         repairEngineFailed_ = true;
         fillerRepair::reportRepairUnavailable(
-            "repair PhysDesMgr must match explicit Design and Grid");
+            "repair PhysDesMgr must match Grid's initialization manager");
         return;
     }
-    desMgr_ = designDesMgr;
+    desMgr_ = gridDesMgr;
     repairEngineFailed_ = false;
 }
 
@@ -906,7 +884,7 @@ bool ImplantLayerChecker::repairFillers(const CheckRequest& request,
 CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
 {
     CheckResult result;
-    if (!designContextReady_) {
+    if (!infrastructureReady_) {
         result.isLegal = false;
         result.diagnostics = diagnostics_;
         return result;
@@ -1016,7 +994,7 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
 // Run checkDirect on every placed instance in parallel.
 std::vector<CheckResult> ImplantLayerChecker::checkAllNodesDirect() const
 {
-    if (!designContextReady_) {
+    if (!infrastructureReady_) {
         return {};
     }
     const std::vector<std::unique_ptr<Node>>& nodes = getNodes();
@@ -2092,7 +2070,7 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
     {
         unsigned size = fillerChanges.size();
         std::vector<CheckResult> results(size);
-        if (!designContextReady_) {
+        if (!infrastructureReady_) {
             for (CheckResult& result : results) {
                 result.isLegal = false;
                 result.diagnostics = diagnostics_;

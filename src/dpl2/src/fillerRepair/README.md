@@ -9,7 +9,7 @@ into that reference and keeps **no** filler-change member state. The
 a run whose checks all pass never pays engine initialization.
 
 The shared wire is
-`CellChangeRecord{Replace, CellData{LeafCellID}, origin_x_, origin_y_,
+`CellChangeRecord{Replace, CellData{LeafCellID}, x_, y_,
 orig_lib_cell_, new_lib_cell_, orientation_}`. The generic `CellData` protocol
 also reserves a string name for future add operations; this swap-only engine
 emits and accepts only the existing-cell `LeafCellID` alternative.
@@ -91,14 +91,12 @@ engine performs no Network↔UDM cross-validation — with lazy init it typicall
 runs mid-check, while the candidate Node already carries its proposed master
 ahead of the pending UDM commit.
 
-The caller-supplied `Design` is the checker design authority.
-`ImplantLayerChecker(Grid*, eUNL::Design*, Network*)` stores that non-owning
-handle as `design_` and obtains `PhysDesMgr` from it, never from Session. The
-Grid manager remains an independent consistency check: a missing Grid,
-Design, Network or manager, or a Design/Grid manager mismatch, fails closed.
-The engine obtains the same Design from `fillerSetting`, verifies its manager
-against both the `init()` manager and Grid, and passes it to the private
-checker. No global design lookup exists.
+Grid is the checker design-context authority.
+`ImplantLayerChecker(Grid*, Network*)` obtains `PhysDesMgr` only from
+`Grid::getDesMgr()`, never from Session. A missing Grid, Network or Grid
+manager fails closed. The engine still verifies that the Design owned by
+`fillerSetting`, the `init()` manager and Grid manager agree before creating
+its private checker. No global design lookup exists.
 
 **One filler authority.** `fillerSetting::isFillerCell(LibCellID)` answers whether
 a master belongs to the configured `core_` list. Infrastructure stores that

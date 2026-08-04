@@ -60,8 +60,8 @@ class FillerRepairEngine
   // variable cannot give you.
   void setDebugLogging(bool enabled);
 
-  // Binds the existing infrastructure to the explicit Design owned by
-  // fillerSetting; that Design, desMgr and Grid manager must agree. Registers
+  // Binds the existing infrastructure; fillerSetting's manager, desMgr and
+  // Grid manager must agree. Registers
   // configured filler masters. The target replacement master is registered
   // lazily by repair(), so opto does not need to predict it during
   // initialization.

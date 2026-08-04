@@ -218,8 +218,8 @@ void printChanges(const std::vector<CellChangeRecord>& changes,
     } else {
       std::cout << std::get<std::string>(record.cell_data_);
     }
-    std::cout << " at (" << record.origin_x_.getStorage() << ","
-              << record.origin_y_.getStorage() << ")  master "
+    std::cout << " at (" << record.x_.getStorage() << ","
+              << record.y_.getStorage() << ")  master "
               << record.orig_lib_cell_.getIndexValue() << " ("
               << nameOf(record.orig_lib_cell_) << ") -> "
               << record.new_lib_cell_.getIndexValue() << " ("
@@ -295,11 +295,10 @@ bool TestFillerRepairCmd::exec()
     return design->getLibAcc().getPhysLibCell(lcId).getLibCell().getName();
   };
 
-  // One checker for the whole run, bound to THIS design rather than to
-  // whatever Session considers current, and pre-loaded with the repair
-  // context so the command does not depend on the DePlace-registered
-  // provider having been installed.
-  ipl::ImplantLayerChecker checker(grid, design, network);
+  // One checker for the whole run, bound to Grid's retained manager rather
+  // than whatever Session considers current, and pre-loaded with the repair
+  // context so the command does not depend on the DePlace provider.
+  ipl::ImplantLayerChecker checker(grid, network);
   checker.setFillerRepairContext(desMgr, setting);
   if (!checker.getDiags().empty()) {
     std::cout << "checker init diagnostics: " << checker.getDiags().size()

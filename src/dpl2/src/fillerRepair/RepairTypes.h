@@ -234,8 +234,8 @@ inline bool sameCellChangeRecord(const CellChangeRecord& left,
                                  const CellChangeRecord& right)
 {
   return left.op_ == right.op_ && left.cell_data_ == right.cell_data_
-         && left.origin_x_ == right.origin_x_
-         && left.origin_y_ == right.origin_y_
+         && left.x_ == right.x_
+         && left.y_ == right.y_
          && left.orig_lib_cell_ == right.orig_lib_cell_
          && left.new_lib_cell_ == right.new_lib_cell_
          && left.orientation_.getValue() == right.orientation_.getValue();

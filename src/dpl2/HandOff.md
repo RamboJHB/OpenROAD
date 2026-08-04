@@ -14,24 +14,23 @@ Masters and Nodes from `fillerSetting::core_`.
 
 ## 0. Current baseline
 
-The branch baseline reviewed for this handoff is `ac90340c63`. It includes the
+The branch baseline reviewed for this handoff is `68a9c0d549`. It includes the
 shared `CellChangeRecord`, fillerSetting-based classification, null-safety,
-adaptive halo tightening, candidate-provider diagnostics, removal of parallel
-snapshot tables and one-field candidate wrappers, rebuild-cache reset, and the
-runtime-only `src/dpl2/src/fillerRepair2/` package plus the explicit-Design
-checker contract. The current update refreshes existing Network masters from
-`fillerSetting`, precomputes same-footprint/different-VT/same-polarity filler
-pairs, skips search when the placed catalog is empty, and separates placement,
-candidate and checker-call state into private engine components. Do not port
-from the older `808c27f` snapshot; it predates those changes. Verification
-results follow:
+adaptive halo tightening, candidate catalog and fast rejection, removal of
+parallel snapshot tables and one-field candidate wrappers, rebuild-cache reset,
+and the runtime-only `src/dpl2/src/fillerRepair2/` package. The current update
+restores the checker constructor to `ImplantLayerChecker(Grid*, Network*)`,
+binds its manager only through `Grid::getDesMgr()` without Session fallback,
+and renames the shared record coordinates from `origin_x_/origin_y_` to
+`x_/y_`. Do not port from the older `808c27f` snapshot; it predates those
+changes. Verification results follow:
 
 | | |
 |---|---|
 | local suite | 278/278, normal and ASan |
 | migration gate (destination code path) | 170/170, normal and ASan |
 | `fillerRepair2` manual strict syntax check | both runtime sources, C++20, `-Wall -Wextra -Werror`; not part of CTest |
-| `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
+| `testFillerRepairCmd` | source call sites synchronized; not compiled in this Codespace because the app/CCI framework headers are unavailable; **never linked** here |
 
 ---
 
@@ -97,7 +96,7 @@ if (legal && !fcRecord.empty()) {
 ```
 
 Each current repair entry is
-`CellChangeRecord{Replace, CellData{LeafCellID}, origin_x_, origin_y_,
+`CellChangeRecord{Replace, CellData{LeafCellID}, x_, y_,
 orig_lib_cell_, new_lib_cell_, orientation_}`. `CellData` can represent a
 future named cell with `std::string`, but filler VT repair remains swap-only
 and does not emit that alternative.
@@ -108,12 +107,10 @@ the first DRC-illegal check, so a run whose checks all pass never pays for it.
 
 Two things must reach the checker before the first failing check:
 
-- **`Design` and `PhysDesMgr`** — the caller constructs
-  `ImplantLayerChecker(Grid*, eUNL::Design*, Network*)`. The checker stores the
-  non-owning Design, reads its manager directly, and verifies it equals
-  `Grid::getDesMgr()`. Missing Grid, Design, Network or manager, and a
-  Design/Grid mismatch, are fatal initialization diagnostics. Session is never
-  read.
+- **Grid-bound `PhysDesMgr`** — the caller constructs
+  `ImplantLayerChecker(Grid*, Network*)`. The checker reads the manager only
+  from `Grid::getDesMgr()`. Missing Grid, Network or manager is a fatal
+  initialization diagnostic. Session is never read.
 - **`fillerSetting`** — `DePlace` registers a provider once:
   `ImplantLayerChecker::setFillerRepairSettingProvider(&provideSetting)`.
   The checker never names `DePlace`, so builds without it still link.
@@ -278,7 +275,7 @@ the wrong thing. Read those first.
 | `FillerRepairEngine.cpp` `checkPlaceWithOverlays` | Batch semantics: one `FillerChanges` = one candidate, results correlate **by input order**, count must match | **silent**: answers mis-attributed to candidates |
 | `FillerRepairEngine.cpp` — initial halo sizing | `getMaxRuleValue()` means checker reach in **sites** and remains the correctness floor; the other input is the widest configured filler master, never an arbitrary placed standard cell or macro. The later planner guard uses the actual two-cell ring | **silent**: too-small reach truncates runs; global placed-master sizing makes macro designs pathologically slow |
 | `RepairPlanner.cpp` `finalizeWindow` — guard rows | Inter-row rules reach **one** row boundary, so ±2 rows of guard covers it. Horizontal reach is not guessed like this; it comes from the checker | **silent**: the checker is never shown the row a new violation appeared in |
-| `FillerRepairEngine.cpp` `init` | `fillerSetting::getDesign()`, its `PhysDesMgr`, and `Grid::getDesMgr()` must agree before the explicit Design is passed to the private checker | caught: fatal init diagnostic |
+| `FillerRepairEngine.cpp` `init` | `fillerSetting::getDesign()`'s `PhysDesMgr`, the supplied manager and `Grid::getDesMgr()` must agree before the private checker is created | caught: fatal init diagnostic |
 | `FillerRepairEngine.cpp` `ensureMasterRegistered` | `Network::addMaster`'s signature and existing-master refresh semantics. Never return early merely because the master exists; `Master::isFiller` must be refreshed before rebuilding the checker | mixed: compile error or every replacement rejected as `NOT_FILLER` |
 | `FillerRepairEngine.cpp` `cellChangeRecord` | `CellChangeRecord`'s shape. Fill **every** field; `orientation_` is read when the checker evaluates the swapped filler | mixed |
 | `FillerRepairEngine.cpp` `buildPlannerData` — filler identity | Infrastructure's single filler authority (`Master`/`Node` carry it). Never re-derive from UDM macro flags — they disagree, and that was a real bug | mixed |

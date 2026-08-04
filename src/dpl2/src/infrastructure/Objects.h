@@ -250,8 +250,8 @@ using CellData = std::variant<std::string, LeafCellID>;
 struct CellChangeRecord {
     OpType    op_;
     CellData    cell_data_;
-    UvDist    origin_x_;
-    UvDist    origin_y_;
+    UvDist    x_;
+    UvDist    y_;
     LibCellID    orig_lib_cell_;
     LibCellID    new_lib_cell_;
     PhysOrientation orientation_;

@@ -38,8 +38,8 @@ class FillerRepairEngine
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
-  // Binds Grid/Network to fillerSetting's explicit Design and configured
-  // filler masters once. The Design manager, desMgr and Grid manager must
+  // Binds Grid/Network to fillerSetting and configured filler masters once.
+  // The fillerSetting manager, desMgr and Grid manager must
   // agree.
   bool init(eUNL::PhysDesMgr* desMgr, const fillerSetting& fillerSetting);
 

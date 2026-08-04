@@ -452,8 +452,8 @@ using CellData = std::variant<std::string, eUNL::LeafCellID>;
 struct CellChangeRecord {
   OpType op_;                       // 本阶段为 Replace
   CellData cell_data_;              // 本阶段必须持有 LeafCellID
-  eUTL::UvDist origin_x_;
-  eUTL::UvDist origin_y_;
+  eUTL::UvDist x_;
+  eUTL::UvDist y_;
   eLIB::LibCellID orig_lib_cell_;
   eLIB::LibCellID new_lib_cell_;
   eUTL::PhysOrientation orientation_;
@@ -593,8 +593,7 @@ master 序列)可铺满该宽度"。第一版实现建议内部就按宽度建�
 ### 5.4 Checker entry 与 placement precheck
 
 ```cpp
-ImplantLayerChecker(Grid* grid, eUNL::Design* design,
-                    Network* network);
+ImplantLayerChecker(Grid* grid, Network* network);
 
 // 唯一入口:调用方持有 fcRecord,checker 只 APPEND,不保存任何成员
 bool check(const Node* node, GridX x, GridY y,
@@ -608,13 +607,11 @@ static void setFillerRepairSettingProvider(FillerSettingProvider provider);
 void setFillerRepairContext(PhysDesMgr* desMgr, const fillerSetting* setting);
 ```
 
-checker constructor 借用已初始化的 Grid、调用方显式传入的 `Design*` 与 Network，
-并把 Design 保存为 non-owning `design_`。`PhysDesMgr` 直接来自
-`design_->getPhysDesMgr()`，禁止 fallback 到 global Session；同时必须与
-`grid->getDesMgr()` 相同。Grid、Design、Network、任一 manager 缺失或 manager
-不一致时 checker fail closed。engine **懒创建**于第一次 DRC 不合法的 check，
-从 `fillerSetting::getDesign()` 取得同一个 Design，验证其 manager 与 engine/Grid
-一致，注册 configured filler masters，再把显式 Design 传给私有 oracle checker。
+checker constructor 借用已初始化的 Grid 与 Network，`PhysDesMgr` 只来自
+`grid->getDesMgr()`，禁止 fallback 到 global Session。Grid、Network 或 Grid
+manager 缺失时 checker fail closed。engine **懒创建**于第一次 DRC 不合法的
+check，从 `fillerSetting::getDesign()` 验证其 manager 与 engine/Grid 一致，注册
+configured filler masters，再用 Grid/Network 创建私有 oracle checker。
 
 `set_filler_option`、Grid/Network 初始化和 checker 初始化都早于 repair，因此缺少
 `fillerSetting`/`PhysDesMgr` 与结构性 `FillerRepairEngine::init()` 失败一样都是
