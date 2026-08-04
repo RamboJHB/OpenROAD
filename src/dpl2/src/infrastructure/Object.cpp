@@ -250,57 +250,6 @@ bool Node::adjustCurrOrient(const PhysOrientation& newOri)
       }
     }
   }
-  // Both the current and new orientations should be {N, FN, FS, S} or {E, FE,
-  // FW, W}.
-  int mX = 1;
-  int mY = 1;
-  if (curOri.getValue() == PhysOrientationE::R90 ||
-      curOri.getValue() == PhysOrientationE::MX90
-      || curOri.getValue() == PhysOrientationE::MY90 ||
-      curOri.getValue() == PhysOrientationE::R270) {
-    const bool test1
-      = (curOri.getValue() == PhysOrientationE::R90 ||
-         curOri.getValue() == PhysOrientationE::MY90);
-    const bool test2
-      = (newOri.getValue() == PhysOrientationE::R90 ||
-         newOri.getValue() == PhysOrientationE::MY90);
-    if (test1 != test2) {
-      mX = -1;
-    }
-    const bool test3
-      = (curOri.getValue() == PhysOrientationE::R90 ||
-         curOri.getValue() == PhysOrientationE::MX90);
-    const bool test4
-      = (newOri.getValue() == PhysOrientationE::R90 ||
-         newOri.getValue() == PhysOrientationE::MX90);
-    if (test3 != test4) {
-      mY = -1;
-    }
-  } else {
-    const bool test1
-      = (curOri.getValue() == PhysOrientationE::R0 ||
-         curOri.getValue() == PhysOrientationE::MX);
-    const bool test2
-      = (newOri.getValue() == PhysOrientationE::R0 ||
-         newOri.getValue() == PhysOrientationE::MX);
-    if (test1 != test2) {
-      mX = -1;
-    }
-    const bool test3
-      = (curOri.getValue() == PhysOrientationE::R0 ||
-         curOri.getValue() == PhysOrientationE::MY);
-    const bool test4
-      = (newOri.getValue() == PhysOrientationE::R0 ||
-         newOri.getValue() == PhysOrientationE::MY);
-    if (test3 != test4) {
-      mY = -1;
-    }
-  }
-
-  // for (Pin* pin : pins_) {
-  //   pin->setOffsetX(pin->getOffsetX() * DbuX{mX});
-  //   pin->setOffsetY(pin->getOffsetY() * DbuY{mY});
-  // }
   orient_ = newOri;
   return true;
 }

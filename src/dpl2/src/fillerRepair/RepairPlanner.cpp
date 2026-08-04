@@ -8,6 +8,7 @@
 #include <map>
 #include <set>
 #include <tuple>
+#include <unordered_set>
 
 namespace dpl2::fillerRepair {
 
@@ -584,8 +585,8 @@ XInterval quantizeGuard(XInterval guard, DbCoord anchorX, DbCoord siteWidth)
   // Grid::gridPixel bounds-checks), and the view exposes no core width to
   // clamp against.
   return XInterval{
-      std::max<DbCoord>(anchorX - snapUpPow2(left, unit), 0),
-      anchorX + snapUpPow2(right, unit)};
+      std::max<DbCoord>(anchorX - snapUpPow2(left + unit, unit), 0),
+      anchorX + snapUpPow2(right + unit, unit)};
 }
 
 RepairWindow finalizeWindow(int level,
@@ -632,7 +633,8 @@ RepairWindow finalizeWindow(int level,
   // where the new violation appeared.
   const std::vector<RowId> guardRows =
       clampRows(view, window.rows.front() - 2, window.rows.back() + 2);
-  XInterval guardX = x;
+  const DbCoord reach = std::max<DbCoord>(view.checkerReachX(), 0);
+  XInterval guardX{x.xl - reach, x.xh + reach};
   for (const RowId rowId : guardRows) {
     for (const PlacedInstance& inst : instancesInRing(view, rowId, x, 2)) {
       const XInterval span = instanceSpan(view, inst);
@@ -749,6 +751,22 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                               current.bridgeFillers.end());
   XInterval x = current.x;
 
+  // Seed fillers explicitly named by newly blocking violations. This also
+  // gives a newly coupled row a usable frontier before directional growth.
+  for (const Violation& violation : blocking) {
+    for (const ViolationParticipant& participant : violation.participants) {
+      const PlacedInstance* inst = view.instance(participant.instanceId);
+      if (inst == nullptr || !inst->isFiller) {
+        continue;
+      }
+      editable.insert(inst->id);
+      rowSet.insert(inst->rowId);
+      const XInterval span = instanceSpan(view, *inst);
+      x.xl = std::min(x.xl, span.xl);
+      x.xh = std::max(x.xh, span.xh);
+    }
+  }
+
   bool growLeft = false;
   bool growRight = false;
   for (const Violation& violation : blocking) {
@@ -818,6 +836,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
         rightFrontier = current.x.xh;
       }
 
+      const DbCoord reach = std::max<DbCoord>(view.checkerReachX(), 0);
       if (addLeft) {
         int added = 0;
         // Walk left from the instance just left of the frontier (everything at
@@ -829,7 +848,10 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
           if (span.xh > leftFrontier || editable.count(all[i].id) > 0) {
             continue;
           }
-          if (!all[i].isFiller || span.xh < leftFrontier) {
+          if (!all[i].isFiller) {
+            continue;
+          }
+          if (span.xh < leftFrontier - reach) {
             break;
           }
           editable.insert(all[i].id);
@@ -850,7 +872,10 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
           if (span.xl < rightFrontier || editable.count(all[i].id) > 0) {
             continue;
           }
-          if (!all[i].isFiller || span.xl > rightFrontier) {
+          if (!all[i].isFiller) {
+            continue;
+          }
+          if (span.xl > rightFrontier + reach) {
             break;
           }
           editable.insert(all[i].id);
@@ -1133,13 +1158,11 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   const bool incremental = !freshFillers.empty();
   std::vector<char> rankIsFresh;
   if (incremental) {
+    const std::unordered_set<InstanceId> fresh(freshFillers.begin(),
+                                               freshFillers.end());
     rankIsFresh.assign(ranked.size(), 0);
     for (size_t i = 0; i < ranked.size(); ++i) {
-      rankIsFresh[i] = std::binary_search(freshFillers.begin(),
-                                          freshFillers.end(),
-                                          ranked[i].instanceId)
-                           ? 1
-                           : 0;
+      rankIsFresh[i] = fresh.find(ranked[i].instanceId) != fresh.end() ? 1 : 0;
     }
   }
 
@@ -1150,15 +1173,15 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   }
 
   const long long space = fullSpaceSize(ranked, budget);
-  plan.complete = space <= budget;
-
-  const int maxSize = plan.complete
+  const bool fitsBudget = space <= budget;
+  const int maxSize = fitsBudget
                           ? fillerTotal
                           : std::min(config.maxSubsetSize, fillerTotal);
+  bool scopeTruncated = maxSize < fillerTotal;
   // Member cap counts FILLERS: size-s subsets draw from the first
   // N_s ranked fillers, each contributing its full domain.
   const auto memberCap = [&](int size) -> int {
-    if (plan.complete || size == 1) {
+    if (fitsBudget || size == 1) {
       return fillerTotal;
     }
     const int cap = size == 2   ? config.memberCapSize2
@@ -1189,10 +1212,11 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
       return;
     }
     if (k == combo.size()) {
-      plan.overlays.push_back(current);
       if (static_cast<int>(plan.overlays.size()) >= budget) {
         budgetHit = true;
+        return;
       }
+      plan.overlays.push_back(current);
       return;
     }
     for (const Swap& option : ranked[combo[k]].options) {
@@ -1248,6 +1272,7 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   for (int size = 1; size <= maxSize && !budgetHit; ++size) {
     const size_t before = plan.overlays.size();
     const int cap = memberCap(size);
+    scopeTruncated |= cap < fillerTotal;
     choose(choose, size, 0, cap);
     // Per-size accounting makes it obvious when a large-window member cap or
     // the checker budget, rather than the legality oracle, removed candidates.
@@ -1261,10 +1286,7 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   // cannot be mislabeled as truncated. Incrementally skipped candidates count
   // as covered: the previous level asked them under this same guard and the
   // answer was not clean, which cannot change (see the header).
-  plan.complete
-      = space <= budget
-        && static_cast<long long>(plan.overlays.size()) + skippedAsAsked
-               == space;
+  plan.complete = !scopeTruncated && !budgetHit;
 
   if (incremental) {
     log.msg("enumerate",
@@ -1695,6 +1717,12 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
                                             int& budget)
 {
   SearchResult sr;
+  if (config_.batchSize <= 0) {
+    diagnostics_.push_back(makeDiag(
+        Severity::Fatal, "InvalidRepairConfig", "batchSize must be positive"));
+    sr.protocolError = true;
+    return sr;
+  }
   log_.msg("gate",
            cat("search start: candidates=", candidates.size(), " batchSize=",
                config_.batchSize, " budget=", budget, " window=",

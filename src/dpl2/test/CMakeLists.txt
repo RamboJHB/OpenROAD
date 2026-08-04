@@ -25,6 +25,20 @@ find_package(TBB REQUIRED)
 
 set(DPL2_SRC "${CMAKE_CURRENT_LIST_DIR}/../src")
 
+# fillerRepair2 is the copy-only migration directory. Runtime sources are
+# byte-for-byte mirrors, so drift is a configure-time failure instead of a
+# destination surprise.
+foreach(runtime_file
+    Debug.h FillerRepairEngine.cpp FillerRepairEngine.h PlacementView.h
+    RepairOracle.h RepairPlanner.cpp RepairPlanner.h RepairTypes.h)
+  file(SHA256 "${DPL2_SRC}/fillerRepair/${runtime_file}" source_hash)
+  file(SHA256 "${DPL2_SRC}/fillerRepair2/${runtime_file}" mirror_hash)
+  if(NOT source_hash STREQUAL mirror_hash)
+    message(FATAL_ERROR
+      "fillerRepair2 runtime drift: ${runtime_file} differs from fillerRepair")
+  endif()
+endforeach()
+
 # This interface target is the only fake/real UDM switch. Runtime sources
 # contain no fake include, compile definition, or conditional code. The fake
 # headers mirror the real eUNL/eLIB/ePHY/eUTL names and signatures and are used
@@ -116,6 +130,7 @@ endif()
 # Delivered infrastructure/checker sources, compiled once and shared by the
 # executables below.
 add_library(dpl2_fr_chain_common OBJECT
+    "${DPL2_SRC}/PlacementDRC.cpp"
     "${DPL2_SRC}/infrastructure/Grid.cpp"
     "${DPL2_SRC}/infrastructure/Object.cpp"
     "${DPL2_SRC}/infrastructure/network.cpp"
@@ -123,7 +138,7 @@ add_library(dpl2_fr_chain_common OBJECT
     "${DPL2_SRC}/infrastructure/fillerSetting.cpp"
     "${DPL2_SRC}/drc/util.cpp"
     "${DPL2_SRC}/drc/ImplantLayerChecker.cpp")
-dpl2_configure_chain_target(dpl2_fr_chain_common delivered)
+dpl2_configure_chain_target(dpl2_fr_chain_common strict)
 
 # The payload builds itself and its portable tests from its own CMakeLists;
 # we never list its files. Handing it our already-compiled infra/checker
@@ -157,7 +172,7 @@ add_library(
 target_link_libraries(
   dpl2_filler_repair_compile_check PRIVATE
   dpl2_fr_chain_common dpl2::fillerRepair)
-dpl2_configure_chain_target(dpl2_filler_repair_compile_check delivered)
+dpl2_configure_chain_target(dpl2_filler_repair_compile_check strict)
 
 # --- Fake-UDM only ---------------------------------------------------------
 # The historical engine regression is the one target that cannot be built

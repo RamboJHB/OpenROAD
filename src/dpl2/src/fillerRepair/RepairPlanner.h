@@ -62,7 +62,7 @@ namespace dpl2::fillerRepair {
 // configuration a run used.
 //
 // [PORT-TUNE] Every default below was chosen against a SYNTHETIC oracle that
-// answers instantly. In production each checker call is real DRC work, so the
+// answers instantly. On a real design each checker call is real DRC work, so the
 // budgets are really "how much DRC time may one repair cost", and only your
 // hardware can answer that. Before touching any of them, get the two numbers
 // the transcript already prints on a real design -- `checker requests=` and
@@ -105,7 +105,7 @@ struct RepairConfig
   // designs. The transcript names the level each answer came from
   // ("grown xN"), so a histogram of that over a real run tells you directly.
   int maxAdaptiveLevels = 32;
-  bool verbose = true;            // [fr] transcript; FR_VERBOSE=0 silences
+  bool verbose = false;           // [fr] transcript; FR_VERBOSE=1 enables
 };
 
 // --- Swap: one filler changes master ---------------------------------------

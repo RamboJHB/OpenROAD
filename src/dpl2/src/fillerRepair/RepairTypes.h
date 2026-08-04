@@ -24,10 +24,8 @@
 //
 //     grep -rn "\[PORT-" <srcroot>/fillerRepair
 //
-//   [PORT-DROP]   You do not need this. Each one says what it costs to keep
-//                 and what breaks if you delete it -- which is nothing in
-//                 production; these exist for the repository-local
-//                 regression, which does not travel.
+//   [PORT-DROP]   Optional repository-local verification support. Each tag
+//                 states the cost and consequence of removing it.
 //
 //   [PORT-ADAPT]  This will not compile or will behave wrongly until you
 //                 change it. Each one names the destination-side thing it

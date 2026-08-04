@@ -171,7 +171,7 @@ struct MasterItem
     //(output of rebuildMasterShapes)
     std::vector<MasterShape> rawShapes;   // original raw shapes (preserved input)
     Dbu siteHeight = 0;               // site height from the master's site type
-    // Serialized portable-input metadata. Production overlay validation reads
+    // Serialized portable-input metadata. Runtime overlay validation reads
     // the authoritative Network Master classification.
     bool isFiller = false;
     std::vector<MasterInterval> intervals;
@@ -317,8 +317,8 @@ private:
     // init functions
     bool init(PhysDesMgr* desMgr);
 
-    // Filler repair is lazy (most checks pass and never need it): the engine
-    // is created and initialized on the first failing check. On a repairable
+    // Filler repair is lazy (most checks pass and never need it): a fresh
+    // engine is initialized for each failing check. On a repairable
     // failure the repair records are APPENDED to the caller's fcRecord; the
     // checker keeps no filler-change member state.
     bool repairFillers(const CheckRequest& request,
@@ -327,7 +327,8 @@ private:
     static void parseLayerName(const std::string& name,
         Layer::Vt& vt, Layer::Polar& polar);
     bool buildRules();
-    void buildMasters();
+    bool buildMasters();
+    bool validateMasterImplantFamilies();
     void rebuildMasterShapes();
     bool buildMstIntervals();
 
@@ -370,7 +371,7 @@ private:
     CheckShapes mergeGroupShapes(const CheckShapes& rawShapes,
         bool isCandidate) const;
 
-    OverlapInfo checkOverlap(const Node* node) const;
+    OverlapInfo checkOverlap(const CheckRequest& request) const;
     DiagVec validateOverlayRequest(const CheckRequest& request,
         const FillerChanges& fillerChanges) const;
     bool touchesInstance(const Violation& violation,
@@ -393,7 +394,7 @@ private:
     std::vector<MasterItem> masterItems_;
 
     std::vector<Diagnostic> diagnostics_; // Initialization diagnostics.
-    // Production initialization requires Grid, its retained manager, and
+    // Runtime initialization requires Grid, its retained manager, and
     // Network. The portable helper sets this after injecting synthetic data.
     bool infrastructureReady_ = false;
     Layer::Polar basePolar_ = Layer::Polar::P; // polarity at
@@ -407,10 +408,9 @@ private:
     // or the registered provider.
     PhysDesMgr* desMgr_ = nullptr;
     const fillerSetting* repairSetting_ = nullptr;
-    mutable std::unique_ptr<fillerRepair::FillerRepairEngine> repairEngine_;
-    // Missing required context or structural initialization failure disables
-    // repair until setFillerRepairContext() explicitly resets the checker.
-    mutable bool repairEngineFailed_ = false;
+    // Missing or mismatched context disables repair until
+    // setFillerRepairContext() explicitly supplies a valid binding.
+    mutable bool repairContextInvalid_ = false;
 
     std::map<eLIB::TechLayerRelativeID, LayerId> techLayerToIdx_;
     std::map<std::string, LayerId> layerNameToIdx_;

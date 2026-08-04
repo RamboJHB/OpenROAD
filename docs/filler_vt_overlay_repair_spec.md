@@ -16,7 +16,8 @@ repair 在局部窗口内生成 **swap move**
 成批交给 checker overlay API 验证**,用同一 `guardRegion` 下的 baseline-delta clean 作为
 唯一 accept 标准。找到 clean 解返回 `ipl::FillerChanges`,由 opto/infrastructure
 commit;修不了则返回 diagnostics。区域 placement gate 是 `repair()` 的内部
-fail-closed 步骤；repair 不修改 DB。context reset 后下一次失败检查再懒创建快照。
+fail-closed 步骤；repair 不修改 DB。每次 direct check 失败都创建 fresh engine，
+用当前 committed placement 建快照，不复用旧 opto overlay/commit 前的状态。
 
 ---
 
@@ -160,8 +161,8 @@ opto 改动次数,所以"好排序让首批候选命中"比"搜索策略高级"�
   per-span tiling 查询见 §5.3。repair 不 commit。
 - **checker-owned engine (`FillerRepairEngine`)**:借用 Grid/Network,负责
   生命周期、初始化与调度；内部 `PlacementSnapshot` 保存 planner 只读数据，
-  `FillerCandidateCatalog` 管理初始化期 master 配对，`CheckerOverlayClient`
-  持有并串行化 private checker overlay 调用。区域 precheck、请求校验和
+  `FillerCandidateCatalog` 管理初始化期 master 配对，并直接持有一个 private
+  `ImplantLayerChecker`。区域 precheck、请求校验和
   diagnostics 仍由 runtime boundary 负责；`ImplantLayerChecker::check()` 用原始
   `CheckRequest` 调用它。它不实现搜索算法,也不修改 DB。
 - **pure planner (`internal::RepairPlanner`)**:负责 violation 归一化、开窗、
@@ -172,8 +173,8 @@ opto 改动次数,所以"好排序让首批候选命中"比"搜索策略高级"�
 
 完整实现与 portable verification 位于 `src/dpl2/src/fillerRepair/`。推荐迁移时把
 `src/dpl2/src/fillerRepair2/` 的内容复制到目的地已有的 `fillerRepair/` 路径；
-它是同一 runtime 的精简投影，不含 tests、standalone build、test-only overload 或
-per-engine logging override。
+它不含 tests 或 standalone build。两目录的八个 runtime/API 文件 byte-identical，
+local CMake 在 configure 阶段用 SHA-256 阻止 drift。
 
 ### 3.2 五层管线
 
@@ -209,8 +210,8 @@ pure planner 内部是五层管线,每层单独可测、单独可替换:
 ### 3.3 ImplantLayerChecker、engine 与内部 planner
 
 调用方只接触现有 `ImplantLayerChecker`,不单独构造 engine 或 adapter。
-engine 在**第一次 DRC 不合法的 check** 时才懒创建:全部 check 都通过的
-run 完全不付 engine 初始化的代价。
+engine 只在 **DRC 不合法的 check** 中创建:全部 check 都通过的 run 不付 engine
+初始化代价；每次失败使用 fresh engine，避免跨 opto commit 的 stale snapshot。
 
 ```text
 setup (一次): DePlace 注册 fillerSetting provider
@@ -222,7 +223,7 @@ opto: checker.check(node, x, y, orient, fcRecord)        [pre-commit]
   → checkDirect(request).isLegal
      → true : 直接返回,repair 从不介入
      → false: repairFillers(request, fcRecord)
-        → 懒建 engine(缺配置或 init 失败都 fail closed 并关闭该 checker 的 repair)
+        → 创建 fresh engine(缺配置时 fail closed；数据修复后 init 可重试)
         → 区域 precheck(只查可编辑行的 gap/overlap)
            → 不合法: Warning(PrecheckFailed) + 不做修复
         → 校验 target 的 std-cell/type/width/height
@@ -236,11 +237,11 @@ opto: checker.check(node, x, y, orient, fcRecord)        [pre-commit]
 opto/infrastructure: commit target + fcRecord
 ```
 
-checker request 的 master 来自 `Node::getMaster()->getId()`,因此已在 Network 中。
-engine 先验证 std-cell/type/width/height;若 DePlace 在 init 后才注册该 master,
-则重建 private checker/planner snapshot。完整 verification package 的 direct
-UDM-handle overload 只供 focused engine tests；推荐迁移的 `fillerRepair2` 不包含
-它。snapshot、candidate catalog 与 checker overlay client 都是
+checker request 的 master 来自 `Node::getMaster()->getId()`,必须已由 infrastructure
+使用真实 edge table 注册在 Network 中。configured filler masters 也必须预注册；
+engine 的 `ensureMasterRegistered()` 只执行 existing-master lookup 与
+`setFiller(true)`，绝不调用 `Network::addMaster`。snapshot、candidate catalog 与
+checker overlay client 都是
 `FillerRepairEngine::Impl` 的 private component，不增加 public API。
 planner-only `OracleRequest`/`OracleStatus`/`requestId`
 abstraction 位于 `RepairOracle.h`,只供 `internal::RepairPlanner` 与 unit-test
@@ -253,10 +254,8 @@ helper；record 本身不在 `RepairTypes.h`。它不并入 Engine、Planner 或
 runtime 签名只使用 final checker 的 `ipl::CheckResult`、`ipl::Diagnostic`、
 `ipl::FillerChanges`。`init()` 成功前，`repair()` 一律 fail-closed。
 
-checker overlay API 与 runtime engine API 都不修改 UDM/placement。direct test
-overload 的 target master 首次注册只扩展既有 Network 的 in-memory master registry,
-不修改 DB。repair 拒绝同实例重入;
-checker 调用在 runtime engine `Impl` 内串行化。一个 runtime engine 私有拥有一套
+checker overlay API 与 runtime engine API 都不修改 UDM/placement。repair 拒绝
+同实例重入。一个 runtime engine 私有拥有一套
 checker/planner snapshot、借用一套 Grid/Network,对应一个 design revision。位置/
 master commit 后,由 infrastructure 将 UDM 同步到 Network Nodes;engine 快照随
 下一次懒初始化重建。repair engine 不更新 Node。实例增删或 Grid topology 变化时
@@ -264,10 +263,9 @@ master commit 后,由 infrastructure 将 UDM 同步到 Network Nodes;engine 快�
 
 ### 3.4 Infrastructure alignment (2026-08-04)
 
-`fillerRepair/` 是完整 verification source of truth；`fillerRepair2/` 是手工维护的
-runtime-only 投影，复制其内容到目的地已有的 `fillerRepair/` 路径。任何 runtime
-算法或 API 改动必须同步两处；现有 CTest/migration gate 构建完整目录，不自动证明
-精简目录与之等价。
+`fillerRepair/` 是完整 verification source of truth；`fillerRepair2/` 是 copy-only
+runtime 目录，复制其内容到目的地已有的 `fillerRepair/` 路径。八个 runtime/API
+文件必须 byte-identical；CTest configure 的 SHA-256 gate 自动拒绝不同步。
 
 - 移植目的地已经提供 final checker；推荐 integration 使用 `fillerRepair2/` 的
   runtime files，并带上 checker `check()` 预留点和 contract 中的 delivered-code fixes。
@@ -276,8 +274,8 @@ runtime-only 投影，复制其内容到目的地已有的 `fillerRepair/` 路�
   infrastructure 负责。本项目不修改其 DRC 算法,也不要求其提供本仓库的 CMake。
 - `ImplantLayerChecker::check(node, x, y, orient, fcRecord)` 是唯一 caller repair
   边界;checker 由调用方显式传入 Grid、active Design 与 Network，不读取 Session。
-  engine 在第一次 DRC 不合法的 check 时懒创建,绑定现有 infrastructure 并注册
-  configured filler masters。row/site/status/origin/orientation 的 authority 是
+  engine 在每次 DRC 不合法的 check 中创建,绑定现有 infrastructure；configured
+  filler masters 与 target master 已由 infrastructure 注册。row/site/status/origin/orientation 的 authority 是
   `PhysDesMgr`。
 - engine 的 placement gate 只有**区域**级:在它可编辑的行内查 gap/overlap,合法
   区间由 supplied `Grid` 的像素按行懒生成(`is_valid &&
@@ -295,22 +293,20 @@ runtime-only 投影，复制其内容到目的地已有的 `fillerRepair/` 路�
   master 是否进入 planner candidate universe 只采用 fillerSetting allow-list。
   engine init 不再用 UDM macro-type filler flag 交叉否决这两项。非 pad PhysRow
   可以有不同 site height，但每个 height 必须是最小 base height 的整数倍。
-- `ensureMasterRegistered()` 对已经存在的 master 也必须调用
-  `Network::addMaster(..., fillerSetting, ...)`，由 infrastructure 刷新
-  `Master::isFiller`。所有 configured master 刷新完成后才能构造 private checker，
-  保证 PlacementView 与 checker 使用同一 filler classification。
+- `ensureMasterRegistered()` 只允许 lookup existing master 并执行
+  `setFiller(true)`。engine 不拥有 edge table，也不调用 `Network::addMaster`；
+  configured 或 target master 缺失时 fail closed。
 - checker/planner instance/master ID 固定为 `Node::getId()` / `Master::getId()`;
   `LeafCellID` / `LibCellID` 是 runtime `CellChangeRecord` handle。
-- placed masters 来自既有 Network;configured filler masters 在 init 时注册;
-  checker request master 若在快照建立后才加入 Network,repair 在验证后触发
-  checker/snapshot 重建。infrastructure 负责同步 Node 的物理状态;repair 不负责
+- placed masters、configured filler masters 和 checker request master 都来自既有
+  Network。infrastructure 负责同步 Node 的物理状态;repair 不负责
   更新 Node,也不负责发现新增/删除的 UDM instance。
-- 91 个可移植 planner unit tests 与 database-free doubles 位于
+- 93 个可移植 planner unit tests 与 database-free doubles 位于
   `test/` 根目录并与 E2E test 同级;不 include local fake UDM tree/provider。
-- 79 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
+- 83 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 7-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
-- 108 个 checker/engine cases、fake UDM include
+- 111 个 checker/engine cases、fake UDM include
   tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
 - 完整目录的 CMake 暴露 `dpl2::fillerRepair`(runtime,C++20)和
   `dpl2::fillerRepairPlanner`(pure pipeline,C++17)，并拥有 portable tests 与
@@ -574,8 +570,8 @@ diagnostic，避免进入注定无解的组合搜索。
 runtime engine 的候选 universe 必须由
 `fillerSetting::getFillerPhysCells()` 取得,再解析为 `Network::Master::getId()`;
 不得从 placed-instance 枚举猜测,也不得解析 master 名。configured master 即使
-尚未实例化也必须在 checker 构造前注册进 Network；即使已经存在也要重新经过
-`addMaster(..., fillerSetting, ...)` 刷新 filler classification。
+尚未实例化也必须由 infrastructure 使用真实 edge table 注册进 Network；engine
+只在 init 中对既有 configured master 执行 `setFiller(true)`。
 
 **band polarity layout 约束(2026-07-15 落地)**:候选还必须与当前 master 的
 **R0 系 bottom-band polarity** 一致(`MasterInfo.bottomBandPolarity`,来源 =
@@ -609,19 +605,19 @@ void setFillerRepairContext(PhysDesMgr* desMgr, const fillerSetting* setting);
 
 checker constructor 借用已初始化的 Grid 与 Network，`PhysDesMgr` 只来自
 `grid->getDesMgr()`，禁止 fallback 到 global Session。Grid、Network 或 Grid
-manager 缺失时 checker fail closed。engine **懒创建**于第一次 DRC 不合法的
-check，从 `fillerSetting::getDesign()` 验证其 manager 与 engine/Grid 一致，注册
-configured filler masters，再用 Grid/Network 创建私有 oracle checker。
+manager 缺失时 checker fail closed。每个 DRC 不合法的 check 创建 fresh engine，
+从 `fillerSetting::getDesign()` 验证其 manager 与 engine/Grid 一致，确认 configured
+filler masters 已在 Network 并刷新其 filler flag，再创建私有 oracle checker。
 
 `set_filler_option`、Grid/Network 初始化和 checker 初始化都早于 repair，因此缺少
-`fillerSetting`/`PhysDesMgr` 与结构性 `FillerRepairEngine::init()` 失败一样都是
-integration error：发出清晰 diagnostic，并关闭该 checker 的 repair，不在后续
-failing check 上静默重试。`setFillerRepairContext()` 是显式 reset 路径。
+`fillerSetting`/`PhysDesMgr` 是 integration error：发出清晰 diagnostic，并关闭该
+checker 的 repair，直到 `setFillerRepairContext()` 显式 reset。engine 数据错误只让
+当前 request fail closed；infrastructure 修复数据后，下一次 fresh init 可以重试。
 
 `check()` 直接传入 Network 已有的 request master;repair 先验证
-target/type/width/height,若 master 是 engine 快照建立之后加入的则重建私有
-snapshot。commit 后由 infrastructure 同步 Grid/Network;engine 快照随下一次懒
-初始化重建,repair 自己从不更新 Network Nodes。新增/删除 instance 或
+target/type/width/height 与 id mapping。commit 后由 infrastructure 同步
+Grid/Network;下一次 failing check 创建的新快照读取最新 committed PhysCell，repair
+自己从不更新 Network Nodes。新增/删除 instance 或
 row/blockage 改变时必须重建 Grid/Network。
 
 final checker 的 persistent init diagnostics 在接受 oracle 前分类：
@@ -1002,12 +998,12 @@ baseline result 摘要;final result 是否 checked/legal/delta-clean 与 returne
 violation 数;best overlay 及其分类(residual original / new inside-window /
 related-in-halo / unrelated-in-halo 统计);bridge filler ids;失败原因枚举。
 
-Deterministic `[fr][stage]` transcript 默认开启：
+Deterministic `[fr][stage]` transcript 默认关闭：
 `planner` 记录 request/config/final decision,`normalize` 记录 signature 输入,
 `window` 记录 L0/adaptive-L1 方向与增量,`swapgen`/`rank`/`enumerate` 记录候选空间,
-`gate` 记录 baseline、batch、cache、budget 与 best candidate。transcript 默认开启;
-`FR_VERBOSE=0` 可全局关闭。完整 verification package 另保留 test-only
-`setDebugLogging()` per-engine override；`fillerRepair2` 不带该 API。日志只增加
+`gate` 记录 baseline、batch、cache、budget 与 best candidate。设置
+`FR_VERBOSE=1` 可全局开启，也可用 `setDebugLogging()` 做 per-engine override；
+两套 runtime 目录提供相同 API。日志只增加
 可观测性,不改变排序、预算或 accept 结果。engine init 另记录每个 implant layer
 的 raw WIDTH/SPACING、最大 configured filler master、checker reach 与
 `defaultHaloX` 的胜出来源；snapshot 前记录 request、
@@ -1033,8 +1029,8 @@ Node filler flag 与 configured allow-list 是 engine authority，UDM macro-type
 
 ## 10. 测试集
 
-当前 91 个 planner cases 是独立 GoogleTests,位于交付目录中的
-`fillerRepair/test/`,并与 79 个 portable E2E cases 同级;E2E cases 集中在
+当前 93 个 planner cases 是独立 GoogleTests,位于交付目录中的
+`fillerRepair/test/`,并与 83 个 portable E2E cases 同级;E2E cases 集中在
 `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`。fixture 通过
 `ImplantLayerCheckerHelper` 构造 7 行 × 200 sites 的 Grid/Network/checker input;
 不读 DEF/LEF,不需要 `E2ETestProvider` 或 real-UDM design builder。
@@ -1044,10 +1040,9 @@ filler:std-cell 比例。dense placement 风险、快速失败与 span-rewrite �
 `docs/filler_repair_dense_placement_analysis.md`;它是 future design note,不改变本阶段
 swap-only normative contract。
 
-108 个 checker/engine fake-UDM cases、provider 与完整 local fake regression 均位于
-`src/dpl2/test/local`,不进入迁移目录。完整 suite 为 278/278；portable migration
-gate 为 170/170，normal 与 ASan 均通过。两套 gate 构建完整 `fillerRepair/`，不自动
-覆盖 runtime-only `fillerRepair2/` 镜像。
+111 个 checker/engine fake-UDM cases、provider 与完整 local fake regression 均位于
+`src/dpl2/test/local`,不进入迁移目录。完整 suite 为 287/287。configure 阶段另以
+SHA-256 比较八个 runtime/API 文件，保证 `fillerRepair2/` 镜像不漂移。
 
 前置与协议:
 
@@ -1059,11 +1054,9 @@ gate 为 170/170，normal 与 ASan 均通过。两套 gate 构建完整 `fillerR
   segment 间 whitespace 排除、placed span clipping、多 row 排序、空/零宽 span、
   empty placement、unordered input、triple coverage、touching legal spans 与
   gap+overlap 确定性顺序。
-- 完整 verification package 的 test-only engine API 在 3 种 layout 上覆盖 repeated
-  regional precheck、opto gate、
+- fake-UDM engine suite 在 3 种 layout 上覆盖 repeated regional precheck、opto gate、
   repair internal precheck、two-row hard macro upper-row coverage、hard/soft blockage、
-  invalid replacement/precheck 无 registry 副作用与 update refresh；这些 test-only
-  `update()`/raw-UDM paths 不进入 `fillerRepair2`。portable checker 另覆盖 changed neighbor
+  invalid replacement/precheck 无 registry 副作用与 fresh-engine refresh。portable checker 另覆盖 changed neighbor
   位于 guard 外仍能报告 target violation。
 - 验证 regional precheck 与 repair 前后 UDM physical records 完全相同。
 - guard-only filler 出现在 `fillerChanges` 中,判 invalid request。
@@ -1131,23 +1124,23 @@ swap-only 功能已实现并于 2026-08-04 重新验证:
   (batch、canonical cache、baseline-delta、best-overlay 记录)、
   last-window definitive 语义。
 - checker-owned `FillerRepairEngine` 借用 supplied Grid/Network,私有拥有
-  oracle checker/snapshot;configured filler init-time 注册、late request master
-  validate-then-rebuild;repair internal precheck 与原子 snapshot rebuild;
+  oracle checker/snapshot;所有 master 由 infrastructure 预注册，engine 只刷新
+  configured filler flag；每个 failing check 使用 fresh committed snapshot；
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译由模块自己的 `src/dpl2/src/fillerRepair/CMakeLists.txt` 拥有
   (target `dpl2::fillerRepair` / `dpl2::fillerRepairPlanner`)。
-- 91 个 planner unit tests、79 个 portable checker/planner/precheck cases 与 108 个
+- 93 个 planner unit tests、83 个 portable checker/planner/precheck cases 与 111 个
   fake-UDM checker/engine tests 全为 GoogleTest;
-  91 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
+  93 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
   和 helper-built portable E2E 一起迁移;fake UDM checker/engine suite 留在 local;
   regional precheck/repair 均 non-mutating;
   runtime integration 使用 checker `check()` 预留点与 fillerRepair;
   Network Node 同步由 infrastructure 独立负责,checker DRC 算法未修改。
-  2026-08-04 完整 local suite 为 278/278、migration gate 为 170/170，normal 与
-  ASan 均通过。
-- `fillerRepair2/` 提供 destination-only runtime projection：只保留 C++20 runtime
-  target，移除 tests、standalone discovery 与 test-only APIs。它必须随完整目录的
-  runtime 改动手工同步；现有 CTest 不替代目的地 build/strict syntax verification。
+  2026-08-04 完整 local suite 为 287/287；normal、ASan 与 migration gate 均为
+  必跑验证项。
+- `fillerRepair2/` 提供 copy-only runtime 目录：只保留 C++20 runtime target，
+  移除 tests 与 standalone discovery。八个 runtime/API 文件由 configure-time
+  SHA-256 gate 保证与完整目录一致；目的地仍需 real-UDM strict build。
   详见 `src/dpl2/HandOff.md` 与 `src/dpl2/src/fillerRepair/test/README.md`。
 
 ---

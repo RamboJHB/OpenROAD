@@ -20,11 +20,11 @@ Swap-only repair, complete and migration-ready.
 | Area | State |
 |---|---|
 | Planner | `internal::RepairPlanner`: adaptive window, filler domains, per-band ranking, subset enumeration, baseline-delta oracle gate. Deterministic, non-mutating |
-| Engine | `FillerRepairEngine` coordinates internal placement-snapshot, filler-catalog and checker-overlay components; it implements the two stable seams and borrows Grid/Network plus `fillerSetting`'s Design |
-| Checker | `ImplantLayerChecker(Grid*, Network*)` uses Grid's retained `PhysDesMgr`; repair wiring writes into caller's `fcRecord`; engine is lazy |
+| Engine | `FillerRepairEngine` coordinates placement snapshot, filler catalog and checker overlay components; it borrows Grid/Network and never constructs Network Masters |
+| Checker | `ImplantLayerChecker(Grid*, Network*)` uses Grid's retained `PhysDesMgr`; a fresh engine handles each failing check and appends only verified changes |
 | Build | `fillerRepair/CMakeLists.txt` owns the full verification package; `fillerRepair2/CMakeLists.txt` owns only the C++20 runtime target. Both use `dpl2_filler_repair_deps` when supplied |
-| Tests | 91 planner + 79 real-checker + 108 local fake-UDM engine cases; 278/278 local and 170/170 migration gate, normal and ASan |
-| Mirror rule | `fillerRepair/` is the source of truth. Mirror every runtime/API change into `fillerRepair2/`; existing CTest gates build the full directory, not the runtime-only copy |
+| Tests | 93 planner + 83 real-checker + 111 local fake-UDM engine cases; 287/287 local strict build |
+| Mirror rule | `fillerRepair/` is the source of truth. Eight runtime/API files are byte-identical in `fillerRepair2/`; configure-time SHA-256 checks reject drift |
 
 ## Fixed decisions
 
@@ -38,19 +38,22 @@ Swap-only repair, complete and migration-ready.
 4. **`fillerSetting::core_` is the only filler authority.**
    `fillerSetting::isFillerCell(LibCellID)` classifies registered Masters;
    Nodes inherit that stored Master type. Candidates come from the same list.
-   No production path re-derives filler identity from UDM macro flags.
-5. **Explicit design, no Session.** The caller supplies Design to the checker;
-   the engine gets the same Design from `fillerSetting`. Design, passed
-   `PhysDesMgr` and Grid manager must agree or initialization fails closed.
-6. **Trust infrastructure.** RowId is the Grid row, x is core-left-relative.
-   No Network↔UDM cross-validation: with lazy init the engine typically runs
-   mid-check, while the candidate Node already carries its proposed master.
+   No runtime path re-derives filler identity from UDM macro flags.
+5. **Grid-bound manager, no Session.** The checker obtains `PhysDesMgr` from
+   Grid. The engine also obtains Design through `fillerSetting`; its manager,
+   the explicit manager and Grid's manager must agree or init fails closed.
+6. **Committed state wins.** RowId is the Grid row and x is core-left-relative.
+   A target Node may already carry opto's transient master, so the engine reads
+   the committed `PhysCell` master and requires that it map through Network.
 7. **Regional gate only.** Repair refuses to run on a gap/overlap in the rows
    it can edit. Whole-design placement legality is infrastructure's gate.
 8. **Bounded, never wrong.** Budgets and level caps end a search as
    *truncated*, which is a bounded give-up — never a wrong acceptance.
 9. **Two seams, no third abstraction.** `PlacementView` in, `RepairOracle`
    out. Do not add another runtime layer beside the checker-owned engine.
+10. **Infrastructure constructs Masters.** Every configured filler and target
+    master is registered with the real edge table before repair. Engine init
+    only refreshes existing configured Masters with `setFiller(true)`.
 
 ## Change rules
 
