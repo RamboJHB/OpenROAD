@@ -13,15 +13,11 @@ namespace dpl2 {
 // loaded design.
 //
 //   test_filler_repair                          sweep every movable cell
-//   test_filler_repair -inst <id> -master <id>  one specific VT swap
+//   test_filler_repair -inst <inst> -master <name>  one specific VT swap
 //
-// Both options take **id numbers**, not names: `-inst` the instance id
-// (`LeafCellID`) and `-master` the replacement master's id (`LibCellID`) --
-// the same two handles `DePlace::isLegal(LeafCellID, LibCellID, fcRecord)`
-// takes, so a drill-in reproduces exactly the call opto makes. The values are
-// the ids' index values, which is what the sweep prints, so a reported line
-// pastes straight back as options. Both must be given together; with neither,
-// the command sweeps.
+// `-inst` takes an instance name, or the numeric node id the sweep prints.
+// `-master` takes the replacement master's cell name. Both must be given
+// together; with neither, the command sweeps.
 //
 // It talks to ImplantLayerChecker DIRECTLY, not through DePlace::isLegal /
 // PlacementDRC: this command must be usable before that wiring exists, and
@@ -37,15 +33,21 @@ namespace dpl2 {
 class TestFillerRepairCmd : public uvTCL::CciCommand
 {
  public:
-  TestFillerRepairCmd();
-
+  TestFillerRepairCmd()
+      : uvTCL::CciCommand("test_filler_repair",
+          "check implant DRC and report the filler swaps the repair engine "
+          "proposes; -inst <inst> -master <name> for one specific VT swap",
+          false /*echo*/, false /*hidden*/, false /*internal*/),
+      instOpt_(this, "inst", "std cell instance name/the node id the sweep prints",
+               false /*isRequired*/, false /*isHidden*/,false /*isPositional*/),
+      masterOpt_(this, "master", "replacement master cell name(same width&height)",
+                 false /*isRequired*/, false /*isHidden*/, false /*isPositional*/)
+   {};
   bool exec() override;
 
  private:
-  // The only two places this file touches the command framework's option
-  // API; see the ADAPT block at the top of the .cc.
-  void declareOptions();
-  bool readOption(const char* name, std::string& value) const;
+  eUNL::CciStringOption instOpt_;
+  eUNL::CciStringOption masterOpt_;
 };
 
 }  // namespace dpl2

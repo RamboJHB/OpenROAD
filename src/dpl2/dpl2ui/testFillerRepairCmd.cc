@@ -11,7 +11,6 @@
 #include <phys/physDesMgr.hh>
 #include <util/iter.hh>
 
-#include <exception>
 #include <functional>
 #include <iostream>
 #include <map>
@@ -23,53 +22,9 @@ using namespace eUNL;
 
 namespace dpl2 {
 
-// ===========================================================================
-// >>> ADAPT: command-framework option API <<<
-//
-// The two functions below are the ONLY code here that depends on how
-// uvTCL::CciCommand declares and reads options. Everything else works off
-// plain strings. If the framework spells these differently, this block is the
-// single place to change -- the command logic does not move.
-//
-// Expected behaviour:
-//   declareOptions()            registers "-inst" and "-master", each taking
-//                               one string value, both optional.
-//   readOption(name, value)     true and fills `value` when the user supplied
-//                               that option; false when they did not.
-//
-// Both values are read as strings and parsed to integers here, so a framework
-// that has no integer option type needs no change.
-// ===========================================================================
-
-TestFillerRepairCmd::TestFillerRepairCmd()
-    : uvTCL::CciCommand("test_filler_repair",
-          "check implant DRC and report the filler swaps the repair engine "
-          "proposes; -inst <instance id> -master <master id> for one specific "
-          "VT swap",
-          false /*echo*/, false /*hidden*/, false /*internal*/)
-{
-  declareOptions();
-}
-
-void TestFillerRepairCmd::declareOptions()
-{
-  addOption("-inst", "instance id (LeafCellID) of the std cell to retarget");
-  addOption("-master",
-            "master id (LibCellID) of the replacement, same width and height");
-}
-
-bool TestFillerRepairCmd::readOption(const char* name, std::string& value) const
-{
-  if (!isOptionSet(name)) {
-    return false;
-  }
-  value = getStringOption(name);
-  return true;
-}
-
-// ===========================================================================
+// =============================================================================
 // Below this line: no command-framework dependency.
-// ===========================================================================
+// =============================================================================
 
 namespace {
 
@@ -125,60 +80,57 @@ std::map<Footprint, std::vector<const eLIB::PhysLibCell*>> buildCandidateIndex(
   return index;
 }
 
-// `-inst` and `-master` are the two ids DePlace::isLegal(LeafCellID, LibCellID)
-// itself takes, so a drill-in reproduces exactly the call opto makes. Both are
-// given as the id's index value, which is what this command prints everywhere
-// (`inst=`, `master=`, `filler cell=`).
-bool parseId(const std::string& text, int& out)
+bool isAllDigits(const std::string& text)
 {
-  if (text.empty()
-      || text.find_first_not_of("0123456789") != std::string::npos) {
-    return false;
+  return !text.empty()
+      && text.find_first_not_of("0123456789") == std::string::npos;
+}
+
+// `-inst` accepts either form: the node id the sweep prints (always available,
+// nothing to look up) or the instance name (what a user reading their own
+// netlist has to hand).
+Node* findNode(Network* network,
+               PhysDesMgr* desMgr,
+               const std::string& instance)
+{
+  if (isAllDigits(instance)) {
+    return network->getNode(std::stoi(instance));
   }
-  try {
-    out = std::stoi(text);
-  } catch (const std::exception&) {
-    return false;
-  }
-  return true;
-}
-
-int instanceIdOf(const Node& node)
-{
-  return node.getDbInst().getIndexValue();
-}
-
-int masterIdOf(const eLIB::PhysLibCell& cell)
-{
-  return cell.getLibCellId().getIndexValue();
-}
-
-// Resolved against Network rather than the design, by comparing index values:
-// it avoids rebuilding a composite id out of an integer, and for the master it
-// folds in the registration requirement -- updateNode looks the master up in
-// Network, so one that is not there could not be proposed anyway.
-Node* findNode(Network* network, int instanceId)
-{
   for (auto& node : network->getNodes()) {
-    if (node && instanceIdOf(*node) == instanceId) {
+    if (!node) {
+      continue;
+    }
+    const PhysCell cell = desMgr->getPhysCell(node->getDbInst());
+    if (cell.isValid()
+        && cell.getPhysMaster().getLibCell().getName() == instance) {
       return node.get();
     }
   }
   return nullptr;
 }
 
-const eLIB::PhysLibCell* findMaster(Network* network, int masterId)
+// Same resolution fillerSetting::addFillerCell uses: name -> module -> lib
+// cell -> physical lib cell. Also accepts a numeric master ID (as printed by
+// ImplantLayerChecker::printStats) when Network is non-null.
+const eLIB::PhysLibCell* findMaster(eUNL::Design* design,
+                                    Network* network,
+                                    const std::string& masterName)
 {
-  for (const auto& master : network->getMasters()) {
-    if (!master) {
-      continue;
+  if (isAllDigits(masterName) && network != nullptr) {
+    const int masterId = std::stoi(masterName);
+    Master* master = network->getMaster(masterId);
+    if (master != nullptr) {
+      return master->getPhysLibCell();
     }
-    const eLIB::PhysLibCell* cell = master->getPhysLibCell();
-    if (cell != nullptr && masterIdOf(*cell) == masterId) {
-      return cell;
-    }
+    return nullptr;
   }
-  return nullptr;
+  const eFNL::ModuleID moduleId = design->getLibAcc().findModule(masterName);
+  const eLIB::LibCell* libCell = moduleId.isValid()
+      ? design->getLibAcc().getLibCell(moduleId) : nullptr;
+  if (libCell == nullptr) {
+    return nullptr;
+  }
+  return &design->getLibAcc().getPhysLibCell(libCell->getId());
 }
 
 // Everything one proposal needs, so the sweep and the targeted path share
@@ -198,11 +150,13 @@ ProposalResult evaluateProposal(const ipl::ImplantLayerChecker& checker,
                                 const eLIB::PhysLibCell& candidate)
 {
   ProposalResult result;
-  network->updateNode(node, desMgr, candidate);
+  // network->updateNode(node, desMgr, candidate);
   result.legal = checker.check(node, grid->gridX(node),
                                grid->gridSnapDownY(node), node->getOrient(),
                                result.changes);
-  network->updateNode(node, desMgr, original);
+  // network->updateNode(node, desMgr, original);
+  // if (result.legal)
+    // network->updateNode(node, desMgr, candidate);
   return result;
 }
 
@@ -211,19 +165,13 @@ void printChanges(const std::vector<CellChangeRecord>& changes,
                   const char* indent)
 {
   for (const CellChangeRecord& record : changes) {
-    std::cout << indent << "filler cell=";
-    if (const LeafCellID* cellId
-        = std::get_if<LeafCellID>(&record.cell_data_)) {
-      std::cout << cellId->getIndexValue();
-    } else {
-      std::cout << std::get<std::string>(record.cell_data_);
-    }
-    std::cout << " at (" << record.x_.getStorage() << ","
-              << record.y_.getStorage() << ")  master "
-              << record.orig_lib_cell_.getIndexValue() << " ("
-              << nameOf(record.orig_lib_cell_) << ") -> "
-              << record.new_lib_cell_.getIndexValue() << " ("
-              << nameOf(record.new_lib_cell_) << ")\n";
+    const LeafCellID* leafId = std::get_if<LeafCellID>(&record.cell_data_);
+    std::cout << indent << "filler cell="
+        << (leafId != nullptr ? leafId->getIndexValue() : -1)
+        << " at (" << record.x_.getStorage() << ","
+        << record.y_.getStorage() << ") "
+        << nameOf(record.orig_lib_cell_) << " -> "
+        << nameOf(record.new_lib_cell_) << "\n";
   }
 }
 
@@ -235,25 +183,16 @@ bool TestFillerRepairCmd::exec()
   std::cout << "  test_filler_repair: implant + repair  \n";
   std::cout << "========================================\n";
 
-  std::string instanceOpt;
-  std::string masterOpt;
-  const bool haveInstance = readOption("-inst", instanceOpt);
-  const bool haveMaster = readOption("-master", masterOpt);
+  const std::string instanceOpt = instOpt_.getValue();
+  const std::string masterOpt = masterOpt_.getValue();
+  const bool haveInstance = !instanceOpt.empty();
+  const bool haveMaster = !masterOpt.empty();
   if (haveInstance != haveMaster) {
     std::cout << "ERROR: -inst and -master must be given together "
                  "(omit both to sweep the design)\n";
     return false;
   }
   const bool targeted = haveInstance;
-
-  int instanceId = -1;
-  int masterId = -1;
-  if (targeted
-      && (!parseId(instanceOpt, instanceId) || !parseId(masterOpt, masterId))) {
-    std::cout << "ERROR: -inst and -master take id numbers, not names "
-                 "(-inst " << instanceOpt << " -master " << masterOpt << ")\n";
-    return false;
-  }
 
   eUNL::Session& sess = eUNL::Session::getSession();
   eUNL::Design* design = sess.getCurrentDesign();
@@ -276,6 +215,7 @@ bool TestFillerRepairCmd::exec()
   }
   std::cout << "grid: " << grid->getRowCount() << " x "
             << grid->getRowSiteCount() << "\n";
+
   if (!grid->isFullUtil()) {
     std::cout << "ERROR: placement grid is not fully utilized; filler repair "
                  "assumes every legal site is occupied\n";
@@ -283,6 +223,10 @@ bool TestFillerRepairCmd::exec()
   }
 
   fillerSetting* setting = de_place->getFillerSetting();
+
+  // set all filler as candidate
+  //setting->addAllFillerCells();
+
   if (!setting || setting->getFillerPhysCells().empty()) {
     std::cout << "ERROR: no filler masters configured -- run "
                  "set_filler_option first\n";
@@ -295,9 +239,10 @@ bool TestFillerRepairCmd::exec()
     return design->getLibAcc().getPhysLibCell(lcId).getLibCell().getName();
   };
 
-  // One checker for the whole run, bound to Grid's retained manager rather
-  // than whatever Session considers current, and pre-loaded with the repair
-  // context so the command does not depend on the DePlace provider.
+  // One checker for the whole run, bound to THIS design rather than to
+  // whatever Session considers current, and pre-loaded with the repair
+  // context so the command does not depend on the DePlace-registered
+  // provider having been installed.
   ipl::ImplantLayerChecker checker(grid, network);
   checker.setFillerRepairContext(desMgr, setting);
   if (!checker.getDiags().empty()) {
@@ -314,17 +259,16 @@ bool TestFillerRepairCmd::exec()
     }
   }
 
-  // =====================================================================
+  // =============================================================================
   // Targeted mode: one instance, one replacement master.
-  // =====================================================================
+  // =============================================================================
   if (targeted) {
-    std::cout << "\n--- targeted: inst " << instanceId << " -> master "
-              << masterId << " ---\n";
+    std::cout << "\n--- targeted: " << instanceOpt << " -> " << masterOpt
+              << " ---\n";
 
-    Node* node = findNode(network, instanceId);
+    Node* node = findNode(network, desMgr, instanceOpt);
     if (node == nullptr) {
-      std::cout << "ERROR: no instance with id " << instanceId
-                << " in Network\n";
+      std::cout << "ERROR: no such instance: " << instanceOpt << "\n";
       return false;
     }
     if (!node->isStdCell()) {
@@ -343,20 +287,15 @@ bool TestFillerRepairCmd::exec()
       return false;
     }
 
-    // Not in Network means no placed instance uses it. updateNode resolves the
-    // master through Network, so it has to be there already; registering it
-    // here would leave an undecorated master behind in shared state.
-    const eLIB::PhysLibCell* candidate = findMaster(network, masterId);
+    const eLIB::PhysLibCell* candidate = findMaster(design, network, masterOpt);
     if (candidate == nullptr) {
-      std::cout << "ERROR: no master with id " << masterId
-                << " registered in Network (no placed instance uses it)\n";
+      std::cout << "ERROR: no such master: " << masterOpt << "\n";
       return false;
     }
-    Master* candidateMaster = network->getMaster(candidate->getLibCellId());
-    if (candidateMaster == nullptr || candidateMaster->isFiller()) {
+    if (setting->isFillerCell(candidate->getLibCellId())) {
       std::cout << "ERROR: replacement master is a filler; the target of a "
                    "repair is a standard cell\n";
-      return false;
+      // return false;
     }
     if (!(footprintOf(*candidate) == footprintOf(*original))) {
       std::cout << "ERROR: replacement changes the footprint ("
@@ -367,16 +306,20 @@ bool TestFillerRepairCmd::exec()
                 << "); repair supports same-size swaps only\n";
       return false;
     }
+    // updateNode resolves the master through Network, so it has to be there
+    // already. Registering it here would leave an undecorated master behind
+    // in shared state.
+    if (network->getMaster(candidate->getLibCellId()) == nullptr) {
+      std::cout << "ERROR: master " << masterOpt << " is not registered in "
+                   "Network (no placed instance uses it)\n";
+      return false;
+    }
 
-    // node id is the checker's InstanceId and what the [fr] transcript names,
-    // so print it next to the instance id the option took.
-    std::cout << "  inst=" << instanceIdOf(*node) << " (node=" << node->getId()
-              << ")  pos=(" << node->getLeft().v << "," << node->getBottom().v
-              << ")  row=" << grid->gridSnapDownY(node).v << "\n";
-    std::cout << "  master: " << masterIdOf(*original) << " ("
-              << nameOf(original->getLibCellId()) << ") -> "
-              << masterIdOf(*candidate) << " ("
-              << nameOf(candidate->getLibCellId()) << ")\n";
+    std::cout << "  node=" << node->getId() << "  pos=(" << node->getLeft().v
+              << "," << node->getBottom().v << ")  row="
+              << grid->gridSnapDownY(node).v << "\n";
+    std::cout << "  master: " << nameOf(original->getLibCellId()) << " -> "
+              << nameOf(candidate->getLibCellId()) << "\n";
 
     const ProposalResult proposal = evaluateProposal(
         checker, grid, network, desMgr, node, *original, *candidate);
@@ -387,7 +330,7 @@ bool TestFillerRepairCmd::exec()
     } else if (proposal.legal) {
       std::cout << "  REPAIRED: " << proposal.changes.size()
                 << " filler swap(s), checker-verified\n";
-      printChanges(proposal.changes, nameOf, "      ");
+      printChanges(proposal.changes, nameOf, "    ");
     } else {
       std::cout << "  ILLEGAL: no filler swap set makes this VT change "
                    "legal\n";
@@ -395,19 +338,14 @@ bool TestFillerRepairCmd::exec()
     std::cout << "  set FR_VERBOSE=0 to silence the [fr] decision "
                  "transcript\n";
     std::cout << "\n========================================\n";
-    // In targeted mode the user asked one question, and every answer -- legal,
-    // repaired, or not repairable -- is a valid one. Only a bad request fails,
-    // and those returned above.
     std::cout << "  test_filler_repair DONE\n";
     std::cout << "========================================\n";
     return true;
   }
 
-  // =====================================================================
+  // =============================================================================
   // Phase 1 -- baseline. Every movable standard cell at its CURRENT master.
-  // A design that is already implant-dirty invalidates phase 2, because the
-  // repair gate is a delta against a clean baseline.
-  // =====================================================================
+  // =============================================================================
   std::cout << "\n--- phase 1: baseline (current masters) ---\n";
   int baselineChecked = 0;
   int baselineIllegal = 0;
@@ -426,10 +364,8 @@ bool TestFillerRepairCmd::exec()
     }
     ++baselineIllegal;
     if (baselineReported++ < kMaxReportedLines) {
-      std::cout << "  dirty as placed: -inst " << instanceIdOf(*node)
-                << " (node=" << node->getId() << ")  master="
-                << node->getMaster()->getDbMaster().getIndexValue() << " ("
-                << nameOf(node->getMaster()->getDbMaster()) << ")  pos=("
+      std::cout << "  dirty as placed: node=" << node->getId() << " master="
+                << nameOf(node->getMaster()->getDbMaster()) << " pos=("
                 << node->getLeft().v << "," << node->getBottom().v << ")"
                 << (legal ? "  (repairable)" : "  (no repair found)") << "\n";
     }
@@ -437,11 +373,9 @@ bool TestFillerRepairCmd::exec()
   std::cout << "  checked: " << baselineChecked
             << "  not clean: " << baselineIllegal << "\n";
 
-  // =====================================================================
-  // Phase 2 -- the feature itself. Propose a same-footprint master swap (the
-  // VT sibling opto would pick) and see whether the checker rejects it and
-  // the repair engine can fix it with filler swaps.
-  // =====================================================================
+  // =============================================================================
+  // Phase 2 -- propose same-footprint master swaps.
+  // =============================================================================
   std::cout << "\n--- phase 2: proposed VT swaps (max " << kMaxProposals
             << ") ---\n";
   const auto candidates = buildCandidateIndex(network);
@@ -487,19 +421,16 @@ bool TestFillerRepairCmd::exec()
         ++repaired;
         totalSwaps += static_cast<int>(proposal.changes.size());
         if (reported++ < kMaxReportedLines) {
-          // Printed as the options that reproduce this one case.
-          std::cout << "  repairable: -inst " << instanceIdOf(*node)
-                    << " -master " << masterIdOf(*candidate) << "   "
+          std::cout << "  repairable: node=" << node->getId() << "  "
                     << nameOf(originalId) << " -> "
                     << nameOf(candidate->getLibCellId())
                     << "  swaps=" << proposal.changes.size() << "\n";
-          printChanges(proposal.changes, nameOf, "      ");
+          printChanges(proposal.changes, nameOf, "    ");
         }
       } else {
         ++unrepairable;
         if (reported++ < kMaxReportedLines) {
-          std::cout << "  NO repair: -inst " << instanceIdOf(*node)
-                    << " -master " << masterIdOf(*candidate) << "   "
+          std::cout << "  NO repair: node=" << node->getId() << "  "
                     << nameOf(originalId) << " -> "
                     << nameOf(candidate->getLibCellId()) << "\n";
         }
@@ -508,7 +439,7 @@ bool TestFillerRepairCmd::exec()
     }
   }
 
-  // ---------------------------------------------------------------------
+  // ----------------------------------------------------------------------------
   std::cout << "\n--- Result ---\n";
   std::cout << "  baseline cells checked : " << baselineChecked << "\n";
   std::cout << "  baseline not clean     : " << baselineIllegal << "\n";
@@ -518,14 +449,10 @@ bool TestFillerRepairCmd::exec()
   std::cout << "    repaired by fillers  : " << repaired << "  ("
             << totalSwaps << " filler swaps proposed)\n";
   std::cout << "    no repair found      : " << unrepairable << "\n";
-  std::cout << "  re-run with the -inst/-master pair printed above to drill "
-               "into one case\n";
+  std::cout << "  re-run with -inst <node id> -master <name> to drill into "
+               "one case\n";
   std::cout << "  set FR_VERBOSE=0 to silence the [fr] decision transcript\n";
 
-  // A dirty baseline means phase 2 was measured against the wrong reference,
-  // so it is a failure even if every proposal happened to come back legal.
-  // `no repair found` is a legitimate outcome (some VT changes are simply not
-  // fixable by swapping fillers), so it does not fail the command.
   const bool passed = baselineIllegal == 0;
   std::cout << "\n========================================\n";
   std::cout << (passed ? "  test_filler_repair PASSED\n"
