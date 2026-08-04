@@ -9,7 +9,7 @@
 | §5 Window/Ranker 的有界扫描 | 已落地 |
 | §4.3 #1 提到的全局 `precheckFillerRepair()` | **已移除**。engine 只保留区域 gate;全设计 placement 合法性归 infrastructure |
 | `updateFillerRepair()` 快照刷新 | **已移除**。engine 改为懒初始化,快照随下一次懒建重建 |
-| §5 的 254/254 CTest 与时间数据 | 已过期。当前为 220/220 本地 + 146/146 migration gate;最新性能数据见 `src/dpl2/src/fillerRepair/README.md` 的 "Search cost" |
+| §5 的 254/254 CTest 与时间数据 | 已过期。当前为 277/277 本地 + 170/170 migration gate;最新性能数据见 `src/dpl2/src/fillerRepair/README.md` 的 "Search cost" |
 | §4.1 influence closure / §4.2 Tier 2 span rewrite | **未实现**,仍是未来方向 |
 
 原始更新: 2026-07-23。
@@ -192,7 +192,7 @@ Span rewrite 需要版本化 checker wire：
 
 | 模块 | 处理方式 |
 |---|---|
-| `FillerRepairEngine` / `PlannerDataSource` | 保留 snapshot、ID、precheck、candidate 入口和 non-mutating contract；`instance()`/`masterInfo()` 已是 O(1) dense-table，`instancesInRow()` 返回缓存 bucket |
+| `FillerRepairEngine` / `PlacementView` | 保留 snapshot、ID、regional precheck、candidate 入口和 non-mutating contract；`instance()`/`masterInfo()` 已是 O(1) dense-table，`instancesInRow()` 返回缓存 bucket |
 | `Signature` | 保留 violation normalization、signature 和 relatedness 基础 |
 | `Window` | 改为 influence-bound window；不能只沿 contiguous filler run 扩展 |
 | `Swap` | 保留为 Tier 1 generator |
@@ -211,7 +211,7 @@ filler，在稀疏场景下是纯浪费。本轮把热点扫描全部收窄为 x
 O(log n + 窗口内 filler)：
 
 - 两个共享原语 `firstRightEdgeAfter` / `firstStartAtOrAfter` 提到
-  `PlannerDataSource.h`（inline），供 `Window` 与 `Ranker` 复用；
+  `PlacementView.h`（inline），供 `Window` 与 `Ranker` 复用；
 - `Window`：`instancesInRing`、`buildWindow` 的 bridge 检测、`finalizeWindow` 的
   editable 收集（改为直接查成员再按 `(row,x,id)` 排序）、`expandWindowAdaptive`
   的左右 frontier 扩展，均不再扫全行；

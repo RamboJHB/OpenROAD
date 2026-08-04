@@ -304,9 +304,10 @@ quantity is how that bug arrived once already, so there is now exactly one.
 Network must contain every placed/fixed physical instance that can intersect
 the core, hard macros included; placement blockages remain Grid state and are
 not Network Nodes. The engine borrows the initialized Grid/Network, registers
-all `fillerSetting::getFillerPhysCells()` candidates, then constructs its
-oracle checker with the supplied `PhysDesMgr`. Calls on one checker/engine pair
-must not overlap.
+all `fillerSetting::getFillerPhysCells()` candidates, verifies that the supplied
+`PhysDesMgr` is exactly `Grid::getDesMgr()`, then constructs its private
+two-argument checker from Grid/Network. No Session fallback is allowed. Calls
+on one checker/engine pair must not overlap.
 
 The engine may still receive `replacement_master_not_filler` for a candidate
 the checker's own metadata rejects. It treats that as blocking and returns no
@@ -320,6 +321,11 @@ partial repair; it never reinterprets or bypasses checker legality.
 run in **both** harness modes — fake-UDM and the destination-shaped migration
 gate (170/170, normal and ASan). Repository-local fake-UDM engine regression:
 107 cases. Full local suite 277/277, normal and ASan.
+
+Those counts build the full `fillerRepair/` verification package. The sibling
+`fillerRepair2/` runtime-only projection is not compiled or compared by these
+CTest gates and must be built separately against the destination dependency
+target before migration.
 
 The fixture invariants the real-checker cases depend on — rule and layer ids as
 container indices, the band-polarity model, the `maxRuleValue_`-sized snapshot

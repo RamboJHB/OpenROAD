@@ -1,5 +1,7 @@
 # fillerRepair2 migration payload
 
+Updated: 2026-08-04.
+
 This directory contains only runtime code used by the destination: the
 checker-owned engine, planner, two planner seams, shared types, logging, and a
 minimal CMake target. It intentionally contains no tests, fake UDM, standalone
@@ -21,6 +23,18 @@ If the engine is compiled outside the destination's existing dependency
 scope, define an interface target named `dpl2_filler_repair_deps` before
 `add_subdirectory()` and attach the existing UDM, infrastructure, and checker
 include/link dependencies to it.
+
+## Synchronization and verification
+
+`../fillerRepair/` is the source of truth; this directory is a hand-maintained
+runtime-only projection, not generated output. Mirror every runtime algorithm,
+API, shared-wire or diagnostic change here before migration.
+
+The repository's 277-test local suite, 170-test migration gate and standalone
+module build compile the full `fillerRepair/` directory. They do not compile or
+compare this projection automatically. Build this directory against the
+destination dependency target, or run an equivalent C++20 strict syntax check,
+before copying it into place.
 
 Runtime API:
 

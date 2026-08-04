@@ -101,9 +101,9 @@ design lookup.
 
 **One filler authority.** `fillerSetting::isFillerCell(LibCellID)` answers whether
 a master belongs to the configured `core_` list. Infrastructure stores that
-answer on `Master`; `Node` inherits it whenever it is added, updated or
-updated. `set_filler_option` runs before filler placement, checker
-initialization and repair initialization. `Node::isFiller()` /
+answer on `Master`; `Node` inherits it whenever it is added or updated.
+`set_filler_option` runs before filler placement, checker initialization and
+repair initialization. `Node::isFiller()` /
 `Master::isFiller()` are the only downstream queries, so no production path
 re-derives filler identity from UDM macro flags. The same core list is the
 replacement candidate allow-list.
@@ -123,6 +123,13 @@ algorithm with compact comments and without tests, fake interfaces,
 standalone dependency discovery, `update()`, the raw-UDM repair overload, or
 the per-engine log override. Copy its contents into the destination's existing
 `fillerRepair/` path so the checker hook and include paths remain unchanged.
+It is a hand-maintained projection of this directory, which remains the source
+of truth; mirror every runtime/API change into both directories.
+
+The 277-test local suite, 170-test migration gate and standalone module build
+all compile this full directory. They do not automatically compile or compare
+`fillerRepair2/`; that minimal payload still needs a destination build (or an
+equivalent strict syntax check) before migration.
 
 ## Porting: what needs a decision
 

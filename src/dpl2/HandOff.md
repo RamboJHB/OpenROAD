@@ -14,20 +14,18 @@ Masters and Nodes from `fillerSetting::core_`.
 
 ## 0. Current baseline
 
-The branch was synchronized through `d0c3efe3e` before this cleanup. That
-includes the shared `CellChangeRecord`, fillerSetting-based classification,
-null-safety, adaptive halo tightening, and candidate-provider diagnostics.
-Do not port from the older `808c27f` snapshot; it predates those changes.
-
-The current tree then removes parallel snapshot tables and one-field candidate
-wrappers, fixes rebuild cache reset, and adds the runtime-only
-`src/dpl2/src/fillerRepair2/` package. Verification results are recorded below:
+The branch baseline reviewed for this handoff is `aa0d2ac9fe`. It includes the
+shared `CellChangeRecord`, fillerSetting-based classification, null-safety,
+adaptive halo tightening, candidate-provider diagnostics, removal of parallel
+snapshot tables and one-field candidate wrappers, rebuild-cache reset, and the
+runtime-only `src/dpl2/src/fillerRepair2/` package. Do not port from the older
+`808c27f` snapshot; it predates those changes. Verification results follow:
 
 | | |
 |---|---|
 | local suite | 277/277, normal and ASan |
 | migration gate (destination code path) | 170/170, normal and ASan |
-| `fillerRepair2` strict syntax gate | both runtime sources, C++20, `-Wall -Wextra -Werror` |
+| `fillerRepair2` manual strict syntax check | both runtime sources, C++20, `-Wall -Wextra -Werror`; not part of CTest |
 | `testFillerRepairCmd` | syntax-checked against the real dpl2 headers, `-Wall -Wextra`; **never linked** here |
 
 ---
@@ -45,6 +43,13 @@ wrappers, fixes rebuild cache reset, and adds the runtime-only
 Neither payload needs a DEF/LEF reader, fake UDM, or fixture provider at the
 destination. `fillerRepair2/README.md` is the minimal copy/link instruction;
 `fillerRepair/README.md` keeps the full design and verification record.
+
+`fillerRepair/` is the source of truth. `fillerRepair2/` is a hand-maintained
+runtime projection, not a generated directory: every runtime algorithm, API,
+wire or diagnostic change must be mirrored before migration. The 277-test local
+suite, 170-test migration gate and standalone module build all compile the full
+directory. They do **not** establish parity with `fillerRepair2/`; build that
+payload against the destination dependencies before copying it into place.
 
 ### Null-safety patch must travel
 
@@ -333,8 +338,9 @@ file must stay: the checker uses it.
 | Full local suite | 277/277, normal and ASan |
 | Migration gate (destination code path) | 170/170, normal and ASan |
 | Standalone module build | 170/170 |
+| Runtime-only `fillerRepair2` | manual strict syntax check; no automated parity/build gate |
 
-The migration gate builds the payload the way a destination does
+The migration gate builds the full verification package the way a destination does
 (`DPL2_TEST_USE_FAKE_UDM=OFF`, no fake-only target, no test provider) with the
 fake headers supplied through the real-UDM knob. It does not prove the headers
 are real; it proves every source compiles and every executable's **link closure

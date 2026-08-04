@@ -22,9 +22,10 @@
 namespace dpl2::fillerRepair {
 
 // Planner-internal oracle protocol. These types live with their sole owner
-// instead of the shared model in Types.h. Runtime callers never see an oracle
-// request id or status; FillerRepairEngine translates final-checker results at
-// this boundary while the FillerChanges payload remains unchanged.
+// instead of the shared model in RepairTypes.h.
+// Runtime callers never see an oracle request id or status;
+// FillerRepairEngine translates final-checker results at this boundary while
+// the FillerChanges payload remains unchanged.
 using OracleRequestId = int32_t;
 
 struct OracleRequest

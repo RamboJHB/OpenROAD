@@ -1,6 +1,6 @@
 # Repository-local fillerRepair harness
 
-Updated: 2026-08-03.
+Updated: 2026-08-04.
 
 **Not part of the migration payload.** It exists so the feature can be
 developed and gated with no real UDM present. It owns the UDM-compatible
@@ -23,7 +23,8 @@ SANITIZE=address ./run_migration_gate.sh
 
 ## The migration gate
 
-`run_migration_gate.sh` builds with `DPL2_TEST_USE_FAKE_UDM=OFF` — no fake-only
+`run_migration_gate.sh` builds the full `src/dpl2/src/fillerRepair/` package
+with `DPL2_TEST_USE_FAKE_UDM=OFF` — no fake-only
 target, no test provider — supplying the fake headers through the *real*-UDM
 knob. That is deliberate: the point is not that the headers are real, it is
 that this exercises the **destination code path** and proves every source
@@ -33,3 +34,7 @@ A static compile-check library cannot prove that. Archives do not resolve
 symbols; only linking an executable does. This gate exists because a divergent
 real-UDM CMake branch once quietly stopped linking `FillerRepairEngine`, and
 nobody could see it without a real UDM.
+
+This gate does not compile or compare the hand-maintained `fillerRepair2/`
+runtime-only projection. That directory needs a separate destination build or
+strict syntax check before migration.
