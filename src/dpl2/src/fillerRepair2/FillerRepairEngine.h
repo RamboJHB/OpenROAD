@@ -38,7 +38,9 @@ class FillerRepairEngine
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
-  // Binds the existing Grid/Network and configured filler masters once.
+  // Binds Grid/Network to fillerSetting's explicit Design and configured
+  // filler masters once. The Design manager, desMgr and Grid manager must
+  // agree.
   bool init(eUNL::PhysDesMgr* desMgr, const fillerSetting& fillerSetting);
 
   // Non-mutating, pre-commit overlay repair.

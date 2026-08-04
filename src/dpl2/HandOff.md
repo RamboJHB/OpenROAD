@@ -14,12 +14,15 @@ Masters and Nodes from `fillerSetting::core_`.
 
 ## 0. Current baseline
 
-The branch baseline reviewed for this handoff is `aa0d2ac9fe`. It includes the
+The branch baseline reviewed for this handoff is `4fd2e8108a`. It includes the
 shared `CellChangeRecord`, fillerSetting-based classification, null-safety,
 adaptive halo tightening, candidate-provider diagnostics, removal of parallel
 snapshot tables and one-field candidate wrappers, rebuild-cache reset, and the
-runtime-only `src/dpl2/src/fillerRepair2/` package. Do not port from the older
-`808c27f` snapshot; it predates those changes. Verification results follow:
+runtime-only `src/dpl2/src/fillerRepair2/` package. The current update changes
+`ImplantLayerChecker` to receive and retain the caller's explicit `eUNL::Design*`,
+passes the `fillerSetting` design through both repair packages, and removes any
+need for a global Session lookup. Do not port from the older `808c27f` snapshot;
+it predates those changes. Verification results follow:
 
 | | |
 |---|---|
@@ -103,10 +106,12 @@ the first DRC-illegal check, so a run whose checks all pass never pays for it.
 
 Two things must reach the checker before the first failing check:
 
-- **`PhysDesMgr`** — `Grid` retains the manager used by `initGrid()`;
-  `ImplantLayerChecker(Grid*, Network*)` reads it through `Grid::getDesMgr()`.
-  Missing `Grid`, `Network`, or manager is a fatal checker initialization
-  diagnostic.
+- **`Design` and `PhysDesMgr`** — the caller constructs
+  `ImplantLayerChecker(Grid*, eUNL::Design*, Network*)`. The checker stores the
+  non-owning Design, reads its manager directly, and verifies it equals
+  `Grid::getDesMgr()`. Missing Grid, Design, Network or manager, and a
+  Design/Grid mismatch, are fatal initialization diagnostics. Session is never
+  read.
 - **`fillerSetting`** — `DePlace` registers a provider once:
   `ImplantLayerChecker::setFillerRepairSettingProvider(&provideSetting)`.
   The checker never names `DePlace`, so builds without it still link.
@@ -182,11 +187,11 @@ Rerun with `-DDPL2_ENABLE_ASAN=ON` before signing off.
 
 ## 5. What the destination must guarantee
 
-- **One design revision.** `PhysDesMgr`, `Grid`, `Network` and one engine
-  describe the same revision. UDM design/library objects outlive the engine.
-  `Grid::getDesMgr()` is the design authority: engine initialization rejects a
-  different manager, and the private oracle checker receives only `Grid` and
-  `Network`. No global design state is read.
+- **One design revision.** Explicit `Design`, `PhysDesMgr`, `Grid`, `Network`
+  and one engine describe the same revision. UDM design/library objects outlive
+  the checker and engine. The engine gets Design from `fillerSetting`, verifies
+  its manager equals the `init()` and Grid managers, and passes that Design to
+  its private oracle checker. No global design state is read.
 - **Network completeness.** Every placed/fixed physical instance that can
   intersect the core, hard macros included. Placement blockages stay Grid
   state, not Network Nodes.
@@ -270,7 +275,7 @@ the wrong thing. Read those first.
 | `FillerRepairEngine.cpp` `checkPlaceWithOverlays` | Batch semantics: one `FillerChanges` = one candidate, results correlate **by input order**, count must match | **silent**: answers mis-attributed to candidates |
 | `FillerRepairEngine.cpp` — initial halo sizing | `getMaxRuleValue()` means checker reach in **sites** and remains the correctness floor; the other input is the widest configured filler master, never an arbitrary placed standard cell or macro. The later planner guard uses the actual two-cell ring | **silent**: too-small reach truncates runs; global placed-master sizing makes macro designs pathologically slow |
 | `RepairPlanner.cpp` `finalizeWindow` — guard rows | Inter-row rules reach **one** row boundary, so ±2 rows of guard covers it. Horizontal reach is not guessed like this; it comes from the checker | **silent**: the checker is never shown the row a new violation appeared in |
-| `FillerRepairEngine.cpp` `init` | `Grid::getDesMgr()`, so Grid/Network/checker/engine provably describe one design revision | caught: fatal init diagnostic |
+| `FillerRepairEngine.cpp` `init` | `fillerSetting::getDesign()`, its `PhysDesMgr`, and `Grid::getDesMgr()` must agree before the explicit Design is passed to the private checker | caught: fatal init diagnostic |
 | `FillerRepairEngine.cpp` `ensureMasterRegistered` | `Network::addMaster`'s signature — the only version-sensitive *signature* in the payload, already changed twice | caught: compile error |
 | `FillerRepairEngine.cpp` `cellChangeRecord` | `CellChangeRecord`'s shape. Fill **every** field; `orientation_` is read when the checker evaluates the swapped filler | mixed |
 | `FillerRepairEngine.cpp` `buildPlannerData` — filler identity | Infrastructure's single filler authority (`Master`/`Node` carry it). Never re-derive from UDM macro flags — they disagree, and that was a real bug | mixed |

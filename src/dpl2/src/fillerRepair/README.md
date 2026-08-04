@@ -91,13 +91,14 @@ engine performs no Network↔UDM cross-validation — with lazy init it typicall
 runs mid-check, while the candidate Node already carries its proposed master
 ahead of the pending UDM commit.
 
-`Grid` is the single design authority for checker construction. It retains the
-`PhysDesMgr` used by `initGrid()`, and
-`ImplantLayerChecker(Grid*, Network*)` reads that manager through
-`Grid::getDesMgr()`. The engine rejects initialization unless its `PhysDesMgr`
-is that same pointer, then creates its private checker with only `Grid` and
-`Network`. There is no explicit-design checker constructor and no global
-design lookup.
+The caller-supplied `Design` is the checker design authority.
+`ImplantLayerChecker(Grid*, eUNL::Design*, Network*)` stores that non-owning
+handle as `design_` and obtains `PhysDesMgr` from it, never from Session. The
+Grid manager remains an independent consistency check: a missing Grid,
+Design, Network or manager, or a Design/Grid manager mismatch, fails closed.
+The engine obtains the same Design from `fillerSetting`, verifies its manager
+against both the `init()` manager and Grid, and passes it to the private
+checker. No global design lookup exists.
 
 **One filler authority.** `fillerSetting::isFillerCell(LibCellID)` answers whether
 a master belongs to the configured `core_` list. Infrastructure stores that

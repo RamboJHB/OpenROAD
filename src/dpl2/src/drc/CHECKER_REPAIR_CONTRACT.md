@@ -52,8 +52,9 @@ consumed.
 
 ### Lazy engine and initialization failures
 
-The engine is created on the first failing check. The checker reads its
-`PhysDesMgr` from `Grid::getDesMgr()` plus either
+The engine is created on the first failing check. The caller passes an explicit
+`Design*` to the checker, which stores it and reads its `PhysDesMgr` directly.
+The filler setting arrives through either
 `setFillerRepairContext()` (harnesses) or the provider registered through
 `setFillerRepairSettingProvider()` (production — dependency inversion, so the
 checker never names `DePlace`).
@@ -97,16 +98,19 @@ approved sequence from each result. A count-based single-prefix strip is wrong.
 
 1. **Repair wiring in `check()`** — the reserved block now calls the owned
    engine with the exact `CheckRequest` that method already built, and appends
-   into the caller's `fcRecord`. Members added: `desMgr_`, `repairSetting_`,
-   `repairEngine_`, `repairEngineFailed_`, plus `setFillerRepairContext()` and
-   the static `setFillerRepairSettingProvider()`.
+   into the caller's `fcRecord`. Members added: `design_`, `desMgr_`,
+   `repairSetting_`, `repairEngine_`, `repairEngineFailed_`, plus
+   `setFillerRepairContext()` and the static
+   `setFillerRepairSettingProvider()`.
 
-2. **Grid-bound design context**
-   `ImplantLayerChecker(Grid*, Network*)` is the only constructor. It reads the
-   manager retained by `Grid::getDesMgr()` and fails closed when `Grid`,
-   `Network`, or that manager is absent. `FillerRepairEngine::init()` also
-   rejects a manager that differs from Grid's manager before creating its
-   private two-argument checker. No global design state is consulted.
+2. **Explicit design context**
+   `ImplantLayerChecker(Grid*, eUNL::Design*, Network*)` is the only
+   constructor. It stores the caller's non-owning Design, obtains its manager
+   directly, and
+   fails closed when Grid, Design, Network or either manager is absent, or when
+   the Design and Grid managers differ. `FillerRepairEngine::init()` gets the
+   same Design from `fillerSetting`, verifies all three manager references, and
+   passes it to the private checker. No global design state is consulted.
 
 3. **`checkDirect()` extends `masterItems_` lazily** when the request master
    was registered in Network after checker init — the
@@ -300,14 +304,16 @@ quantity is how that bug arrived once already, so there is now exactly one.
 
 ## 5. Shared-state requirements
 
-`PhysDesMgr`, `Grid`, `Network` and one engine describe one design revision.
+Explicit `Design`, `PhysDesMgr`, `Grid`, `Network` and one engine describe one
+design revision.
 Network must contain every placed/fixed physical instance that can intersect
 the core, hard macros included; placement blockages remain Grid state and are
 not Network Nodes. The engine borrows the initialized Grid/Network, registers
-all `fillerSetting::getFillerPhysCells()` candidates, verifies that the supplied
-`PhysDesMgr` is exactly `Grid::getDesMgr()`, then constructs its private
-two-argument checker from Grid/Network. No Session fallback is allowed. Calls
-on one checker/engine pair must not overlap.
+all `fillerSetting::getFillerPhysCells()` candidates, retains
+`fillerSetting::getDesign()`, verifies its manager equals the supplied manager
+and `Grid::getDesMgr()`, then constructs its private checker from
+Grid/Design/Network. No Session fallback is allowed. Calls on one checker/engine
+pair must not overlap.
 
 The engine may still receive `replacement_master_not_filler` for a candidate
 the checker's own metadata rejects. It treats that as blocking and returns no

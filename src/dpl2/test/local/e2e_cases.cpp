@@ -211,9 +211,10 @@ class CheckerHarness
     filler_setting_->addFillerCell(kDefaultFillers);
     checker_ = std::make_unique<dpl2::ipl::ImplantLayerChecker>(
         objects_.infrastructure().grid(),
+        objects_.design().design(),
         objects_.infrastructure().network());
-    // The checker self-initializes from Grid's retained manager; the repair
-    // engine is created lazily on the first failing check. This presets what
+    // The checker self-initializes from the explicit Design; the repair engine
+    // is created lazily on the first failing check. This presets what
     // production obtains from the DePlace-registered provider.
     if (presetContext) {
       checker_->setFillerRepairContext(objects_.design().desMgr(),
@@ -911,10 +912,10 @@ TEST_P(FillerRepairEngineE2E, MissingInfrastructureErrorsOut)
   EXPECT_TRUE(hasDiagnostic(repair.diagnostics, "missing_infrastructure"));
 }
 
-// Grid is the only design authority for checker construction. Changing the
-// global current design after infrastructure creation must not redirect either
-// the checker or the engine's private checker.
-TEST_P(FillerRepairEngineE2E, GridManagerDrivesCheckerWithoutGlobalSession)
+// The caller-supplied Design is the checker authority. Changing the global
+// current design after infrastructure creation must not redirect either the
+// checker or the engine's private checker.
+TEST_P(FillerRepairEngineE2E, ExplicitDesignAvoidsGlobalSession)
 {
   auto provider = frt::makeE2ETestProvider();
   ASSERT_NE(provider, nullptr);
@@ -932,9 +933,15 @@ TEST_P(FillerRepairEngineE2E, GridManagerDrivesCheckerWithoutGlobalSession)
   active->activate();
   ASSERT_EQ(infrastructure->grid()->getDesMgr(), requested->desMgr());
   dpl2::ipl::ImplantLayerChecker checker(infrastructure->grid(),
+                                         requested->design(),
                                          infrastructure->network());
   EXPECT_TRUE(checker.getDiags().empty()) << diagnosticText(checker.getDiags());
   EXPECT_EQ(checker.siteWidth(), infrastructure->grid()->getSiteWidth().v);
+  dpl2::ipl::ImplantLayerChecker mismatchedChecker(
+      infrastructure->grid(), active->design(), infrastructure->network());
+  EXPECT_TRUE(hasDiagnostic(mismatchedChecker.getDiags(),
+                            "grid_design_mismatch"));
+
   dpl2::fillerSetting setting(requested->design());
   setting.addFillerCell(kDefaultFillers);
   dpl2::fillerRepair::FillerRepairEngine engine(infrastructure->grid(),

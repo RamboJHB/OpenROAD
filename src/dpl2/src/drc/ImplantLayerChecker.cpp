@@ -196,8 +196,10 @@ Layer::Polar ImplantLayerChecker::getPolar(RowId rowA, RowId rowB) const
     return (low % 2 == 0) ? opposite(basePolar_) : basePolar_;
 }
 
-ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network)
-    : DRCChecker(grid), network_(network)
+ImplantLayerChecker::ImplantLayerChecker(Grid* grid,
+    eUNL::Design* design,
+    Network* network)
+    : DRCChecker(grid), network_(network), design_(design)
 {
     if (grid_ == nullptr) {
         diagnostics_.push_back({"missing_grid",
@@ -209,11 +211,29 @@ ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network)
             "fatal: ImplantLayerChecker requires an initialized Network"});
         return;
     }
-    desMgr_ = grid_->getDesMgr();
+    if (design_ == nullptr) {
+        diagnostics_.push_back({"missing_design",
+            "fatal: ImplantLayerChecker requires an explicit Design"});
+        return;
+    }
+    desMgr_ = design_->getPhysDesMgr();
     if (desMgr_ == nullptr) {
+        diagnostics_.push_back({"missing_design_phys_des_mgr",
+            "fatal: ImplantLayerChecker requires the explicit Design to own"
+            " a PhysDesMgr"});
+        return;
+    }
+    PhysDesMgr* const gridDesMgr = grid_->getDesMgr();
+    if (gridDesMgr == nullptr) {
         diagnostics_.push_back({"missing_grid_phys_des_mgr",
-            "fatal: ImplantLayerChecker requires Grid to retain the PhysDesMgr"
-            " used to initialize it"});
+            "fatal: ImplantLayerChecker requires Grid to retain its"
+            " initialization PhysDesMgr"});
+        return;
+    }
+    if (gridDesMgr != desMgr_) {
+        diagnostics_.push_back({"grid_design_mismatch",
+            "fatal: ImplantLayerChecker Design PhysDesMgr must match Grid's"
+            " initialization PhysDesMgr"});
         return;
     }
     designContextReady_ = true;
@@ -809,16 +829,19 @@ void ImplantLayerChecker::setFillerRepairContext(PhysDesMgr* desMgr,
 {
     repairSetting_ = setting;
     repairEngine_.reset();
+    PhysDesMgr* const designDesMgr
+        = design_ != nullptr ? design_->getPhysDesMgr() : nullptr;
     PhysDesMgr* const gridDesMgr
         = grid_ != nullptr ? grid_->getDesMgr() : nullptr;
-    if (!designContextReady_ || desMgr == nullptr || gridDesMgr == nullptr
+    if (!designContextReady_ || desMgr == nullptr || designDesMgr == nullptr
+        || gridDesMgr == nullptr || desMgr != designDesMgr
         || desMgr != gridDesMgr) {
         repairEngineFailed_ = true;
         fillerRepair::reportRepairUnavailable(
-            "repair PhysDesMgr must match the manager retained by Grid");
+            "repair PhysDesMgr must match explicit Design and Grid");
         return;
     }
-    desMgr_ = gridDesMgr;
+    desMgr_ = designDesMgr;
     repairEngineFailed_ = false;
 }
 

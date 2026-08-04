@@ -268,11 +268,11 @@ runtime-only 投影，复制其内容到目的地已有的 `fillerRepair/` 路�
 
 - 移植目的地已经提供 final checker；推荐 integration 使用 `fillerRepair2/` 的
   runtime files，并带上 checker `check()` 预留点和 contract 中的 delivered-code fixes。
-  checker-owned engine 借用 supplied Grid/Network、私有持有 checker/planner
-  snapshot;UDM 到 Network 的同步由目的地 infrastructure 负责。本项目不修改其
-  DRC 算法,也不要求其提供本仓库的 CMake。
+  checker-owned engine 借用 supplied Grid/Network 和 `fillerSetting` 的 Design、
+  私有持有 checker/planner snapshot;UDM 到 Network 的同步由目的地
+  infrastructure 负责。本项目不修改其 DRC 算法,也不要求其提供本仓库的 CMake。
 - `ImplantLayerChecker::check(node, x, y, orient, fcRecord)` 是唯一 caller repair
-  边界;checker 通常直接构造在 `DePlace::getGrid()` / `getNetwork()` 上。
+  边界;checker 由调用方显式传入 Grid、active Design 与 Network，不读取 Session。
   engine 在第一次 DRC 不合法的 check 时懒创建,绑定现有 infrastructure 并注册
   configured filler masters。row/site/status/origin/orientation 的 authority 是
   `PhysDesMgr`。
@@ -580,7 +580,8 @@ master 序列)可铺满该宽度"。第一版实现建议内部就按宽度建�
 ### 5.4 Checker entry 与 placement precheck
 
 ```cpp
-ImplantLayerChecker(Grid* grid, Network* network);
+ImplantLayerChecker(Grid* grid, eUNL::Design* design,
+                    Network* network);
 
 // 唯一入口:调用方持有 fcRecord,checker 只 APPEND,不保存任何成员
 bool check(const Node* node, GridX x, GridY y,
@@ -594,11 +595,13 @@ static void setFillerRepairSettingProvider(FillerSettingProvider provider);
 void setFillerRepairContext(PhysDesMgr* desMgr, const fillerSetting* setting);
 ```
 
-checker constructor 只接收并借用已初始化的 Grid/Network；`PhysDesMgr` 必须来自
-`grid->getDesMgr()`，禁止 fallback 到 global Session。Grid、Network 或 manager
-缺失时 checker fail closed。engine **懒创建**于第一次 DRC 不合法的 check，验证
-调用方 manager 与 Grid manager 是同一个对象后，注册 configured filler masters，
-再用两参数 constructor 创建私有 oracle checker 与 runtime snapshot。
+checker constructor 借用已初始化的 Grid、调用方显式传入的 `Design*` 与 Network，
+并把 Design 保存为 non-owning `design_`。`PhysDesMgr` 直接来自
+`design_->getPhysDesMgr()`，禁止 fallback 到 global Session；同时必须与
+`grid->getDesMgr()` 相同。Grid、Design、Network、任一 manager 缺失或 manager
+不一致时 checker fail closed。engine **懒创建**于第一次 DRC 不合法的 check，
+从 `fillerSetting::getDesign()` 取得同一个 Design，验证其 manager 与 engine/Grid
+一致，注册 configured filler masters，再把显式 Design 传给私有 oracle checker。
 
 `set_filler_option`、Grid/Network 初始化和 checker 初始化都早于 repair，因此缺少
 `fillerSetting`/`PhysDesMgr` 与结构性 `FillerRepairEngine::init()` 失败一样都是

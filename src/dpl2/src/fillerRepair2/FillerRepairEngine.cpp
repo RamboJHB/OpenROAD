@@ -86,6 +86,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
 
   Grid* grid_ = nullptr;
   Network* network_ = nullptr;
+  eUNL::Design* design_ = nullptr;
   eUNL::PhysDesMgr* des_mgr_ = nullptr;
   const fillerSetting* filler_settings_ = nullptr;
   std::vector<const eLIB::PhysLibCell*> filler_masters_;
@@ -1463,7 +1464,8 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
 {
   ipl::CheckResult result;
   result.isLegal = true;
-  if (!initialized_ || des_mgr_ == nullptr || grid_ == nullptr
+  if (!initialized_ || design_ == nullptr || des_mgr_ == nullptr
+      || grid_ == nullptr
       || network_ == nullptr) {
     result.isLegal = false;
     result.diagnostics.push_back(
@@ -1635,6 +1637,7 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
   }
 // Per-node Network<->UDM cross-validation was removed deliberately:
 
+  design_ = settingDesign;
   filler_settings_ = &fillerSettings;
   filler_masters_ = fillerSettings.getFillerPhysCells();
   for (size_t configuredIndex = 0;
@@ -1682,7 +1685,9 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   checker_.reset();
   oracle_diagnostics_.clear();
   repair_config_.verbose = log_.enabled();
-  checker_ = std::make_unique<ipl::ImplantLayerChecker>(grid_, network_);
+  // The private checker receives the same explicit Design validated at init.
+  checker_ = std::make_unique<ipl::ImplantLayerChecker>(
+      grid_, design_, network_);
   buildPlannerData();
   bool checkerReady = true;
   for (const ipl::Diagnostic& diagnostic : checker_->getDiags()) {

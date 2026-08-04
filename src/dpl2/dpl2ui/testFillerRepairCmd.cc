@@ -299,7 +299,7 @@ bool TestFillerRepairCmd::exec()
   // whatever Session considers current, and pre-loaded with the repair
   // context so the command does not depend on the DePlace-registered
   // provider having been installed.
-  ipl::ImplantLayerChecker checker(grid, network, desMgr);
+  ipl::ImplantLayerChecker checker(grid, design, network);
   checker.setFillerRepairContext(desMgr, setting);
   if (!checker.getDiags().empty()) {
     std::cout << "checker init diagnostics: " << checker.getDiags().size()

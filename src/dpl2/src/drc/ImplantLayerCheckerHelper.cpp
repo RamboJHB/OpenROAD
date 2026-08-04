@@ -243,11 +243,11 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
     checker.rowHeight_ = inputRowHeight_;
     checker.siteWidth_ = inputSiteWidth_;
     // This helper supplies the complete synthetic checker model without UDM.
-    // Remove the production-only manager diagnostic after that explicit setup.
+    // Remove the production-only Design diagnostic after that explicit setup.
     checker.diagnostics_.erase(
         std::remove_if(checker.diagnostics_.begin(), checker.diagnostics_.end(),
             [](const Diagnostic& diagnostic) {
-                return diagnostic.status == "missing_grid_phys_des_mgr";
+                return diagnostic.status == "missing_design";
             }),
         checker.diagnostics_.end());
     checker.designContextReady_ = true;

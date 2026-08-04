@@ -268,7 +268,8 @@ using CheckShapes = std::vector<CheckShape>;
 class ImplantLayerChecker final : public DRCChecker
 {
 public:
-    ImplantLayerChecker(Grid* grid, Network* network);
+    ImplantLayerChecker(Grid* grid, eUNL::Design* design,
+        Network* network);
     ~ImplantLayerChecker();
 
     bool check(const Node* cell, GridX x, GridY y,
@@ -298,7 +299,7 @@ public:
     size_t mergedShapeCount() const;
 
     // Presets what lazy filler-repair initialization would otherwise obtain
-    // from the registered provider (desMgr from this checker's init,
+    // from the registered provider (desMgr from the explicit Design,
     // fillerSetting from set_filler_option). Call before check() in
     // harnesses that do not run under a DePlace owner.
     void setFillerRepairContext(PhysDesMgr* desMgr,
@@ -386,6 +387,8 @@ private:
     Dbu queryRadius(const Rule& rule) const;
 
     Network* network_ = nullptr;
+    // Explicit non-owning design context; never sourced from Session.
+    eUNL::Design* design_ = nullptr;
     std::vector<Layer> layers_;
     std::unordered_map<std::string, std::vector<LayerId>> layerGroups_;
     std::vector<Rule> rules_;
@@ -393,8 +396,9 @@ private:
     std::vector<MasterItem> masterItems_;
 
     std::vector<Diagnostic> diagnostics_; // Initialization diagnostics.
-    // Production initialization requires Grid, Network, and Grid's retained
-    // PhysDesMgr. The portable helper sets this after injecting synthetic data.
+    // Production initialization requires Grid, explicit Design, Network, and
+    // matching Design/Grid managers. The portable helper sets this after
+    // injecting synthetic data.
     bool designContextReady_ = false;
     Layer::Polar basePolar_ = Layer::Polar::P; // polarity at
     //bottom band of row 0; polarity alternates per row.
@@ -403,8 +407,8 @@ private:
     int maxRuleValue_ = 1; // the maxValue for all rules' minValue
     mutable int nextCandShapeId_ = -1; // Temporary candidate shape ids.
 
-    // Filler repair (lazy). desMgr_ is bound from Grid; the setting comes from
-    // setFillerRepairContext() or the registered provider.
+    // Filler repair (lazy). The setting comes from setFillerRepairContext()
+    // or the registered provider.
     PhysDesMgr* desMgr_ = nullptr;
     const fillerSetting* repairSetting_ = nullptr;
     mutable std::unique_ptr<fillerRepair::FillerRepairEngine> repairEngine_;
