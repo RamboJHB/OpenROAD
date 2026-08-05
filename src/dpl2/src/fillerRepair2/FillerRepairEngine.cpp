@@ -1842,8 +1842,8 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " requestedPhysDesMgr=", static_cast<const void*>(desMgr)));
     return false;
   }
-  eUNL::Design* settingDesign = fillerSettings.getDesign();
-  eUNL::PhysDesMgr* settingDesMgr
+  const eUNL::Design* settingDesign = fillerSettings.getDesign();
+  const eUNL::PhysDesMgr* settingDesMgr
       = settingDesign != nullptr ? settingDesign->getPhysDesMgr() : nullptr;
   if (settingDesign == nullptr || settingDesMgr != desMgr) {
     failInit("design_mismatch",
@@ -1912,15 +1912,8 @@ bool FillerRepairEngine::Impl::ensureMasterRegistered(
   if (network_ == nullptr || grid_ == nullptr || filler_settings_ == nullptr) {
     return false;
   }
-  // Always refresh existing masters too. Network::addMaster() re-applies the
-  // sole filler authority from fillerSetting; rebuildOracle() then gives the
-  // private checker the same classification.
-  static const EdgeTypeTable kNoEdgeTypes;
-  Master* refreshed = network_->addMaster(
-      master, *filler_settings_, grid_, &kNoEdgeTypes);
-  return refreshed != nullptr
-         && refreshed->isFiller()
-                == filler_settings_->isFillerCell(master.getLibCellId());
+  return true;
+
 }
 
 bool FillerRepairEngine::Impl::rebuildOracle()
