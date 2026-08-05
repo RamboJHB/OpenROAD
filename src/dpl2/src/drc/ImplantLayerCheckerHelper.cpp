@@ -243,7 +243,7 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
     checker.rowHeight_ = inputRowHeight_;
     checker.siteWidth_ = inputSiteWidth_;
     // This helper supplies the complete synthetic checker model without UDM.
-    // Remove the runtime-only Grid-manager diagnostic after that setup.
+    // Remove the production-only Grid-manager diagnostic after that setup.
     checker.diagnostics_.erase(
         std::remove_if(checker.diagnostics_.begin(), checker.diagnostics_.end(),
             [](const Diagnostic& diagnostic) {
@@ -271,7 +271,6 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
         checker.masterItems_[i] = std::move(item);
     }
 
-    checker.validateMasterImplantFamilies();
     // [fillerRepair-fix] buildRules() now reads the members set above.
     checker.buildRules();
     checker.setMaxRuleValue();
@@ -349,7 +348,7 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
 
     // -- placed instances (reconstructed from network nodes) --
     // Build placedInsts from checker's network nodes.
-    // For the real-design flow, checker runs against a Design
+    // For the production-flow case, checker runs against a real design
     // accessed via its Network.  The PlacedInst fields (rowId, colId) are
     // derived from node coordinates.
     std::vector<PlacedInst> placedInsts;

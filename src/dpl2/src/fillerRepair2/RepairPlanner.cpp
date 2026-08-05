@@ -8,13 +8,10 @@
 #include <map>
 #include <set>
 #include <tuple>
-#include <unordered_set>
 
 namespace dpl2::fillerRepair {
 
-// --------------------------------------------------------------------------
 // Swap model -- one filler, one new master, everything else unchanged.
-// --------------------------------------------------------------------------
 
 std::optional<Swap> makeSwap(const PlacementView& view,
                              InstanceId instanceId,
@@ -65,9 +62,7 @@ std::optional<Swap> makeSwap(const PlacementView& view,
 
 std::size_t OverlayKeyHash::operator()(const OverlayKey& key) const
 {
-  // FNV-1a over the key's integer fields. The swap list is already sorted and
-  // deduplicated, so equal overlays hash equal regardless of enumeration
-  // order.
+// FNV-1a over the key's integer fields. The swap list is already sorted and
   std::size_t hash = 1469598103934665603ULL;
   const auto mix = [&hash](std::int64_t value) {
     hash ^= static_cast<std::size_t>(value);
@@ -86,8 +81,7 @@ std::size_t OverlayKeyHash::operator()(const OverlayKey& key) const
 
 OverlayKey overlayKey(const Region& guard, const Overlay& overlay)
 {
-  // The guard is part of the identity: the same overlay under a different
-  // guard is a different checker question.
+// The guard is part of the identity: the same overlay under a different
   OverlayKey key;
   key.guardXl = guard.x.xl;
   key.guardXh = guard.x.xh;
@@ -188,9 +182,7 @@ void logCandidateProviderTrace(const PlacementView& view,
                " diagnosticCount=", result.diagnostics.size());
   });
 
-  // A zero result gets the full rejection matrix. On the normal path, avoid
-  // repeating the whole configured library for every editable filler and log
-  // only the candidates the provider actually returned.
+// A zero result gets the full rejection matrix. On the normal path, avoid
   const bool logRejected
       = result.candidates.empty() || !result.diagnostics.empty();
   for (const MasterId id : view.fillerMasterIds()) {
@@ -276,8 +268,7 @@ SwapGenerationResult generateSwaps(
     MasterCandidateResult candidates =
         view.getUsableMasterCandidates(fillerId);
     logCandidateProviderTrace(view, fillerId, candidates, log);
-    // Provider diagnostics (unknown instance, not a filler, ...) are kept:
-    // they explain why a filler contributed no moves.
+// Provider diagnostics (unknown instance, not a filler, ...) are kept:
     result.diagnostics.insert(result.diagnostics.end(),
                               candidates.diagnostics.begin(),
                               candidates.diagnostics.end());
@@ -291,14 +282,13 @@ SwapGenerationResult generateSwaps(
       continue;
     }
 
-    // Deterministic per-filler order regardless of provider ordering.
+// Deterministic per-filler order regardless of provider ordering.
     std::sort(candidates.candidates.begin(), candidates.candidates.end());
 
     int emitted = 0;
     for (const MasterId candidate : candidates.candidates) {
       std::string error;
-      // Defense in depth: the provider guarantees compatibility, but a swap
-      // that fails validation must never enter the search.
+// Defense in depth: the provider guarantees compatibility, but a swap
       const auto swap = makeSwap(view, fillerId, candidate, &error);
       if (!swap.has_value()) {
         result.diagnostics.push_back(
@@ -313,8 +303,7 @@ SwapGenerationResult generateSwaps(
       }
       result.swaps.push_back(*swap);
       ++emitted;
-      // Deferred: this is the innermost loop of swap generation, so a
-      // silenced transcript must not pay for the string.
+// Deferred: this is the innermost loop of swap generation, so a
       log.msg("swapgen", [&] {
         return cat("emit filler=", swap->instanceId, " row=", swap->rowId,
                    " span=", show(swap->span), " master ", swap->oldMasterId,
@@ -340,10 +329,7 @@ SwapGenerationResult generateSwaps(
   return result;
 }
 
-// --------------------------------------------------------------------------
 // What the checker reported, turned into what the search needs: which rows,
-// how much x, and who is a filler we may touch versus a cell we may not.
-// --------------------------------------------------------------------------
 
 namespace {
 
@@ -356,11 +342,6 @@ std::vector<RowId> sortedUniqueRows(const std::vector<RowId>& rows)
 }
 
 // Set equality of two row lists, ignoring order and duplicates -- the same
-// question `sortedUniqueRows(a) == sortedUniqueRows(b)` answers, without
-// materializing either side. Signature comparison runs once per candidate per
-// violation, so allocating here allocates on the hottest loop of the search.
-// Quadratic on purpose: a violation couples a handful of rows, and for those
-// sizes a linear scan beats sorting, let alone two heap allocations.
 bool sameRowSet(const std::vector<RowId>& a, const std::vector<RowId>& b)
 {
   const auto coveredBy = [](const std::vector<RowId>& lhs,
@@ -412,8 +393,7 @@ std::vector<NormalizedViolation> normalizeViolations(
     NormalizedViolation nv;
     nv.raw = raw;
 
-    // Rows: checker-provided, sorted unique; when missing, fall back to the
-    // anchor row and flag it.
+// Rows: checker-provided, sorted unique; when missing, fall back to the
     nv.rowIds = sortedUniqueRows(raw.rowIds);
     if (nv.rowIds.empty()) {
       nv.rowIds = {request.targetPlace.rowId};
@@ -421,7 +401,7 @@ std::vector<NormalizedViolation> normalizeViolations(
       ++rowFallbacks;
     }
 
-    // Footprint: xWindow united with every participant's x range.
+// Footprint: xWindow united with every participant's x range.
     nv.xRange = raw.xWindow;
     for (const ViolationParticipant& p : raw.participants) {
       if (!p.xRange.empty()) {
@@ -435,7 +415,7 @@ std::vector<NormalizedViolation> normalizeViolations(
       }
     }
 
-    // The changed std cell is always an anchor, participant or not.
+// The changed std cell is always an anchor, participant or not.
     const InstanceId target = request.targetPlace.instanceId;
     if (std::find(nv.cellAnchors.begin(), nv.cellAnchors.end(), target)
         == nv.cellAnchors.end()) {
@@ -465,11 +445,7 @@ std::vector<NormalizedViolation> normalizeViolations(
 
 bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth)
 {
-  // Implant layers distinguish otherwise-identical violations -- in
-  // particular P-band vs N-band MS at the same x gap, which the checker may
-  // report with the same ruleId/kind/relation/rows. Both default
-  // to 0/nullopt when the checker leaves them unset, so this is a no-op for
-  // layer-agnostic checkers.
+// Implant layers distinguish otherwise-identical violations -- in
   if (signatureClass(a) != signatureClass(b)) {
     return false;
   }
@@ -477,9 +453,6 @@ bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth)
     return false;
   }
 
-  // xWindow tolerance: overlap of at least half the shorter window, or the
-  // windows lie within one site of each other (covers zero-length windows
-  // and one-site jitter across snapshots).
   const DbCoord overlap = std::min(a.xWindow.xh, b.xWindow.xh)
                           - std::max(a.xWindow.xl, b.xWindow.xl);
   const DbCoord shorter = std::min(a.xWindow.length(), b.xWindow.length());
@@ -494,15 +467,13 @@ bool isRelatedToOverlay(const Violation& violation,
                         DbCoord ruleDistance)
 {
   for (const Swap& swap : overlay) {
-    // Direct participation of a changed instance.
+// Direct participation of a changed instance.
     for (const ViolationParticipant& p : violation.participants) {
       if (p.instanceId == swap.instanceId) {
         return true;
       }
     }
-    // Geometric proximity: within one rule distance of the changed span, on
-    // the same or a vertically adjacent row (implant rules couple at most
-    // adjacent rows).
+// Geometric proximity: within one rule distance of the changed span, on
     bool rowNear = violation.rowIds.empty();  // no row info -> conservative
     for (const RowId row : violation.rowIds) {
       if (row >= swap.rowId - 1 && row <= swap.rowId + 1) {
@@ -527,10 +498,7 @@ DbCoord estimateRuleDistance(const std::vector<Violation>& violations,
   return distance;
 }
 
-// --------------------------------------------------------------------------
 // The window: which fillers may be edited, and how much design the checker
-// must be shown so its answer about them is trustworthy.
-// --------------------------------------------------------------------------
 
 namespace {
 
@@ -546,7 +514,6 @@ std::vector<RowId> clampRows(const PlacementView& view, RowId lo, RowId hi)
 }
 
 // Snaps a non-negative distance up to the next power-of-two multiple of
-// `unit` (at least one unit).
 DbCoord snapUpPow2(DbCoord distance, DbCoord unit)
 {
   DbCoord snapped = std::max<DbCoord>(unit, 1);
@@ -557,36 +524,14 @@ DbCoord snapUpPow2(DbCoord distance, DbCoord unit)
 }
 
 // Why the guard is rounded rather than fitted.
-//
-// The guard IS the question -- "check this region" -- so two candidates only
-// count as the same question if their guards match. Growth adds a couple of
-// fillers at a time, so a guard fitted to the window moves a little at every
-// step, and every answer already in hand stops matching. Measured on the
-// no-solution path, 90% of all checker calls were an overlay we had already
-// asked about, under a guard a few DBU different.
-//
-// So each side is pushed out to a power-of-two distance from the anchor --
-// the one point that cannot move during a repair:
-//
-//     window grows:  |--|  |---|  |----|  |------|  |-------|
-//     guard snaps:   |------------|       |----------------------|
-//                    (one guard for several steps, then a jump)
-//
-// 33 steps became 5 distinct guards. Rounding OUTWARD is always safe: a
-// bigger region can only remove edge artifacts from the checker's snapshot,
-// never create them.
 XInterval quantizeGuard(XInterval guard, DbCoord anchorX, DbCoord siteWidth)
 {
   const DbCoord unit = std::max<DbCoord>(siteWidth, 1);
   const DbCoord left = std::max<DbCoord>(anchorX - guard.xl, 0);
   const DbCoord right = std::max<DbCoord>(guard.xh - anchorX, 0);
-  // x is core-left-relative, so 0 is a known edge: snapping must not walk off
-  // it. Overshooting the right edge is harmless (those columns are empty and
-  // Grid::gridPixel bounds-checks), and the view exposes no core width to
-  // clamp against.
   return XInterval{
-      std::max<DbCoord>(anchorX - snapUpPow2(left + unit, unit), 0),
-      anchorX + snapUpPow2(right + unit, unit)};
+      std::max<DbCoord>(anchorX - snapUpPow2(left, unit), 0),
+      anchorX + snapUpPow2(right, unit)};
 }
 
 RepairWindow finalizeWindow(int level,
@@ -602,9 +547,6 @@ RepairWindow finalizeWindow(int level,
   window.level = level;
   window.rows.assign(rowSet.begin(), rowSet.end());
   window.x = x;
-  // editableFillers is the move-generation universe, ordered by (row, x, id).
-  // Look the members up directly rather than scanning whole rows for them: on a
-  // packed row the editable set is a sparse minority of the instances present.
   std::vector<const PlacedInstance*> editableInsts;
   editableInsts.reserve(editable.size());
   for (const InstanceId id : editable) {
@@ -622,19 +564,9 @@ RepairWindow finalizeWindow(int level,
   }
   window.bridgeFillers.assign(bridge.begin(), bridge.end());
 
-  // [PORT-ADAPT] Vertical reach of the guard, and an assumption worth
-  // checking against your rule deck: inter-row rules reach ONE row boundary,
-  // so a violation our edit could cause lives at most one row outside the
-  // window, and two rows of guard covers it with a margin. The horizontal
-  // reach is not guessed like this -- it comes from the checker's own
-  // getMaxRuleValue() (see FillerRepairEngine.cpp). If any implant rule of
-  // yours spans more than one row boundary, this must grow to match, and
-  // nothing will tell you: the checker would simply never be shown the row
-  // where the new violation appeared.
   const std::vector<RowId> guardRows =
       clampRows(view, window.rows.front() - 2, window.rows.back() + 2);
-  const DbCoord reach = std::max<DbCoord>(view.checkerReachX(), 0);
-  XInterval guardX{x.xl - reach, x.xh + reach};
+  XInterval guardX = x;
   for (const RowId rowId : guardRows) {
     for (const PlacedInstance& inst : instancesInRing(view, rowId, x, 2)) {
       const XInterval span = instanceSpan(view, inst);
@@ -690,8 +622,7 @@ RepairWindow buildWindow(const TargetPlace& anchor,
     x.xh = std::max(x.xh, span.xh);
   };
 
-  // --- L0 seed set: violation filler participants, plus the
-  // violation footprints/rows for the x range.
+// --- L0 seed set: violation filler participants, plus the
   for (const NormalizedViolation& nv : violations) {
     rowSet.insert(nv.rowIds.begin(), nv.rowIds.end());
     x.xl = std::min(x.xl, nv.xRange.xl);
@@ -704,16 +635,11 @@ RepairWindow buildWindow(const TargetPlace& anchor,
     }
   }
 
-  // --- Bridge fillers (default-mandatory): fillers touching the
-  // anchor in its row, and fillers in rows ±1 overlapping the anchor span
-  // widened by one rule distance. They join even outside the footprint.
+// --- Bridge fillers (default-mandatory): fillers touching the
   const XInterval bridgeSpan{anchorSpan.xl - ruleDistance,
                              anchorSpan.xh + ruleDistance};
   for (const RowId rowId : clampRows(view, anchor.rowId - 1, anchor.rowId + 1)) {
-    // Only instances overlapping bridgeSpan can qualify: the row==anchor
-    // touch cases (span touches an anchor edge) and the coupled-row overlap
-    // case both lie inside [anchorSpan +/- ruleDistance]. Binary-search that
-    // band instead of walking the whole row.
+// Only instances overlapping bridgeSpan can qualify: the row==anchor
     const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
     const int lo = firstRightEdgeAfter(view, all, bridgeSpan.xl);
     const int hi = firstStartAtOrAfter(all, bridgeSpan.xh);
@@ -750,22 +676,6 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
   std::set<InstanceId> bridge(current.bridgeFillers.begin(),
                               current.bridgeFillers.end());
   XInterval x = current.x;
-
-  // Seed fillers explicitly named by newly blocking violations. This also
-  // gives a newly coupled row a usable frontier before directional growth.
-  for (const Violation& violation : blocking) {
-    for (const ViolationParticipant& participant : violation.participants) {
-      const PlacedInstance* inst = view.instance(participant.instanceId);
-      if (inst == nullptr || !inst->isFiller) {
-        continue;
-      }
-      editable.insert(inst->id);
-      rowSet.insert(inst->rowId);
-      const XInterval span = instanceSpan(view, *inst);
-      x.xl = std::min(x.xl, span.xl);
-      x.xh = std::max(x.xh, span.xh);
-    }
-  }
 
   bool growLeft = false;
   bool growRight = false;
@@ -836,11 +746,9 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
         rightFrontier = current.x.xh;
       }
 
-      const DbCoord reach = std::max<DbCoord>(view.checkerReachX(), 0);
       if (addLeft) {
         int added = 0;
-        // Walk left from the instance just left of the frontier (everything at
-        // or right of it has span.xh > leftFrontier and was skipped before).
+// Walk left from the instance just left of the frontier (everything at
         for (int i = firstRightEdgeAfter(view, all, leftFrontier) - 1;
              i >= 0 && added < step;
              --i) {
@@ -848,10 +756,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
           if (span.xh > leftFrontier || editable.count(all[i].id) > 0) {
             continue;
           }
-          if (!all[i].isFiller) {
-            continue;
-          }
-          if (span.xh < leftFrontier - reach) {
+          if (!all[i].isFiller || span.xh < leftFrontier) {
             break;
           }
           editable.insert(all[i].id);
@@ -863,8 +768,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
       }
       if (addRight) {
         int added = 0;
-        // Walk right from the first instance at or right of the frontier
-        // (everything before it has span.xl < rightFrontier and was skipped).
+// Walk right from the first instance at or right of the frontier
         for (int i = firstStartAtOrAfter(all, rightFrontier);
              i < static_cast<int>(all.size()) && added < step;
              ++i) {
@@ -872,10 +776,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
           if (span.xl < rightFrontier || editable.count(all[i].id) > 0) {
             continue;
           }
-          if (!all[i].isFiller) {
-            continue;
-          }
-          if (span.xl > rightFrontier + reach) {
+          if (!all[i].isFiller || span.xl > rightFrontier) {
             break;
           }
           editable.insert(all[i].id);
@@ -889,10 +790,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
     return addedLeftTotal + addedRightTotal > before;
   };
 
-  // Residual violations choose the primary direction. Because multi-swap
-  // legality is non-monotone, that direction can be locally blocked while a
-  // required filler is immediately available on the other side. In that
-  // case, try the opposite side once before declaring the window exhausted.
+// Residual violations choose the primary direction. Because multi-swap
   const bool primaryAdded = addOnSides(growLeft, growRight);
   if (!primaryAdded && growLeft != growRight) {
     log.msg("window",
@@ -917,34 +815,19 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                         log);
 }
 
-// --------------------------------------------------------------------------
 // Trying order. The bridge filler first, then the anchor's own VT, then the
-// neighbourhood majority -- most repairs are found in the first few tries.
-// --------------------------------------------------------------------------
 
 namespace {
 
 // Which VT do this filler's neighbours mostly have? A good guess at what to
-// recolour it to, since matching your neighbours is what merges runs.
-//
-// Votes are weighted by how much implant actually faces the filler. A
-// neighbour beside it in the same row shares both half-row bands, so it gets
-// two votes; a neighbour one row up or down only meets it across a single
-// band boundary, so it gets one. Ties go to the lower VT id, for determinism.
 VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
 {
   const XInterval span = instanceSpan(view, inst);
   std::map<VtId, int> votes;
 
-  // Only the immediate x-neighbors matter, so binary-search to inst's span
-  // instead of scanning the whole (packed) row for every ranked filler.
-  // Defensive: an instance with a missing master must not crash the vote
-  // (upstream validation makes it unreachable in runtime, but the ranker
-  // must not rely on two layers above it).
+// Only the immediate x-neighbors matter, so binary-search to inst's span
 
-  // Same-row x-adjacent neighbors (touching an edge) each cast two band votes.
-  // A toucher does not overlap span (it meets an edge), so it sits just
-  // outside the overlap range -- widen by one instance on each side.
+// Same-row x-adjacent neighbors (touching an edge) each cast two band votes.
   {
     const std::vector<PlacedInstance>& all = view.instancesInRow(inst.rowId);
     const int lo = firstRightEdgeAfter(view, all, span.xl);
@@ -966,8 +849,7 @@ VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
       }
     }
   }
-  // Rows +-1 neighbors that overlap span each cast one band vote. The overlap
-  // range is exactly [firstRightEdgeAfter(xl), firstStartAtOrAfter(xh)).
+// Rows +-1 neighbors that overlap span each cast one band vote. The overlap
   for (const RowId rowId : {inst.rowId - 1, inst.rowId + 1}) {
     const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
     const int lo = firstRightEdgeAfter(view, all, span.xl);
@@ -993,8 +875,6 @@ VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
 }
 
 // Filler-level ordering key: which fillers the searcher combines
-// first. VT-choice features (anchor vote, third-VT demotion) do NOT belong
-// here -- they order options WITHIN a domain, below.
 struct FillerKey
 {
   int direct = 0;      // descending
@@ -1041,7 +921,7 @@ std::vector<FillerDomain> rankFillers(
   std::set<InstanceId> bridge(window.bridgeFillers.begin(),
                               window.bridgeFillers.end());
 
-  // Group swaps into per-filler domains, keyed for deterministic grouping.
+// Group swaps into per-filler domains, keyed for deterministic grouping.
   std::map<InstanceId, FillerDomain> byFiller;
   for (const Swap& swap : swaps) {
     FillerDomain& domain = byFiller[swap.instanceId];
@@ -1053,9 +933,7 @@ std::vector<FillerDomain> rankFillers(
   ranked.reserve(byFiller.size());
   int demoted = 0;
   for (auto& [id, domain] : byFiller) {
-    // Domain order: anchor's new VT -> neighbor majority -> stable master id;
-    // the third VT (neither) last -- demoted within THIS domain only, so it
-    // stays reachable in every subset the filler joins.
+// Domain order: anchor's new VT -> neighbor majority -> stable master id;
     const PlacedInstance* filler = view.instance(id);
     const VtId majorityVt =
         filler != nullptr ? neighborMajorityVt(view, *filler) : kUnknownVt;
@@ -1095,9 +973,7 @@ std::vector<FillerDomain> rankFillers(
             cat(ranked.size(), " filler domain(s) over ", swaps.size(),
                 " swap(s), anchorVt=", anchorVt,
                 ", demoted(thirdVt)=", demoted));
-    // Print the actual domain order consumed by SubsetSearcher. Each line
-    // contains the filler-level key followed by the complete, still-reachable
-    // master domain (anchor/majority choices first, third VT last).
+// Print the actual domain order consumed by SubsetSearcher. Each line
     for (size_t rank = 0; rank < ranked.size(); ++rank) {
       const FillerDomain& domain = ranked[rank];
       const FillerKey key = fillerKey(domain);
@@ -1116,15 +992,11 @@ std::vector<FillerDomain> rankFillers(
   return ranked;
 }
 
-// --------------------------------------------------------------------------
 // Candidates: one swap, then two at a time, then three, ... bounded by the
-// member caps so a wide window cannot explode.
-// --------------------------------------------------------------------------
 
 namespace {
 
 // Full subset space size: prod(1 + |domain_i|) - 1, clamped to `cap + 1` so
-// the multiplication cannot overflow.
 long long fullSpaceSize(const std::vector<FillerDomain>& ranked, long long cap)
 {
   long long size = 1;
@@ -1153,16 +1025,17 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
     return plan;
   }
 
-  // Rank-indexed mirror of `freshFillers`, so the leaf test is one array read
-  // rather than a search. See the header for why skipping the rest is exact.
+// Rank-indexed mirror of `freshFillers`, so the leaf test is one array read
   const bool incremental = !freshFillers.empty();
   std::vector<char> rankIsFresh;
   if (incremental) {
-    const std::unordered_set<InstanceId> fresh(freshFillers.begin(),
-                                               freshFillers.end());
     rankIsFresh.assign(ranked.size(), 0);
     for (size_t i = 0; i < ranked.size(); ++i) {
-      rankIsFresh[i] = fresh.find(ranked[i].instanceId) != fresh.end() ? 1 : 0;
+      rankIsFresh[i] = std::binary_search(freshFillers.begin(),
+                                          freshFillers.end(),
+                                          ranked[i].instanceId)
+                           ? 1
+                           : 0;
     }
   }
 
@@ -1173,15 +1046,14 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   }
 
   const long long space = fullSpaceSize(ranked, budget);
-  const bool fitsBudget = space <= budget;
-  const int maxSize = fitsBudget
+  plan.complete = space <= budget;
+
+  const int maxSize = plan.complete
                           ? fillerTotal
                           : std::min(config.maxSubsetSize, fillerTotal);
-  bool scopeTruncated = maxSize < fillerTotal;
-  // Member cap counts FILLERS: size-s subsets draw from the first
-  // N_s ranked fillers, each contributing its full domain.
+// Member cap counts FILLERS: size-s subsets draw from the first
   const auto memberCap = [&](int size) -> int {
-    if (fitsBudget || size == 1) {
+    if (plan.complete || size == 1) {
       return fillerTotal;
     }
     const int cap = size == 2   ? config.memberCapSize2
@@ -1192,31 +1064,25 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
 
   std::vector<int> combo;  // filler indices of the current combination
   Overlay current;         // one option per chosen filler, filler-rank order
-  // The emitted count is bounded by the budget, so the candidate list is
-  // sized once instead of doubling its way there.
+// The emitted count is bounded by the budget, so the candidate list is
   plan.overlays.reserve(static_cast<size_t>(
       std::min<long long>(space, static_cast<long long>(budget))));
   bool budgetHit = false;
   int comboFresh = 0;      // fresh members in `combo`, maintained incrementally
   long long skippedAsAsked = 0;  // candidates the previous level already asked
 
-  // Both recursions pass themselves as `self` rather than going through
-  // std::function: this is the innermost loop of enumeration (millions of
-  // calls on a wide window), and type erasure there costs an indirect call
-  // per step for no benefit.
+// Both recursions pass themselves as `self` rather than going through
 
-  // Cartesian product over the chosen fillers' domains, last filler's option
-  // varying fastest, so the all-first-choice assignment (anchor-follow) leads.
+// Cartesian product over the chosen fillers' domains, last filler's option
   const auto emitProducts = [&](const auto& self, size_t k) -> void {
     if (budgetHit) {
       return;
     }
     if (k == combo.size()) {
+      plan.overlays.push_back(current);
       if (static_cast<int>(plan.overlays.size()) >= budget) {
         budgetHit = true;
-        return;
       }
-      plan.overlays.push_back(current);
       return;
     }
     for (const Swap& option : ranked[combo[k]].options) {
@@ -1229,20 +1095,16 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
     }
   };
 
-  // Lexicographic filler combinations of `size` within the rank prefix `cap`.
+// Lexicographic filler combinations of `size` within the rank prefix `cap`.
   const auto choose =
       [&](const auto& self, int size, int from, int cap) -> void {
     if (budgetHit) {
       return;
     }
     if (static_cast<int>(combo.size()) == size) {
-      // Already emitted -- and answered -- at the previous level: its whole
-      // Cartesian product is skipped, so no key is built and no oracle
-      // question is repeated.
+// Already emitted -- and answered -- at the previous level: its whole
       if (incremental && comboFresh == 0) {
-        // Count what its Cartesian product WOULD have been: those candidates
-        // are covered (by the previous level), so completeness accounting
-        // must not treat the level as truncated.
+// Count what its Cartesian product WOULD have been: those candidates
         long long product = 1;
         for (const int rank : combo) {
           product *= static_cast<long long>(ranked[rank].options.size());
@@ -1272,21 +1134,18 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   for (int size = 1; size <= maxSize && !budgetHit; ++size) {
     const size_t before = plan.overlays.size();
     const int cap = memberCap(size);
-    scopeTruncated |= cap < fillerTotal;
     choose(choose, size, 0, cap);
-    // Per-size accounting makes it obvious when a large-window member cap or
-    // the checker budget, rather than the legality oracle, removed candidates.
+// Per-size accounting makes it obvious when a large-window member cap or
     log.msg("enumerate",
             cat("subsetSize=", size, " memberPrefix=", cap, '/',
                 fillerTotal, " -> emitted=", plan.overlays.size() - before,
                 budgetHit ? " (budget reached)" : ""));
   }
-  // Reaching the budget on the final element is still a complete search.
-  // Derive completeness from what was actually emitted so space == budget
-  // cannot be mislabeled as truncated. Incrementally skipped candidates count
-  // as covered: the previous level asked them under this same guard and the
-  // answer was not clean, which cannot change (see the header).
-  plan.complete = !scopeTruncated && !budgetHit;
+// Reaching the budget on the final element is still a complete search.
+  plan.complete
+      = space <= budget
+        && static_cast<long long>(plan.overlays.size()) + skippedAsAsked
+               == space;
 
   if (incremental) {
     log.msg("enumerate",
@@ -1302,17 +1161,11 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   return plan;
 }
 
-// --------------------------------------------------------------------------
 // Asking the checker. Accept only a candidate that removes every violation we
-// were given and introduces none of its own -- measured against a baseline of
-// the same region with nothing changed.
-// --------------------------------------------------------------------------
 
 namespace {
 
 // A violation falls inside the repair window when its x overlaps the editable
-// span and at least one of its rows is editable. Empty rows
-// -> not in-window, matching the checker-provided-rows fallback.
 bool inRepairWindow(const Violation& v, const RepairWindow& window)
 {
   if (!v.xWindow.overlaps(window.x)) {
@@ -1328,9 +1181,6 @@ bool inRepairWindow(const Violation& v, const RepairWindow& window)
 }
 
 // A violation is observable in a baseline collected within `guard` when it
-// overlaps the guard geometrically. Used to scope the baseline-reproduces-
-// originals check: an original outside the current guard is simply not this
-// window's responsibility (it is covered once the window grows).
 bool inGuardRegion(const Violation& v, const Region& guard)
 {
   if (!v.xWindow.overlaps(guard.x)) {
@@ -1410,8 +1260,7 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
   }
 
   baseline_ = &it->second;
-  // Classes follow the baseline: it changes only when the guard does, so this
-  // is paid once per distinct guard rather than once per candidate.
+// Classes follow the baseline: it changes only when the guard does, so this
   baseline_classes_.clear();
   baseline_classes_.reserve(baseline_->violations.size());
   for (const Violation& v : baseline_->violations) {
@@ -1427,8 +1276,7 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
            cat("baseline for guard ", show(guard), ": ",
                baseline_->violations.size(), " violation(s)"));
 
-  // Baseline consistency gate: refuse to search on a stale/inconsistent
-  // snapshot.
+// Baseline consistency gate: refuse to search on a stale/inconsistent
   if (!checkBaselineConsistency(window)) {
     baseline_ = nullptr;
     return false;
@@ -1438,13 +1286,10 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
 
 bool OracleGate::checkBaselineConsistency(const RepairWindow& window)
 {
-  // One-to-one bookkeeping so a single baseline finding cannot satisfy two
-  // originals (and, below, cannot be double-counted as unexpected).
+// One-to-one bookkeeping so a single baseline finding cannot satisfy two
   std::vector<char> consumed(baseline_->violations.size(), 0);
 
-  // (a) Every original inside the guard must reproduce in the baseline. If it
-  //     does not, the input snapshot is stale/inconsistent and a candidate
-  //     that merely "does not observe" it would be mistaken for a repair.
+// (a) Every original inside the guard must reproduce in the baseline. If it
   int inGuardOriginals = 0;
   for (const Violation& original : originals_) {
     if (!inGuardRegion(original, window.guardRegion)) {
@@ -1473,11 +1318,7 @@ bool OracleGate::checkBaselineConsistency(const RepairWindow& window)
     }
   }
 
-  // (b) No unexpected in-window violation may pre-exist in the baseline: by the
-  //     input snapshot is assumed clean apart from the originals,
-  //     so an unmatched baseline finding inside the repair window signals an
-  //     inconsistent snapshot. Unmatched findings OUTSIDE the window are the
-  //     allowed unrelated pre-existing halo.
+// (b) No unexpected in-window violation may pre-exist in the baseline: by the
   for (size_t i = 0; i < baseline_->violations.size(); ++i) {
     if (consumed[i]) {
       continue;
@@ -1515,15 +1356,10 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   if (!summary.usable) {
     return summary;
   }
-  // Self-consistency both ways: isLegal must agree with whether the
-  // result reports violations. `isLegal && violations non-empty` AND
-  // `!isLegal && violations empty` (an unexplained illegal result, which the
-  // real checker returns for blocking overlaps / off-grid / polarity) are both
-  // rejected as not clean.
+// Self-consistency both ways: isLegal must agree with whether the
   summary.inconsistent = (result.isLegal != result.violations.empty());
 
-  // Signature classes of this result, computed once instead of once per
-  // (original, finding) and (finding, baseline) pair below.
+// Signature classes of this result, computed once instead of once per
   const size_t resultCount = result.violations.size();
   result_classes_scratch_.clear();
   result_classes_scratch_.reserve(resultCount);
@@ -1531,8 +1367,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
     result_classes_scratch_.push_back(signatureClass(v));
   }
 
-  // Residual originals: match each original to a DISTINCT result finding, so
-  // two originals cannot both claim the same one (one-to-one).
+// Residual originals: match each original to a DISTINCT result finding, so
   {
     consumed_scratch_.assign(resultCount, 0);
     std::vector<char>& consumed = consumed_scratch_;
@@ -1551,12 +1386,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
     }
   }
 
-  // New violations = result findings not matched one-to-one against the
-  // baseline: one baseline finding absorbs at most one candidate
-  // finding, so a second same-signature finding is correctly counted as new
-  // (P/N bands + the one-site signature tolerance make duplicates real). Inside
-  // the repair window a new violation always rejects; in the guard halo only
-  // when related to this overlay.
+// New violations = result findings not matched one-to-one against the
   baseline_consumed_scratch_.assign(baseline_->violations.size(), 0);
   std::vector<char>& baselineConsumed = baseline_consumed_scratch_;
   for (size_t r = 0; r < resultCount; ++r) {
@@ -1579,8 +1409,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
       summary.blockingViolations.push_back(v);
     } else if (isRelatedToOverlay(v, overlay,
                                   std::max(rule_distance_, v.requiredValue))) {
-      // Per-violation rule distance: a new violation from a
-      // larger-distance rule must not be mislabeled unrelated and let through.
+// Per-violation rule distance: a new violation from a
       ++summary.relatedInHalo;
       summary.blockingViolations.push_back(v);
     } else {
@@ -1593,14 +1422,6 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   return summary;
 }
 
-// [PORT-TUNE] Everything not already cached in this chunk goes out as ONE
-// batch. Measured here, the alternative -- topping a short batch up with
-// candidates from the next chunk so every call is full -- was evaluated and
-// not done: it trades a fixed per-batch cost (one region scan) against
-// speculatively checking candidates that an earlier answer may make
-// unnecessary, and which way that lands depends on your thread count and on
-// what one candidate actually costs. If batches show up in a real profile,
-// that is the experiment to run. See fillerRepair/README.md "Search cost".
 bool OracleGate::resolve(const Overlay* chunk,
                          const OverlayKey* chunkKeys,
                          std::size_t count,
@@ -1610,9 +1431,7 @@ bool OracleGate::resolve(const Overlay* chunk,
 {
   out.assign(count, nullptr);
 
-  // Send everything in the chunk that is not cached yet as one batch. The
-  // single lookup per candidate here is the only one the search needs: hits
-  // land in `out` directly, misses are filled in from the batch below.
+// Send everything in the chunk that is not cached yet as one batch. The
   std::vector<OracleRequest> requests;
   std::vector<std::size_t> pending;  // chunk indices, parallel to `requests`
   requests.reserve(count);
@@ -1660,8 +1479,7 @@ bool OracleGate::resolve(const Overlay* chunk,
   ++batches_sent_;
   requests_sent_ += static_cast<int>(requests.size());
 
-  // Protocol validation: one result per request, ids echo exactly once, no
-  // unknown ids. Order must NOT matter -- map back by id.
+// Protocol validation: one result per request, ids echo exactly once, no
   if (results.size() != requests.size()) {
     diagnostics_.push_back(makeDiag(
         Severity::Fatal, "CheckerProtocolError",
@@ -1672,9 +1490,7 @@ bool OracleGate::resolve(const Overlay* chunk,
                  " requests=", requests.size()));
     return false;
   }
-  // Non-const: each id is validated to appear exactly once, so the result it
-  // names is MOVED into the cache rather than deep-copied (a result carries
-  // its violation and diagnostic vectors).
+// Non-const: each id is validated to appear exactly once, so the result it
   std::map<OracleRequestId, OracleResult*> byId;
   for (OracleResult& result : results) {
     if (!byId.emplace(result.requestId, &result).second) {
@@ -1717,12 +1533,6 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
                                             int& budget)
 {
   SearchResult sr;
-  if (config_.batchSize <= 0) {
-    diagnostics_.push_back(makeDiag(
-        Severity::Fatal, "InvalidRepairConfig", "batchSize must be positive"));
-    sr.protocolError = true;
-    return sr;
-  }
   log_.msg("gate",
            cat("search start: candidates=", candidates.size(), " batchSize=",
                config_.batchSize, " budget=", budget, " window=",
@@ -1736,8 +1546,7 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
         std::min(candidates.size(),
                  next + static_cast<size_t>(config_.batchSize));
     const size_t count = chunkEnd - next;
-    // Identity is built ONCE per candidate, and resolve() hands back the
-    // answers so this loop never repeats its cache lookup.
+// Identity is built ONCE per candidate, and resolve() hands back the
     chunkKeys.clear();
     chunkKeys.reserve(count);
     for (size_t i = next; i < chunkEnd; ++i) {
@@ -1749,7 +1558,7 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
       return sr;
     }
 
-    // Evaluate the chunk in enumeration order; first delta-clean wins.
+// Evaluate the chunk in enumeration order; first delta-clean wins.
     for (size_t i = next; i < chunkEnd; ++i) {
       const OracleResult* answer = answers[i - next];
       if (answer == nullptr) {
@@ -1767,8 +1576,7 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
                      " -> accept"));
         return sr;
       }
-      // Track best non-clean for diagnostics (fewer blocking findings, then
-      // fewer changes, then earlier enumeration index).
+// Track best non-clean for diagnostics (fewer blocking findings, then
       const int blockers = summary.residualOriginals + summary.newInWindow
                            + summary.relatedInHalo + (summary.usable ? 0 : 1000);
       const int bestBlockers = sr.bestSummary.residualOriginals
@@ -1804,10 +1612,7 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
   return sr;
 }
 
-// --------------------------------------------------------------------------
 // The driver: search the window, and when nothing in it works, grow and
-// search again.
-// --------------------------------------------------------------------------
 
 namespace {
 
@@ -1854,10 +1659,7 @@ FillerRepairResult RepairPlanner::repair(
 {
   FillerRepairResult result;
 
-  // The overlay API is a pure query and must never call back into
-  // repair, and one planner instance never runs two repairs at once
-  // (concurrent repairs = one planner per thread over a shared immutable
-  // view). Turn a violation into a fatal result instead of corrupted state.
+// The overlay API is a pure query and must never call back into
   if (repair_active_.exchange(true, std::memory_order_acq_rel)) {
     result.diagnostics.push_back(makeDiag(
         Severity::Fatal, "ReentrantRepair",
@@ -1910,9 +1712,7 @@ FillerRepairResult RepairPlanner::repair(
     return result;
   }
 
-  // The transcript starts with both the immutable request and every search
-  // knob. This makes a runtime failure reproducible from one captured log
-  // without relying on hidden defaults.
+// The transcript starts with both the immutable request and every search
   log_.msg("planner",
            cat("repair start: anchor inst=", request.targetPlace.instanceId,
                " master=", request.targetPlace.masterId,
@@ -1929,10 +1729,7 @@ FillerRepairResult RepairPlanner::repair(
                " maxAdaptiveLevels=", config_.maxAdaptiveLevels,
                " budget/repair=", config_.checkerCallBudgetPerRepair));
 
-  // Placement coverage is intentionally not checked here: the engine's
-  // regional gate runs before this, and whole-design legality is
-  // infrastructure's own gate.
-  // Empty snapshot: nothing to repair is a success with no changes.
+// Placement coverage is intentionally not checked here: the engine's
   if (request.violations.empty()) {
     result.hasSolution = true;
     result.diagnostics.push_back(makeDiag(
@@ -1942,7 +1739,7 @@ FillerRepairResult RepairPlanner::repair(
     return result;
   }
 
-  // Stage 2: normalize the snapshot into signatures/footprints.
+// Stage 2: normalize the snapshot into signatures/footprints.
   const std::vector<NormalizedViolation> violations =
       normalizeViolations(request, log_);
 
@@ -1955,13 +1752,9 @@ FillerRepairResult RepairPlanner::repair(
   OracleGate gate(view_, oracle_, request.targetPlace, request.violations,
                   view_.siteWidth(), ruleDistance, config_, log_);
 
-  // The adaptive window loop: search L0, then grow K fillers toward the
-  // best non-clean candidate's blocking side until clean or an expansion
-  // cutoff.
+// The adaptive window loop: search L0, then grow K fillers toward the
   OracleGate::SearchResult best;  // best non-clean across windows (diagnostics)
-  // Definitive iff the LAST window we actually searched was fully enumerated
-  // an earlier smaller window being complete does not prove the
-  // later truncated window has no solution.
+// Definitive iff the LAST window we actually searched was fully enumerated
   bool lastSearchedDefinitive = false;
   RepairWindow window = buildWindow(
                                     request.targetPlace,
@@ -1970,10 +1763,7 @@ FillerRepairResult RepairPlanner::repair(
                                     ruleDistance,
                                     log_);
 
-  // Previous level's search question, so enumeration can be incremental: the
-  // guard is quantized and therefore repeats across most levels, and under a
-  // repeated guard every combination without a newly editable filler is one
-  // the previous level already asked. See enumerateOverlays in the header.
+// Previous level's search question, so enumeration can be incremental: the
   Region searchedGuard;
   std::vector<InstanceId> searchedEditable;
   bool haveSearchedLevel = false;
@@ -1983,9 +1773,7 @@ FillerRepairResult RepairPlanner::repair(
     std::vector<Violation> blockingForExpansion = request.violations;
     bool currentDefinitive = false;
 
-    // Per-repair ceiling across all adaptive levels. Checked before the
-    // window is searched so exhaustion ends the search the same way an
-    // expansion cutoff does -- truncated, not a baseline-gate failure.
+// Per-repair ceiling across all adaptive levels. Checked before the
     if (config_.checkerCallBudgetPerRepair > 0
         && gate.requestsSent() >= config_.checkerCallBudgetPerRepair) {
       result.diagnostics.push_back(makeDiag(
@@ -2001,9 +1789,7 @@ FillerRepairResult RepairPlanner::repair(
       break;
     }
 
-    // One loop iteration is one independently budgeted search question. The
-    // window and guard are logged before generating swaps so a transcript can
-    // explain exactly which fillers were editable versus check-only.
+// One loop iteration is one independently budgeted search question. The
     log_.msg("planner",
              cat("search ", label, ": area=", show(window.area()),
                  " guard=", show(window.guardRegion), " editable=",
@@ -2036,8 +1822,7 @@ FillerRepairResult RepairPlanner::repair(
 
         int budget = config_.checkerCallBudgetPerWindow;
         if (config_.checkerCallBudgetPerRepair > 0) {
-          // Never let one window spend past the per-repair ceiling. The
-          // remainder is > 0 here: the loop head just checked it.
+// Never let one window spend past the per-repair ceiling. The
           budget = std::min(budget,
                             config_.checkerCallBudgetPerRepair
                                 - gate.requestsSent());
@@ -2055,8 +1840,7 @@ FillerRepairResult RepairPlanner::repair(
           return result;
         }
 
-        // Incremental only when the quantized guard did not move: a new guard
-        // makes every candidate a new checker question again.
+// Incremental only when the quantized guard did not move: a new guard
         std::vector<InstanceId> freshFillers;
         if (haveSearchedLevel && window.guardRegion == searchedGuard) {
           std::set_difference(window.editableFillers.begin(),
@@ -2128,10 +1912,7 @@ FillerRepairResult RepairPlanner::repair(
       }
     }
 
-    // A stable blocking set is not a proof that farther fillers cannot form a
-    // clean non-monotone multi-swap. Keep expanding until no adjacent filler
-    // can be added, the level cap fires, or the normal per-window search
-    // limits stop enumeration.
+// A stable blocking set is not a proof that farther fillers cannot form a
     if (window.level >= config_.maxAdaptiveLevels) {
       result.diagnostics.push_back(makeDiag(
           Severity::Info, "ExpansionCutoff",
@@ -2140,7 +1921,7 @@ FillerRepairResult RepairPlanner::repair(
       log_.msg("planner",
                cat("window ", label, " adaptive level cap ",
                    config_.maxAdaptiveLevels, " -> truncated"));
-      // Farther windows were never searched, so no-solution is not definitive.
+// Farther windows were never searched, so no-solution is not definitive.
       lastSearchedDefinitive = false;
       break;
     }
@@ -2164,7 +1945,7 @@ FillerRepairResult RepairPlanner::repair(
     window = expanded;
   }
 
-  // No clean overlay anywhere: empty changes, explain why.
+// No clean overlay anywhere: empty changes, explain why.
   result.hasSolution = false;
   result.diagnostics.push_back(makeDiag(
       Severity::Error, "NoCleanOverlay",

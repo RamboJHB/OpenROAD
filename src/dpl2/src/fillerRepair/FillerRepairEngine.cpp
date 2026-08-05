@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -22,8 +23,9 @@ namespace fillerRepair {
 
 namespace {
 
-// Immutable planner-facing placement state, built once during engine init and
-// exposed to the planner only through PlacementView accessors.
+// Immutable planner-facing placement state. Engine rebuilds this component
+// when the Network master universe changes; the planner only sees it through
+// PlacementView accessors.
 struct PlacementSnapshot
 {
   struct MasterRef
@@ -50,9 +52,23 @@ struct PlacementSnapshot
     DbCoord yHi = 0;
   };
 
+  void clear()
+  {
+    siteWidth = 0;
+    rowHeight = 0;
+    defaultHaloX = 0;
+    coreXl = 0;
+    rows.clear();
+    rowFrames.clear();
+    legalSpans.clear();
+    masters.clear();
+    instances.clear();
+    byRow.clear();
+    fillerMasterIds.clear();
+  }
+
   DbCoord siteWidth = 0;
   DbCoord rowHeight = 0;
-  DbCoord checkerReachX = 0;
   DbCoord defaultHaloX = 0;
   DbCoord coreXl = 0;
   std::vector<RowId> rows;
@@ -194,6 +210,34 @@ class FillerCandidateCatalog
   bool hasPlacedCandidate_ = false;
 };
 
+// Owns the private checker and serializes its mutable-const overlay path.
+class CheckerOverlayClient
+{
+ public:
+  void clear() { checker_.reset(); }
+  void reset(Grid* grid, Network* network)
+  {
+    checker_ = std::make_unique<ipl::ImplantLayerChecker>(grid, network);
+  }
+  ipl::ImplantLayerChecker* get() { return checker_.get(); }
+  const ipl::ImplantLayerChecker* get() const { return checker_.get(); }
+  std::vector<ipl::CheckResult> check(
+      const ipl::CheckRequest& target,
+      const ::Rect& guard,
+      const std::vector<ipl::FillerChanges>& changes)
+  {
+    if (checker_ == nullptr) {
+      return std::vector<ipl::CheckResult>();
+    }
+    std::lock_guard<std::mutex> lock(mutex_);
+    return checker_->checkPlaceWithOverlays(target, guard, changes);
+  }
+
+ private:
+  std::unique_ptr<ipl::ImplantLayerChecker> checker_;
+  std::mutex mutex_;
+};
+
 }  // namespace
 
 class FillerRepairEngine::Impl final : private PlacementView,
@@ -208,36 +252,30 @@ class FillerRepairEngine::Impl final : private PlacementView,
   bool init(eUNL::PhysDesMgr* desMgr,
             const fillerSetting& fillerSettings);
   void setDebugLogging(bool enabled);
+  // Gap/overlap coverage restricted to selected repair rows. repair() checks
+  // the initial target influence before registration; adaptive candidates
+  // that edit farther rows are checked before entering the checker batch.
+  // This keeps the safety gate proportional to touched rows instead of the
+  // whole placed design.
+  ipl::CheckResult localPrecheck(const Region& influence) const;
   RepairOutcome repair(const ipl::CheckRequest& request);
+  RepairOutcome repair(eUNL::LeafCellID targetCell,
+                       const eLIB::PhysLibCell& newMaster);
 
  private:
   static constexpr int kSnapshotHaloRows = 1;
 
-  // --- one-shot infrastructure binding and snapshot construction ----------
-  bool bindInfrastructure(eUNL::PhysDesMgr* desMgr,
-                          const fillerSetting& fillerSettings);
-  bool ensureMasterRegistered(const eLIB::PhysLibCell& master);
-  bool buildOracle();
   void buildPlannerData();
   bool isReady() const;
   bool isNonBlockingCheckerInitDiagnostic(
       const ipl::Diagnostic& diagnostic) const;
+  bool bindInfrastructure(eUNL::PhysDesMgr* desMgr,
+                          const fillerSetting& fillerSettings);
+  bool ensureMasterRegistered(const eLIB::PhysLibCell& master);
+  bool rebuildOracle();
   void failInit(const std::string& status, const std::string& message);
-  void addProblem(Severity severity,
-                  const std::string& code,
-                  const std::string& message);
-
-  // Gap/overlap coverage restricted to selected repair rows. repair() checks
-  // the initial target influence; adaptive candidates that edit farther rows
-  // are checked before entering the checker batch. This keeps the safety gate
-  // proportional to touched rows instead of the whole placed design.
-  ipl::CheckResult localPrecheck(const Region& influence) const;
-  const std::vector<XInterval>& legalSpansForRow(RowId rowId) const;
-
-  // --- PlacementView -------------------------------------------------------
   const std::vector<RowId>& rows() const override { return placement_.rows; }
   DbCoord siteWidth() const override { return placement_.siteWidth; }
-  DbCoord checkerReachX() const override { return placement_.checkerReachX; }
   const std::vector<PlacedInstance>& instancesInRow(RowId rowId) const override;
   const PlacedInstance* instance(InstanceId id) const override;
   const MasterInfo* masterInfo(MasterId id) const override;
@@ -249,13 +287,13 @@ class FillerRepairEngine::Impl final : private PlacementView,
   }
   CellChangeRecord cellChangeRecord(InstanceId instanceId,
                                     MasterId newMasterId) const override;
-
-  // --- RepairOracle --------------------------------------------------------
   OracleResult checkPlaceWithOverlay(const OracleRequest& request) override;
   std::vector<OracleResult> checkPlaceWithOverlays(
       const std::vector<OracleRequest>& requests) override;
 
-  // --- checker/planner boundary conversions -------------------------------
+  void addProblem(Severity severity,
+                  const std::string& code,
+                  const std::string& message);
   ipl::CheckRequest toCheckRequest(const TargetPlace& place) const;
   ::Rect toGuardRect(const Region& region) const;
   Violation toPlannerViolation(const ipl::Violation& violation,
@@ -265,6 +303,11 @@ class FillerRepairEngine::Impl final : private PlacementView,
                        DbCoord x,
                        DbCoord width,
                        DbCoord heightRows) const;
+  RepairOutcome repairImpl(
+      std::optional<ipl::CheckRequest> checkerRequest,
+      std::optional<eUNL::LeafCellID> targetCell,
+      const eLIB::PhysLibCell* newMaster);
+
   // Grows `table` so `id` is a valid index (ids can exceed the presized
   // container counts only if the Network id spaces are not dense).
   template <typename T>
@@ -282,12 +325,13 @@ class FillerRepairEngine::Impl final : private PlacementView,
   std::vector<const eLIB::PhysLibCell*> filler_masters_;
   PlacementSnapshot placement_;
   FillerCandidateCatalog candidate_catalog_;
-  std::unique_ptr<ipl::ImplantLayerChecker> checker_;
+  CheckerOverlayClient checker_overlay_;
   RepairConfig repair_config_;
   DebugLog log_;
   std::vector<Diagnostic> setup_diagnostics_;
   std::vector<ipl::Diagnostic> init_diagnostics_;
   std::vector<ipl::Diagnostic> oracle_diagnostics_;
+  const std::vector<XInterval>& legalSpansForRow(RowId rowId) const;
   bool initialized_ = false;
   bool init_attempted_ = false;
   std::atomic<bool> repair_active_{false};
@@ -295,30 +339,26 @@ class FillerRepairEngine::Impl final : private PlacementView,
 
 namespace {
 
+ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic);
+
 Orient toPlannerOrient(eUTL::PhysOrientation orientation)
 {
-  switch (orientation.getValue()) {
-    case eUTL::PhysOrientationE::R180: return Orient::R180;
-    case eUTL::PhysOrientationE::MX: return Orient::MX;
-    case eUTL::PhysOrientationE::MY: return Orient::MY;
-    default: break;
-  }
+  if (orientation == eUTL::PhysOrientationE::R180) return Orient::R180;
+  if (orientation == eUTL::PhysOrientationE::MX) return Orient::MX;
+  if (orientation == eUTL::PhysOrientationE::MY) return Orient::MY;
   return Orient::R0;
 }
 
 std::string orientationName(eUTL::PhysOrientation orientation)
 {
-  switch (orientation.getValue()) {
-    case eUTL::PhysOrientationE::R0: return "R0";
-    case eUTL::PhysOrientationE::R90: return "R90";
-    case eUTL::PhysOrientationE::R180: return "R180";
-    case eUTL::PhysOrientationE::R270: return "R270";
-    case eUTL::PhysOrientationE::MX: return "MX";
-    case eUTL::PhysOrientationE::MX90: return "MX90";
-    case eUTL::PhysOrientationE::MY: return "MY";
-    case eUTL::PhysOrientationE::MY90: return "MY90";
-    default: break;
-  }
+  if (orientation == eUTL::PhysOrientationE::R0) return "R0";
+  if (orientation == eUTL::PhysOrientationE::R90) return "R90";
+  if (orientation == eUTL::PhysOrientationE::R180) return "R180";
+  if (orientation == eUTL::PhysOrientationE::R270) return "R270";
+  if (orientation == eUTL::PhysOrientationE::MX) return "MX";
+  if (orientation == eUTL::PhysOrientationE::MX90) return "MX90";
+  if (orientation == eUTL::PhysOrientationE::MY) return "MY";
+  if (orientation == eUTL::PhysOrientationE::MY90) return "MY90";
   return cat("unknown(", static_cast<int>(orientation.getValue()), ")");
 }
 
@@ -361,10 +401,10 @@ std::string masterDebug(const eLIB::PhysLibCell& cell)
 }
 
 bool isStandardCellMaster(const eLIB::PhysLibCell& cell,
-                          const fillerSetting& fillerSettings)
+                          const fillerSetting& filler_settings)
 {
   return cell.getType().isCore() && !cell.getType().isBlock()
-         && !fillerSettings.isFillerCell(cell.getLibCellId());
+         && !filler_settings.isFillerCell(cell.getLibCellId());
 }
 
 ViolationKind toKind(ipl::RuleSource source)
@@ -395,24 +435,6 @@ ViolationRelation toRelation(ipl::Relationship relationship)
              : ViolationRelation::IntraRow;
 }
 
-const char* severityName(Severity severity)
-{
-  switch (severity) {
-    case Severity::Info: return "info";
-    case Severity::Warning: return "warning";
-    case Severity::Error: return "error";
-    case Severity::Fatal: return "fatal";
-  }
-  return "unknown";
-}
-
-ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
-{
-  return ipl::Diagnostic{
-      diagnostic.code,
-      cat(severityName(diagnostic.severity), ": ", diagnostic.message)};
-}
-
 }  // namespace
 
 
@@ -422,7 +444,7 @@ ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
 // reasoned about a broken placement would be meaningless. Only the rows the
 // target can influence are checked; whole-design legality belongs to
 // infrastructure, not here.
-namespace {
+namespace internal {
 
 enum class CoverageFindingKind
 {
@@ -528,15 +550,17 @@ std::vector<CoverageFinding> findCoverageFindings(
   return findings;
 }
 
-}  // namespace
+}  // namespace internal
 
 void FillerRepairEngine::Impl::buildPlannerData()
 {
   eUNL::PhysDesMgr* desMgr = des_mgr_;
   Grid* grid = grid_;
   Network* network = network_;
-  const ipl::ImplantLayerChecker* checker = checker_.get();
+  const ipl::ImplantLayerChecker* checker = checker_overlay_.get();
   const auto& fillerMasters = filler_masters_;
+  placement_.clear();
+  setup_diagnostics_.clear();
   repair_config_.verbose = log_.enabled();
   if (desMgr == nullptr || grid == nullptr || network == nullptr
       || checker == nullptr) {
@@ -572,12 +596,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
     placement_.rowFrames.push_back(frame);
     placement_.rows.push_back(y.v);
   }
-  for (const PlacementSnapshot::RowFrame& frame : placement_.rowFrames) {
-    const DbCoord height = frame.yHi - frame.yLo;
-    if (height > 0
-        && (placement_.rowHeight == 0 || height < placement_.rowHeight)) {
-      placement_.rowHeight = height;
-    }
+  if (!placement_.rowFrames.empty()) {
+    placement_.rowHeight = placement_.rowFrames.front().yHi - placement_.rowFrames.front().yLo;
   }
   placement_.byRow.resize(placement_.rowFrames.size());
   placement_.legalSpans.resize(placement_.rowFrames.size());
@@ -716,18 +736,16 @@ void FillerRepairEngine::Impl::buildPlannerData()
                    masterDebug(*cell), "} networkMasterId=", id);
       });
       if (id < 0) {
-        // Network master construction belongs to infrastructure because it
-        // requires the real edge table. An uninstantiated configured master
-        // is therefore unavailable to this snapshot, but safely omitting it
-        // can only reduce the search space; it cannot make an illegal overlay
-        // pass. Initialization fails below only if no registered candidate
-        // remains at all.
-        addProblem(Severity::Warning, "ConfiguredMasterNotInNetwork",
+        // Fatal: the checker validates candidates against Network masters, so
+        // a configured master the Network never imported means the snapshot
+        // was built against different inputs -- refuse instead of silently
+        // shrinking the candidate universe.
+        addProblem(Severity::Fatal, "ConfiguredMasterNotInNetwork",
                    cat("configured filler master is not in Network: "
                        "configuredIndex=",
                        configuredIndex, " {", masterDebug(*cell),
                        "} networkMasters=", network->getMasters().size(),
-                       " networkMasterId=", id, " decision=skip"));
+                       " networkMasterId=", id));
         continue;
       }
       const MasterInfo* info = masterInfo(static_cast<MasterId>(id));
@@ -794,6 +812,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
                      " has no usable master"));
       continue;
     }
+    const eLIB::PhysLibCell* cell = node->getMaster()->getPhysLibCell();
     const eUNL::LeafCellID lcId = node->getDbInst();
     const eUNL::PhysCell physCell = desMgr->getPhysCell(lcId);
     if (!physCell.isValid()) {
@@ -807,19 +826,6 @@ void FillerRepairEngine::Impl::buildPlannerData()
         && status != eUNL::PhysObjStatus::LOC_FIXED) {
       continue;
     }
-    // Node may temporarily carry opto's candidate master while UDM still
-    // describes the committed placement. Snapshot the committed master so a
-    // checker-triggered repair never persists that transient overlay.
-    const Master* committedMaster
-        = network->getMaster(physCell.getPhysMaster().getLibCellId());
-    if (committedMaster == nullptr
-        || committedMaster->getPhysLibCell() == nullptr) {
-      addProblem(Severity::Fatal, "MissingCommittedMaster",
-                 cat("Network node ", node->getId(),
-                     " has no Network master for its committed PhysCell"));
-      continue;
-    }
-    const eLIB::PhysLibCell* cell = committedMaster->getPhysLibCell();
     const RowId rowId = static_cast<RowId>(grid->gridSnapDownY(node).v);
     if (rowId < 0 || rowId >= static_cast<RowId>(placement_.rowFrames.size())) {
       continue;  // outside the core grid: context the planner cannot edit
@@ -827,7 +833,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
     const eUTL::Point2D origin = physCell.getOrigin();
     const DbCoord x = origin.getX().getStorage() - placement_.coreXl;
 
-    const MasterId masterId = static_cast<MasterId>(committedMaster->getId());
+    const MasterId masterId = static_cast<MasterId>(node->getMaster()->getId());
     if (masterInfo(masterId) == nullptr) {
       addProblem(Severity::Fatal, "MissingNodeMasterMetadata",
                  cat("Network node ", node->getId(), " references master ",
@@ -925,7 +931,6 @@ void FillerRepairEngine::Impl::buildPlannerData()
     const int reachSites = checker->getMaxRuleValue();
     const DbCoord checkerReach =
         static_cast<DbCoord>(reachSites) * placement_.siteWidth;
-    placement_.checkerReachX = checkerReach;
 
     const bool fillerWidthWins = maxFillerWidth > checkerReach;
     placement_.defaultHaloX = std::max(checkerReach, maxFillerWidth);
@@ -977,7 +982,8 @@ bool FillerRepairEngine::Impl::isNonBlockingCheckerInitDiagnostic(
       && diagnostic.status != "skipped_missing_rule_parameter") {
     return false;
   }
-  if (des_mgr_ == nullptr || network_ == nullptr || checker_ == nullptr) {
+  if (des_mgr_ == nullptr || network_ == nullptr
+      || checker_overlay_.get() == nullptr) {
     return false;
   }
 
@@ -998,7 +1004,7 @@ bool FillerRepairEngine::Impl::isNonBlockingCheckerInitDiagnostic(
     }
   }
 
-  for (const ipl::Layer& layer : checker_->getLayers()) {
+  for (const ipl::Layer& layer : checker_overlay_.get()->getLayers()) {
     const std::string marker = cat("layer ", layer.getName(), " ");
     if (diagnostic.message.find(marker) != std::string::npos) {
       return usedLayerNames.count(layer.getName()) == 0;
@@ -1318,7 +1324,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   // properties. Dropping the count check to "salvage" a partial batch would
   // silently mis-attribute answers to candidates.
   const std::vector<ipl::CheckResult> raw
-      = checker_->checkPlaceWithOverlays(target, guard, changes);
+      = checker_overlay_.check(target, guard, changes);
   log_.msg("engine",
            cat("overlay batch: ", changes.size(), " candidate(s) -> ",
                raw.size(), " result(s)"));
@@ -1362,8 +1368,8 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   // So strip every leading copy of that known sequence, and judge each
   // candidate only on what this request produced. Without it one benign
   // start-up note would make every candidate illegal forever. Anything
-  // structural never gets this far: buildOracle() already failed closed.
-  const auto& initDiags = checker_->getDiags();
+  // structural never gets this far: rebuildOracle() already failed closed.
+  const auto& initDiags = checker_overlay_.get()->getDiags();
   const auto requestDiagOffset =
       [&initDiags](const std::vector<ipl::Diagnostic>& diagnostics) {
         size_t offset = 0;
@@ -1390,8 +1396,8 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     OracleResult& out = results[requestIndex];
     out.requestId = requests[requestIndex].requestId;
     const ipl::CheckResult& r = raw[rawIndex];
-    const size_t diagnosticOffset = requestDiagOffset(r.diagnostics);
-    for (size_t d = diagnosticOffset; d < r.diagnostics.size(); ++d) {
+    for (size_t d = requestDiagOffset(r.diagnostics); d < r.diagnostics.size();
+         ++d) {
       out.diagnostics.push_back(makeDiag(
           Severity::Warning, r.diagnostics[d].status,
           r.diagnostics[d].message));
@@ -1401,22 +1407,6 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
       out.violations.push_back(
           toPlannerViolation(v, first.targetPlace.instanceId));
     }
-    const bool derivedLegal
-        = out.violations.empty() && out.diagnostics.empty();
-    // Known checker-init diagnostics are deliberately removed above, so they
-    // are the only reason a raw illegal flag may become a clean result. Any
-    // other disagreement is a protocol error and must fail closed.
-    const bool strippedKnownInit = diagnosticOffset > 0;
-    if ((r.isLegal && !derivedLegal)
-        || (!r.isLegal && derivedLegal && !strippedKnownInit)) {
-      out.status = OracleStatus::CheckerError;
-      out.isLegal = false;
-      out.diagnostics.push_back(makeDiag(
-          Severity::Fatal,
-          "CheckerProtocolError",
-          "checker isLegal disagrees with its violations and diagnostics"));
-      continue;
-    }
     // Candidate-shape classification: request-level validation failures come
     // back as extra diagnostics with NO violations -> InvalidOverlay.
     if (out.violations.empty() && !r.isLegal && !out.diagnostics.empty()) {
@@ -1424,7 +1414,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
       out.isLegal = false;
     } else {
       out.status = OracleStatus::Checked;
-      out.isLegal = derivedLegal;
+      out.isLegal = out.violations.empty() && out.diagnostics.empty();
     }
   }
   return results;
@@ -1461,6 +1451,21 @@ Region FillerRepairEngine::Impl::snapshotGuard(RowId rowId,
 
 RepairOutcome FillerRepairEngine::Impl::repair(
     const ipl::CheckRequest& request)
+{
+  return repairImpl(request, std::nullopt, nullptr);
+}
+
+RepairOutcome FillerRepairEngine::Impl::repair(
+    eUNL::LeafCellID targetCell,
+    const eLIB::PhysLibCell& newMaster)
+{
+  return repairImpl(std::nullopt, targetCell, &newMaster);
+}
+
+RepairOutcome FillerRepairEngine::Impl::repairImpl(
+    std::optional<ipl::CheckRequest> checkerRequest,
+    std::optional<eUNL::LeafCellID> targetCell,
+    const eLIB::PhysLibCell* newMaster)
 {
   RepairOutcome result;
   const auto addDiagnostic = [&result](Severity severity,
@@ -1500,11 +1505,17 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
-  // Resolve the checker request to one immutable engine-snapshot target. The
-  // engine deliberately does not reread candidate
+  // 1) Resolve the checker request (preferred) or the direct UDM request to
+  // one immutable engine-snapshot target before touching the shared Network
+  // master registry. The checker path deliberately does not reread candidate
   // placement from the live Node: DePlace may already have changed that Node
   // while the UDM commit is still pending.
-  const int targetId = request.instanceId;
+  int targetId = -1;
+  if (checkerRequest.has_value()) {
+    targetId = checkerRequest->instanceId;
+  } else if (targetCell.has_value()) {
+    targetId = network_->getNodeId(*targetCell);
+  }
   const PlacedInstance* inst =
       targetId >= 0 ? instance(static_cast<InstanceId>(targetId)) : nullptr;
   if (inst == nullptr) {
@@ -1513,23 +1524,24 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                   "target is not a placed node in this engine snapshot");
     return result;
   }
-  if (static_cast<InstanceId>(request.instanceId) != inst->id
-      || request.rowId < 0 || request.colId < 0
-      || !supportedOrientation(request.orientation)) {
-    addDiagnostic(Severity::Fatal,
-                  "InvalidCheckRequest",
-                  "checker supplied an invalid target placement request");
-    return result;
+  if (checkerRequest.has_value()) {
+    if (static_cast<InstanceId>(checkerRequest->instanceId) != inst->id
+        || checkerRequest->masterId < 0 || checkerRequest->rowId < 0
+        || checkerRequest->colId < 0
+        || !supportedOrientation(checkerRequest->orientation)) {
+      addDiagnostic(Severity::Fatal,
+                    "InvalidCheckRequest",
+                    "checker supplied an invalid target placement request");
+      return result;
+    }
+    targetCell = placement_.instances[inst->id]->udm.cellId;
+    const Master* requestedMaster = network_->getMaster(
+        static_cast<int>(checkerRequest->masterId));
+    newMaster = requestedMaster != nullptr
+                    ? requestedMaster->getPhysLibCell()
+                    : nullptr;
   }
-  const eUNL::LeafCellID targetCell
-      = placement_.instances[inst->id]->udm.cellId;
-  const Master* requestedMaster = request.masterId >= 0
-                                      ? network_->getMaster(request.masterId)
-                                      : nullptr;
-  const eLIB::PhysLibCell* newMaster
-      = requestedMaster != nullptr ? requestedMaster->getPhysLibCell()
-                                   : nullptr;
-  if (newMaster == nullptr || requestedMaster->getId() != request.masterId) {
+  if (!targetCell.has_value() || newMaster == nullptr) {
     addDiagnostic(Severity::Fatal,
                   "TargetMasterUnknown",
                   "target replacement master is absent from Network");
@@ -1569,24 +1581,22 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   const DbCoord targetX = inst->x;
   const Orient targetOrientation = inst->orientation;
 
-  const RowId requestedRowId = static_cast<RowId>(request.rowId);
-  const DbCoord requestedX
-      = static_cast<DbCoord>(request.colId) * placement_.siteWidth;
-  const Orient requestedOrientation = toPlannerOrient(request.orientation);
-  const bool samePlacement = requestedRowId == targetRowId
-                             && requestedX == targetX
-                             && requestedOrientation == targetOrientation;
-  if (!samePlacement) {
-    addDiagnostic(Severity::Warning,
-                  "UnsupportedTargetMove",
-                  "filler repair supports same-position target master swaps "
-                  "only");
-    return result;
-  }
+  const RowId requestedRowId = checkerRequest.has_value()
+                                   ? static_cast<RowId>(checkerRequest->rowId)
+                                   : targetRowId;
+  const DbCoord requestedX = checkerRequest.has_value()
+                                 ? static_cast<DbCoord>(checkerRequest->colId)
+                                       * placement_.siteWidth
+                                 : targetX;
+  const Orient requestedOrientation
+      = checkerRequest.has_value()
+            ? toPlannerOrient(checkerRequest->orientation)
+            : targetOrientation;
   const Region initialInfluence = snapshotGuard(
       requestedRowId, requestedX, replacementWidth, replacementHeight);
 
-  // Placement must be sound before any oracle work begins.
+  // Fail before registering an uninstantiated replacement master. The
+  // rejected-request contract covers the in-memory Network registry too.
   const ipl::CheckResult placement = localPrecheck(initialInfluence);
   if (!placement.isLegal) {
     result.diagnostics = placement.diagnostics;
@@ -1597,18 +1607,41 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
-  const int registeredMasterId
-      = network_->getMasterId(newMaster->getLibCellId());
-  if (registeredMasterId != request.masterId) {
-    addDiagnostic(Severity::Fatal,
-                  "TargetMasterNotRegistered",
-                  "target master must be registered consistently by "
-                  "infrastructure before filler repair");
-    return result;
+  // DePlace may not have imported an uninstantiated target replacement yet.
+  // Register it only after request and placement validation, then rebuild the
+  // checker and planner snapshot so all id tables share the expanded Network
+  // universe.
+  if (network_->getMaster(newMaster->getLibCellId()) == nullptr) {
+    const bool registered = ensureMasterRegistered(*newMaster);
+    const bool rebuilt = registered && rebuildOracle();
+    if (!rebuilt) {
+      initialized_ = false;
+      result.diagnostics = oracle_diagnostics_;
+      addDiagnostic(Severity::Fatal,
+                    "TargetMasterRegistrationFailed",
+                    "target master could not be added to the repair oracle");
+      return result;
+    }
   }
 
-  const MasterId newMasterId = static_cast<MasterId>(request.masterId);
-  const MasterInfo* replacement = masterInfo(newMasterId);
+  const int newMasterId = network_->getMasterId(newMaster->getLibCellId());
+  // The checker entry may receive a master that DePlace registered after the
+  // engine snapshot was built. Rebuild the private oracle exactly once so the
+  // new Network master id is understood by both checker and planner.
+  if (newMasterId >= 0
+      && masterInfo(static_cast<MasterId>(newMasterId)) == nullptr
+      && !rebuildOracle()) {
+    initialized_ = false;
+    result.diagnostics = oracle_diagnostics_;
+    addDiagnostic(Severity::Fatal,
+                  "TargetMasterRegistrationFailed",
+                  "target master could not be added to the repair oracle");
+    return result;
+  }
+  const MasterInfo* replacement = newMasterId >= 0
+                                      ? masterInfo(static_cast<MasterId>(
+                                            newMasterId))
+                                      : nullptr;
   if (replacement == nullptr || replacement->isFiller
       || replacement->width != replacementWidth
       || replacement->height != replacementHeight) {
@@ -1621,13 +1654,17 @@ RepairOutcome FillerRepairEngine::Impl::repair(
 
   TargetPlace target;
   target.instanceId = targetInstanceId;
-  target.masterId = newMasterId;
+  target.masterId = static_cast<MasterId>(newMasterId);
   target.rowId = requestedRowId;
   target.x = requestedX;
   target.orientation = requestedOrientation;
 
+  const bool samePlacement = target.rowId == targetRowId
+                             && target.x == targetX
+                             && target.orientation == targetOrientation;
+
   if (log_.enabled()) {
-    const eUNL::PhysCell physical = des_mgr_->getPhysCell(targetCell);
+    const eUNL::PhysCell physical = des_mgr_->getPhysCell(*targetCell);
     const DbCoord coreYl = grid_->getCore().getYL().getStorage();
     const DbCoord requestYRelative
         = grid_->gridYToDbu(GridY{requestedRowId}).v;
@@ -1669,7 +1706,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     log_.msg(
         "engine",
         cat("snapshot frame: request{source=",
-            "checker",
+            checkerRequest.has_value() ? "checker" : "direct",
             " inst=", target.instanceId,
             " master=", target.masterId,
             " row=", requestedRowId,
@@ -1757,12 +1794,20 @@ RepairOutcome FillerRepairEngine::Impl::repair(
             " polarityMismatch=", stats.polarityMismatch, '}'));
     return result;
   }
+  if (!samePlacement) {
+    addDiagnostic(Severity::Warning,
+                  "UnsupportedTargetMove",
+                  "filler repair supports same-position target master swaps "
+                  "only");
+    return result;
+  }
+
   // 3) Pure search over this object's data-source and oracle interfaces.
-  FillerRepairRequest plannerRequest;
-  plannerRequest.targetPlace = target;
-  plannerRequest.violations = snapshot.violations;
+  FillerRepairRequest request;
+  request.targetPlace = target;
+  request.violations = snapshot.violations;
   internal::RepairPlanner planner(*this, *this, repair_config_);
-  const FillerRepairResult planned = planner.repair(plannerRequest);
+  const FillerRepairResult planned = planner.repair(request);
 
   result.hasSolution = planned.hasSolution;
   for (const Diagnostic& diagnostic : planned.diagnostics) {
@@ -1792,6 +1837,28 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   return result;
 }
 
+namespace {
+
+const char* severityName(Severity severity)
+{
+  switch (severity) {
+    case Severity::Info: return "info";
+    case Severity::Warning: return "warning";
+    case Severity::Error: return "error";
+    case Severity::Fatal: return "fatal";
+  }
+  return "unknown";
+}
+
+ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
+{
+  return ipl::Diagnostic{
+      diagnostic.code,
+      cat(severityName(diagnostic.severity), ": ", diagnostic.message)};
+}
+
+}  // namespace
+
 bool FillerRepairEngine::Impl::init(eUNL::PhysDesMgr* desMgr,
                                     const fillerSetting& fillerSettings)
 {
@@ -1804,7 +1871,7 @@ bool FillerRepairEngine::Impl::init(eUNL::PhysDesMgr* desMgr,
     return false;
   }
 
-  initialized_ = buildOracle();
+  initialized_ = rebuildOracle();
   if (!initialized_) {
     init_diagnostics_.insert(init_diagnostics_.end(),
                              oracle_diagnostics_.begin(),
@@ -1839,13 +1906,13 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
   // whole-design placement legality is infrastructure's own gate). Legal
   // spans come lazily from Grid pixels for exactly these rows; placed spans
   // are read live from PhysDesMgr for the row's snapshot nodes.
-  std::vector<PlacementCoverageRow> coverageRows;
+  std::vector<internal::PlacementCoverageRow> coverageRows;
   const RowId rowLo = std::max<RowId>(influence.rowLo, 0);
   const RowId rowHi = std::min<RowId>(
       influence.rowHi, static_cast<RowId>(placement_.rowFrames.size()) - 1);
   for (RowId rowId = rowLo; rowId <= rowHi; ++rowId) {
     const PlacementSnapshot::RowFrame& frame = placement_.rowFrames[static_cast<size_t>(rowId)];
-    PlacementCoverageRow coverageRow;
+    internal::PlacementCoverageRow coverageRow;
     coverageRow.rowId = rowId;
     coverageRow.legalSpans = legalSpansForRow(rowId);
     for (const PlacedInstance& inst : instancesInRow(rowId)) {
@@ -1878,11 +1945,11 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
     coverageRows.push_back(std::move(coverageRow));
   }
 
-  const std::vector<CoverageFinding> findings
-      = findCoverageFindings(std::move(coverageRows));
+  const std::vector<internal::CoverageFinding> findings
+      = internal::findCoverageFindings(std::move(coverageRows));
   result.isLegal = findings.empty();
-  for (const CoverageFinding& finding : findings) {
-    const char* status = coverageFindingStatus(finding.kind);
+  for (const internal::CoverageFinding& finding : findings) {
+    const char* status = internal::coverageFindingStatus(finding.kind);
     result.diagnostics.push_back(
         {status,
          cat("warning: placement ", status, " row=", finding.rowId,
@@ -1930,7 +1997,6 @@ void FillerRepairEngine::Impl::failInit(const std::string& status,
                                         const std::string& message)
 {
   init_diagnostics_.push_back({status, message});
-  log_.msg("engine", cat(status, ": ", message));
 }
 
 bool FillerRepairEngine::Impl::bindInfrastructure(
@@ -2006,11 +2072,12 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  fillerSettings.getFillerPhysCells().size()));
     return false;
   }
-  // Per-node live-master equality is deliberately not required: lazy
-  // initialization happens mid-check, when the target Node may already carry
-  // its proposed master ahead of the pending UDM commit. buildPlannerData()
-  // instead reads each committed PhysCell master and still fails closed on
-  // missing or inconsistent mappings.
+  // Per-node Network<->UDM cross-validation was removed deliberately:
+  // infrastructure data is trusted as-is, and with lazy initialization the
+  // engine is typically created MID-CHECK, while the candidate Node already
+  // carries its proposed master ahead of the pending UDM commit
+  // (DePlace::isLegal updates the Node before checkDRC). Nodes whose master
+  // or physical record is unusable are simply skipped by buildPlannerData.
 
   filler_settings_ = &fillerSettings;
   filler_masters_ = fillerSettings.getFillerPhysCells();
@@ -2027,11 +2094,13 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
       continue;
     }
     if (!ensureMasterRegistered(*master)) {
-      log_.msg("engine",
-               cat("configured filler master unavailable: configuredIndex=",
+      failInit("filler_master_registration_failed",
+               cat("fatal: configured filler master could not be registered "
+                   "in Network: configuredIndex=",
                    configuredIndex, " {", masterDebug(*master),
                    "} networkMasters=", network_->getMasters().size(),
-                   " decision=skip"));
+                   " gridSiteWidth=", grid_->getSiteWidth().v,
+                   " gridRows=", grid_->getRowCount().v));
     }
   }
   return init_diagnostics_.empty();
@@ -2040,28 +2109,40 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
 bool FillerRepairEngine::Impl::ensureMasterRegistered(
     const eLIB::PhysLibCell& master)
 {
-  if (network_ == nullptr) {
+  if (network_ == nullptr || grid_ == nullptr || filler_settings_ == nullptr) {
     return false;
   }
-  // Master construction belongs to infrastructure because it requires the
-  // real edge table. Repair only refreshes the filler classification of an
-  // already registered configured master.
-  Master* registered = network_->getMaster(master.getLibCellId());
-  if (registered == nullptr) {
-    return false;
-  }
-  registered->setFiller(true);
-  return true;
+  // [PORT-ADAPT] Network::addMaster. This is the ONLY call in the payload
+  // whose signature tracks the infrastructure version, and it has already
+  // changed twice (it gained the fillerSetting parameter, and its third
+  // parameter became const EdgeTypeTable*). If yours differs, fix it here --
+  // nothing in the search or the oracle needs to know.
+  //
+  // The empty edge-type table is on purpose. addMaster dereferences it without
+  // a null check, so nullptr is out; an empty one makes it return right after
+  // filling in the geometry, which is all the implant oracle reads anyway.
+  // This call is mandatory even when the master already exists: addMaster()
+  // refreshes Master::isFiller from fillerSetting, the sole filler authority.
+  // rebuildOracle() runs after registration and therefore gives the private
+  // checker the same refreshed master classification.
+  static const EdgeTypeTable kNoEdgeTypes;
+  Master* refreshed = network_->addMaster(
+      master, *filler_settings_, grid_, &kNoEdgeTypes);
+  return refreshed != nullptr
+         && refreshed->isFiller()
+                == filler_settings_->isFillerCell(master.getLibCellId());
 }
 
-bool FillerRepairEngine::Impl::buildOracle()
+bool FillerRepairEngine::Impl::rebuildOracle()
 {
+  checker_overlay_.clear();
+  oracle_diagnostics_.clear();
   repair_config_.verbose = log_.enabled();
   // bindInfrastructure proved the engine manager and Grid manager agree.
-  checker_ = std::make_unique<ipl::ImplantLayerChecker>(grid_, network_);
+  checker_overlay_.reset(grid_, network_);
   buildPlannerData();
   bool checkerReady = true;
-  for (const ipl::Diagnostic& diagnostic : checker_->getDiags()) {
+  for (const ipl::Diagnostic& diagnostic : checker_overlay_.get()->getDiags()) {
     if (isNonBlockingCheckerInitDiagnostic(diagnostic)) {
       log_.msg("engine",
                cat("non-blocking checker init diagnostic: ",
@@ -2078,7 +2159,7 @@ bool FillerRepairEngine::Impl::buildOracle()
              " nonPadRows=", placement_.rows.size(),
              " engineSiteWidth=", placement_.siteWidth,
              " gridSiteWidth=", grid_->getSiteWidth().v,
-             " checkerSiteWidth=", checker_->siteWidth(), "}")});
+             " checkerSiteWidth=", checker_overlay_.get()->siteWidth(), "}")});
     log_.msg("engine",
              cat("blocking checker init diagnostic: ", diagnostic.status,
                  " ", diagnostic.message));
@@ -2101,7 +2182,9 @@ void reportRepairUnavailable(const char* reason)
 }
 
 FillerRepairEngine::FillerRepairEngine(Grid* grid, Network* network)
-    : impl_(std::make_unique<Impl>(grid, network))
+    : grid_(grid),
+      network_(network),
+      impl_(std::make_unique<Impl>(grid, network))
 {
 }
 
@@ -2109,6 +2192,7 @@ FillerRepairEngine::~FillerRepairEngine() = default;
 
 void FillerRepairEngine::setDebugLogging(bool enabled)
 {
+  debug_logging_ = enabled;
   impl_->setDebugLogging(enabled);
 }
 
@@ -2116,6 +2200,22 @@ bool FillerRepairEngine::init(eUNL::PhysDesMgr* desMgr,
                               const fillerSetting& fillerSettings)
 {
   return impl_->init(desMgr, fillerSettings);
+}
+
+bool FillerRepairEngine::update(eUNL::PhysDesMgr* desMgr,
+                                const fillerSetting& fillerSettings)
+{
+  auto replacement = std::make_unique<Impl>(grid_, network_);
+  replacement->setDebugLogging(debug_logging_);
+  const bool initialized = replacement->init(desMgr, fillerSettings);
+  impl_ = std::move(replacement);
+  return initialized;
+}
+
+RepairOutcome FillerRepairEngine::repair(eUNL::LeafCellID targetCell,
+                                         const eLIB::PhysLibCell& newMaster)
+{
+  return impl_->repair(targetCell, newMaster);
 }
 
 RepairOutcome FillerRepairEngine::repair(const ipl::CheckRequest& request)

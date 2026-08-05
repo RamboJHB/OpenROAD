@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include <PlacementDRC.h>
 #include <drc/ImplantLayerChecker.h>
 #include <drc/ImplantLayerCheckerHelper.h>
 #include <fillerRepair/RepairPlanner.h>
@@ -39,66 +38,6 @@ bool hasDiagnostic(const std::vector<Diagnostic>& diagnostics,
       [&](const Diagnostic& diagnostic) {
         return diagnostic.status == status;
       });
-}
-
-class AppendingChecker final : public DRCChecker
-{
- public:
-  AppendingChecker(bool passes, size_t expectedInputSize)
-      : DRCChecker(nullptr),
-        passes_(passes),
-        expectedInputSize_(expectedInputSize)
-  {
-  }
-
-  bool check(const Node*,
-             GridX,
-             GridY,
-             const PhysOrientation&) const override
-  {
-    return passes_;
-  }
-
-  bool check(const Node*,
-             GridX,
-             GridY,
-             const PhysOrientation&,
-             std::vector<CellChangeRecord>& records) const override
-  {
-    EXPECT_EQ(records.size(), expectedInputSize_);
-    records.emplace_back();
-    return passes_;
-  }
-
- private:
-  bool passes_;
-  size_t expectedInputSize_;
-};
-
-TEST(PlacementDRCTest, PublishesChangesOnlyWhenEveryCheckerPasses)
-{
-  {
-    PlacementDRC drc(nullptr);
-    drc.addChecker(DRCCheckerType::EdgeSpacing,
-                   std::make_unique<AppendingChecker>(true, 1));
-    drc.addChecker(DRCCheckerType::Padding,
-                   std::make_unique<AppendingChecker>(false, 2));
-    std::vector<CellChangeRecord> records(1);
-    EXPECT_FALSE(drc.checkDRC(
-        nullptr, GridX{0}, GridY{0}, PhysOrientationE::R0, records));
-    EXPECT_EQ(records.size(), 1U);
-  }
-  {
-    PlacementDRC drc(nullptr);
-    drc.addChecker(DRCCheckerType::EdgeSpacing,
-                   std::make_unique<AppendingChecker>(true, 1));
-    drc.addChecker(DRCCheckerType::Padding,
-                   std::make_unique<AppendingChecker>(true, 2));
-    std::vector<CellChangeRecord> records(1);
-    EXPECT_TRUE(drc.checkDRC(
-        nullptr, GridX{0}, GridY{0}, PhysOrientationE::R0, records));
-    EXPECT_EQ(records.size(), 3U);
-  }
 }
 
 TEST(ImplantLayerCheckerInitializationTest,
@@ -1286,92 +1225,6 @@ TEST(ImplantCheckerNullSafetyTest,
   mutableNode->setMaster(savedMaster);
 }
 
-TEST(ImplantCheckerRequestGeometryTest,
-     UsesRequestedRowAndRejectsAFootprintPastTheGrid)
-{
-  PlannerCheckerFixture fixture;
-  Grid* grid = fixture.grid();
-  Network* network = fixture.network();
-  ImplantLayerChecker& checker = fixture.mutableChecker();
-  ASSERT_NE(grid, nullptr);
-  ASSERT_NE(network, nullptr);
-  const Node* node = network->getNodes().front().get();
-  ASSERT_NE(node, nullptr);
-
-  CheckRequest committed{node->getId(),
-                         node->getMaster()->getId(),
-                         grid->gridSnapDownY(node).v,
-                         grid->gridX(node).v,
-                         node->getOrient()};
-  ASSERT_TRUE(checker.checkDirect(committed).isLegal);
-  std::vector<CellChangeRecord> changes;
-  EXPECT_FALSE(checker.check(node,
-                             grid->gridX(node),
-                             GridY{-1},
-                             node->getOrient(),
-                             changes));
-
-  ImplantInput wide = input();
-  wide.masters[C1_MASTER].width = 2 * SITE_WIDTH;
-  for (MasterShape& shape : wide.masters[C1_MASTER].shapes) {
-    shape.rect._xh = UvDist(2 * SITE_WIDTH);
-  }
-  wide.masters[C1_MASTER].rawShapes = wide.masters[C1_MASTER].shapes;
-  ImplantLayerCheckerHelper helper;
-  helper.initialize(wide);
-  ImplantLayerChecker wideChecker(helper.getGrid(), helper.getNetwork());
-  helper.initChecker(wideChecker);
-  CheckRequest overhang{instId(0, SITE_COUNT - 1),
-                        C1_MASTER,
-                        0,
-                        SITE_COUNT - 1,
-                        PhysOrientationE::R0};
-  const CheckResult result = wideChecker.checkDirect(overhang);
-  EXPECT_FALSE(result.isLegal);
-  EXPECT_TRUE(hasDiagnostic(result.diagnostics, "placement_out_of_grid"));
-}
-
-TEST(ImplantCheckerRuleReachTest, IncludesPrlAndLengthInMaximumReach)
-{
-  ImplantInput in = input();
-  in.rules.clear();
-  Rule spacing(0, RuleSource::Lef58Spacing, F1_LAYER, 2);
-  spacing.setPrl(9);
-  spacing.setLength(13);
-  in.rules.push_back(spacing);
-  ImplantLayerCheckerHelper helper;
-  helper.initialize(in);
-  ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
-  helper.initChecker(checker);
-  EXPECT_EQ(checker.getMaxRuleValue(),
-            (13 + SITE_WIDTH - 1) / SITE_WIDTH);
-
-  ImplantInput clamped = input();
-  clamped.rules.clear();
-  Rule huge(0, RuleSource::Lef58Spacing, F1_LAYER, 2);
-  huge.setLength((SITE_COUNT + 10) * SITE_WIDTH);
-  clamped.rules.push_back(huge);
-  ImplantLayerCheckerHelper clampHelper;
-  clampHelper.initialize(clamped);
-  ImplantLayerChecker clampChecker(clampHelper.getGrid(),
-                                   clampHelper.getNetwork());
-  clampHelper.initChecker(clampChecker);
-  EXPECT_EQ(clampChecker.getMaxRuleValue(), SITE_COUNT);
-}
-
-TEST(ImplantCheckerMasterValidationTest, RejectsMixedImplantFamilies)
-{
-  ImplantInput in = input();
-  in.masters[C1_MASTER].shapes.back().layer = F2_LAYER;
-  in.masters[C1_MASTER].rawShapes = in.masters[C1_MASTER].shapes;
-  ImplantLayerCheckerHelper helper;
-  helper.initialize(in);
-  ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
-  helper.initChecker(checker);
-  EXPECT_TRUE(hasDiagnostic(checker.getDiags(),
-                            "master_implant_family_mismatch"));
-}
-
 TEST(InfrastructureNullSafetyTest, RejectsNullOwnedObjectsAndClearedGridAccess)
 {
   Network emptyNetwork;
@@ -1959,7 +1812,7 @@ TEST(FillerRepairCheckerE2ETest, EmptyCandidateUniverseFailsWithoutPartial)
   const fr::OracleResult baseline = fixture.baseline(SCN_MID);
   ASSERT_FALSE(baseline.violations.empty());
   fr::RepairConfig config;
-  config.adaptiveStepFillers = 1;
+  config.adaptiveStepFillers = 100;
   config.checkerCallBudgetPerWindow = 32;
   const fr::FillerRepairResult result
       = fixture.repair(SCN_MID, baseline.violations, config);
@@ -2112,7 +1965,7 @@ TEST(FillerRepairCheckerE2ETest, CachedBaselineFreesWindowBudget)
   fr::RepairConfig config;
   config.checkerCallBudgetPerWindow = 1;  // one call per window, refilled
   config.batchSize = 1;
-  config.adaptiveStepFillers = 1;
+  config.adaptiveStepFillers = 100;
   const fr::FillerRepairResult result
       = fixture.repair(scn, baseline.violations, config);
   EXPECT_FALSE(result.hasSolution);

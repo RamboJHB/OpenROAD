@@ -148,10 +148,9 @@ Rect getCoreArea();
  */
 Rect getBoundingBox(const Rect& region, int rings = 3) const;
 fillerSetting* getFillerSetting() { return filler_setting_.get();};
-// [fillerRepair-fix] Network Master construction stays with the infrastructure
-// owner that has the real edge table. It also refreshes existing Node filler
-// types. Call after updating fillerSetting and before a checker may lazily
-// initialize filler repair.
+// Network Master construction stays with the infrastructure owner that has
+// the real edge table. Call after updating fillerSetting and before checker
+// initialization or filler-repair testing.
 bool registerFillerRepairMasters();
 
 private:

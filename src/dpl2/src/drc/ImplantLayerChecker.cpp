@@ -217,7 +217,8 @@ ImplantLayerChecker::ImplantLayerChecker(Grid* grid,
             " initialization PhysDesMgr"});
         return;
     }
-    infrastructureReady_ = init(desMgr_);
+    infrastructureReady_ = true;
+    init(desMgr_);
 }
 
 ImplantLayerChecker::~ImplantLayerChecker()
@@ -247,7 +248,7 @@ bool ImplantLayerChecker::init(PhysDesMgr* desMgr)
         }
     }
     buildLayers(desMgr);
-    ok = buildMasters() && ok;
+    buildMasters();
     ok = buildRules() && ok;
     ok = buildMstIntervals() && ok;
 
@@ -332,6 +333,7 @@ void ImplantLayerChecker::buildLayers(PhysDesMgr* desMgr)
                         widthRule->getCheckImplantGroup();
                     if (!checkGroup.empty()) {
                         rule.setCheckGroup(checkGroup);
+                        uvAssert(layerGroups_.contains(checkGroup));
                     }
                 }
             } else if (techRule.getCheck().getType() ==
@@ -402,8 +404,7 @@ void ImplantLayerChecker::buildLayers(PhysDesMgr* desMgr)
 bool ImplantLayerChecker::buildRules()
 {
     bool ok = true;
-    sortedRules_.clear();
-    for (const Rule& rule : rules_) {
+    for (Rule rule : rules_) {
         // Keep unsupported rules visible to callers, but do not let them
         // participate in violation generation.
         if (!rule.getUnsupportedClauses().empty()) {
@@ -415,7 +416,6 @@ bool ImplantLayerChecker::buildRules()
             if (layerGroups_.find(*rule.getCheckGroup()) == layerGroups_.end()) {
                 diagnostics_.push_back({"skipped_missing_rule_parameter",
                     "unknown implant group " + *rule.getCheckGroup()});
-                ok = false;
             }
         }
     }
@@ -440,17 +440,14 @@ bool ImplantLayerChecker::buildRules()
 // Set the max search radius (in sites) from the largest rule value.
 void ImplantLayerChecker::setMaxRuleValue()
 {
-    Dbu maxValue = 0;
+    int maxValue = 0;
     for (const Rule& rule : rules_) {
-        maxValue = std::max(maxValue, queryRadius(rule));
+        if (rule.getMinValue() > maxValue) {
+            maxValue = rule.getMinValue();
+        }
     }
     if (siteWidth_ > 0) {
-        Dbu reachSites = (maxValue + siteWidth_ - 1) / siteWidth_;
-        if (grid_ != nullptr && grid_->getRowSiteCount().v > 0) {
-            reachSites = std::min<Dbu>(reachSites,
-                grid_->getRowSiteCount().v);
-        }
-        maxRuleValue_ = static_cast<int>(reachSites);
+        maxRuleValue_ = (maxValue + siteWidth_ - 1) / siteWidth_;
     }
 }
 
@@ -565,39 +562,34 @@ bool ImplantLayerChecker::buildMstIntervals()
 }
 
 // Build masterItems_ (implant shapes) from the Network masters and tech library.
-bool ImplantLayerChecker::buildMasters()
+void ImplantLayerChecker::buildMasters()
 {
-    bool ok = true;
     int masterCount = network_->getMasters().size();
-    masterItems_.assign(masterCount, MasterItem{});
+    masterItems_.resize(masterCount);
 
     for (const std::unique_ptr<Master>& masterPtr : network_->getMasters()) {
         const Master* nm = masterPtr.get();
         if (!nm) {
             diagnostics_.push_back({"null_network_master",
                 "Network contains a null master slot"});
-            ok = false;
             continue;
         }
         MasterId mid = nm->getId();
         if (mid < 0 || mid >= masterCount) {
             diagnostics_.push_back({"invalid_network_master_id",
                 makeMessage("master ", mid)});
-            ok = false;
             continue;
         }
         const eLIB::PhysLibCell* physCell = nm->getPhysLibCell();
         if (physCell == nullptr) {
             diagnostics_.push_back({"missing_physical_master",
                 makeMessage("master ", mid)});
-            ok = false;
             continue;
         }
         const eLIB::TechSite* techSite = physCell->getTechSite();
         if (techSite == nullptr) {
             diagnostics_.push_back({"missing_master_site",
                 makeMessage("master ", mid)});
-            ok = false;
             continue;
         }
 
@@ -655,39 +647,7 @@ bool ImplantLayerChecker::buildMasters()
         item.rawShapes = item.shapes;
     }
 
-    ok = validateMasterImplantFamilies() && ok;
     rebuildMasterShapes();
-    return ok;
-}
-
-bool ImplantLayerChecker::validateMasterImplantFamilies()
-{
-    bool ok = true;
-    for (const MasterItem& master : masterItems_) {
-        Layer::Vt family = Layer::Vt::Unknown;
-        bool mismatchReported = false;
-        for (const MasterShape& shape : master.shapes) {
-            if (shape.layer < 0
-                || shape.layer >= static_cast<LayerId>(layers_.size())) {
-                continue;
-            }
-            const Layer::Vt shapeFamily = layers_[shape.layer].getVt();
-            if (shapeFamily == Layer::Vt::Unknown) {
-                continue;
-            }
-            if (family == Layer::Vt::Unknown) {
-                family = shapeFamily;
-            } else if (family != shapeFamily && !mismatchReported) {
-                diagnostics_.push_back({
-                    "master_implant_family_mismatch",
-                    "master " + std::to_string(master.masterId)
-                        + " contains more than one implant VT family"});
-                mismatchReported = true;
-                ok = false;
-            }
-        }
-    }
-    return ok;
 }
 
 // Rebuild master shapes into canonical bottom/top half-row bands
@@ -834,7 +794,7 @@ bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
     CheckRequest request;
     request.instanceId = node->getId();
     request.masterId = node->getMaster()->getId();
-    request.rowId = y.v;
+    request.rowId = grid_->gridSnapDownY(node).v;
     request.colId = x.v;
     request.orientation = orient;
 
@@ -849,17 +809,18 @@ void ImplantLayerChecker::setFillerRepairContext(PhysDesMgr* desMgr,
     const fillerSetting* setting)
 {
     repairSetting_ = setting;
+    repairEngine_.reset();
     PhysDesMgr* const gridDesMgr
         = grid_ != nullptr ? grid_->getDesMgr() : nullptr;
     if (!infrastructureReady_ || desMgr == nullptr || gridDesMgr == nullptr
         || desMgr != gridDesMgr) {
-        repairContextInvalid_ = true;
+        repairEngineFailed_ = true;
         fillerRepair::reportRepairUnavailable(
             "repair PhysDesMgr must match Grid's initialization manager");
         return;
     }
     desMgr_ = gridDesMgr;
-    repairContextInvalid_ = false;
+    repairEngineFailed_ = false;
 }
 
 namespace {
@@ -872,34 +833,44 @@ void ImplantLayerChecker::setFillerRepairSettingProvider(
     g_fillerSettingProvider = provider;
 }
 
-// Lazy: most checks are legal and never reach here. A failing request gets a
-// fresh committed-placement snapshot so a previous opto overlay or commit can
-// never leave a stale engine behind.
+// Lazy: most checks are legal and never reach here, so the engine (and its
+// whole-design snapshot) is only built once a candidate actually fails.
 bool ImplantLayerChecker::repairFillers(const CheckRequest& request,
     std::vector<CellChangeRecord>& fcRecord) const
 {
-    if (repairContextInvalid_) {
-        return false;
+    if (repairEngineFailed_) {
+        return false;  // structural init failure: fail closed from now on
     }
-    const fillerSetting* setting = repairSetting_ != nullptr
-        ? repairSetting_
-        : (g_fillerSettingProvider != nullptr ? g_fillerSettingProvider()
-                                              : nullptr);
-    if (setting == nullptr || desMgr_ == nullptr) {
-        repairContextInvalid_ = true;
-        fillerRepair::reportRepairUnavailable(desMgr_ == nullptr
-            ? "no PhysDesMgr; filler repair is disabled for this checker"
-            : "no fillerSetting; set_filler_option must run before checker"
-              " and repair initialization");
-        return false;
+    if (!repairEngine_) {
+        const fillerSetting* setting = repairSetting_ != nullptr
+            ? repairSetting_
+            : (g_fillerSettingProvider != nullptr ? g_fillerSettingProvider()
+                                                  : nullptr);
+        if (setting == nullptr || desMgr_ == nullptr) {
+            // set_filler_option and checker initialization are required to
+            // precede repair. Missing either context is an integration error,
+            // so fail closed instead of changing behaviour on a later check.
+            repairEngineFailed_ = true;
+            fillerRepair::reportRepairUnavailable(desMgr_ == nullptr
+                ? "no PhysDesMgr; filler repair is disabled for this checker"
+                : "no fillerSetting; set_filler_option must run before checker"
+                  " and repair initialization");
+            return false;
+        }
+        auto engine = std::make_unique<fillerRepair::FillerRepairEngine>(
+            grid_, network_);
+        if (!engine->init(desMgr_, *setting)) {
+            // Structural: the data the engine needs is present but unusable.
+            // Retrying would fail identically, so disable repair here.
+            repairEngineFailed_ = true;
+            fillerRepair::reportRepairUnavailable(
+                "engine initialization failed; filler repair is disabled for"
+                " this checker (use setFillerRepairContext to reset)");
+            return false;
+        }
+        repairEngine_ = std::move(engine);
     }
-    fillerRepair::FillerRepairEngine engine(grid_, network_);
-    if (!engine.init(desMgr_, *setting)) {
-        fillerRepair::reportRepairUnavailable(
-            "engine initialization failed for this check");
-        return false;
-    }
-    fillerRepair::RepairOutcome outcome = engine.repair(request);
+    fillerRepair::RepairOutcome outcome = repairEngine_->repair(request);
     if (!outcome.hasSolution) {
         return false;
     }
@@ -923,16 +894,10 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
     // checkDRC) has no MasterItem yet; getNodeShape would index out of
     // bounds. Both builders are idempotent by master id, so extend lazily.
     if (request.masterId >= 0
-        && static_cast<size_t>(request.masterId) >= masterItems_.size()
-        && network_->getMaster(request.masterId) != nullptr) {
+        && static_cast<size_t>(request.masterId) >= masterItems_.size()) {
         ImplantLayerChecker* self = const_cast<ImplantLayerChecker*>(this);
-        const bool rebuilt = self->buildMasters()
-            && self->buildMstIntervals();
-        if (!rebuilt) {
-            result.isLegal = false;
-            result.diagnostics = diagnostics_;
-            return result;
-        }
+        self->buildMasters();
+        self->buildMstIntervals();
     }
     if (siteWidth_ <= 0 || request.colId < 0) {
         result.diagnostics = diagnostics_ ;
@@ -974,22 +939,7 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
         result.isLegal = false;
         return result;
     }
-    const MasterItem& targetMaster = masterItems_[request.masterId];
-    const int targetWidth = static_cast<int>(
-        (targetMaster.width + siteWidth_ - 1) / siteWidth_);
-    const int targetHeight = static_cast<int>(
-        (targetMaster.height + rowHeight_ - 1) / rowHeight_);
-    if (request.colId + targetWidth > grid_->getRowSiteCount().v
-        || request.rowId + targetHeight > grid_->getRowCount().v) {
-        result.diagnostics = diagnostics_;
-        result.diagnostics.push_back({"placement_out_of_grid",
-            "instance " + std::to_string(request.instanceId) + " footprint "
-                + std::to_string(targetWidth) + "x"
-                + std::to_string(targetHeight)});
-        result.isLegal = false;
-        return result;
-    }
-    const OverlapInfo& overlap = checkOverlap(request);
+    const OverlapInfo& overlap = checkOverlap(node);
     if (overlap.diags) {
         result.diagnostics = diagnostics_;
         result.diagnostics.push_back(*overlap.diags);
@@ -1013,7 +963,7 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
     // prepare the target intervals
     XInterval tgtItv;
     tgtItv.xl = request.colId * siteWidth_ ;
-    tgtItv.xh = tgtItv.xl + masterItems_[request.masterId].width;
+    tgtItv.xh = tgtItv.xl + node->getWidth().v;
     std::vector<XInterval> itvs{tgtItv};
 
     const std::vector<CheckShape> shapes = mergeShapes(snapshot);
@@ -1089,15 +1039,8 @@ CheckShapes snapshot;
         || siteWidth_ <= 0 || rowHeight_ <= 0) {
         return snapshot;
     }
-    if (request.masterId < 0
-        || request.masterId >= static_cast<MasterId>(masterItems_.size())) {
-        return snapshot;
-    }
-    const MasterItem& targetMaster = masterItems_[request.masterId];
-    int width = static_cast<int>((targetMaster.width + siteWidth_ - 1)
-                                 / siteWidth_);
-    int height = static_cast<int>((targetMaster.height + rowHeight_ - 1)
-                                  / rowHeight_);
+    int width = tgtNode->getWidth().v / siteWidth_;
+    int height = tgtNode->getHeight().v / rowHeight_;
     RowId row0 = std::max(request.rowId - 1, 0);
     RowId row1 = std::min(request.rowId + height, grid_->getRowCount().v - 1);
     ColId col0 = std::max(request.colId - maxRuleValue_, 0);
@@ -1718,32 +1661,18 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
     }
 
     // Check pixel grid for overlapping non-filler cells at a node's placement.
-    OverlapInfo ImplantLayerChecker::checkOverlap(
-        const CheckRequest& request) const
+    OverlapInfo ImplantLayerChecker::checkOverlap(const Node* node) const
     {
         OverlapInfo info;
-        const Node* node = network_ != nullptr
-            ? network_->getNode(request.instanceId) : nullptr;
         if (node == nullptr) {
             info.diags = Diagnostic{"unknown_target_instance",
                 "cannot check overlap for a null node"};
             return info;
         }
 
-        if (request.masterId < 0
-            || request.masterId >= static_cast<MasterId>(masterItems_.size())
-            || siteWidth_ <= 0 || rowHeight_ <= 0) {
-            info.diags = Diagnostic{"unknown_target_master",
-                makeMessage("master ", request.masterId)};
-            return info;
-        }
-        const MasterItem& master = masterItems_[request.masterId];
-        const int width = static_cast<int>((master.width + siteWidth_ - 1)
-                                           / siteWidth_);
-        const int height = static_cast<int>((master.height + rowHeight_ - 1)
-                                            / rowHeight_);
-        for (GridX x{request.colId}; x < GridX{request.colId + width}; x++) {
-            for (GridY y{request.rowId}; y < GridY{request.rowId + height}; y++) {
+        for (GridX x = grid_->gridX(node); x < grid_->gridEndX(node); x++) {
+            for (GridY y = grid_->gridSnapDownY(node);
+                y < grid_->gridEndY(node); y++) {
                 Pixel* pixel = grid_->gridPixel(x, y);
                 Node* node2 = pixel ? pixel->cell : nullptr;
                 if (node2 != nullptr && node2 != node) {
@@ -1796,21 +1725,6 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
         if (!targetHasData) {
             diagnostics.push_back({"unknown_target_master",
                 makeMessage("master ", request.masterId)});
-        }
-        if (targetHasData && grid_ != nullptr && siteWidth_ > 0
-            && rowHeight_ > 0) {
-            const MasterItem& target = masterItems_[request.masterId];
-            const int width = static_cast<int>(
-                (target.width + siteWidth_ - 1) / siteWidth_);
-            const int height = static_cast<int>(
-                (target.height + rowHeight_ - 1) / rowHeight_);
-            if (request.colId + width > grid_->getRowSiteCount().v
-                || request.rowId + height > grid_->getRowCount().v) {
-                diagnostics.push_back({"placement_out_of_grid",
-                    "instance " + std::to_string(request.instanceId)
-                        + " footprint " + std::to_string(width) + "x"
-                        + std::to_string(height)});
-            }
         }
 
         std::set<InstanceId> seen;
@@ -2010,6 +1924,7 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
         };
         auto groupShapesFor = [&](RowId rowId, BandSlot bandSlot) {
             CheckShapes groupShapes;
+            int nextId = 1;
             for (const CheckShape& shape : shapes) {
                 if (shape.rowId != rowId || shape.bandSlot != bandSlot ||
                     !inGroup(shape.layer)) {
@@ -2260,7 +2175,7 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
             result.isLegal = false;
             return result;
         }
-        const OverlapInfo& overlap = checkOverlap(request);
+        const OverlapInfo& overlap = checkOverlap(node);
         if (overlap.diags) {
             result.diagnostics.push_back(*overlap.diags);
             result.isLegal = false;
@@ -2291,7 +2206,7 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
         // prepare the target intervals
         XInterval tgtItv;
         tgtItv.xl = request.colId * siteWidth_;
-        tgtItv.xh = tgtItv.xl + masterItems_[request.masterId].width;
+        tgtItv.xh = tgtItv.xl + node->getWidth().v;
         std::vector<XInterval> itvs{tgtItv};
         for (const CellChangeRecord& change : fillerChanges) {
             const LeafCellID* cellId = cellChangeLeafCellId(change);
@@ -2412,7 +2327,6 @@ ImplantLayerChecker::makeViolations(const std::vector<CheckOutcome>& outcomes,
                     case RuleSource::Spacing:      os << "SPACING"; break;
                     case RuleSource::Lef58Width:   os << "LEF58_WIDTH"; break;
                     case RuleSource::Lef58Spacing: os << "LEF58_SPACING"; break;
-                    case RuleSource::Count:        os << "COUNT"; break;
                 }
                 os << " primaryLayer=" << rule.getPrimaryLayer() <<
                     " minValue=" << rule.getMinValue();

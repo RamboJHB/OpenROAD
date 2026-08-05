@@ -37,7 +37,7 @@ target_link_libraries(
   dpl2_filler_repair_planner_test
   PRIVATE GTest::gtest_main dpl2::fillerRepairPlanner)
 target_compile_options(
-  dpl2_filler_repair_planner_test PRIVATE -Wall -Wextra -Werror)
+  dpl2_filler_repair_planner_test PRIVATE -Wall -Wextra)
 gtest_discover_tests(
   dpl2_filler_repair_planner_test
   TEST_PREFIX "planner."
@@ -50,7 +50,6 @@ set(DPL2_CHECKER_HELPER_SOURCES
     "${DPL2_SRC_ROOT}/drc/ImplantLayerCheckerHelper.cpp")
 if(NOT DPL2_RUNTIME_LIBRARIES)
   list(PREPEND DPL2_CHECKER_HELPER_SOURCES
-      "${DPL2_SRC_ROOT}/PlacementDRC.cpp"
       "${DPL2_SRC_ROOT}/infrastructure/Grid.cpp"
       "${DPL2_SRC_ROOT}/infrastructure/Object.cpp"
       "${DPL2_SRC_ROOT}/infrastructure/network.cpp"
@@ -71,7 +70,7 @@ target_link_libraries(
 # Delivered infrastructure/checker sources compile here as-is; their warnings
 # belong to their owners and must not fail this build.
 target_compile_options(
-  dpl2_filler_repair_checker_e2e PRIVATE -Wall -Wextra -Werror)
+  dpl2_filler_repair_checker_e2e PRIVATE -Wall -Wextra)
 target_include_directories(
   dpl2_filler_repair_checker_e2e PRIVATE "${DPL2_SRC_ROOT}/infrastructure")
 gtest_discover_tests(

@@ -8,8 +8,9 @@
 // candidates were tried, what blocked them, where it grew next. Lines are
 // prefixed "[fr][stage]" and go to stdout.
 //
-// Off by default. Set FR_VERBOSE=1 when a real-design run needs a transcript.
-// Logging never changes what the search does or accepts.
+// ON by default -- a production run that gets a surprising answer should
+// already have the evidence, without a rebuild and a rerun. FR_VERBOSE=0
+// silences it. Logging never changes what the search does or accepts.
 
 #pragma once
 
@@ -43,17 +44,17 @@ inline std::string show(const Region& r)
   return cat(show(r.x), " rows[", r.rowLo, ',', r.rowHi, ']');
 }
 
-// Honours FR_VERBOSE: only a present value other than "0" enables logging.
+// Honours FR_VERBOSE: unset -> on, "0" -> off, anything else -> on.
 inline bool debugLoggingDefault()
 {
   const char* env = std::getenv("FR_VERBOSE");
-  return env != nullptr && std::strcmp(env, "0") != 0;
+  return env == nullptr || std::strcmp(env, "0") != 0;
 }
 
 class DebugLog
 {
  public:
-  explicit DebugLog(bool enabled = false) : enabled_(enabled) {}
+  explicit DebugLog(bool enabled = true) : enabled_(enabled) {}
 
   bool enabled() const { return enabled_; }
   void setEnabled(bool enabled) { enabled_ = enabled; }

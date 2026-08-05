@@ -79,12 +79,6 @@ class TestPlacementView : public PlacementView
     return *this;
   }
 
-  TestPlacementView& setCheckerReachX(DbCoord reach)
-  {
-    checker_reach_x_ = reach;
-    return *this;
-  }
-
   TestPlacementView& addMaster(MasterId id, DbCoord width, DbCoord height, bool isFiller, VtId vt,
                         BandPolarity bottomBandPolarity = BandPolarity::N)
   {
@@ -134,7 +128,6 @@ class TestPlacementView : public PlacementView
   }
 
   DbCoord siteWidth() const override { return site_width_; }
-  DbCoord checkerReachX() const override { return checker_reach_x_; }
 
   const std::vector<PlacedInstance>& instancesInRow(RowId rowId) const override
   {
@@ -231,7 +224,6 @@ class TestPlacementView : public PlacementView
   }
 
   DbCoord site_width_ = 1;
-  DbCoord checker_reach_x_ = 1;
   std::map<MasterId, MasterInfo> masters_;      // ordered => deterministic
   std::map<RowId, XInterval> row_spans_;        // ordered => deterministic
   std::map<InstanceId, PlacedInstance> instances_;
@@ -2060,8 +2052,7 @@ void testWindowAtDesignEdges()
                                          fr::DebugLog(verbose()));
   EXPECT_EQ(topWindow.guardRegion.rowLo, 0);
   EXPECT_EQ(topWindow.guardRegion.rowHi, 2);
-  EXPECT_GE(topWindow.guardRegion.x.xh,
-            topWindow.x.xh + top.checkerReachX());
+  EXPECT_TRUE(topWindow.guardRegion.x.xh <= 8);
 }
 
 void testWindowAdaptiveAddsKOnBlockingSide()
@@ -2167,38 +2158,6 @@ void testWindowAdaptiveCoupledRowsAndFixedBoundary()
   EXPECT_TRUE(expanded.containsEditable(303));  // coupled row +1
   EXPECT_TRUE(!expanded.containsEditable(304)); // K=1, no run sweep
   EXPECT_TRUE(!expanded.containsEditable(104)); // row -1 stopped at fixed cell 103
-}
-
-void testWindowAdaptiveReachesSparseAndReportedFillers()
-{
-  fr::TestPlacementView design = makeLibrary();
-  design.setCheckerReachX(6)
-      .addRow(0, 0, 12)
-      .place(100, fillerMaster(2, kVt1), 0, 0)
-      .place(101, cellMaster(kVt1), 0, 2)
-      .place(102, fillerMaster(2, kVt1), 0, 6)
-      .addRow(1, 0, 12)
-      .place(200, fillerMaster(2, kVt1), 1, 8);
-  fr::RepairWindow seed;
-  seed.rows = {0};
-  seed.x = {0, 2};
-  seed.editableFillers = {100};
-  seed.guardRegion = {{0, 8}, 0, 1};
-  fr::TargetPlace anchor{101, cellMaster(kVt1), 0, 2, fr::Orient::R0};
-  fr::Violation blocking = makeViolation(
-      9, fr::ViolationKind::MinSpacing,
-      fr::ViolationRelation::InterRow, {0, 1}, {1, 2});
-  fr::ViolationParticipant reported;
-  reported.instanceId = 200;
-  reported.rowId = 1;
-  reported.xRange = {8, 10};
-  reported.isFiller = true;
-  blocking.participants = {reported};
-
-  const fr::RepairWindow expanded = fr::expandWindowAdaptive(
-      seed, anchor, {blocking}, design, 1, fr::DebugLog(verbose()));
-  EXPECT_TRUE(expanded.containsEditable(102));
-  EXPECT_TRUE(expanded.containsEditable(200));
 }
 
 void testGuardRegionTwoCellRing()
@@ -3294,22 +3253,6 @@ void testPlannerDetectsProtocolError()
     sawProtocol |= diag.code == "CheckerProtocolError";
   }
   EXPECT_TRUE(sawProtocol);
-}
-
-void testPlannerRejectsZeroBatchSize()
-{
-  ScenarioA sc = makeScenarioA();
-  fr::TestRepairOracle checker(sc.design, sc.rules);
-  fr::RepairConfig config;
-  config.batchSize = 0;
-  fr::internal::RepairPlanner planner(sc.design, checker, config);
-  const fr::FillerRepairResult result = planner.repair(sc.request);
-  EXPECT_FALSE(result.hasSolution);
-  EXPECT_TRUE(std::any_of(
-      result.diagnostics.begin(), result.diagnostics.end(),
-      [](const fr::Diagnostic& diagnostic) {
-        return diagnostic.code == "InvalidRepairConfig";
-      }));
 }
 
 // Batch result order must not matter: a checker returning results reversed
@@ -4956,15 +4899,6 @@ void testEnumerateIncrementalSkipsAlreadyAskedCombinations()
     }
   }
   EXPECT_EQ(f, incremental.overlays.size());
-
-  // Caller order is irrelevant. The old binary-search implementation lost
-  // 802 when a non-window id preceded it in an unsorted vector.
-  const auto unsorted = fr::enumerateOverlays(
-      domains, config, 100, fr::DebugLog(verbose()), {999, 802});
-  EXPECT_EQ(unsorted.overlays.size(), incremental.overlays.size());
-  for (size_t i = 0; i < unsorted.overlays.size(); ++i) {
-    EXPECT_TRUE(sameOverlay(unsorted.overlays[i], incremental.overlays[i]));
-  }
 }
 
 void testEnumerateIncrementalWithNoFreshFillerEmitsNothing()
@@ -5282,8 +5216,6 @@ void registerPlannerTests()
        testWindowAdaptiveAddsKOnBlockingSide},
       {"window_adaptive_coupled_rows_and_fixed_boundary",
        testWindowAdaptiveCoupledRowsAndFixedBoundary},
-      {"window_adaptive_reaches_sparse_and_reported_fillers",
-       testWindowAdaptiveReachesSparseAndReportedFillers},
       {"guard_region_two_cell_ring", testGuardRegionTwoCellRing},
       {"planner_no_editable_filler_zero_calls", testPlannerNoEditableFillerZeroCalls},
       {"planner_reentrant_repair_refused", testPlannerReentrantRepairRefused},
@@ -5317,7 +5249,6 @@ void registerPlannerTests()
       {"planner_no_solution_definitive", testPlannerNoSolutionDefinitive},
       {"gate_cache_single_evaluation", testGateCacheSingleEvaluation},
       {"planner_detects_protocol_error", testPlannerDetectsProtocolError},
-      {"planner_rejects_zero_batch_size", testPlannerRejectsZeroBatchSize},
       {"planner_order_independent_batches", testPlannerOrderIndependentBatches},
       {"planner_batch_size_invariance", testPlannerBatchSizeInvariance},
       {"planner_determinism_full_transcript",

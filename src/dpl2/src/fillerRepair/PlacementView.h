@@ -73,11 +73,6 @@ class PlacementView
 
   virtual DbCoord siteWidth() const = 0;
 
-  // Horizontal distance the legality oracle can inspect outside an edited
-  // interval. Lightweight planner views may use one site; the runtime engine
-  // overrides this with the checker's exact reach.
-  virtual DbCoord checkerReachX() const { return siteWidth(); }
-
   // Sorted by x ascending (ties by id). Contract for multi-height (future):
   // an instance spanning several rows is reported by every row it occupies.
   // V1 designs are single-height. Returned by reference: this is the

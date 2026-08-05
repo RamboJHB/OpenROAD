@@ -6,6 +6,7 @@
 #include <infrastructure/network.h>
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
+#include <drc/PaddingChecker.h>
 #include <drc/ImplantLayerChecker.h>
 #include <PlacementDRC.h>
 
@@ -15,10 +16,10 @@ namespace dpl2 {
 
 DePlace::DePlace(PhysDesMgr* desMgr)
     : desMgr_(desMgr),
-      arch_(std::make_unique<Architecture>()),
       network_(std::make_unique<Network>()),
       padding_(std::make_shared<Padding>()),
-      grid_(std::make_unique<Grid>())
+      grid_(std::make_unique<Grid>()),
+      arch_(std::make_unique<Architecture>())
 {
   design_ = eUNL::Session::getSession().getCurrentDesign();
   padding_->setDesginManager(desMgr);
@@ -26,10 +27,10 @@ DePlace::DePlace(PhysDesMgr* desMgr)
 }
 
 DePlace::DePlace()
-    : arch_(std::make_unique<Architecture>()),
-      network_(std::make_unique<Network>()),
+    : network_(std::make_unique<Network>()),
       padding_(std::make_shared<Padding>()),
-      grid_(std::make_unique<Grid>())
+      grid_(std::make_unique<Grid>()),
+      arch_(std::make_unique<Architecture>())
 {
   eUNL::Session& sess = eUNL::Session::getSession();
   eUNL::Design* design = sess.getCurrentDesign();
@@ -83,10 +84,6 @@ bool DePlace::registerFillerRepairMasters()
     }
   }
 
-  // addMaster refreshes an existing Master's classification, but Nodes keep
-  // the type captured when they were imported. set_filler_option commonly
-  // runs after that import, so synchronize placed instances as part of the
-  // same infrastructure-owned registration step.
   for (const auto& node : network_->getNodes()) {
     if (node != nullptr && node->getMaster() != nullptr
         && filler_setting_->isFillerCell(
@@ -222,6 +219,7 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId, std::string moduleName)
 bool DePlace::isLegal(LeafCellID cellId, LibCellID lcId,
     std::vector<CellChangeRecord>& fcRecord)
 {
+  Rect rect = this->core_;
   const PhysLibCell& physLibCell = design_->getLibAcc().getPhysLibCell(lcId);
 
   Node* cell = this->network_->getNode(cellId);

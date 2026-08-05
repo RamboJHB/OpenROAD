@@ -256,13 +256,11 @@ struct ShieldWireVisitor :
     : addBlockedLayers(a), desMgr(d) {}
 
   bool filter(const eUNL::PhysNet& net, const eUNL::PhysNetID& netId) override {
-    (void) netId;
     return net.hasSWire();
   }
 
   eUNL::UnlIterStatus visit(const eUNL::PhysNet& net,
     const eUNL::PhysNetID& netId) override {
-    (void) netId;
     const eUNL::PhysSWire& swire = net.getSWire();
     for (const eUNL::PhysShape& sbox : swire.getShapes()) {
       if (sbox.isVia() || sbox.getUsage() == eUNL::ShapeUsageE::DRCFILL) {
