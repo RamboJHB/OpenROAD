@@ -25,17 +25,20 @@ binds its manager only through `Grid::getDesMgr()` without Session fallback,
 and renames the shared record coordinates from `origin_x_/origin_y_` to
 `x_/y_`.
 
-Only two post-baseline deltas are retained: the current
+Only two post-baseline functional deltas are retained: the current
 `test_filler_repair` implementation and
 `DePlace::registerFillerRepairMasters()`. All other project code and tests are
-restored exactly to `944ce7ba66`. Do not port from the older `808c27f`
-snapshot; it predates the baseline changes. Verification results follow:
+restored to `944ce7ba66`. The four checker sources also have a formatting-only
+120-column pass; their whitespace-stripped content is unchanged. Do not port
+from the older `808c27f` snapshot; it predates the baseline changes.
+Verification results follow:
 
 | | |
 |---|---|
 | local suite | 278/278, normal and ASan |
 | migration gate (destination code path) | 170/170, normal and ASan |
 | `fillerRepair2` manual strict syntax check | both runtime sources, C++20, `-Wall -Wextra -Werror`; not part of CTest |
+| checker formatting | four checker files, 120-column profile; identical non-whitespace content before and after |
 | `testFillerRepairCmd` | source call sites synchronized; not compiled in this Codespace because the app/CCI framework headers are unavailable; **never linked** here |
 
 ---

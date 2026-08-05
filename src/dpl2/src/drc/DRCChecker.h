@@ -10,27 +10,18 @@ namespace dpl2 {
 class Grid;
 class Node;
 
-enum class DRCCheckerType
-{
-  EdgeSpacing,
-  BlockedLayers,
-  Padding,
-  OneSiteGap,
-  Count
-};
+enum class DRCCheckerType { EdgeSpacing, BlockedLayers, Padding, OneSiteGap, Count };
 
-constexpr std::array<const char*, static_cast<size_t>(DRCCheckerType::Count)>
-    drc_checker_type_name{
-        "edge_spacing",
-        "blocked_layers",
-        "padding",
-        "one_site_gap",
-    };
+constexpr std::array<const char*, static_cast<size_t>(DRCCheckerType::Count)> drc_checker_type_name{
+    "edge_spacing",
+    "blocked_layers",
+    "padding",
+    "one_site_gap",
+};
 
 inline std::string toString(DRCCheckerType type)
 {
-  return std::string(
-      drc_checker_type_name[static_cast<size_t>(type)]);
+  return std::string(drc_checker_type_name[static_cast<size_t>(type)]);
 }
 
 // Abstract base for a DRC rule checker.
@@ -41,20 +32,14 @@ class DRCChecker
   virtual ~DRCChecker() = default;
 
   // Core checking interface -- pure virtual, overridden by each rule.
-  virtual bool check(const Node* cell,
-                     GridX x,
-                     GridY y,
-                     const eUTL::PhysOrientation& orient) const = 0;
+  virtual bool check(const Node* cell, GridX x, GridY y, const eUTL::PhysOrientation& orient) const = 0;
 
   // [fillerRepair-fix] Repair-aware form: a checker that can fix the
   // candidate by editing fillers appends its records to `fcRecord` and
   // returns true. Declared here so ImplantLayerChecker's `override` is valid
   // and so callers holding a DRCChecker* reach the repair path. The default
   // ignores the record vector, so a checker without repair needs no change.
-  virtual bool check(const Node* cell,
-                     GridX x,
-                     GridY y,
-                     const eUTL::PhysOrientation& orient,
+  virtual bool check(const Node* cell, GridX x, GridY y, const eUTL::PhysOrientation& orient,
                      std::vector<CellChangeRecord>& fcRecord) const
   {
     (void) fcRecord;

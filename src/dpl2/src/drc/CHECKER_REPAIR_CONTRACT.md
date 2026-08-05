@@ -18,6 +18,13 @@ has to make** about code we do own; see `HandOff.md` §8.
 Checker DRC rules, shapes, scan behaviour and blocking-violation logic are
 **unchanged**. Nothing below alters what the checker decides.
 
+The four checker sources `DRCChecker.h`, `ImplantLayerChecker.h`,
+`ImplantLayerChecker.cpp`, and `ImplantLayerCheckerHelper.cpp` use a
+formatting-only 120-column pass so declarations, calls, conditions, and short
+enums stay together when readable. Includes and comments are not reordered or
+reflowed. A whitespace-stripped content hash was compared before and after the
+pass; all four files retained exactly the same non-whitespace content.
+
 ---
 
 ## 1. Runtime contract
