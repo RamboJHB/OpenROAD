@@ -1,43 +1,32 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-08-05. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-08-06. Branch: `claude/wizardly-carson-secahu`.
 
 What this feature does: opto changes one standard cell's VT. The fillers around
 it still carry the old implant type, which is an MW/MS violation. This finds a
 set of same-size filler master swaps that removes the violation, validates them
 with the real `ImplantLayerChecker`, and hands the records back to opto to
-commit. It never mutates UDM placement or Grid. During initialization it may
-register configured masters; infrastructure has already classified filler
+commit. It never mutates UDM placement or Grid. Infrastructure registers
+configured masters with real edge data; initialization only refreshes filler
 Masters and Nodes from `fillerSetting::core_`.
 
 ---
 
 ## 0. Current baseline
 
-The working and migration baseline for this handoff is **`944ce7ba66`**. It
-includes the
-shared `CellChangeRecord`, fillerSetting-based classification, null-safety,
-adaptive halo tightening, candidate catalog and fast rejection, removal of
-parallel snapshot tables and one-field candidate wrappers, rebuild-cache reset,
-and the runtime-only `src/dpl2/src/fillerRepair2/` package. The current update
-restores the checker constructor to `ImplantLayerChecker(Grid*, Network*)`,
-binds its manager only through `Grid::getDesMgr()` without Session fallback,
-and renames the shared record coordinates from `origin_x_/origin_y_` to
-`x_/y_`.
-
-Only two post-baseline functional deltas are retained: the current
-`test_filler_repair` implementation and
-`DePlace::registerFillerRepairMasters()`. All other project code and tests are
-restored to `944ce7ba66`. The four checker sources also have a formatting-only
-120-column pass; their whitespace-stripped content is unchanged. Do not port
-from the older `808c27f` snapshot; it predates the baseline changes.
-Verification results follow:
+The current branch contains the shared `CellChangeRecord`, fillerSetting-based
+classification, null-safety, adaptive search, candidate catalog, and the
+runtime-only `src/dpl2/src/fillerRepair2/` package. Design context is obtained
+only from Grid/Network: Grid retains `PhysDesMgr`, Network borrows DePlace's
+active `fillerSetting`, and `FillerRepairEngine::init()` takes no arguments.
+Master construction remains entirely in infrastructure with its real edge
+table. Verification results follow:
 
 | | |
 |---|---|
 | local suite | 278/278, normal and ASan |
 | migration gate (destination code path) | 170/170, normal and ASan |
-| `fillerRepair2` manual strict syntax check | both runtime sources, C++20, `-Wall -Wextra -Werror`; not part of CTest |
+| `fillerRepair2` strict compile gate | both runtime sources staged under the destination name, C++20, `-Wall -Wextra -Werror` |
 | checker formatting | four checker files, 120-column profile; identical non-whitespace content before and after |
 | `testFillerRepairCmd` | source call sites synchronized; not compiled in this Codespace because the app/CCI framework headers are unavailable; **never linked** here |
 
@@ -93,8 +82,11 @@ suite, migration gate, and an ASan full run before enabling repair.
 
 ## 2. The caller boundary
 
-`ImplantLayerChecker::check()` is the only entry. Opto owns the record vector;
-the checker appends into it and keeps no filler-change member state.
+`ImplantLayerChecker::check()` is the only entry. Repair defaults on for
+ordinary checker instances, so opto needs no extra setup call. Opto owns the
+record vector; the checker appends into it and keeps no filler-change member
+state. `ImplantLayerCheckerHelper::initChecker()` switches repair off for
+checker-only tests.
 
 Before the test command constructs its checker, it calls
 `DePlace::registerFillerRepairMasters()`. DePlace owns the real edge table, so
@@ -117,24 +109,25 @@ and does not emit that alternative.
 
 There is no `initFillerRepair`, `precheckFillerRepair`, `updateFillerRepair` or
 `getFillerChanges` to call — those are gone. The engine is built **lazily** on
-the first DRC-illegal check, so a run whose checks all pass never pays for it.
+the first DRC-illegal check after repair is enabled, so a run whose checks all
+pass never pays for it.
 
-Two things must reach the checker before the first failing check:
+Two things must be bound before the first repair-enabled failing check:
 
 - **Grid-bound `PhysDesMgr`** — the caller constructs
   `ImplantLayerChecker(Grid*, Network*)`. The checker reads the manager only
   from `Grid::getDesMgr()`. Missing Grid, Network or manager is a fatal
   initialization diagnostic. Session is never read.
-- **`fillerSetting`** — `DePlace` registers a provider once:
-  `ImplantLayerChecker::setFillerRepairSettingProvider(&provideSetting)`.
-  The checker never names `DePlace`, so builds without it still link.
-  A harness with no `DePlace` owner calls
-  `checker.setFillerRepairContext(desMgr, &fillerSetting)` instead.
+- **`fillerSetting`** — `DePlace` stores a non-owning pointer on Network with
+  `network->setFillerSetting(fillerSetting)`. A harness without DePlace does
+  the same binding explicitly. The checker never owns or accepts this setting;
+  the lazy engine reads it from Network.
 
 If configuration has not arrived yet, the check returns illegal, emits one
-`[fr]` notice, and disables repair until `setFillerRepairContext()` explicitly
-resets the checker. Structural `FillerRepairEngine::init()` failures are also
-fail-closed.
+`[fr]` notice, and disables repair for that checker's lifetime. Structural
+`FillerRepairEngine::init()` failures are also fail-closed. After an
+infrastructure/configuration revision change, the owner constructs a new
+checker; there is no context/reset API.
 
 **Swap-only.** Same instance, same position, same orientation, same width and
 height, different master. A target whose placement moved is refused
@@ -289,8 +282,8 @@ the wrong thing. Read those first.
 | `FillerRepairEngine.cpp` `checkPlaceWithOverlays` | Batch semantics: one `FillerChanges` = one candidate, results correlate **by input order**, count must match | **silent**: answers mis-attributed to candidates |
 | `FillerRepairEngine.cpp` — initial halo sizing | `getMaxRuleValue()` means checker reach in **sites** and remains the correctness floor; the other input is the widest configured filler master, never an arbitrary placed standard cell or macro. The later planner guard uses the actual two-cell ring | **silent**: too-small reach truncates runs; global placed-master sizing makes macro designs pathologically slow |
 | `RepairPlanner.cpp` `finalizeWindow` — guard rows | Inter-row rules reach **one** row boundary, so ±2 rows of guard covers it. Horizontal reach is not guessed like this; it comes from the checker | **silent**: the checker is never shown the row a new violation appeared in |
-| `FillerRepairEngine.cpp` `init` | `fillerSetting::getDesign()`'s `PhysDesMgr`, the supplied manager and `Grid::getDesMgr()` must agree before the private checker is created | caught: fatal init diagnostic |
-| `FillerRepairEngine.cpp` `ensureMasterRegistered` | `Network::addMaster`'s signature and existing-master refresh semantics. Never return early merely because the master exists; `Master::isFiller` must be refreshed before rebuilding the checker | mixed: compile error or every replacement rejected as `NOT_FILLER` |
+| `FillerRepairEngine.cpp` `init` | Network must hold the active setting and `fillerSetting::getDesign()`'s manager must equal `Grid::getDesMgr()` before the private checker is created | caught: fatal init diagnostic |
+| `FillerRepairEngine.cpp` `ensureMasterRegistered` | Infrastructure must have registered every configured master with the real edge table. Engine only performs lookup + `setFiller(true)` and fails closed when absent | caught: fatal init diagnostic |
 | `FillerRepairEngine.cpp` `cellChangeRecord` | `CellChangeRecord`'s shape. Fill **every** field; `orientation_` is read when the checker evaluates the swapped filler | mixed |
 | `FillerRepairEngine.cpp` `buildPlannerData` — filler identity | Infrastructure's single filler authority (`Master`/`Node` carry it). Never re-derive from UDM macro flags — they disagree, and that was a real bug | mixed |
 | `FillerRepairEngine.cpp` `implantLayerOf` | Reads master implant shapes the way the checker does (layer identity via `TechLayerRelativeID`, band anchored at the bottommost rect) | mixed |
@@ -303,7 +296,7 @@ are already absent from `fillerRepair2/`.
 
 | Where | Costs to keep | What you lose by deleting |
 |---|---|---|
-| `FillerRepairEngine::update()` | ~30 lines | The repository-local regression's snapshot-refresh entry. Production refreshes via `setFillerRepairContext()` instead |
+| `FillerRepairEngine::update()` | ~30 lines | The repository-local regression's snapshot-refresh entry. Runtime constructs a new checker after an infrastructure revision instead |
 | `FillerRepairEngine::repair(LeafCellID, PhysLibCell)` | ~25 lines | The same, for callers holding UDM handles and no `CheckRequest` |
 | `FillerRepairEngine::setDebugLogging()` | ~10 lines | Per-engine transcript control. `FR_VERBOSE=0` already does it globally |
 | `dpl2::fillerRepairPlanner` target | one extra compile | The guard that keeps UDM out of the search. Recommended to keep |
@@ -357,7 +350,7 @@ file must stay: the checker uses it.
 | Full local suite | 278/278, normal and ASan |
 | Migration gate (destination code path) | 170/170, normal and ASan |
 | Standalone module build | 170/170 |
-| Runtime-only `fillerRepair2` | manual strict syntax check; no automated parity/build gate |
+| Runtime-only `fillerRepair2` | automated staged strict compile of both runtime sources |
 
 The migration gate builds the full verification package the way a destination does
 (`DPL2_TEST_USE_FAKE_UDM=OFF`, no fake-only target, no test provider) with the

@@ -22,8 +22,6 @@ using eUTL::PhysOrientationE;
 using eUTL::PhysOrientation;
 
 namespace dpl2 {
-class fillerSetting;
-
 namespace fillerRepair {
 class FillerRepairEngine;
 }
@@ -275,6 +273,11 @@ class ImplantLayerChecker final : public DRCChecker
   bool check(const Node* cell, GridX x, GridY y, const eUTL::PhysOrientation& orient,
              std::vector<CellChangeRecord>& fcRecord) const override;
 
+  // [fillerRepair-fix] Repair is enabled for the normal checker path.
+  // ImplantLayerCheckerHelper disables it for checker-only tests.
+  void setFillerRepairEnabled(bool enabled) { enableFillerRepair_ = enabled; }
+  bool isFillerRepairEnabled() const { return enableFillerRepair_; }
+
   CheckResult checkDirect(const CheckRequest& request) const;
   std::vector<CheckResult> checkPlaceWithOverlays(const CheckRequest& request, const Rect& guardRegion,
                                                   const std::vector<FillerChanges>& fillerChanges) const;
@@ -294,18 +297,6 @@ class ImplantLayerChecker final : public DRCChecker
   const std::vector<Diagnostic>& getDiags() const { return diagnostics_; }
   size_t mergedShapeCount() const;
 
-  // Presets what lazy filler-repair initialization would otherwise obtain
-  // from the registered provider (Grid-bound desMgr and fillerSetting from
-  // set_filler_option). Call before check() in
-  // harnesses that do not run under a DePlace owner.
-  void setFillerRepairContext(PhysDesMgr* desMgr, const fillerSetting* setting);
-
-  // Dependency inversion: the infrastructure owner (DePlace) registers how
-  // to reach the active fillerSetting; the checker never names DePlace, so
-  // builds without it still link.
-  using FillerSettingProvider = const fillerSetting* (*) ();
-  static void setFillerRepairSettingProvider(FillerSettingProvider provider);
-
   friend class TestImplantCmd;
   friend class ImplantLayerCheckerHelper;
 
@@ -314,9 +305,9 @@ class ImplantLayerChecker final : public DRCChecker
   bool init(PhysDesMgr* desMgr);
 
   // Filler repair is lazy (most checks pass and never need it): the engine
-  // is created and initialized on the first failing check. On a repairable
-  // failure the repair records are APPENDED to the caller's fcRecord; the
-  // checker keeps no filler-change member state.
+  // is created and initialized on the first enabled failing check. On a
+  // repairable failure the repair records are APPENDED to the caller's
+  // fcRecord; the checker keeps no filler-change member state.
   bool repairFillers(const CheckRequest& request, std::vector<CellChangeRecord>& fcRecord) const;
   void buildLayers(PhysDesMgr* desMgr);
   static void parseLayerName(const std::string& name, Layer::Vt& vt, Layer::Polar& polar);
@@ -384,13 +375,12 @@ class ImplantLayerChecker final : public DRCChecker
   int maxRuleValue_ = 1;              // the maxValue for all rules' minValue
   mutable int nextCandShapeId_ = -1;  // Temporary candidate shape ids.
 
-  // Filler repair (lazy). The setting comes from setFillerRepairContext()
-  // or the registered provider.
-  PhysDesMgr* desMgr_ = nullptr;
-  const fillerSetting* repairSetting_ = nullptr;
+  // Filler repair is lazy. Its engine obtains PhysDesMgr from Grid and the
+  // active filler setting from Network.
+  bool enableFillerRepair_ = true;
   mutable std::unique_ptr<fillerRepair::FillerRepairEngine> repairEngine_;
-  // Missing required context or structural initialization failure disables
-  // repair until setFillerRepairContext() explicitly resets the checker.
+  // Structural initialization failure disables repair for this checker's
+  // lifetime. Infrastructure revisions require a new checker instance.
   mutable bool repairEngineFailed_ = false;
 
   std::map<eLIB::TechLayerRelativeID, LayerId> techLayerToIdx_;

@@ -1,18 +1,14 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-08-05.
+Updated: 2026-08-06.
 
-Working baseline: **`944ce7ba66`**. The only retained later changes are the
-current `test_filler_repair` command and the infrastructure-owned
-`DePlace::registerFillerRepairMasters()` helper it calls before checking.
-Planner, engine and checker behavior in this tree otherwise matches that
-baseline.
-
-`ImplantLayerChecker::check()` is the caller-facing entry. Opto owns the
-`CellChangeRecord` vector; the checker appends checker-verified repair swaps
-into that reference and keeps **no** filler-change member state. The
-`FillerRepairEngine` is created **lazily** on the first DRC-illegal check —
-a run whose checks all pass never pays engine initialization.
+`ImplantLayerChecker::check()` is the caller-facing entry. Repair defaults on
+for ordinary checker instances; `ImplantLayerCheckerHelper` switches it off
+for checker-only tests. Opto owns the `CellChangeRecord` vector; the checker
+appends checker-verified repair swaps into that reference and keeps **no**
+filler-change member state. The `FillerRepairEngine` is created **lazily** on
+the first enabled DRC-illegal check — a run whose checks all pass never pays
+engine initialization.
 
 The shared wire is
 `CellChangeRecord{Replace, CellData{LeafCellID}, x_, y_,
@@ -21,15 +17,15 @@ also reserves a string name for future add operations; this swap-only engine
 emits and accepts only the existing-cell `LeafCellID` alternative.
 
 ```cpp
-// production (set_filler_option ran; DePlace registered the setting provider)
+// set_filler_option ran; DePlace bound its setting to Network
 std::vector<CellChangeRecord> fcRecord;
 bool legal = deplace->isLegal(cellId, lcId, fcRecord);   // -> checker.check(...)
 if (legal && !fcRecord.empty()) {
   commitFillerSwaps(fcRecord);   // commit stays with opto/infrastructure
 }
 
-// harnesses without a DePlace owner preset the lazy context instead:
-checker.setFillerRepairContext(desMgr, &fillerSetting);
+// a harness without DePlace performs the same non-owning binding:
+network.setFillerSetting(&fillerSetting);
 ```
 
 **One rule-reach authority.** The checker's `getMaxRuleValue()` is literally
@@ -97,12 +93,13 @@ engine performs no Network↔UDM cross-validation — with lazy init it typicall
 runs mid-check, while the candidate Node already carries its proposed master
 ahead of the pending UDM commit.
 
-Grid is the checker design-context authority.
+Grid and Network are the two runtime context authorities.
 `ImplantLayerChecker(Grid*, Network*)` obtains `PhysDesMgr` only from
 `Grid::getDesMgr()`, never from Session. A missing Grid, Network or Grid
-manager fails closed. The engine still verifies that the Design owned by
-`fillerSetting`, the `init()` manager and Grid manager agree before creating
-its private checker. No global design lookup exists.
+manager fails closed. DePlace binds its active `fillerSetting` to Network;
+`FillerRepairEngine::init()` takes no context parameters and verifies that
+the bound setting's Design manager equals Grid's manager before creating its
+private checker. No global design lookup exists.
 
 **One filler authority.** `fillerSetting::isFillerCell(LibCellID)` answers whether
 a master belongs to the configured `core_` list. Infrastructure stores that
@@ -113,11 +110,11 @@ repair initialization. `Node::isFiller()` /
 re-derives filler identity from UDM macro flags. The same core list is the
 replacement candidate allow-list.
 
-Engine initialization calls `Network::addMaster(..., fillerSetting, ...)` for
-every configured master even when that master is already registered. The
-existing-master path refreshes `Master::isFiller`; only after all refreshes
-does the engine construct its private checker, so the PlacementView and checker
-consume the same classification.
+Infrastructure registers every configured filler master with its real edge
+table before checking. Engine initialization only looks up those masters and
+calls `Master::setFiller(true)`; it never calls `addMaster` with incomplete
+edge data. Only after every configured master is present and classified does
+the engine construct its private checker.
 
 **Includes** use angle brackets throughout, resolved from the `src/` root
 (`<fillerRepair/RepairPlanner.h>`, `<infrastructure/Grid.h>`), matching the
@@ -143,10 +140,10 @@ the per-engine log override. Copy its contents into the destination's existing
 It is a hand-maintained projection of this directory, which remains the source
 of truth; mirror every runtime/API change into both directories.
 
-The 278-test local suite, 170-test migration gate and standalone module build
-all compile this full directory. They do not automatically compile or compare
-`fillerRepair2/`; that minimal payload still needs a destination build (or an
-equivalent strict syntax check) before migration.
+The 278-test local suite and 170-test migration gate compile this full
+directory. Test CMake additionally stages `fillerRepair2/` under the
+destination `fillerRepair/` name and compiles both runtime sources as C++20
+with `-Wall -Wextra -Werror`.
 
 ## Porting: what needs a decision
 

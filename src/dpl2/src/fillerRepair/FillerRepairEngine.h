@@ -22,7 +22,6 @@
 
 namespace dpl2 {
 
-class fillerSetting;
 class Grid;
 class Network;
 
@@ -60,26 +59,23 @@ class FillerRepairEngine
   // variable cannot give you.
   void setDebugLogging(bool enabled);
 
-  // Binds the existing infrastructure; fillerSetting's manager, desMgr and
-  // Grid manager must agree. Registers
-  // configured filler masters. The target replacement master is registered
-  // lazily by repair(), so opto does not need to predict it during
-  // initialization.
+  // Gets PhysDesMgr from Grid and the active fillerSetting from Network;
+  // their designs must agree. Configured masters must already be registered
+  // by infrastructure with real edge data.
   // UDM/infrastructure objects must outlive the engine. init() is one-shot.
-  bool init(eUNL::PhysDesMgr* desMgr, const fillerSetting& fillerSetting);
+  bool init();
 
   // [PORT-DROP] Rebuilds the private snapshot in place. It pre-dates lazy
-  // init and no production path reaches it: refreshing is done by calling
-  // ImplantLayerChecker::setFillerRepairContext(), which drops the engine so
-  // the next failing check builds a new one. Only the repository-local
-  // regression drives snapshot refresh through here, and that does not
-  // travel. DELETE it (~30 lines with its Impl half).
+  // init and no runtime path reaches it: an infrastructure revision requires
+  // its owner to construct a new ImplantLayerChecker. Only the
+  // repository-local regression drives snapshot refresh through here, and
+  // that does not travel. DELETE it (~30 lines with its Impl half).
   //
   // Contract while it exists: never changes Network Nodes; rebuild
   // Grid/Network first if rows, blockages or the instance set changed; a
   // stale or incomplete Network makes it fail closed; not concurrent with
   // repair().
-  bool update(eUNL::PhysDesMgr* desMgr, const fillerSetting& fillerSetting);
+  bool update();
 
   // Pre-commit implant overlay query. The only placement gate here is
   // regional: repair refuses to run on top of a gap/overlap inside the rows

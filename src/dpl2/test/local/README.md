@@ -1,6 +1,6 @@
 # Repository-local fillerRepair harness
 
-Updated: 2026-08-05.
+Updated: 2026-08-06.
 
 **Not part of the migration payload.** It exists so the feature can be
 developed and gated with no real UDM present. It owns the UDM-compatible
@@ -35,6 +35,6 @@ symbols; only linking an executable does. This gate exists because a divergent
 real-UDM CMake branch once quietly stopped linking `FillerRepairEngine`, and
 nobody could see it without a real UDM.
 
-This gate does not compile or compare the hand-maintained `fillerRepair2/`
-runtime-only projection. That directory needs a separate destination build or
-strict syntax check before migration.
+Both local and migration configurations stage `fillerRepair2/` under the
+destination directory name and strictly compile its runtime sources. Runtime
+behavior remains exercised through the source-of-truth `fillerRepair/` tests.

@@ -13,7 +13,6 @@
 
 #include "infrastructure/Grid.h"
 #include "infrastructure/Objects.h"
-#include <infrastructure/fillerSetting.h>
 #include <fillerRepair/FillerRepairEngine.h>
 #include <dpl2/network.h>
 #include "util.h"
@@ -202,15 +201,15 @@ ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network) : DRCChec
     diagnostics_.push_back({"missing_network", "fatal: ImplantLayerChecker requires an initialized Network"});
     return;
   }
-  desMgr_ = grid_->getDesMgr();
-  if (desMgr_ == nullptr) {
+  PhysDesMgr* const desMgr = grid_->getDesMgr();
+  if (desMgr == nullptr) {
     diagnostics_.push_back({"missing_grid_phys_des_mgr",
                             "fatal: ImplantLayerChecker requires Grid to retain its"
                             " initialization PhysDesMgr"});
     return;
   }
   infrastructureReady_ = true;
-  init(desMgr_);
+  init(desMgr);
 }
 
 ImplantLayerChecker::~ImplantLayerChecker()
@@ -222,7 +221,6 @@ ImplantLayerChecker::~ImplantLayerChecker()
 // --------------------------------------------------------------------------------
 bool ImplantLayerChecker::init(PhysDesMgr* desMgr)
 {
-  desMgr_ = desMgr;  // remembered for lazy filler-repair initialization
   eUTL::PerfLogger perfLogger("dpl2.init");
   bool isFullUtil = grid_->isFullUtil();
   std::cout << "Fully utilized grid: " << isFullUtil << std::endl;
@@ -740,33 +738,12 @@ bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y, const eUTL::
   request.orientation = orient;
 
   bool isLegal = checkDirect(request).isLegal;
-  if (!isLegal) {
+  // [fillerRepair-fix] Helper-built checkers disable repair so their checks
+  // retain DRC-only semantics; ordinary checker instances default to enabled.
+  if (!isLegal && enableFillerRepair_) {
     isLegal = repairFillers(request, fcRecord);
   }
   return isLegal;
-}
-
-void ImplantLayerChecker::setFillerRepairContext(PhysDesMgr* desMgr, const fillerSetting* setting)
-{
-  repairSetting_ = setting;
-  repairEngine_.reset();
-  PhysDesMgr* const gridDesMgr = grid_ != nullptr ? grid_->getDesMgr() : nullptr;
-  if (!infrastructureReady_ || desMgr == nullptr || gridDesMgr == nullptr || desMgr != gridDesMgr) {
-    repairEngineFailed_ = true;
-    fillerRepair::reportRepairUnavailable("repair PhysDesMgr must match Grid's initialization manager");
-    return;
-  }
-  desMgr_ = gridDesMgr;
-  repairEngineFailed_ = false;
-}
-
-namespace {
-ImplantLayerChecker::FillerSettingProvider g_fillerSettingProvider = nullptr;
-}
-
-void ImplantLayerChecker::setFillerRepairSettingProvider(FillerSettingProvider provider)
-{
-  g_fillerSettingProvider = provider;
 }
 
 // Lazy: most checks are legal and never reach here, so the engine (and its
@@ -777,28 +754,14 @@ bool ImplantLayerChecker::repairFillers(const CheckRequest& request, std::vector
     return false;  // structural init failure: fail closed from now on
   }
   if (!repairEngine_) {
-    const fillerSetting* setting = repairSetting_ != nullptr
-                                       ? repairSetting_
-                                       : (g_fillerSettingProvider != nullptr ? g_fillerSettingProvider() : nullptr);
-    if (setting == nullptr || desMgr_ == nullptr) {
-      // set_filler_option and checker initialization are required to
-      // precede repair. Missing either context is an integration error,
-      // so fail closed instead of changing behaviour on a later check.
-      repairEngineFailed_ = true;
-      fillerRepair::reportRepairUnavailable(desMgr_ == nullptr
-                                                ? "no PhysDesMgr; filler repair is disabled for this checker"
-                                                : "no fillerSetting; set_filler_option must run before checker"
-                                                  " and repair initialization");
-      return false;
-    }
     auto engine = std::make_unique<fillerRepair::FillerRepairEngine>(grid_, network_);
-    if (!engine->init(desMgr_, *setting)) {
+    if (!engine->init()) {
       // Structural: the data the engine needs is present but unusable.
       // Retrying would fail identically, so disable repair here.
       repairEngineFailed_ = true;
       fillerRepair::reportRepairUnavailable(
           "engine initialization failed; filler repair is disabled for"
-          " this checker (use setFillerRepairContext to reset)");
+          " this checker");
       return false;
     }
     repairEngine_ = std::move(engine);

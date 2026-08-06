@@ -1,10 +1,10 @@
 # AGENTS.md — dpl2 filler repair project memory
 
-Updated: 2026-08-05. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-08-06. Branch: `claude/wizardly-carson-secahu`.
 
-Working baseline: **`944ce7ba66`**. Keep only the current
-`DePlace::registerFillerRepairMasters()` and `test_filler_repair` as later
-deltas unless a new change is explicitly approved.
+Current integration: DePlace binds its owned `fillerSetting` to Network;
+checker has no setting context/provider API; engine uses no-argument `init()`
+and never constructs Network masters.
 
 Read before changing this feature:
 
@@ -25,10 +25,10 @@ Swap-only repair, complete and migration-ready.
 |---|---|
 | Planner | `internal::RepairPlanner`: adaptive window, filler domains, per-band ranking, subset enumeration, baseline-delta oracle gate. Deterministic, non-mutating |
 | Engine | `FillerRepairEngine` coordinates internal placement-snapshot, filler-catalog and checker-overlay components; it implements the two stable seams and borrows Grid/Network plus `fillerSetting`'s Design |
-| Checker | `ImplantLayerChecker(Grid*, Network*)` uses Grid's retained `PhysDesMgr`; repair wiring writes into caller's `fcRecord`; engine is lazy |
+| Checker | `ImplantLayerChecker(Grid*, Network*)` uses Grid's retained `PhysDesMgr`; repair is enabled by default, writes into caller's `fcRecord`, and builds the engine lazily. The test helper disables repair |
 | Build | `fillerRepair/CMakeLists.txt` owns the full verification package; `fillerRepair2/CMakeLists.txt` owns only the C++20 runtime target. Both use `dpl2_filler_repair_deps` when supplied |
 | Tests | 91 planner + 79 real-checker + 108 local fake-UDM engine cases; 278/278 local and 170/170 migration gate, normal and ASan |
-| Mirror rule | `fillerRepair/` is the source of truth. Mirror every runtime/API change into `fillerRepair2/`; existing CTest gates build the full directory, not the runtime-only copy |
+| Mirror rule | `fillerRepair/` is the source of truth. Mirror every runtime/API change into `fillerRepair2/`; test CMake stages that copy under the destination name and strictly compiles both runtime sources |
 | Retained infrastructure helper | `DePlace::registerFillerRepairMasters()` uses the real edge table and is called by the current `test_filler_repair` before checker construction |
 
 ## Fixed decisions
@@ -40,6 +40,8 @@ Swap-only repair, complete and migration-ready.
 3. **Opto owns the records.** `check()` appends into the caller's
    `std::vector<CellChangeRecord>`; the checker keeps no member state, and
    commit belongs to opto/infrastructure. Repair never mutates UDM.
+   Ordinary checker instances enable repair by default;
+   `ImplantLayerCheckerHelper` explicitly disables it for checker-only tests.
 4. **`fillerSetting::core_` is the only filler authority.**
    `fillerSetting::isFillerCell(LibCellID)` classifies registered Masters;
    Nodes inherit that stored Master type. Candidates come from the same list.

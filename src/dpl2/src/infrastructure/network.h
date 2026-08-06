@@ -20,6 +20,11 @@ class fillerSetting;
 class Network
 {
 public:
+  // [fillerRepair-fix] Non-owning binding to DePlace's active setting.
+  // DePlace owns both objects and guarantees the setting outlives Network.
+  void setFillerSetting(const fillerSetting* setting) { filler_setting_ = setting; }
+  const fillerSetting* getFillerSetting() const { return filler_setting_; }
+
   std::vector<std::unique_ptr<Node>>& getNodes() { return nodes_; }
   std::vector<std::unique_ptr<Master>>& getMasters() {return masters_;}
   // For creating and adding cells.
@@ -81,6 +86,7 @@ public:
     return true;
   }
 private:
+  const fillerSetting* filler_setting_ = nullptr;
   int cells_cnt_ = 0;
   Rect core_; // Core area of the design.
   std::vector<std::unique_ptr<Master>> masters_;

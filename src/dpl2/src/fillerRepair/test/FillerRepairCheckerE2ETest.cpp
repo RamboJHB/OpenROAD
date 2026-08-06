@@ -642,6 +642,7 @@ std::vector<CheckResult> check(const CheckRequest& request,
   helper.initialize(in);
   ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
   helper.initChecker(checker);
+  EXPECT_FALSE(checker.isFillerRepairEnabled());
   EXPECT_TRUE(checker.getDiags().empty());
   return checker.checkPlaceWithOverlays(request, guard(), changes);
 }

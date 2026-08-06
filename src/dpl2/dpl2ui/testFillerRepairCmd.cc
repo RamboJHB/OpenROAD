@@ -251,12 +251,9 @@ bool TestFillerRepairCmd::exec()
     return design->getLibAcc().getPhysLibCell(lcId).getLibCell().getName();
   };
 
-  // One checker for the whole run, bound to THIS design rather than to
-  // whatever Session considers current, and pre-loaded with the repair
-  // context so the command does not depend on the DePlace-registered
-  // provider having been installed.
+  // One checker for the whole run. Filler repair obtains its active setting
+  // from Network, which is already bound and populated by DePlace above.
   ipl::ImplantLayerChecker checker(grid, network);
-  checker.setFillerRepairContext(desMgr, setting);
   if (!checker.getDiags().empty()) {
     std::cout << "checker init diagnostics: " << checker.getDiags().size()
               << "\n";

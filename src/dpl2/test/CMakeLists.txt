@@ -133,6 +133,24 @@ set(DPL2_FILLER_REPAIR_BUILD_TESTS ON)
 set(DPL2_RUNTIME_LIBRARIES dpl2_fr_chain_common)
 add_subdirectory("${DPL2_SRC}/fillerRepair" fillerRepair)
 
+# Compile the copy-only migration payload under its destination directory
+# name. This prevents fillerRepair2 from drifting behind the exercised source
+# while keeping it out of runtime linkage and test behavior.
+set(DPL2_FR2_STAGE_ROOT
+    "${CMAKE_CURRENT_BINARY_DIR}/fillerRepair2-stage")
+file(MAKE_DIRECTORY "${DPL2_FR2_STAGE_ROOT}/fillerRepair")
+file(COPY "${DPL2_SRC}/fillerRepair2/"
+     DESTINATION "${DPL2_FR2_STAGE_ROOT}/fillerRepair")
+add_library(dpl2_filler_repair2_compile_check OBJECT
+    "${DPL2_FR2_STAGE_ROOT}/fillerRepair/RepairPlanner.cpp"
+    "${DPL2_FR2_STAGE_ROOT}/fillerRepair/FillerRepairEngine.cpp")
+target_include_directories(
+  dpl2_filler_repair2_compile_check
+  BEFORE PRIVATE "${DPL2_FR2_STAGE_ROOT}")
+target_link_libraries(
+  dpl2_filler_repair2_compile_check PRIVATE dpl2_filler_repair_deps)
+dpl2_configure_chain_target(dpl2_filler_repair2_compile_check strict)
+
 # --- Targets defined ONCE for both UDM modes -------------------------------
 #
 # dpl2_test_udm is the only fake/real switch, so every target below is built

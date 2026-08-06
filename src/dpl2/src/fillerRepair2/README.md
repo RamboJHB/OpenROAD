@@ -1,10 +1,6 @@
 # fillerRepair2 migration payload
 
-Updated: 2026-08-05.
-
-This runtime payload is restored to working baseline **`944ce7ba66`**. The
-retained `registerFillerRepairMasters()` and `test_filler_repair` changes live
-outside this directory and do not change its runtime files.
+Updated: 2026-08-06.
 
 This directory contains only runtime code used by the destination: the
 checker-owned engine, planner, two planner seams, shared types, logging, and a
@@ -34,36 +30,36 @@ include/link dependencies to it.
 runtime-only projection, not generated output. Mirror every runtime algorithm,
 API, shared-wire or diagnostic change here before migration.
 
-The repository's 278-test local suite, 170-test migration gate and standalone
-module build compile the full `fillerRepair/` directory. They do not compile or
-compare this projection automatically. Build this directory against the
-destination dependency target, or run an equivalent C++20 strict syntax check,
-before copying it into place.
+Test CMake stages this directory under the destination `fillerRepair/` name
+and compiles both runtime sources as C++20 with `-Wall -Wextra -Werror`. The
+278-test local suite and 170-test migration gate exercise the full
+source-of-truth directory.
 
 Runtime API:
 
 ```cpp
 FillerRepairEngine(Grid*, Network*);
-bool init(PhysDesMgr*, const fillerSetting&);
+bool init();
 RepairOutcome repair(const ipl::CheckRequest&);
 ```
 
 The destination checker constructor must be
 `ImplantLayerChecker(Grid*, Network*)`. It obtains `PhysDesMgr` only from
-Grid. Engine initialization verifies the `fillerSetting` Design manager
-against the explicit `PhysDesMgr` and Grid manager before constructing its
-private checker. Neither path reads Session.
+Grid. DePlace binds its active `fillerSetting` to Network. Engine initialization
+reads that binding, verifies its Design manager against Grid's manager, and
+then constructs its private checker. Neither path reads Session.
 
-Initialization replays every configured filler master through
-`Network::addMaster(..., fillerSetting, ...)`, including masters already in
-Network, so `Master::isFiller` is refreshed before the private checker is
-constructed. The runtime remains one file but separates three private
+Infrastructure must register every configured filler master with the real edge
+table before checking. Initialization only looks up each existing Network
+master and applies `Master::setFiller(true)` before the private checker is
+constructed; the engine never creates a master. The runtime remains one file but separates three private
 responsibilities: placement snapshot, compatible filler catalog, and serialized
 checker overlay calls. The catalog is built once using same width/height,
 different known VT and matching bottom-band polarity. When no placed filler
 has a catalog entry, the engine returns `NoCompatibleFillerCandidate` after the
 baseline result and skips window/search work.
 
-`ImplantLayerChecker::check()` remains the caller-facing entry. Repair is
-non-mutating and returns the shared `ipl::FillerChanges`/`CellChangeRecord`
-wire for infrastructure to commit.
+`ImplantLayerChecker::check()` remains the caller-facing entry. Repair defaults
+on for ordinary checker instances; `ImplantLayerCheckerHelper` switches it off.
+Repair is non-mutating and returns the shared
+`ipl::FillerChanges`/`CellChangeRecord` wire for infrastructure to commit.

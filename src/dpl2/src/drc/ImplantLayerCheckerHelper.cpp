@@ -226,6 +226,9 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
 void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
 {
   eUTL::PerfLogger perfLogger("dpl2.helper.initChecker", true /* singleLine */);
+  // [fillerRepair-fix] Helper-driven checks validate checker rules only.
+  // A caller that intentionally tests repair may opt in after initialization.
+  checker.setFillerRepairEnabled(false);
   // Set checker state that buildRules/buildMasters/buildInst depend on
   checker.layers_ = inputLayers_;
   checker.rules_ = inputRules_;

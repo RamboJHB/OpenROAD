@@ -1,6 +1,6 @@
 # fillerRepair ↔ delivered code: contract and change list
 
-Updated: 2026-08-05. Working baseline: `944ce7ba66`.
+Updated: 2026-08-06.
 
 Everything fillerRepair needs from outside itself, and every edit it required
 in code it does not own. Edits are tagged `[fillerRepair-fix]` in the source so
@@ -32,15 +32,20 @@ pass; all four files retained exactly the same non-whitespace content.
 ### Entry
 
 ```cpp
+void ImplantLayerChecker::setFillerRepairEnabled(bool enabled);
+
 bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
                                 const PhysOrientation& orient,
                                 std::vector<CellChangeRecord>& fcRecord) const;
 ```
 
-The caller (opto) owns the vector. On a DRC-illegal candidate the checker
-consults the repair engine; when a checker-verified swap set exists, `check()`
-returns true and **appends** the records. The checker stores no filler-change
-member — `getFillerChanges()`, `initFillerRepair()`, `updateFillerRepair()` and
+Filler repair defaults to enabled. `ImplantLayerCheckerHelper::initChecker()`
+sets the switch false so checker-only tests never create the engine. With the
+switch off, an illegal candidate returns false without creating the engine or
+touching the record vector. With it on, the checker consults the repair engine;
+when a checker-verified swap set exists, `check()` returns true and **appends**
+into the caller-owned vector. The checker stores no filler-change member —
+`getFillerChanges()`, `initFillerRepair()`, `updateFillerRepair()` and
 `precheckFillerRepair()` do not exist.
 
 ### Overlay API (used by the engine's private oracle)
@@ -59,19 +64,19 @@ consumed.
 
 ### Lazy engine and initialization failures
 
-The engine is created on the first failing check. The checker reads
+The engine is created on the first repair-enabled failing check. The checker reads
 `PhysDesMgr` only from the manager retained by Grid.
-The filler setting arrives through either
-`setFillerRepairContext()` (harnesses) or the provider registered through
-`setFillerRepairSettingProvider()` (production — dependency inversion, so the
-checker never names `DePlace`).
+DePlace binds its active `fillerSetting` to Network through a non-owning
+pointer. The checker neither owns nor accepts it; the lazy engine reads it
+directly from Network.
 
 `set_filler_option` and checker initialization both precede repair. Missing
 `fillerSetting` or `PhysDesMgr` is therefore an integration error, not a
 retryable state. Missing context and structural
 `FillerRepairEngine::init()` failures both disable repair for that checker.
-`setFillerRepairContext()` is the explicit reset path used by harnesses and
-integrations that replace the context.
+The checker is bound to one infrastructure/configuration revision for its
+lifetime. Its owner constructs a new checker after that revision changes; no
+context or reset API is exposed.
 
 ### IDs and wire
 
@@ -104,17 +109,17 @@ approved sequence from each result. A count-based single-prefix strip is wrong.
 ### `drc/ImplantLayerChecker.h` / `.cpp`
 
 1. **Repair wiring in `check()`** — the reserved block now calls the owned
-   engine with the exact `CheckRequest` that method already built, and appends
-   into the caller's `fcRecord`. Members added: `desMgr_`,
-   `repairSetting_`, `repairEngine_`, `repairEngineFailed_`, plus
-   `setFillerRepairContext()` and the static
-   `setFillerRepairSettingProvider()`.
+   engine with the exact `CheckRequest` that method already built only when
+   `enableFillerRepair_` is true, and appends into the caller's `fcRecord`.
+   The switch defaults true. The checker keeps only the switch, lazy engine
+   and failed-init latch. A failed latch remains closed for that checker's
+   lifetime.
 
 2. **Grid-bound design context**
    `ImplantLayerChecker(Grid*, Network*)` is the only constructor. It obtains
    `PhysDesMgr` from `Grid::getDesMgr()` and fails closed when Grid, Network or
-   the Grid manager is absent. `FillerRepairEngine::init()` still verifies the
-   `fillerSetting` Design manager, explicit manager and Grid manager agree
+   the Grid manager is absent. `FillerRepairEngine::init()` takes no context
+   arguments and verifies Network's bound setting belongs to Grid's manager
    before creating its private checker. No global design state is consulted.
 
 3. **`checkDirect()` extends `masterItems_` lazily** when the request master
@@ -128,7 +133,9 @@ approved sequence from each result. A count-based single-prefix strip is wrong.
 ### `drc/ImplantLayerCheckerHelper.cpp`
 
 Follows the checker's own rename/removal (`groups_` → the current members;
-`buildRules()` reads the members set above). Mechanical, no behaviour change.
+`buildRules()` reads the members set above). `initChecker()` explicitly leaves
+filler repair disabled, so helper-driven rule checks remain DRC-only. A test
+that intentionally exercises repair must enable it after helper initialization.
 
 ### `drc/DRCChecker.h`
 
@@ -251,30 +258,24 @@ Not patched here; they belong to the integration owner.
 | `initPlacementDRC()` is declared but never defined, `drc_engine_` is never constructed, and nothing calls `PlacementDRC::addChecker` | `DePlace::isLegal` cannot reach any checker; with an empty `checkers_` it would report every candidate legal |
 | `DRCCheckerType` has no implant entry (`EdgeSpacing`, `BlockedLayers`, `Padding`, `OneSiteGap`) | no key to register `ImplantLayerChecker` under |
 
-### What fillerRepair adapted to, without patching
+### Master registration boundary
 
-`Network::addMaster` lost its two-argument overload and its third parameter
-became `const EdgeTypeTable*`. Our three call sites pass an **empty table**:
-`EdgeTypeTable` lives in `Objects.h`, which the repair-only link target
-already has, so the reason the overload existed (keeping `PlacementDRC` out of
-that target) is gone. `addMaster` dereferences the table before any null
-check, so `nullptr` is not an option; an empty one returns right after the
-geometry the implant oracle reads. This is a fallback path — on the production
-route `DePlace` registers the master WITH the real edge table before `check()`
-runs, so a Master decorated by us never reaches placement DRC.
+Filler repair never calls `Network::addMaster`: only infrastructure owns the
+real edge table needed to construct a complete Master. Before checking,
+`DePlace::registerFillerRepairMasters()` registers every configured filler
+master with that table. Engine initialization looks each one up and applies
+`setFiller(true)`; a missing configured master fails closed.
 
 ### `DePlace`
 
-Registers the setting provider in its constructor, and forwards
-`getBoundingBox`. It is the only place that knows both `DePlace` and the
-checker.
+Binds its owned `fillerSetting` to its owned Network in both constructors and
+forwards `getBoundingBox`. The binding is non-owning and remains valid because
+DePlace owns both objects.
 
-The retained post-baseline helper
 `DePlace::registerFillerRepairMasters()` uses DePlace's real Grid and edge
 table to register every master in the active fillerSetting. It then refreshes
 already-imported matching Nodes to `Node::FILLER`. The current
-`test_filler_repair` calls this once before constructing its checker; the
-planner and engine algorithms remain those from `944ce7ba66`.
+`test_filler_repair` calls this once before constructing its checker.
 
 `include/dpl2/DePlace.h` now forward-declares `Pixel`, `GridPt`, `GridRect`,
 `DbuPt`, and `DbuRect` as `struct`, matching their infrastructure definitions.
@@ -320,14 +321,12 @@ quantity is how that bug arrived once already, so there is now exactly one.
 one design revision.
 Network must contain every placed/fixed physical instance that can intersect
 the core, hard macros included; placement blockages remain Grid state and are
-not Network Nodes. The engine borrows the initialized Grid/Network, registers
-all `fillerSetting::getFillerPhysCells()` candidates, verifies the setting's
-manager equals the supplied manager and `Grid::getDesMgr()`, then constructs
-its private checker from Grid/Network. Registration is not skipped for an
-existing master:
-`Network::addMaster(..., fillerSetting, ...)` must refresh
-`Master::isFiller` before checker construction. No Session fallback is
-allowed. Calls on one checker/engine pair must not overlap.
+not Network Nodes. Network also borrows DePlace's active `fillerSetting`.
+Infrastructure registers all configured masters with real edge data. The
+engine verifies the setting's manager equals `Grid::getDesMgr()`, looks up and
+classifies those existing masters, then constructs its private checker from
+Grid/Network. No Session fallback is allowed. Calls on one checker/engine pair
+must not overlap.
 
 Initialization builds a compatibility catalog keyed by placed filler master.
 Only configured masters with identical width/height, different known VT and
@@ -345,10 +344,9 @@ run in **both** harness modes — fake-UDM and the destination-shaped migration
 gate (170/170, normal and ASan). Repository-local fake-UDM engine regression:
 108 cases. Full local suite 278/278, normal and ASan.
 
-Those counts build the full `fillerRepair/` verification package. The sibling
-`fillerRepair2/` runtime-only projection is not compiled or compared by these
-CTest gates and must be built separately against the destination dependency
-target before migration.
+Those counts build the full `fillerRepair/` verification package. Test CMake
+also stages `fillerRepair2/` under the destination directory name and strictly
+compiles its two runtime sources, preventing API drift before migration.
 
 The fixture invariants the real-checker cases depend on — rule and layer ids as
 container indices, the band-polarity model, the `maxRuleValue_`-sized snapshot

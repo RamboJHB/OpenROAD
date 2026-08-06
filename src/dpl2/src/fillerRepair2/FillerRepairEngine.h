@@ -13,7 +13,6 @@
 
 namespace dpl2 {
 
-class fillerSetting;
 class Grid;
 class Network;
 
@@ -38,10 +37,9 @@ class FillerRepairEngine
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
-  // Binds Grid/Network to fillerSetting and configured filler masters once.
-  // The fillerSetting manager, desMgr and Grid manager must
-  // agree.
-  bool init(eUNL::PhysDesMgr* desMgr, const fillerSetting& fillerSetting);
+  // Gets PhysDesMgr from Grid and the active fillerSetting from Network.
+  // Configured masters must already exist in Network with real edge data.
+  bool init();
 
   // Non-mutating, pre-commit overlay repair.
   RepairOutcome repair(const ipl::CheckRequest& request);

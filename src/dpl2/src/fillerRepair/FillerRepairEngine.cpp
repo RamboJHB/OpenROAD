@@ -249,11 +249,10 @@ class FillerRepairEngine::Impl final : private PlacementView,
   {
   }
 
-  bool init(eUNL::PhysDesMgr* desMgr,
-            const fillerSetting& fillerSettings);
+  bool init();
   void setDebugLogging(bool enabled);
   // Gap/overlap coverage restricted to selected repair rows. repair() checks
-  // the initial target influence before registration; adaptive candidates
+  // the initial target influence before oracle evaluation; adaptive candidates
   // that edit farther rows are checked before entering the checker batch.
   // This keeps the safety gate proportional to touched rows instead of the
   // whole placed design.
@@ -269,8 +268,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
   bool isReady() const;
   bool isNonBlockingCheckerInitDiagnostic(
       const ipl::Diagnostic& diagnostic) const;
-  bool bindInfrastructure(eUNL::PhysDesMgr* desMgr,
-                          const fillerSetting& fillerSettings);
+  bool bindInfrastructure();
   bool ensureMasterRegistered(const eLIB::PhysLibCell& master);
   bool rebuildOracle();
   void failInit(const std::string& status, const std::string& message);
@@ -1245,7 +1243,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     }
   }
 
-  // The initial target influence was checked before any master registration.
+  // The initial target influence was checked before planner search.
   // Adaptive windows can later introduce fillers from additional rows. Check
   // only requests that actually edit outside the initial influence, and keep
   // illegal requests out of the checker batch without rejecting legal peers.
@@ -1607,21 +1605,15 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
     return result;
   }
 
-  // DePlace may not have imported an uninstantiated target replacement yet.
-  // Register it only after request and placement validation, then rebuild the
-  // checker and planner snapshot so all id tables share the expanded Network
-  // universe.
+  // Master construction belongs to infrastructure because it requires the
+  // real edge table. Repair may refresh an existing snapshot, but it never
+  // invents an incomplete Network master.
   if (network_->getMaster(newMaster->getLibCellId()) == nullptr) {
-    const bool registered = ensureMasterRegistered(*newMaster);
-    const bool rebuilt = registered && rebuildOracle();
-    if (!rebuilt) {
-      initialized_ = false;
-      result.diagnostics = oracle_diagnostics_;
-      addDiagnostic(Severity::Fatal,
-                    "TargetMasterRegistrationFailed",
-                    "target master could not be added to the repair oracle");
-      return result;
-    }
+    addDiagnostic(Severity::Fatal,
+                  "TargetMasterNotRegistered",
+                  "target master is absent from Network; infrastructure "
+                  "must register it with the real edge table before check");
+    return result;
   }
 
   const int newMasterId = network_->getMasterId(newMaster->getLibCellId());
@@ -1859,15 +1851,13 @@ ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
 
 }  // namespace
 
-bool FillerRepairEngine::Impl::init(eUNL::PhysDesMgr* desMgr,
-                                    const fillerSetting& fillerSettings)
+bool FillerRepairEngine::Impl::init()
 {
   if (init_attempted_) {
     return false;
   }
   init_attempted_ = true;
-  des_mgr_ = desMgr;
-  if (!bindInfrastructure(desMgr, fillerSettings)) {
+  if (!bindInfrastructure()) {
     return false;
   }
 
@@ -1999,9 +1989,7 @@ void FillerRepairEngine::Impl::failInit(const std::string& status,
   init_diagnostics_.push_back({status, message});
 }
 
-bool FillerRepairEngine::Impl::bindInfrastructure(
-    eUNL::PhysDesMgr* desMgr,
-    const fillerSetting& fillerSettings)
+bool FillerRepairEngine::Impl::bindInfrastructure()
 {
   if (grid_ == nullptr || network_ == nullptr) {
     failInit("missing_infrastructure",
@@ -2009,6 +1997,7 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  grid_ != nullptr, " network=", network_ != nullptr));
     return false;
   }
+  eUNL::PhysDesMgr* const desMgr = grid_->getDesMgr();
   if (desMgr == nullptr) {
     failInit("missing_phys_des_mgr",
              cat("fatal: missing PhysDesMgr: gridSiteWidth=",
@@ -2018,26 +2007,14 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " networkMasters=", network_->getMasters().size()));
     return false;
   }
-  // [PORT-ADAPT] Grid::getDesMgr(). The engine refuses to bind to a manager
-  // other than the one Grid was initialized with, because Grid, Network, the
-  // checker and this engine must all describe ONE design revision. If your
-  // Grid does not retain its manager, give it an accessor -- do not delete
-  // this check; a mismatch here is silently wrong answers, not a crash.
-  eUNL::PhysDesMgr* const gridDesMgr = grid_->getDesMgr();
-  if (gridDesMgr == nullptr) {
-    failInit("missing_grid_phys_des_mgr",
-             "fatal: Grid does not retain an initialization PhysDesMgr");
+  const fillerSetting* const fillerSettings = network_->getFillerSetting();
+  if (fillerSettings == nullptr) {
+    failInit("missing_filler_setting",
+             "fatal: Network has no active fillerSetting; DePlace must bind "
+             "it before filler repair initialization");
     return false;
   }
-  if (gridDesMgr != desMgr) {
-    failInit("grid_phys_des_mgr_mismatch",
-             cat("fatal: engine PhysDesMgr must match Grid's initialization "
-                 "manager: gridPhysDesMgr=",
-                 static_cast<const void*>(gridDesMgr),
-                 " requestedPhysDesMgr=", static_cast<const void*>(desMgr)));
-    return false;
-  }
-  eUNL::Design* settingDesign = fillerSettings.getDesign();
+  eUNL::Design* settingDesign = fillerSettings->getDesign();
   eUNL::PhysDesMgr* settingDesMgr
       = settingDesign != nullptr ? settingDesign->getPhysDesMgr() : nullptr;
   if (settingDesign == nullptr || settingDesMgr != desMgr) {
@@ -2050,7 +2027,7 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " requestedPhysDesMgr=", static_cast<const void*>(desMgr)));
     return false;
   }
-  if (fillerSettings.getFillerPhysCells().empty()) {
+  if (fillerSettings->getFillerPhysCells().empty()) {
     failInit("empty_filler_allow_list",
              cat("fatal: fillerSetting::getFillerPhysCells() is empty: "
                  "settingDesign=",
@@ -2069,7 +2046,7 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " gridRows=", grid_->getRowCount().v,
                  " gridSitesPerRow=", grid_->getRowSiteCount().v,
                  " configuredFillers=",
-                 fillerSettings.getFillerPhysCells().size()));
+                 fillerSettings->getFillerPhysCells().size()));
     return false;
   }
   // Per-node Network<->UDM cross-validation was removed deliberately:
@@ -2079,8 +2056,9 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
   // (DePlace::isLegal updates the Node before checkDRC). Nodes whose master
   // or physical record is unusable are simply skipped by buildPlannerData.
 
-  filler_settings_ = &fillerSettings;
-  filler_masters_ = fillerSettings.getFillerPhysCells();
+  des_mgr_ = desMgr;
+  filler_settings_ = fillerSettings;
+  filler_masters_ = fillerSettings->getFillerPhysCells();
   for (size_t configuredIndex = 0;
        configuredIndex < filler_masters_.size();
        ++configuredIndex) {
@@ -2095,8 +2073,8 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
     }
     if (!ensureMasterRegistered(*master)) {
       failInit("filler_master_registration_failed",
-               cat("fatal: configured filler master could not be registered "
-                   "in Network: configuredIndex=",
+               cat("fatal: configured filler master is absent from Network "
+                   "or could not be classified: configuredIndex=",
                    configuredIndex, " {", masterDebug(*master),
                    "} networkMasters=", network_->getMasters().size(),
                    " gridSiteWidth=", grid_->getSiteWidth().v,
@@ -2109,28 +2087,17 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
 bool FillerRepairEngine::Impl::ensureMasterRegistered(
     const eLIB::PhysLibCell& master)
 {
-  if (network_ == nullptr || grid_ == nullptr || filler_settings_ == nullptr) {
+  if (network_ == nullptr || filler_settings_ == nullptr) {
     return false;
   }
-  // [PORT-ADAPT] Network::addMaster. This is the ONLY call in the payload
-  // whose signature tracks the infrastructure version, and it has already
-  // changed twice (it gained the fillerSetting parameter, and its third
-  // parameter became const EdgeTypeTable*). If yours differs, fix it here --
-  // nothing in the search or the oracle needs to know.
-  //
-  // The empty edge-type table is on purpose. addMaster dereferences it without
-  // a null check, so nullptr is out; an empty one makes it return right after
-  // filling in the geometry, which is all the implant oracle reads anyway.
-  // This call is mandatory even when the master already exists: addMaster()
-  // refreshes Master::isFiller from fillerSetting, the sole filler authority.
-  // rebuildOracle() runs after registration and therefore gives the private
-  // checker the same refreshed master classification.
-  static const EdgeTypeTable kNoEdgeTypes;
-  Master* refreshed = network_->addMaster(
-      master, *filler_settings_, grid_, &kNoEdgeTypes);
-  return refreshed != nullptr
-         && refreshed->isFiller()
-                == filler_settings_->isFillerCell(master.getLibCellId());
+  // Infrastructure owns Master creation because it has the real edge table.
+  // Repair only refreshes the allow-list classification on an existing one.
+  Master* const registered = network_->getMaster(master.getLibCellId());
+  if (registered == nullptr) {
+    return false;
+  }
+  registered->setFiller(true);
+  return true;
 }
 
 bool FillerRepairEngine::Impl::rebuildOracle()
@@ -2196,18 +2163,16 @@ void FillerRepairEngine::setDebugLogging(bool enabled)
   impl_->setDebugLogging(enabled);
 }
 
-bool FillerRepairEngine::init(eUNL::PhysDesMgr* desMgr,
-                              const fillerSetting& fillerSettings)
+bool FillerRepairEngine::init()
 {
-  return impl_->init(desMgr, fillerSettings);
+  return impl_->init();
 }
 
-bool FillerRepairEngine::update(eUNL::PhysDesMgr* desMgr,
-                                const fillerSetting& fillerSettings)
+bool FillerRepairEngine::update()
 {
   auto replacement = std::make_unique<Impl>(grid_, network_);
   replacement->setDebugLogging(debug_logging_);
-  const bool initialized = replacement->init(desMgr, fillerSettings);
+  const bool initialized = replacement->init();
   impl_ = std::move(replacement);
   return initialized;
 }

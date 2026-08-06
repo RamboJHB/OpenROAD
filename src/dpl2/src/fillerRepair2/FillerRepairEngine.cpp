@@ -248,8 +248,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
   {
   }
 
-  bool init(eUNL::PhysDesMgr* desMgr,
-            const fillerSetting& fillerSettings);
+  bool init();
   // Gap/overlap coverage restricted to the rows a repair may edit.
   ipl::CheckResult localPrecheck(const Region& influence) const;
   RepairOutcome repair(const ipl::CheckRequest& request);
@@ -261,8 +260,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
   bool isReady() const;
   bool isNonBlockingCheckerInitDiagnostic(
       const ipl::Diagnostic& diagnostic) const;
-  bool bindInfrastructure(eUNL::PhysDesMgr* desMgr,
-                          const fillerSetting& fillerSettings);
+  bool bindInfrastructure();
   bool ensureMasterRegistered(const eLIB::PhysLibCell& master);
   bool rebuildOracle();
   void failInit(const std::string& status, const std::string& message);
@@ -1149,7 +1147,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     }
   }
 
-// The initial target influence was checked before any master registration.
+// The initial target influence was checked before planner search.
   const Region initialInfluence = snapshotGuard(first.targetPlace);
   std::vector<size_t> legalIndices;
   legalIndices.reserve(requests.size());
@@ -1437,18 +1435,14 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
-// DePlace may not have imported an uninstantiated target replacement yet.
+  // Master construction belongs to infrastructure because it requires the
+  // real edge table. Repair never invents an incomplete Network master.
   if (network_->getMaster(newMaster->getLibCellId()) == nullptr) {
-    const bool registered = ensureMasterRegistered(*newMaster);
-    const bool rebuilt = registered && rebuildOracle();
-    if (!rebuilt) {
-      initialized_ = false;
-      result.diagnostics = oracle_diagnostics_;
-      addDiagnostic(Severity::Fatal,
-                    "TargetMasterRegistrationFailed",
-                    "target master could not be added to the repair oracle");
-      return result;
-    }
+    addDiagnostic(Severity::Fatal,
+                  "TargetMasterNotRegistered",
+                  "target master is absent from Network; infrastructure "
+                  "must register it with the real edge table before check");
+    return result;
   }
 
   const int newMasterId = network_->getMasterId(newMaster->getLibCellId());
@@ -1680,15 +1674,13 @@ ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
 
 }  // namespace
 
-bool FillerRepairEngine::Impl::init(eUNL::PhysDesMgr* desMgr,
-                                    const fillerSetting& fillerSettings)
+bool FillerRepairEngine::Impl::init()
 {
   if (init_attempted_) {
     return false;
   }
   init_attempted_ = true;
-  des_mgr_ = desMgr;
-  if (!bindInfrastructure(desMgr, fillerSettings)) {
+  if (!bindInfrastructure()) {
     return false;
   }
 
@@ -1809,9 +1801,7 @@ void FillerRepairEngine::Impl::failInit(const std::string& status,
   init_diagnostics_.push_back({status, message});
 }
 
-bool FillerRepairEngine::Impl::bindInfrastructure(
-    eUNL::PhysDesMgr* desMgr,
-    const fillerSetting& fillerSettings)
+bool FillerRepairEngine::Impl::bindInfrastructure()
 {
   if (grid_ == nullptr || network_ == nullptr) {
     failInit("missing_infrastructure",
@@ -1819,6 +1809,7 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  grid_ != nullptr, " network=", network_ != nullptr));
     return false;
   }
+  eUNL::PhysDesMgr* const desMgr = grid_->getDesMgr();
   if (desMgr == nullptr) {
     failInit("missing_phys_des_mgr",
              cat("fatal: missing PhysDesMgr: gridSiteWidth=",
@@ -1828,22 +1819,15 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " networkMasters=", network_->getMasters().size()));
     return false;
   }
-  eUNL::PhysDesMgr* const gridDesMgr = grid_->getDesMgr();
-  if (gridDesMgr == nullptr) {
-    failInit("missing_grid_phys_des_mgr",
-             "fatal: Grid does not retain an initialization PhysDesMgr");
+  const fillerSetting* const fillerSettings = network_->getFillerSetting();
+  if (fillerSettings == nullptr) {
+    failInit("missing_filler_setting",
+             "fatal: Network has no active fillerSetting; DePlace must bind "
+             "it before filler repair initialization");
     return false;
   }
-  if (gridDesMgr != desMgr) {
-    failInit("grid_phys_des_mgr_mismatch",
-             cat("fatal: engine PhysDesMgr must match Grid's initialization "
-                 "manager: gridPhysDesMgr=",
-                 static_cast<const void*>(gridDesMgr),
-                 " requestedPhysDesMgr=", static_cast<const void*>(desMgr)));
-    return false;
-  }
-  const eUNL::Design* settingDesign = fillerSettings.getDesign();
-  const eUNL::PhysDesMgr* settingDesMgr
+  eUNL::Design* settingDesign = fillerSettings->getDesign();
+  eUNL::PhysDesMgr* settingDesMgr
       = settingDesign != nullptr ? settingDesign->getPhysDesMgr() : nullptr;
   if (settingDesign == nullptr || settingDesMgr != desMgr) {
     failInit("design_mismatch",
@@ -1855,7 +1839,7 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " requestedPhysDesMgr=", static_cast<const void*>(desMgr)));
     return false;
   }
-  if (fillerSettings.getFillerPhysCells().empty()) {
+  if (fillerSettings->getFillerPhysCells().empty()) {
     failInit("empty_filler_allow_list",
              cat("fatal: fillerSetting::getFillerPhysCells() is empty: "
                  "settingDesign=",
@@ -1874,13 +1858,14 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
                  " gridRows=", grid_->getRowCount().v,
                  " gridSitesPerRow=", grid_->getRowSiteCount().v,
                  " configuredFillers=",
-                 fillerSettings.getFillerPhysCells().size()));
+                 fillerSettings->getFillerPhysCells().size()));
     return false;
   }
 // Per-node Network<->UDM cross-validation was removed deliberately:
 
-  filler_settings_ = &fillerSettings;
-  filler_masters_ = fillerSettings.getFillerPhysCells();
+  des_mgr_ = desMgr;
+  filler_settings_ = fillerSettings;
+  filler_masters_ = fillerSettings->getFillerPhysCells();
   for (size_t configuredIndex = 0;
        configuredIndex < filler_masters_.size();
        ++configuredIndex) {
@@ -1895,8 +1880,8 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
     }
     if (!ensureMasterRegistered(*master)) {
       failInit("filler_master_registration_failed",
-               cat("fatal: configured filler master could not be registered "
-                   "in Network: configuredIndex=",
+               cat("fatal: configured filler master is absent from Network "
+                   "or could not be classified: configuredIndex=",
                    configuredIndex, " {", masterDebug(*master),
                    "} networkMasters=", network_->getMasters().size(),
                    " gridSiteWidth=", grid_->getSiteWidth().v,
@@ -1909,11 +1894,15 @@ bool FillerRepairEngine::Impl::bindInfrastructure(
 bool FillerRepairEngine::Impl::ensureMasterRegistered(
     const eLIB::PhysLibCell& master)
 {
-  if (network_ == nullptr || grid_ == nullptr || filler_settings_ == nullptr) {
+  if (network_ == nullptr || filler_settings_ == nullptr) {
     return false;
   }
+  Master* const registered = network_->getMaster(master.getLibCellId());
+  if (registered == nullptr) {
+    return false;
+  }
+  registered->setFiller(true);
   return true;
-
 }
 
 bool FillerRepairEngine::Impl::rebuildOracle()
@@ -1971,10 +1960,9 @@ FillerRepairEngine::FillerRepairEngine(Grid* grid, Network* network)
 
 FillerRepairEngine::~FillerRepairEngine() = default;
 
-bool FillerRepairEngine::init(eUNL::PhysDesMgr* desMgr,
-                              const fillerSetting& fillerSettings)
+bool FillerRepairEngine::init()
 {
-  return impl_->init(desMgr, fillerSettings);
+  return impl_->init();
 }
 
 RepairOutcome FillerRepairEngine::repair(const ipl::CheckRequest& request)

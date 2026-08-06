@@ -7,7 +7,6 @@
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
 #include <drc/PaddingChecker.h>
-#include <drc/ImplantLayerChecker.h>
 #include <PlacementDRC.h>
 
 #include <algorithm>
@@ -24,6 +23,9 @@ DePlace::DePlace(PhysDesMgr* desMgr)
   design_ = eUNL::Session::getSession().getCurrentDesign();
   padding_->setDesginManager(desMgr);
   filler_setting_ = std::make_unique<fillerSetting>(design_);
+  // [fillerRepair-fix] Network is filler repair's single infrastructure
+  // seam; checker no longer needs a DePlace-specific provider.
+  network_->setFillerSetting(filler_setting_.get());
 }
 
 DePlace::DePlace()
@@ -40,12 +42,8 @@ DePlace::DePlace()
   this->design_ = design;
   padding_->setDesginManager(desMgr_);
   filler_setting_ = std::make_unique<fillerSetting>(design);
-  // Filler repair reaches the active fillerSetting through this provider
-  // (dependency inversion: the checker never names DePlace).
-  ipl::ImplantLayerChecker::setFillerRepairSettingProvider(
-      []() -> const fillerSetting* {
-        return DePlace::get()->getFillerSetting();
-      });
+  // [fillerRepair-fix] Network borrows the setting; DePlace owns both.
+  network_->setFillerSetting(filler_setting_.get());
   if (!data_loaded_) {
     importDb();
     initGrid();
@@ -64,6 +62,10 @@ bool DePlace::registerFillerRepairMasters()
       || edge_type_table_ == nullptr) {
     return false;
   }
+
+  // [fillerRepair-fix] Keep the binding current if the owner replaced its
+  // setting before rebuilding configured filler masters.
+  network_->setFillerSetting(filler_setting_.get());
 
   const std::vector<const PhysLibCell*> masters
       = filler_setting_->getFillerPhysCells();
