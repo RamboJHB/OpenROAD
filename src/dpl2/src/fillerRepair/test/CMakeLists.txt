@@ -16,6 +16,7 @@
 # of recompiled here.
 
 include(GoogleTest)
+find_package(ZLIB REQUIRED)
 
 if(NOT DEFINED DPL2_RUNTIME_LIBRARIES)
   set(DPL2_RUNTIME_LIBRARIES "" CACHE STRING
@@ -47,7 +48,12 @@ gtest_discover_tests(
 # targets; with none supplied, compile the sibling sources as a fallback so
 # the suite still runs standalone.
 set(DPL2_CHECKER_HELPER_SOURCES
-    "${DPL2_SRC_ROOT}/drc/ImplantLayerCheckerHelper.cpp")
+    "${DPL2_SRC_ROOT}/drc/ImplantLayerCheckerHelper.cpp"
+    "${DPL2_SRC_ROOT}/../dpl2ui/FillerRepairDumpReplay.cc")
+set_source_files_properties(
+  "${DPL2_SRC_ROOT}/drc/ImplantLayerCheckerHelper.cpp"
+  "${DPL2_SRC_ROOT}/../dpl2ui/FillerRepairDumpReplay.cc"
+  PROPERTIES COMPILE_OPTIONS "-Werror")
 if(NOT DPL2_RUNTIME_LIBRARIES)
   list(PREPEND DPL2_CHECKER_HELPER_SOURCES
       "${DPL2_SRC_ROOT}/infrastructure/Grid.cpp"
@@ -66,13 +72,16 @@ add_executable(
   FillerRepairCheckerE2ETest.cpp)
 target_link_libraries(
   dpl2_filler_repair_checker_e2e
-  PRIVATE GTest::gtest_main dpl2::fillerRepair ${DPL2_RUNTIME_LIBRARIES})
+  PRIVATE GTest::gtest_main dpl2::fillerRepair ZLIB::ZLIB
+          ${DPL2_RUNTIME_LIBRARIES})
 # Delivered infrastructure/checker sources compile here as-is; their warnings
 # belong to their owners and must not fail this build.
 target_compile_options(
   dpl2_filler_repair_checker_e2e PRIVATE -Wall -Wextra)
 target_include_directories(
-  dpl2_filler_repair_checker_e2e PRIVATE "${DPL2_SRC_ROOT}/infrastructure")
+  dpl2_filler_repair_checker_e2e
+  PRIVATE "${DPL2_SRC_ROOT}/infrastructure"
+          "${DPL2_SRC_ROOT}/../dpl2ui")
 gtest_discover_tests(
   dpl2_filler_repair_checker_e2e
   TEST_PREFIX "portable-e2e."

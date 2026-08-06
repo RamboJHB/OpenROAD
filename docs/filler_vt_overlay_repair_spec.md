@@ -313,7 +313,7 @@ runtime-only 投影，复制其内容到目的地已有的 `fillerRepair/` 路�
   更新 Node,也不负责发现新增/删除的 UDM instance。
 - 91 个可移植 planner unit tests 与 database-free doubles 位于
   `test/` 根目录并与 E2E test 同级;不 include local fake UDM tree/provider。
-- 80 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
+- 82 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 7-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
 - 111 个 checker/engine cases、fake UDM include
@@ -617,6 +617,13 @@ bool check(const Node* node, GridX x, GridY y,
 语义：原始检查不合法就返回 false，也不修改 `fcRecord`。
 `ImplantLayerCheckerHelper::initChecker()` 显式关闭，checker-only tests 不会误入
 repair；需要测试 repair 的 helper caller 可在初始化后重新开启。
+
+helper dump 使用 gzip v5，保存 base row polarity 以及 `fillerSetting` 的 presence、
+flags、prefix、configured Network master ids 和 avoid-pattern map；load 继续兼容
+v1-v4。`test_filler_repair -load <dump.gz>` 不依赖当前 Design/UDM：它从 dump
+重建 Grid/Network/final checker，并让 pure planner 直调 overlay oracle。定向模式为
+`-load <dump.gz> -inst <node-id> -master <master-id>`。这条测试路径只读，不构造
+需要真实 UDM 的 runtime engine，也不修改重建后的 placement。
 
 checker constructor 借用已初始化的 Grid 与 Network，`PhysDesMgr` 只来自
 `grid->getDesMgr()`，禁止 fallback 到 global Session。DePlace 将 active
@@ -1047,7 +1054,7 @@ Node filler flag 与 configured allow-list 是 engine authority，UDM macro-type
 ## 10. 测试集
 
 当前 91 个 planner cases 是独立 GoogleTests,位于交付目录中的
-`fillerRepair/test/`,并与 80 个 portable E2E cases 同级;E2E cases 集中在
+`fillerRepair/test/`,并与 82 个 portable E2E cases 同级;E2E cases 集中在
 `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`。fixture 通过
 `ImplantLayerCheckerHelper` 构造 7 行 × 200 sites 的 Grid/Network/checker input;
 不读 DEF/LEF,不需要 `E2ETestProvider` 或 real-UDM design builder。
@@ -1058,8 +1065,8 @@ filler:std-cell 比例。dense placement 风险、快速失败与 span-rewrite �
 swap-only normative contract。
 
 111 个 checker/engine fake-UDM cases、provider 与完整 local fake regression 均位于
-`src/dpl2/test/local`,不进入迁移目录。完整 suite 为 282/282；portable migration
-gate 为 171/171，normal 与 ASan 均通过。两套 gate 构建完整 `fillerRepair/`；test
+`src/dpl2/test/local`,不进入迁移目录。完整 suite 为 284/284；portable migration
+gate 为 173/173，normal 与 ASan 均通过。两套 gate 构建完整 `fillerRepair/`；test
 CMake 另将 `fillerRepair2/` 按目的地目录名 staged，并以 C++20、
 `-Wall -Wextra -Werror` 编译其两个 runtime source。
 
@@ -1150,14 +1157,14 @@ swap-only 功能已实现并于 2026-08-06 重新验证:
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译由模块自己的 `src/dpl2/src/fillerRepair/CMakeLists.txt` 拥有
   (target `dpl2::fillerRepair` / `dpl2::fillerRepairPlanner`)。
-- 91 个 planner unit tests、80 个 portable checker/planner/precheck cases 与 111 个
+- 91 个 planner unit tests、82 个 portable checker/planner/precheck cases 与 111 个
   fake-UDM checker/engine tests 全为 GoogleTest;
   91 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
   和 helper-built portable E2E 一起迁移;fake UDM checker/engine suite 留在 local;
   regional precheck/repair 均 non-mutating;
   runtime integration 使用 checker `check()` 预留点与 fillerRepair;
   Network Node 同步由 infrastructure 独立负责,checker DRC 算法未修改。
-  2026-08-06 完整 local suite 为 282/282、migration gate 为 171/171，normal 与
+  2026-08-06 完整 local suite 为 284/284、migration gate 为 173/173，normal 与
   ASan 均通过。
 - `fillerRepair2/` 提供 destination-only runtime projection：只保留 C++20 runtime
   target，移除 tests、standalone discovery 与 test-only APIs。它必须随完整目录的

@@ -1,13 +1,19 @@
 #include "drc/ImplantLayerCheckerHelper.h"
-#include "infrastructure/Grid.h"
-#include "infrastructure/Objects.h"
-#include <dpl2/network.h>
-#include "util/performance.hh"
 
-#include <zlib.h>
+#include <algorithm>
 #include <iomanip>
+#include <iostream>
 #include <memory>
 #include <sstream>
+#include <string>
+
+#include <zlib.h>
+
+#include <dpl2/network.h>
+
+#include "infrastructure/Grid.h"
+#include "infrastructure/Objects.h"
+#include "infrastructure/fillerSetting.h"
 
 namespace dpl2 {
 namespace ipl {
@@ -145,6 +151,9 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
     inputBasePolar_ = input.basePolar;
     inputSiteWidth_ = input.siteWidth;
     inputRowHeight_ = input.rowHeight;
+    // [fillerRepair-fix] Retain the candidate/configuration projection so a
+    // loaded helper can be dumped again without a UDM Design.
+    inputFillerSetting_ = input.fillerSetting;
 
     // create grid layout
     const DbuX siteWidth(input.siteWidth);
@@ -164,7 +173,7 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
     grid_->row_y_dbu_to_index_.clear();
     grid_->row_index_to_y_dbu_.resize(rowCount.v);
     grid_->row_index_to_pixel_height_.resize(rowCount.v);
-    for (RowId rowId = 0; rowId <  input.rowCount; rowId++) {
+    for (RowId rowId = 0; rowId < input.rowCount; rowId++) {
         const DbuY yBase(rowId * input.rowHeight);
         grid_->row_y_dbu_to_index_[yBase] = GridY(rowId);
         grid_->row_index_to_y_dbu_[rowId] = yBase;
@@ -172,10 +181,10 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
     }
     grid_->uniform_row_height_ = DbuY(input.rowHeight);
     grid_->site_width_ = siteWidth;
-    grid_->core_ = eUTL::Rect(
-        eUTL::UvDist(0), eUTL::UvDist(0),
-        eUTL::UvDist(siteWidth.v * siteCount.v),
-        eUTL::UvDist(rowHeight.v * rowCount.v));
+    grid_->core_ = eUTL::Rect(eUTL::UvDist(0),
+                              eUTL::UvDist(0),
+                              eUTL::UvDist(siteWidth.v * siteCount.v),
+                              eUTL::UvDist(rowHeight.v * rowCount.v));
     grid_->desMgr_ = nullptr;
     grid_->logger_ = nullptr;
     bool isFullUtil = grid_->isFullUtil();
@@ -185,6 +194,21 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
         std::unique_ptr<Master> master = std::make_unique<Master>();
         master->setId(i);
         master->setDbMaster(LibCellID(0, static_cast<int>(i)));
+        const bool configuredFiller
+            = input.fillerSetting.present
+              && std::find(input.fillerSetting.fillerMasterIds.begin(),
+                           input.fillerSetting.fillerMasterIds.end(),
+                           static_cast<MasterId>(i))
+                     != input.fillerSetting.fillerMasterIds.end();
+        const bool placedFiller
+            = std::any_of(input.placedInsts.begin(),
+                          input.placedInsts.end(),
+                          [i](const PlacedInst& placed) {
+                              return placed.masterId == static_cast<MasterId>(i)
+                                     && placed.isFiller;
+                          });
+        master->setFiller(configuredFiller || placedFiller
+                          || input.masters[i].isFiller);
         network_->addMaster(std::move(master));
     }
 
@@ -201,8 +225,9 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
         node->setOrient(pi.orientation);
         node->setPlaced(true);
         node->setType(pi.isFiller ? Node::FILLER : Node::CELL);
-        if (pi.masterId >= 0 &&
-            pi.masterId < static_cast<MasterId>(network_->getMasters().size())) {
+        if (pi.masterId >= 0
+            && pi.masterId
+                   < static_cast<MasterId>(network_->getMasters().size())) {
             node->setMaster(network_->getMasters()[pi.masterId].get());
         }
         node->setDbInst(LeafCellID(0, pi.instanceId));
@@ -234,8 +259,16 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
     checker.basePolar_ = inputBasePolar_;
     checker.rowHeight_ = inputRowHeight_;
     checker.siteWidth_ = inputSiteWidth_;
-    checker.enableFillerRepair_ = inputEnableFillerRepair_;
-
+    // Helper checks have no bound engine. Keep their semantics checker-only.
+    checker.setFillerRepairEnabled(false);
+    checker.diagnostics_.erase(
+        std::remove_if(checker.diagnostics_.begin(),
+                       checker.diagnostics_.end(),
+                       [](const Diagnostic& diagnostic) {
+                           return diagnostic.status
+                                  == "missing_grid_phys_des_mgr";
+                       }),
+        checker.diagnostics_.end());
     // Populate masterItems_ indexed by MasterId (aligned with Network::masters_)
     const size_t masterCount = network_->getMasters().size();
     checker.masterItems_.resize(masterCount);
@@ -256,6 +289,7 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
     }
 
     checker.buildRules();
+    checker.setMaxRuleValue();
     checker.buildMstIntervals();
 }
 
@@ -268,11 +302,47 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
     std::ostringstream buf;
     std::ostream& out = buf;
 
-    out << "ImplantLayerCheckerDump 1\n";
+    // [fillerRepair-fix] v5 adds base polarity to the v4 fillerSetting data;
+    // both are required to replay planner + checker faithfully.
+    out << "ImplantLayerCheckerDump 5\n";
     out << "row_count " << checker.grid_->getRowCount().v << "\n";
     out << "col_count " << checker.grid_->getRowSiteCount().v << "\n";
     out << "row_height " << checker.rowHeight_ << "\n";
     out << "site_width " << checker.siteWidth_ << "\n";
+    out << "base_polar " << enumInt(checker.basePolar_) << "\n";
+
+    FillerSettingData fillerData = inputFillerSetting_;
+    const fillerSetting* setting = checker.network_ != nullptr
+                                       ? checker.network_->getFillerSetting()
+                                       : nullptr;
+    if (setting != nullptr) {
+        fillerData.present = true;
+        fillerData.followOrder = setting->getFollowOrder();
+        fillerData.checkDrc = setting->getCheckDRC();
+        fillerData.fitSpace = setting->getFitSpace();
+        fillerData.prefix = setting->getPrefix();
+        fillerData.fillerMasterIds.clear();
+        for (const eLIB::LibCellID libCellId : setting->getFillerCells()) {
+            const MasterId masterId = checker.network_->getMasterId(libCellId);
+            if (masterId >= 0) {
+                fillerData.fillerMasterIds.push_back(masterId);
+            }
+        }
+        fillerData.avoidPatterns = setting->getAvoidPattern();
+    }
+    out << "filler_setting " << fillerData.present << "\n";
+    if (fillerData.present) {
+        out << "filler_flags " << fillerData.followOrder << ' '
+            << fillerData.checkDrc << ' ' << fillerData.fitSpace << "\n";
+        out << "filler_prefix " << std::quoted(fillerData.prefix) << "\n";
+        out << "filler_masters ";
+        dumpVector(out, fillerData.fillerMasterIds);
+        out << "\n";
+        out << "avoid_patterns " << fillerData.avoidPatterns.size() << "\n";
+        for (const auto& [pair, enabled] : fillerData.avoidPatterns) {
+            out << pair.first << ' ' << pair.second << ' ' << enabled << "\n";
+        }
+    }
 
     // -- layers --
     out << "layers " << checker.layers_.size() << "\n";
@@ -331,8 +401,8 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
 
     // -- placed instances (reconstructed from network nodes) --
     // Build placedInsts from checker's network nodes.
-    // For the production-flow case, checker runs against a real design
-    // accessed via its Network.  The PlacedInst fields (rowId, colId) are
+    // For the real-design case, checker runs against a design accessed via
+    // its Network. The PlacedInst fields (rowId, colId) are
     // derived from node coordinates.
     std::vector<PlacedInst> placedInsts;
     if (checker.network_) {
@@ -343,9 +413,8 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
             }
             PlacedInst pi;
             pi.instanceId = node->getId();
-            pi.masterId = node->getMaster()
-                          ? node->getMaster()->getId()
-                          : MasterId(-1);
+            pi.masterId = node->getMaster() ? node->getMaster()->getId()
+                                            : MasterId(-1);
             const Dbu nodeLeft = node->getLeft().v;
             const Dbu nodeBottom = node->getBottom().v;
             pi.rowId = nodeBottom / checker.rowHeight_;
@@ -369,10 +438,10 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
         return false;
     }
     const std::string& data = buf.str();
-    const int written = gzwrite(gz, data.data(), static_cast<unsigned int>
-        (data.size()));
-    gzclose(gz);
-    return written > 0;
+    const int written = gzwrite(
+        gz, data.data(), static_cast<unsigned int>(data.size()));
+    const int closeResult = gzclose(gz);
+    return written == static_cast<int>(data.size()) && closeResult == Z_OK;
 }
 
 // Deserialize checker state from a gzip-compressed file produced by dump().
@@ -387,8 +456,8 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
     std::string buf(64 * 1024, '\0');
     std::string data;
     while (true) {
-        const int got = gzread(gz, buf.data(), static_cast<unsigned int>
-            (buf.size()));
+        const int got = gzread(
+            gz, buf.data(), static_cast<unsigned int>(buf.size()));
         if (got <= 0) {
             break;
         }
@@ -414,8 +483,8 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
 
     std::string tag;
     int version = 0;
-    if (!(in >> tag >> version) || tag != "ImplantLayerCheckerDump" ||
-        (version != 1 && version != 2 && version != 3)) {
+    if (!(in >> tag >> version) || tag != "ImplantLayerCheckerDump"
+        || version < 1 || version > 5) {
         return ImplantInput();
     }
 
@@ -436,11 +505,54 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
         return ImplantInput();
     }
 
+    if (version >= 5) {
+        int basePolar = 0;
+        if (!(in >> section >> basePolar) || section != "base_polar") {
+            return ImplantInput();
+        }
+        input.basePolar = enumValue<Layer::Polar>(basePolar);
+    }
+
+    if (version >= 4) {
+        if (!(in >> section >> input.fillerSetting.present)
+            || section != "filler_setting") {
+            return ImplantInput();
+        }
+        if (input.fillerSetting.present) {
+            if (!(in >> section >> input.fillerSetting.followOrder
+                  >> input.fillerSetting.checkDrc
+                  >> input.fillerSetting.fitSpace)
+                || section != "filler_flags") {
+                return ImplantInput();
+            }
+            if (!(in >> section >> std::quoted(input.fillerSetting.prefix))
+                || section != "filler_prefix") {
+                return ImplantInput();
+            }
+            if (!(in >> section) || section != "filler_masters"
+                || !loadVector(in, input.fillerSetting.fillerMasterIds)) {
+                return ImplantInput();
+            }
+            if (!(in >> section >> count) || section != "avoid_patterns") {
+                return ImplantInput();
+            }
+            for (size_t i = 0; i < count; ++i) {
+                int first = 0;
+                int second = 0;
+                bool enabled = false;
+                if (!(in >> first >> second >> enabled)) {
+                    return ImplantInput();
+                }
+                input.fillerSetting.avoidPatterns[{first, second}] = enabled;
+            }
+        }
+    }
+
     // -- layers --
     if (!(in >> section >> count) || section != "layers") {
         return ImplantInput();
     }
-input.layers.reserve(count);
+    input.layers.reserve(count);
     for (size_t i = 0; i < count; ++i) {
         Layer layer;
         int id = 0;
@@ -491,14 +603,13 @@ input.layers.reserve(count);
         std::optional<Dbu> length;
         std::optional<std::string> checkGroup;
         std::vector<LayerId> intersectLayers;
-        if (!(in >> ruleId >> source >> primaryLayer) ||
-            !loadOptional(in, secondaryLayer) ||
-            !(in >> minValue >> direction) ||
-            !loadOptional(in, prl) ||
-            !(in >> zeroPrl >> exceptAbutted >> exceptCornerTouch) ||
-            !loadOptional(in, length) ||
-            !loadOptional(in, checkGroup) ||
-            !loadVector(in, intersectLayers)) {
+        if (!(in >> ruleId >> source >> primaryLayer)
+            || !loadOptional(in, secondaryLayer)
+            || !(in >> minValue >> direction) || !loadOptional(in, prl)
+            || !(in >> zeroPrl >> exceptAbutted >> exceptCornerTouch)
+            || !loadOptional(in, length)
+            || !loadOptional(in, checkGroup)
+            || !loadVector(in, intersectLayers)) {
             return ImplantInput();
         }
         rule.setRuleId(ruleId);
@@ -517,10 +628,10 @@ input.layers.reserve(count);
         std::vector<std::string> unsupportedClauses;
         std::optional<int> containmentGroup;
         std::vector<int> containedByRuleIds;
-        if (!loadStringVector(in, unsupportedClauses) ||
-            !loadOptional(in, containmentGroup) ||
-            !loadVector(in, containedByRuleIds) ||
-            !(in >> specificityRank)) {
+        if (!loadStringVector(in, unsupportedClauses)
+            || !loadOptional(in, containmentGroup)
+            || !loadVector(in, containedByRuleIds)
+            || !(in >> specificityRank)) {
             return ImplantInput();
         }
         rule.setUnsupportedClauses(unsupportedClauses);
@@ -540,8 +651,8 @@ input.layers.reserve(count);
         size_t shapeCount = 0;
         bool isFiller = false;
         Dbu siteHeight = 0;
-        if (!(in >> master.masterId >> master.width >> master.height >>
-            isFiller >> siteHeight >> shapeCount)) {
+        if (!(in >> master.masterId >> master.width >> master.height
+              >> isFiller >> siteHeight >> shapeCount)) {
             return ImplantInput();
         }
         master.isFiller = isFiller;
@@ -550,8 +661,8 @@ input.layers.reserve(count);
         for (size_t s = 0; s < shapeCount; ++s) {
             MasterShape shape;
             Dbu xl = 0, yl = 0, xh = 0, yh = 0;
-            if (!(in >> shape.masterId >> shape.shapeId >> shape.layer >>
-                xl >> yl >> xh >> yh)) {
+            if (!(in >> shape.masterId >> shape.shapeId >> shape.layer >> xl
+                  >> yl >> xh >> yh)) {
                 return ImplantInput();
             }
             shape.rect = ::Rect(eUTL::UvDist(xl), eUTL::UvDist(yl),
@@ -570,8 +681,8 @@ input.layers.reserve(count);
         PlacedInst inst;
         int orientation = 0;
         bool isFiller = false;
-        if (!(in >> inst.instanceId >> inst.masterId >>
-            inst.rowId >> inst.colId >> orientation >> isFiller)) {
+        if (!(in >> inst.instanceId >> inst.masterId >> inst.rowId
+              >> inst.colId >> orientation >> isFiller)) {
             return ImplantInput();
         }
         inst.orientation = enumValue<PhysOrientation>(orientation);
@@ -581,5 +692,5 @@ input.layers.reserve(count);
     return input;
 }
 
-} // namespace ipl
-} // namespace dpl2
+}  // namespace ipl
+}  // namespace dpl2

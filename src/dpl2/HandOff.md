@@ -25,8 +25,8 @@ table. Verification results follow:
 
 | | |
 |---|---|
-| local suite | 282/282, normal and ASan |
-| migration gate (destination code path) | 171/171, normal and ASan |
+| local suite | 284/284, normal and ASan |
+| migration gate (destination code path) | 173/173, normal and ASan |
 | `fillerRepair2` strict compile gate | both runtime sources staged under the destination name, C++20, `-Wall -Wextra -Werror` |
 | checker formatting | checker and helper use four-space indentation |
 | `testFillerRepairCmd` | source call sites synchronized; not compiled in this Codespace because the app/CCI framework headers are unavailable; **never linked** here |
@@ -39,7 +39,7 @@ table. Verification results follow:
 |---|---|
 | **Minimal payload (recommended)** | Copy the **contents** of `src/dpl2/src/fillerRepair2/` into the destination's existing `src/dpl2/src/fillerRepair/`. It contains only runtime source/headers and a 16-line CMake target; the existing checker include and namespace need no edit |
 | **Verification package** | `src/dpl2/src/fillerRepair/` — runtime code plus portable tests, standalone dependency handshake, detailed comments and audit tags |
-| **Test command** | `src/dpl2/dpl2ui/testFillerRepairCmd.{hh,cc}` — current `test_filler_repair`. Run `set_filler_option` first, then call it with no options to sweep, or use `-inst <instance-name-or-node-id> -master <master-name-or-network-id>` for one same-footprint VT proposal |
+| **Test command** | `src/dpl2/dpl2ui/testFillerRepairCmd.{hh,cc}` plus `FillerRepairDumpReplay.{hh,cc}`. On a live design, run `set_filler_option` first, then sweep or use `-inst <instance-name-or-node-id> -master <master-name-or-network-id>`. `-load <checker.dump.gz>` needs no loaded design; add numeric `-inst <node-id> -master <master-id>` for one dumped proposal |
 | **Patches to delivered code** | **not in either path above** — eleven files, all tagged `[fillerRepair-fix]`, itemised with reasons in `src/dpl2/src/drc/CHECKER_REPAIR_CONTRACT.md`: `drc/DRCChecker.h`, `drc/ImplantLayerChecker.{h,cpp}`, `drc/ImplantLayerCheckerHelper.cpp`, `infrastructure/Objects.h`, `infrastructure/Object.cpp`, `infrastructure/Grid.{h,cpp}`, `infrastructure/network.cpp`, `DePlace.cpp`, `include/dpl2/DePlace.h`. Without them the payload does not build. The `DePlace` / `Grid::isFullUtil` pair is a **correctness fix in delivered code, independent of repair** — grid occupancy was missing every filler |
 | **Not part of the payload** | `src/dpl2/test/` — the repository-local harness (fake UDM tree, engine regression, runner scripts). It exists so this can be developed and gated without a real UDM. |
 
@@ -49,8 +49,8 @@ destination. `fillerRepair2/README.md` is the minimal copy/link instruction;
 
 `fillerRepair/` is the source of truth. `fillerRepair2/` is a hand-maintained
 runtime projection, not a generated directory: every runtime algorithm, API,
-wire or diagnostic change must be mirrored before migration. The 282-test local
-suite, 171-test migration gate and standalone module build all compile the full
+wire or diagnostic change must be mirrored before migration. The 284-test local
+suite, 173-test migration gate and standalone module build all compile the full
 directory. They do **not** establish parity with `fillerRepair2/`; build that
 payload against the destination dependencies before copying it into place.
 
@@ -188,9 +188,16 @@ cmake -S <srcroot>/fillerRepair -B build-fr \
 cmake --build build-fr && ctest --test-dir build-fr --output-on-failure
 ```
 
-171 portable tests: 91 database-free planner cases and 80 that drive the **real
+173 portable tests: 91 database-free planner cases and 82 that drive the **real
 `ImplantLayerChecker`** through `ImplantLayerCheckerHelper`-built input. They
 build no UDM objects, so they run before any design is available.
+
+The helper writes gzip dump format v5. It round-trips base row polarity and the
+complete serializable `fillerSetting` projection (flags, prefix, configured
+Network master ids and avoid-pattern map) while continuing to read v1-v4.
+`test_filler_repair -load` uses that projection as the planner candidate list
+and calls the reconstructed real checker as its oracle. It does not instantiate
+the UDM-dependent runtime engine and does not mutate the dump model.
 
 `DPL2_RUNTIME_LIBRARIES` should name the destination's existing infra/checker
 targets. If omitted, the fallback compiles the adjacent supplied sources — the
@@ -358,11 +365,11 @@ file must stay: the checker uses it.
 | | |
 |---|---|
 | Portable planner tests | 91 |
-| Portable real-checker E2E | 80 |
+| Portable real-checker E2E | 82 |
 | Repository-local engine regression | 111 (fake UDM, not migrated) |
-| Full local suite | 282/282, normal and ASan |
-| Migration gate (destination code path) | 171/171, normal and ASan |
-| Standalone module build | 171/171 |
+| Full local suite | 284/284, normal and ASan |
+| Migration gate (destination code path) | 173/173, normal and ASan |
+| Standalone module build | 173/173 |
 | Runtime-only `fillerRepair2` | automated staged strict compile of both runtime sources |
 
 The migration gate builds the full verification package the way a destination does

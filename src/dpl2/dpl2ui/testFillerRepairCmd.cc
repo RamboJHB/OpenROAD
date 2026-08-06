@@ -1,5 +1,7 @@
 #include <testFillerRepairCmd.hh>
 
+#include <FillerRepairDumpReplay.hh>
+
 #include <dpl2/DePlace.h>
 #include <drc/ImplantLayerChecker.h>
 #include <fillerRepair/FillerRepairEngine.h>
@@ -12,8 +14,10 @@
 #include <phys/physDesMgr.hh>
 #include <util/iter.hh>
 
+#include <exception>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <string>
 #include <utility>
@@ -85,6 +89,24 @@ bool isAllDigits(const std::string& text)
 {
   return !text.empty()
       && text.find_first_not_of("0123456789") == std::string::npos;
+}
+
+bool parseNonNegativeInt(const std::string& text, int& value)
+{
+  if (!isAllDigits(text)) {
+    return false;
+  }
+  try {
+    const unsigned long long parsed = std::stoull(text);
+    if (parsed > static_cast<unsigned long long>(
+                     std::numeric_limits<int>::max())) {
+      return false;
+    }
+    value = static_cast<int>(parsed);
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
 }
 
 // `-inst` accepts either form: the node id the sweep prints (always available,
@@ -193,6 +215,7 @@ bool TestFillerRepairCmd::exec()
 
   const std::string instanceOpt = instOpt_.getValue();
   const std::string masterOpt = masterOpt_.getValue();
+  const std::string loadOpt = loadOpt_.getValue();
   const bool haveInstance = !instanceOpt.empty();
   const bool haveMaster = !masterOpt.empty();
   if (haveInstance != haveMaster) {
@@ -201,6 +224,33 @@ bool TestFillerRepairCmd::exec()
     return false;
   }
   const bool targeted = haveInstance;
+
+  // A helper dump is self-contained: rebuild its Grid/Network/checker and
+  // run the pure planner before touching Session, DePlace, or UDM.
+  if (!loadOpt.empty()) {
+    FillerRepairDumpReplayOptions options;
+    options.maxProposals = kMaxProposals;
+    options.maxReportedLines = kMaxReportedLines;
+    if (targeted
+        && (!parseNonNegativeInt(instanceOpt, options.instanceId)
+            || !parseNonNegativeInt(masterOpt, options.masterId))) {
+      std::cout << "ERROR: with -load, -inst and -master must be numeric "
+                   "node/master ids stored in the dump\n";
+      return false;
+    }
+    const FillerRepairDumpReplayResult replay
+        = replayFillerRepairDump(loadOpt, options, std::cout);
+    if (!replay.completed) {
+      std::cout << "ERROR: " << replay.error << "\n";
+      return false;
+    }
+    std::cout << "\n========================================\n";
+    std::cout << (replay.passed
+                      ? "  test_filler_repair PASSED\n"
+                      : "  test_filler_repair FAILED (dirty baseline)\n");
+    std::cout << "========================================\n";
+    return replay.passed;
+  }
 
   eUNL::Session& sess = eUNL::Session::getSession();
   eUNL::Design* design = sess.getCurrentDesign();

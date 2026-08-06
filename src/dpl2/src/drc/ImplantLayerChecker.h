@@ -469,6 +469,7 @@ private:
                     const XInterval& xWindow,
                     const CheckShapes& shapes) const;
     Dbu queryRadius(const Rule& rule) const;
+    bool hasUsableInfrastructure() const;
 
     Network* network_ = nullptr;
     std::vector<Layer> layers_;
@@ -478,9 +479,6 @@ private:
     std::vector<MasterItem> masterItems_;
 
     std::vector<Diagnostic> diagnostics_;  // Initialization diagnostics.
-    // Runtime initialization requires Grid, its retained manager, and
-    // Network. The portable helper sets this after injecting synthetic data.
-    bool infrastructureReady_ = false;
     Layer::Polar basePolar_ = Layer::Polar::P;  // polarity at
     // bottom band of row 0; polarity alternates per row.
     Dbu rowHeight_ = 0;

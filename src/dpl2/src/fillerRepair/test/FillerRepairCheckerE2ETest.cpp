@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include <FillerRepairDumpReplay.hh>
 #include <drc/ImplantLayerChecker.h>
 #include <drc/ImplantLayerCheckerHelper.h>
 #include <fillerRepair/RepairPlanner.h>
@@ -564,6 +565,7 @@ TEST(ImplantLayerCheckerHelperTest, DumpLoadPreservesFillerSetting)
   ASSERT_TRUE(helper.dump(firstPath, checker));
   const ImplantInput loaded = ImplantLayerCheckerHelper::load(firstPath);
 
+  EXPECT_EQ(loaded.basePolar, original.basePolar);
   EXPECT_TRUE(loaded.fillerSetting.present);
   EXPECT_EQ(loaded.fillerSetting.followOrder,
             original.fillerSetting.followOrder);
@@ -596,6 +598,62 @@ TEST(ImplantLayerCheckerHelperTest, DumpLoadPreservesFillerSetting)
 
   std::remove(firstPath.c_str());
   std::remove(secondPath.c_str());
+}
+
+TEST(ImplantLayerCheckerHelperTest,
+     DumpReplayRunsPlannerAndCheckerWithoutDesign)
+{
+  const ImplantInput original = input();
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(original);
+  ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
+  helper.initChecker(checker);
+
+  const std::string path
+      = ::testing::TempDir() + "/filler_repair_replay.dump.gz";
+  ASSERT_TRUE(helper.dump(path, checker));
+
+  FillerRepairDumpReplayOptions options;
+  options.instanceId = instId(SCN_MID.row, SCN_MID.col);
+  options.masterId = SCN_MID.newMaster;
+  std::ostringstream output;
+  const FillerRepairDumpReplayResult replay
+      = replayFillerRepairDump(path, options, output);
+
+  EXPECT_TRUE(replay.completed) << replay.error << '\n' << output.str();
+  EXPECT_TRUE(replay.passed) << output.str();
+  EXPECT_EQ(replay.proposals, 1) << output.str();
+  EXPECT_EQ(replay.cleanRightAway, 0) << output.str();
+  EXPECT_EQ(replay.repaired, 1) << output.str();
+  EXPECT_EQ(replay.unrepairable, 0) << output.str();
+  EXPECT_GT(replay.totalFillerSwaps, 0) << output.str();
+  EXPECT_NE(output.str().find("REPAIRED"), std::string::npos);
+
+  std::remove(path.c_str());
+}
+
+TEST(ImplantLayerCheckerHelperTest,
+     DumpReplayRejectsDumpWithoutFillerSetting)
+{
+  ImplantInput noSetting = input();
+  noSetting.fillerSetting = FillerSettingData{};
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(noSetting);
+  ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
+  helper.initChecker(checker);
+
+  const std::string path
+      = ::testing::TempDir() + "/filler_repair_no_setting.dump.gz";
+  ASSERT_TRUE(helper.dump(path, checker));
+
+  std::ostringstream output;
+  const FillerRepairDumpReplayResult replay = replayFillerRepairDump(
+      path, FillerRepairDumpReplayOptions{}, output);
+  EXPECT_FALSE(replay.completed);
+  EXPECT_FALSE(replay.passed);
+  EXPECT_EQ(replay.error, "dump has no configured fillerSetting masters");
+
+  std::remove(path.c_str());
 }
 
 Rect guard()

@@ -29,9 +29,9 @@ Swap-only repair, complete and migration-ready.
 | Engine | `FillerRepairEngine` coordinates internal placement-snapshot, filler-catalog and checker-overlay components; it implements the two stable seams and borrows Grid/Network, `fillerSetting`'s Design, and the caller-owned checker |
 | Checker | `ImplantLayerChecker(Grid*, Network*)` uses Grid's retained `PhysDesMgr`; repair is enabled by default, writes into caller's `fcRecord`, and borrows a pre-initialized engine. The test helper disables repair |
 | Build | `fillerRepair/CMakeLists.txt` owns the full verification package; `fillerRepair2/CMakeLists.txt` owns only the C++20 runtime target. Both use `dpl2_filler_repair_deps` when supplied |
-| Tests | 91 planner + 80 real-checker + 111 local fake-UDM engine cases; 282/282 local and 171/171 migration gate, normal and ASan |
+| Tests | 91 planner + 82 real-checker + 111 local fake-UDM engine cases; 284/284 local and 173/173 migration gate, normal and ASan |
 | Mirror rule | `fillerRepair/` is the source of truth. Mirror every runtime/API change into `fillerRepair2/`; test CMake stages that copy under the destination name and strictly compiles both runtime sources |
-| Retained infrastructure helper | `DePlace::registerFillerRepairMasters()` uses the real edge table and is called by the current `test_filler_repair` before checker construction |
+| Retained infrastructure helper | `DePlace::registerFillerRepairMasters()` uses the real edge table for live-design tests. Helper gzip v5 preserves base polarity and fillerSetting; `test_filler_repair -load` replays it without Design/UDM |
 
 ## Fixed decisions
 

@@ -221,11 +221,25 @@ ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network)
              " initialization PhysDesMgr"});
         return;
     }
-    infrastructureReady_ = true;
     init(desMgr);
 }
 
 ImplantLayerChecker::~ImplantLayerChecker() = default;
+
+bool ImplantLayerChecker::hasUsableInfrastructure() const
+{
+    if (grid_ == nullptr || network_ == nullptr) {
+        return false;
+    }
+    return std::none_of(
+        diagnostics_.begin(),
+        diagnostics_.end(),
+        [](const Diagnostic& diagnostic) {
+            return diagnostic.status == "missing_grid"
+                   || diagnostic.status == "missing_network"
+                   || diagnostic.status == "missing_grid_phys_des_mgr";
+        });
+}
 
 // --------------------------------------------------------------------------------
 // initialize
@@ -832,7 +846,7 @@ bool ImplantLayerChecker::check(const Node* node,
                                 std::vector<CellChangeRecord>& fcRecord) const
 {
     (void) y;
-    if (!node || node->getMaster() == nullptr || !infrastructureReady_) {
+    if (!node || node->getMaster() == nullptr || !hasUsableInfrastructure()) {
         return false;
     }
     CheckRequest request;
@@ -891,7 +905,7 @@ void ImplantLayerChecker::ensureMasterData(MasterId masterId) const
 CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
 {
     CheckResult result;
-    if (!infrastructureReady_) {
+    if (!hasUsableInfrastructure()) {
         result.isLegal = false;
         result.diagnostics = diagnostics_;
         return result;
@@ -1002,7 +1016,7 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
 // Run checkDirect on every placed instance in parallel.
 std::vector<CheckResult> ImplantLayerChecker::checkAllNodesDirect() const
 {
-    if (!infrastructureReady_) {
+    if (!hasUsableInfrastructure()) {
         return {};
     }
     const std::vector<std::unique_ptr<Node>>& nodes = getNodes();
@@ -2145,7 +2159,7 @@ std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
 {
     unsigned size = fillerChanges.size();
     std::vector<CheckResult> results(size);
-    if (!infrastructureReady_) {
+    if (!hasUsableInfrastructure()) {
         for (CheckResult& result : results) {
             result.isLegal = false;
             result.diagnostics = diagnostics_;

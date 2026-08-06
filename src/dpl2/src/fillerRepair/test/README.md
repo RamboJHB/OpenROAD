@@ -2,7 +2,7 @@
 
 Updated: 2026-08-06.
 
-These move with `fillerRepair/` and are the migration gate: **171 tests**, none
+These move with `fillerRepair/` and are the migration gate: **173 tests**, none
 of which construct a UDM object, include the repository's fake UDM tree, or
 need a fixture provider from the destination. They run before a design exists.
 
@@ -32,7 +32,7 @@ fallback when the primary side is blocked); ranking into filler domains;
 subset enumeration and member caps; the oracle-gate protocol and its error
 paths; both budgets; determinism; guard quantization; and cache invariants.
 
-## 80 real-checker cases — `FillerRepairCheckerE2ETest.cpp`
+## 82 real-checker cases — `FillerRepairCheckerE2ETest.cpp`
 
 Drive the **real `ImplantLayerChecker`** over `ImplantLayerCheckerHelper`-built
 input. No fake checker, no fake placement view, no fake UDM. The small
@@ -81,9 +81,12 @@ every ratio and what moves is the size of the editable universe.
   produces width *and* spacing on both bands; the bridge swap clears every one
   of them; a same-size swap with the wrong VT clears none; a batch answers each
   candidate on its own merits, correlated by input order; and a violation is
-  still detected when the changed filler lies outside the guard. Helper dump
-  format v4 round-trips fillerSetting flags, prefix, configured master ids and
-  avoid-patterns, while older dump versions remain readable.
+  still detected when the changed filler lies outside the guard. Gzip helper
+  dump format v5 round-trips base row polarity plus fillerSetting flags,
+  prefix, configured master ids and avoid-patterns, while v1-v4 remain
+  readable. Dump replay proves the pure planner can drive the reconstructed
+  real checker without a loaded Design and rejects a dump without the saved
+  candidate allow-list.
 - **Repair window** — the L0 window is exactly five sites and three rows, holds
   nine editable fillers, reaches the bridge and excludes the retargeted std
   cell; the guard is the quantized power-of-two ring around the anchor and

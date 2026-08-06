@@ -147,7 +147,7 @@ the per-engine log override. Copy its contents into the destination's existing
 It is a hand-maintained projection of this directory, which remains the source
 of truth; mirror every runtime/API change into both directories.
 
-The 282-test local suite and 171-test migration gate compile this full
+The 284-test local suite and 173-test migration gate compile this full
 directory. Test CMake additionally stages `fillerRepair2/` under the
 destination `fillerRepair/` name and compiles both runtime sources as C++20
 with `-Wall -Wextra -Werror`.
@@ -310,12 +310,12 @@ Full migration instructions, including the destination checklist, are in
 
 ## Verification
 
-- portable planner: 91 cases; portable checker E2E: 79 cases (both compile,
+- portable planner: 91 cases; portable checker E2E: 82 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
 - repository-local fake-UDM engine regression: 111 cases under
   `src/dpl2/test/local/`.
-- 2026-08-06 full local suite: 282/282 normal and ASan; migration gate
-  171/171 normal and ASan; standalone module build 171/171.
+- 2026-08-06 full local suite: 284/284 normal and ASan; migration gate
+  173/173 normal and ASan; standalone module build 173/173.
 
 ### Search cost
 

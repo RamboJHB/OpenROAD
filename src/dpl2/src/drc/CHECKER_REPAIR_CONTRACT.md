@@ -135,15 +135,32 @@ approved sequence from each result. A count-based single-prefix strip is wrong.
 5. **`const char[N]` diagnostics** — string literals bound to a `std::string&`
    parameter did not compile; the affected declarations take `const char*`.
 
+6. **No duplicated readiness flag** — the former `designContextReady_`
+   (`infrastructureReady_` after the Grid-context refactor) is removed.
+   Checker entry points derive usability from Grid/Network and blocking
+   constructor diagnostics. The helper only removes its intentional
+   `missing_grid_phys_des_mgr` diagnostic after injecting synthetic state; it
+   no longer writes a private checker readiness bit.
+
 ### `drc/ImplantLayerCheckerHelper.cpp`
 
 Follows the checker's own rename/removal (`groups_` → the current members;
 `buildRules()` reads the members set above). `initChecker()` explicitly leaves
 filler repair disabled, so helper-driven rule checks remain DRC-only. A test
 that intentionally exercises repair must enable it after helper initialization.
-Dump format v4 preserves fillerSetting presence, scalar flags, prefix,
-configured filler master ids and avoid-pattern map. Loading v1-v3 remains
-supported; those versions have no fillerSetting section.
+Dump format v5 is gzip-compressed and preserves row base polarity plus
+fillerSetting presence, scalar flags, prefix, configured filler master ids and
+avoid-pattern map. Loading v1-v4 remains supported; v1-v3 have no
+fillerSetting section, and v4 predates the base-polarity field. The replay
+command requires a v4+ dump because earlier files cannot reconstruct the
+planner candidate allow-list.
+
+`test_filler_repair -load <dump.gz>` reconstructs the helper Grid, Network and
+checker and runs the pure planner through the real overlay API without a
+loaded Design. Its optional targeted form requires the numeric ids stored in
+the dump: `-inst <node-id> -master <master-id>`. This path is read-only and
+does not construct `FillerRepairEngine`, whose runtime boundary intentionally
+requires real UDM objects.
 
 ### `drc/DRCChecker.h`
 
@@ -349,10 +366,10 @@ metadata disagreement still blocks and returns no partial repair.
 
 ## 6. Verified boundary
 
-91 portable planner cases and 80 portable real-checker cases build, link and
+91 portable planner cases and 82 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
-gate (171/171, normal and ASan). Repository-local fake-UDM engine regression:
-111 cases. Full local suite 282/282, normal and ASan.
+gate (173/173, normal and ASan). Repository-local fake-UDM engine regression:
+111 cases. Full local suite 284/284, normal and ASan.
 
 Those counts build the full `fillerRepair/` verification package. Test CMake
 also stages `fillerRepair2/` under the destination directory name and strictly
