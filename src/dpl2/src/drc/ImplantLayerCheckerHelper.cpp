@@ -1,17 +1,13 @@
 #include "drc/ImplantLayerCheckerHelper.h"
-
+#include "infrastructure/Grid.h"
+#include "infrastructure/Objects.h"
 #include <dpl2/network.h>
-#include <infrastructure/fillerSetting.h>
+#include "util/performance.hh"
 
-#include <algorithm>
-#include <fstream>
+#include <zlib.h>
 #include <iomanip>
 #include <memory>
 #include <sstream>
-
-#include "infrastructure/Grid.h"
-#include "infrastructure/Objects.h"
-#include "util/performance.hh"
 
 namespace dpl2 {
 namespace ipl {
@@ -138,8 +134,6 @@ ImplantLayerCheckerHelper::~ImplantLayerCheckerHelper() = default;
 
 void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
 {
-    eUTL::PerfLogger perfLogger("dpl2.helper.initialize",
-                                true /* singleLine */);
     grid_ = std::make_unique<Grid>();
     network_ = std::make_unique<Network>();
 
@@ -151,7 +145,6 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
     inputBasePolar_ = input.basePolar;
     inputSiteWidth_ = input.siteWidth;
     inputRowHeight_ = input.rowHeight;
-    inputFillerSetting_ = input.fillerSetting;
 
     // create grid layout
     const DbuX siteWidth(input.siteWidth);
@@ -160,13 +153,18 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
     GridX siteCount = GridX(input.colCount);
 
     grid_->resize(rowCount);
-    for (GridY y(0); y.v < rowCount.v; ++y.v) {
+    grid_->row_count_ = rowCount;
+    grid_->row_site_count_ = siteCount;
+    for (GridY y(0); y.v < rowCount.v; y++) {
         grid_->resize(y, siteCount);
+        for (GridX x(0); x.v < siteCount; x++) {
+            grid_->gridPixel(x, y)->is_valid = true;
+        }
     }
     grid_->row_y_dbu_to_index_.clear();
     grid_->row_index_to_y_dbu_.resize(rowCount.v);
     grid_->row_index_to_pixel_height_.resize(rowCount.v);
-    for (RowId rowId = 0; rowId < input.rowCount; rowId++) {
+    for (RowId rowId = 0; rowId <  input.rowCount; rowId++) {
         const DbuY yBase(rowId * input.rowHeight);
         grid_->row_y_dbu_to_index_[yBase] = GridY(rowId);
         grid_->row_index_to_y_dbu_[rowId] = yBase;
@@ -174,37 +172,19 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
     }
     grid_->uniform_row_height_ = DbuY(input.rowHeight);
     grid_->site_width_ = siteWidth;
-    grid_->row_count_ = rowCount;
-    grid_->row_site_count_ = siteCount;
-    grid_->core_ = eUTL::Rect(eUTL::UvDist(0),
-                              eUTL::UvDist(0),
-                              eUTL::UvDist(siteWidth.v * siteCount.v),
-                              eUTL::UvDist(rowHeight.v * rowCount.v));
+    grid_->core_ = eUTL::Rect(
+        eUTL::UvDist(0), eUTL::UvDist(0),
+        eUTL::UvDist(siteWidth.v * siteCount.v),
+        eUTL::UvDist(rowHeight.v * rowCount.v));
     grid_->desMgr_ = nullptr;
     grid_->logger_ = nullptr;
-
+    bool isFullUtil = grid_->isFullUtil();
+    std::cout << "Fully utilized grid [before place]: " << isFullUtil << std::endl;
     // Create Network Masters from input masters
     for (size_t i = 0; i < input.masters.size(); ++i) {
         std::unique_ptr<Master> master = std::make_unique<Master>();
         master->setId(i);
         master->setDbMaster(LibCellID(0, static_cast<int>(i)));
-        const bool configuredFiller
-            = input.fillerSetting.present
-              && std::find(input.fillerSetting.fillerMasterIds.begin(),
-                           input.fillerSetting.fillerMasterIds.end(),
-                           static_cast<MasterId>(i))
-                     != input.fillerSetting.fillerMasterIds.end();
-        const bool placedFiller
-            = std::any_of(input.placedInsts.begin(),
-                          input.placedInsts.end(),
-                          [i](const PlacedInst& placed) {
-                              return placed.masterId == static_cast<MasterId>(i)
-                                     && placed.isFiller;
-                          });
-        const bool itemFiller
-            = i < input.masters.size() && input.masters[i].isFiller;
-        const bool isFiller = configuredFiller || placedFiller || itemFiller;
-        master->setFiller(isFiller);
         network_->addMaster(std::move(master));
     }
 
@@ -215,23 +195,21 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
         node->setId(pi.instanceId);
         node->setLeft(DbuX(pi.colId * input.siteWidth));
         node->setBottom(DbuY(pi.rowId * input.rowHeight));
-        Dbu masterWidth = input.masters[pi.masterId].width;
-        node->setWidth(DbuX(masterWidth));
-        node->setHeight(DbuY(input.rowHeight));
+        const MasterItem& master = input.masters[pi.masterId];
+        node->setWidth(DbuX(master.width));
+        node->setHeight(DbuY(master.height));
         node->setOrient(pi.orientation);
         node->setPlaced(true);
         node->setType(pi.isFiller ? Node::FILLER : Node::CELL);
-        if (pi.masterId >= 0
-            && pi.masterId
-                   < static_cast<MasterId>(network_->getMasters().size())) {
+        if (pi.masterId >= 0 &&
+            pi.masterId < static_cast<MasterId>(network_->getMasters().size())) {
             node->setMaster(network_->getMasters()[pi.masterId].get());
         }
         node->setDbInst(LeafCellID(0, pi.instanceId));
 
         // mark place
         for (GridX x = grid_->gridX(node); x < grid_->gridEndX(node); x++) {
-            for (GridY y = grid_->gridSnapDownY(node);
-                 y < grid_->gridEndY(node);
+            for (GridY y = grid_->gridSnapDownY(node); y < grid_->gridEndY(node);
                  y++) {
                 Pixel* pixel = grid_->gridPixel(x, y);
                 if (pixel == nullptr) {
@@ -240,40 +218,25 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
                 pixel->cell = node;
             }
         }
+
         network_->addNode(std::move(nodePtr));
     }
-    bool isFullUtil = grid_->isFullUtil();
+    isFullUtil = grid_->isFullUtil();
     std::cout << "Fully utilized grid: " << isFullUtil << std::endl;
 }
 
 void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
 {
-    eUTL::PerfLogger perfLogger("dpl2.helper.initChecker",
-                                true /* singleLine */);
-    // [fillerRepair-fix] Helper-driven checks validate checker rules only.
-    // A caller that intentionally tests repair may opt in after initialization.
-    checker.setFillerRepairEnabled(false);
     // Set checker state that buildRules/buildMasters/buildInst depend on
     checker.layers_ = inputLayers_;
     checker.rules_ = inputRules_;
-    // [fillerRepair-fix] follow the checker rename/removal: groups_ ->
-    // layerGroups_; the interval/shape id counters are gone.
     checker.layerGroups_ = inputGroups_;
     checker.basePolar_ = inputBasePolar_;
     checker.rowHeight_ = inputRowHeight_;
     checker.siteWidth_ = inputSiteWidth_;
-    // This helper supplies the complete synthetic checker model without UDM.
-    // Remove the real-design Grid-manager diagnostic after that setup.
-    checker.diagnostics_.erase(std::remove_if(checker.diagnostics_.begin(),
-                                              checker.diagnostics_.end(),
-                                              [](const Diagnostic& diagnostic) {
-                                                  return diagnostic.status == "missing_grid_phys_des_mgr";
-                                              }),
-                               checker.diagnostics_.end());
-    checker.infrastructureReady_ = true;
+    checker.enableFillerRepair_ = inputEnableFillerRepair_;
 
-    // Populate masterItems_ indexed by MasterId (aligned with
-    // Network::masters_)
+    // Populate masterItems_ indexed by MasterId (aligned with Network::masters_)
     const size_t masterCount = network_->getMasters().size();
     checker.masterItems_.resize(masterCount);
     for (size_t i = 0; i < masterCount && i < inputMasters_.size(); ++i) {
@@ -292,65 +255,30 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
         checker.masterItems_[i] = std::move(item);
     }
 
-    // [fillerRepair-fix] buildRules() now reads the members set above.
     checker.buildRules();
-    checker.setMaxRuleValue();
     checker.buildMstIntervals();
 }
 
+// Serialize checker state (layers, rules, masters, placements) to
+// a gzip-compressed file.
 bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
                                      const ImplantLayerChecker& checker) const
 {
-    std::ofstream out(filePath);
-    if (!out) {
-        return false;
-    }
+    // Write to a string buffer first, then compress
+    std::ostringstream buf;
+    std::ostream& out = buf;
 
-    out << "ImplantLayerCheckerDump 4\n";
+    out << "ImplantLayerCheckerDump 1\n";
     out << "row_count " << checker.grid_->getRowCount().v << "\n";
     out << "col_count " << checker.grid_->getRowSiteCount().v << "\n";
     out << "row_height " << checker.rowHeight_ << "\n";
     out << "site_width " << checker.siteWidth_ << "\n";
 
-    FillerSettingData fillerData = inputFillerSetting_;
-    const fillerSetting* setting = checker.network_ != nullptr
-                                       ? checker.network_->getFillerSetting()
-                                       : nullptr;
-    if (setting != nullptr) {
-        fillerData.present = true;
-        fillerData.followOrder = setting->getFollowOrder();
-        fillerData.checkDrc = setting->getCheckDRC();
-        fillerData.fitSpace = setting->getFitSpace();
-        fillerData.prefix = setting->getPrefix();
-        fillerData.fillerMasterIds.clear();
-        for (const eLIB::LibCellID libCellId : setting->getFillerCells()) {
-            const MasterId masterId = checker.network_->getMasterId(libCellId);
-            if (masterId >= 0) {
-                fillerData.fillerMasterIds.push_back(masterId);
-            }
-        }
-        fillerData.avoidPatterns = setting->getAvoidPattern();
-    }
-    out << "filler_setting " << fillerData.present << "\n";
-    if (fillerData.present) {
-        out << "filler_flags " << fillerData.followOrder << ' '
-            << fillerData.checkDrc << ' ' << fillerData.fitSpace << "\n";
-        out << "filler_prefix " << std::quoted(fillerData.prefix) << "\n";
-        out << "filler_masters ";
-        dumpVector(out, fillerData.fillerMasterIds);
-        out << "\n";
-        out << "avoid_patterns " << fillerData.avoidPatterns.size() << "\n";
-        for (const auto& [pair, enabled] : fillerData.avoidPatterns) {
-            out << pair.first << ' ' << pair.second << ' ' << enabled << "\n";
-        }
-    }
-
     // -- layers --
     out << "layers " << checker.layers_.size() << "\n";
     for (const Layer& layer : checker.layers_) {
         out << layer.getId() << ' ' << std::quoted(layer.getName()) << ' '
-            << enumInt(layer.getVt()) << ' ' << enumInt(layer.getPolar())
-            << "\n";
+            << enumInt(layer.getVt()) << ' ' << enumInt(layer.getPolar()) << "\n";
     }
 
     // -- groups --
@@ -367,8 +295,8 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
         out << rule.getRuleId() << ' ' << enumInt(rule.getSource()) << ' '
             << rule.getPrimaryLayer() << ' ';
         dumpOptional(out, rule.getSecondaryLayer());
-        out << ' ' << rule.getMinValue() << ' ' << enumInt(rule.getDirection())
-            << ' ';
+        out << ' ' << rule.getMinValue() << ' ' <<
+            enumInt(rule.getDirection()) << ' ';
         dumpOptional(out, rule.getPrl());
         out << ' ' << rule.getZeroPrl() << ' ' << rule.getExceptAbutted() << ' '
             << rule.getExceptCornerTouch() << ' ';
@@ -403,21 +331,21 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
 
     // -- placed instances (reconstructed from network nodes) --
     // Build placedInsts from checker's network nodes.
-    // For the real-design case, checker runs against a real design
+    // For the production-flow case, checker runs against a real design
     // accessed via its Network.  The PlacedInst fields (rowId, colId) are
     // derived from node coordinates.
     std::vector<PlacedInst> placedInsts;
     if (checker.network_) {
-        for (const std::unique_ptr<Node>& nodePtr :
-             checker.network_->getNodes()) {
+        for (const std::unique_ptr<Node>& nodePtr : checker.network_->getNodes()) {
             const Node* node = nodePtr.get();
             if (!node) {
                 continue;
             }
             PlacedInst pi;
             pi.instanceId = node->getId();
-            pi.masterId
-                = node->getMaster() ? node->getMaster()->getId() : MasterId(-1);
+            pi.masterId = node->getMaster()
+                          ? node->getMaster()->getId()
+                          : MasterId(-1);
             const Dbu nodeLeft = node->getLeft().v;
             const Dbu nodeBottom = node->getBottom().v;
             pi.rowId = nodeBottom / checker.rowHeight_;
@@ -430,24 +358,52 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
 
     out << "placed " << placedInsts.size() << "\n";
     for (const PlacedInst& inst : placedInsts) {
-        out << inst.instanceId << ' ' << inst.masterId << ' ' << inst.rowId
-            << ' ' << inst.colId << ' ' << enumInt(inst.orientation) << ' '
-            << inst.isFiller << "\n";
+        out << inst.instanceId << ' ' << inst.masterId << ' '
+            << inst.rowId << ' ' << inst.colId << ' '
+            << enumInt(inst.orientation) << ' ' << inst.isFiller << "\n";
     }
-    return true;
+
+    // Compress and write to file
+    gzFile gz = gzopen(filePath.c_str(), "w");
+    if (!gz) {
+        return false;
+    }
+    const std::string& data = buf.str();
+    const int written = gzwrite(gz, data.data(), static_cast<unsigned int>
+        (data.size()));
+    gzclose(gz);
+    return written > 0;
 }
 
+// Deserialize checker state from a gzip-compressed file produced by dump().
 ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
 {
-    std::ifstream file(filePath);
-    if (!file) {
+    // Read entire gzip-compressed file into memory
+    gzFile gz = gzopen(filePath.c_str(), "r");
+    if (!gz) {
+        return ImplantInput();
+    }
+
+    std::string buf(64 * 1024, '\0');
+    std::string data;
+    while (true) {
+        const int got = gzread(gz, buf.data(), static_cast<unsigned int>
+            (buf.size()));
+        if (got <= 0) {
+            break;
+        }
+        data.append(buf.data(), static_cast<size_t>(got));
+    }
+    const int closeRet = gzclose(gz);
+    if (closeRet != Z_OK) {
         return ImplantInput();
     }
 
     // Filter out comment lines
+    std::istringstream rawIn(data);
     std::ostringstream filtered;
     std::string line;
-    while (std::getline(file, line)) {
+    while (std::getline(rawIn, line)) {
         const size_t first = line.find_first_not_of(" \t\r\n");
         if (first != std::string::npos && line[first] == '#') {
             continue;
@@ -458,8 +414,8 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
 
     std::string tag;
     int version = 0;
-    if (!(in >> tag >> version) || tag != "ImplantLayerCheckerDump"
-        || version < 1 || version > 4) {
+    if (!(in >> tag >> version) || tag != "ImplantLayerCheckerDump" ||
+        (version != 1 && version != 2 && version != 3)) {
         return ImplantInput();
     }
 
@@ -480,46 +436,11 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
         return ImplantInput();
     }
 
-    if (version >= 4) {
-        if (!(in >> section >> input.fillerSetting.present)
-            || section != "filler_setting") {
-            return ImplantInput();
-        }
-        if (input.fillerSetting.present) {
-            if (!(in >> section >> input.fillerSetting.followOrder
-                  >> input.fillerSetting.checkDrc
-                  >> input.fillerSetting.fitSpace)
-                || section != "filler_flags") {
-                return ImplantInput();
-            }
-            if (!(in >> section >> std::quoted(input.fillerSetting.prefix))
-                || section != "filler_prefix") {
-                return ImplantInput();
-            }
-            if (!(in >> section) || section != "filler_masters"
-                || !loadVector(in, input.fillerSetting.fillerMasterIds)) {
-                return ImplantInput();
-            }
-            if (!(in >> section >> count) || section != "avoid_patterns") {
-                return ImplantInput();
-            }
-            for (size_t i = 0; i < count; ++i) {
-                int first = 0;
-                int second = 0;
-                bool enabled = false;
-                if (!(in >> first >> second >> enabled)) {
-                    return ImplantInput();
-                }
-                input.fillerSetting.avoidPatterns[{first, second}] = enabled;
-            }
-        }
-    }
-
     // -- layers --
     if (!(in >> section >> count) || section != "layers") {
         return ImplantInput();
     }
-    input.layers.reserve(count);
+input.layers.reserve(count);
     for (size_t i = 0; i < count; ++i) {
         Layer layer;
         int id = 0;
@@ -570,12 +491,14 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
         std::optional<Dbu> length;
         std::optional<std::string> checkGroup;
         std::vector<LayerId> intersectLayers;
-        if (!(in >> ruleId >> source >> primaryLayer)
-            || !loadOptional(in, secondaryLayer)
-            || !(in >> minValue >> direction) || !loadOptional(in, prl)
-            || !(in >> zeroPrl >> exceptAbutted >> exceptCornerTouch)
-            || !loadOptional(in, length) || !loadOptional(in, checkGroup)
-            || !loadVector(in, intersectLayers)) {
+        if (!(in >> ruleId >> source >> primaryLayer) ||
+            !loadOptional(in, secondaryLayer) ||
+            !(in >> minValue >> direction) ||
+            !loadOptional(in, prl) ||
+            !(in >> zeroPrl >> exceptAbutted >> exceptCornerTouch) ||
+            !loadOptional(in, length) ||
+            !loadOptional(in, checkGroup) ||
+            !loadVector(in, intersectLayers)) {
             return ImplantInput();
         }
         rule.setRuleId(ruleId);
@@ -594,10 +517,10 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
         std::vector<std::string> unsupportedClauses;
         std::optional<int> containmentGroup;
         std::vector<int> containedByRuleIds;
-        if (!loadStringVector(in, unsupportedClauses)
-            || !loadOptional(in, containmentGroup)
-            || !loadVector(in, containedByRuleIds)
-            || !(in >> specificityRank)) {
+        if (!loadStringVector(in, unsupportedClauses) ||
+            !loadOptional(in, containmentGroup) ||
+            !loadVector(in, containedByRuleIds) ||
+            !(in >> specificityRank)) {
             return ImplantInput();
         }
         rule.setUnsupportedClauses(unsupportedClauses);
@@ -617,8 +540,8 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
         size_t shapeCount = 0;
         bool isFiller = false;
         Dbu siteHeight = 0;
-        if (!(in >> master.masterId >> master.width >> master.height >> isFiller
-              >> siteHeight >> shapeCount)) {
+        if (!(in >> master.masterId >> master.width >> master.height >>
+            isFiller >> siteHeight >> shapeCount)) {
             return ImplantInput();
         }
         master.isFiller = isFiller;
@@ -627,14 +550,12 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
         for (size_t s = 0; s < shapeCount; ++s) {
             MasterShape shape;
             Dbu xl = 0, yl = 0, xh = 0, yh = 0;
-            if (!(in >> shape.masterId >> shape.shapeId >> shape.layer >> xl
-                  >> yl >> xh >> yh)) {
+            if (!(in >> shape.masterId >> shape.shapeId >> shape.layer >>
+                xl >> yl >> xh >> yh)) {
                 return ImplantInput();
             }
-            shape.rect = ::Rect(eUTL::UvDist(xl),
-                                eUTL::UvDist(yl),
-                                eUTL::UvDist(xh),
-                                eUTL::UvDist(yh));
+            shape.rect = ::Rect(eUTL::UvDist(xl), eUTL::UvDist(yl),
+                                eUTL::UvDist(xh), eUTL::UvDist(yh));
             master.shapes.push_back(shape);
         }
         input.masters.push_back(master);
@@ -649,8 +570,8 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
         PlacedInst inst;
         int orientation = 0;
         bool isFiller = false;
-        if (!(in >> inst.instanceId >> inst.masterId >> inst.rowId >> inst.colId
-              >> orientation >> isFiller)) {
+        if (!(in >> inst.instanceId >> inst.masterId >>
+            inst.rowId >> inst.colId >> orientation >> isFiller)) {
             return ImplantInput();
         }
         inst.orientation = enumValue<PhysOrientation>(orientation);
@@ -660,5 +581,5 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
     return input;
 }
 
-}  // namespace ipl
-}  // namespace dpl2
+} // namespace ipl
+} // namespace dpl2
