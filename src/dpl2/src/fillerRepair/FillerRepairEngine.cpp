@@ -4,12 +4,16 @@
 #include <fillerRepair/FillerRepairEngine.h>
 
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include <fillerRepair/FillerRetiler.h>
 #include <fillerRepair/RepairPlanner.h>
 #include <infrastructure/Grid.h>
 #include <infrastructure/Objects.h>
@@ -30,6 +34,7 @@ struct PlacementSnapshot
   {
     MasterInfo info;
     eLIB::LibCellID libCellId;
+    std::string siteName;
   };
   struct UdmRef
   {
@@ -228,6 +233,245 @@ class CheckerOverlayClient
 
  private:
   const ipl::ImplantLayerChecker* checker_ = nullptr;
+};
+
+// One request-local filler introduced by geometric retiling. Negative ids are
+// deliberately local to a repair call; neither Network nor UDM is modified.
+struct LayoutAddition
+{
+  InstanceId instanceId = -1;
+  PlacedInstance placed;
+  CellChangeRecord record;
+};
+
+ipl::FillerChanges mergeFillerChanges(const ipl::FillerChanges& fixed,
+                                      const ipl::FillerChanges& variable)
+{
+  ipl::FillerChanges merged = fixed;
+  for (const CellChangeRecord& change : variable) {
+    const std::string* name
+        = change.op_ == OpType::Add
+              ? std::get_if<std::string>(&change.cell_data_)
+              : nullptr;
+    if (name != nullptr) {
+      const auto existing = std::find_if(
+          merged.begin(), merged.end(), [&](const CellChangeRecord& item) {
+            const std::string* itemName
+                = item.op_ == OpType::Add
+                      ? std::get_if<std::string>(&item.cell_data_)
+                      : nullptr;
+            return itemName != nullptr && *itemName == *name;
+          });
+      if (existing != merged.end()) {
+        *existing = change;
+        continue;
+      }
+    }
+    merged.push_back(change);
+  }
+  return merged;
+}
+
+// Per-call placement view after applying target placement, filler deletions,
+// and one exact-cover tiling. It is immutable after construction and therefore
+// safe for concurrent repairs even though the shared engine snapshot is read.
+class LayoutPlacementView final : public PlacementView
+{
+ public:
+  LayoutPlacementView(
+      const PlacementView& base,
+      TargetPlace target,
+      std::set<InstanceId> removed,
+      std::vector<LayoutAddition> additions,
+      std::unordered_map<MasterId, eLIB::LibCellID> masterLibCells)
+      : base_(base),
+        target_(target),
+        removed_(std::move(removed)),
+        additions_(std::move(additions)),
+        master_lib_cells_(std::move(masterLibCells))
+  {
+    const MasterInfo* targetMaster = masterInfo(target_.masterId);
+    target_instance_ = PlacedInstance{target_.instanceId,
+                                      target_.masterId,
+                                      target_.rowId,
+                                      target_.x,
+                                      target_.orientation,
+                                      false};
+
+    for (const RowId rowId : base_.rows()) {
+      std::vector<PlacedInstance>& row = by_row_[rowId];
+      for (const PlacedInstance& placed : base_.instancesInRow(rowId)) {
+        if (placed.id != target_.instanceId
+            && removed_.count(placed.id) == 0) {
+          row.push_back(placed);
+        }
+      }
+    }
+    appendToRows(target_instance_, targetMaster);
+    for (const LayoutAddition& addition : additions_) {
+      synthetic_.emplace(addition.instanceId, addition.placed);
+      appendToRows(addition.placed, masterInfo(addition.placed.masterId));
+    }
+    for (auto& [rowId, row] : by_row_) {
+      (void) rowId;
+      std::sort(row.begin(), row.end(), [](const PlacedInstance& left,
+                                           const PlacedInstance& right) {
+        return left.x != right.x ? left.x < right.x : left.id < right.id;
+      });
+    }
+  }
+
+  const std::vector<RowId>& rows() const override { return base_.rows(); }
+  DbCoord siteWidth() const override { return base_.siteWidth(); }
+
+  const std::vector<PlacedInstance>& instancesInRow(
+      RowId rowId) const override
+  {
+    const auto found = by_row_.find(rowId);
+    return found != by_row_.end() ? found->second : emptyInstances();
+  }
+
+  const PlacedInstance* instance(InstanceId id) const override
+  {
+    if (id == target_.instanceId) {
+      return &target_instance_;
+    }
+    if (removed_.count(id) != 0) {
+      return nullptr;
+    }
+    const auto synthetic = synthetic_.find(id);
+    return synthetic != synthetic_.end() ? &synthetic->second
+                                         : base_.instance(id);
+  }
+
+  const MasterInfo* masterInfo(MasterId id) const override
+  {
+    return base_.masterInfo(id);
+  }
+
+  const std::vector<MasterId>& fillerMasterIds() const override
+  {
+    return base_.fillerMasterIds();
+  }
+
+  MasterCandidateResult getUsableMasterCandidates(
+      InstanceId instanceId) const override
+  {
+    return instanceId >= 0
+               ? base_.getUsableMasterCandidates(instanceId)
+               : PlacementView::getUsableMasterCandidates(instanceId);
+  }
+
+  CellChangeRecord cellChangeRecord(InstanceId instanceId,
+                                    MasterId newMasterId) const override
+  {
+    if (instanceId >= 0) {
+      return base_.cellChangeRecord(instanceId, newMasterId);
+    }
+    const auto addition = std::find_if(
+        additions_.begin(),
+        additions_.end(),
+        [instanceId](const LayoutAddition& item) {
+          return item.instanceId == instanceId;
+        });
+    if (addition == additions_.end()) {
+      return CellChangeRecord{};
+    }
+    CellChangeRecord record = addition->record;
+    const auto libCell = master_lib_cells_.find(newMasterId);
+    if (libCell != master_lib_cells_.end()) {
+      record.new_lib_cell_ = libCell->second;
+    }
+    return record;
+  }
+
+ private:
+  void appendToRows(const PlacedInstance& placed, const MasterInfo* master)
+  {
+    const int heightRows
+        = master != nullptr ? std::max<int>(master->height, 1) : 1;
+    for (int offset = 0; offset < heightRows; ++offset) {
+      PlacedInstance copy = placed;
+      copy.rowId += offset;
+      by_row_[copy.rowId].push_back(copy);
+    }
+  }
+
+  const PlacementView& base_;
+  TargetPlace target_;
+  std::set<InstanceId> removed_;
+  std::vector<LayoutAddition> additions_;
+  std::unordered_map<MasterId, eLIB::LibCellID> master_lib_cells_;
+  PlacedInstance target_instance_;
+  std::unordered_map<InstanceId, PlacedInstance> synthetic_;
+  std::map<RowId, std::vector<PlacedInstance>> by_row_;
+};
+
+// Prefixes every planner candidate with the fixed geometric Delete/Add
+// transaction. The real checker still decides all implant legality.
+class LayoutOracle final : public RepairOracle
+{
+ public:
+  LayoutOracle(RepairOracle& base,
+               const LayoutPlacementView& view,
+               ipl::FillerChanges fixed)
+      : base_(base), view_(view), fixed_(std::move(fixed))
+  {
+  }
+
+  OracleResult checkPlaceWithOverlay(const OracleRequest& request) override
+  {
+    std::vector<OracleResult> results = checkPlaceWithOverlays({request});
+    if (results.size() == 1) {
+      return std::move(results.front());
+    }
+    OracleResult failed;
+    failed.requestId = request.requestId;
+    failed.status = OracleStatus::CheckerError;
+    failed.diagnostics.push_back(
+        makeDiag(Severity::Fatal,
+                 "CheckerProtocolError",
+                 "checker returned the wrong result count for one layout "
+                 "overlay request"));
+    return failed;
+  }
+
+  std::vector<OracleResult> checkPlaceWithOverlays(
+      const std::vector<OracleRequest>& requests) override
+  {
+    std::vector<OracleRequest> merged = requests;
+    for (OracleRequest& request : merged) {
+      request.fillerChanges
+          = mergeFillerChanges(fixed_, request.fillerChanges);
+    }
+    std::vector<OracleResult> results = base_.checkPlaceWithOverlays(merged);
+    for (OracleResult& result : results) {
+      for (Violation& violation : result.violations) {
+        for (ViolationParticipant& participant : violation.participants) {
+          const PlacedInstance* placed
+              = view_.instance(participant.instanceId);
+          if (placed == nullptr) {
+            continue;
+          }
+          const MasterInfo* master = view_.masterInfo(placed->masterId);
+          participant.masterId = placed->masterId;
+          participant.rowId = placed->rowId;
+          participant.xRange
+              = XInterval{placed->x,
+                          placed->x + (master != nullptr ? master->width : 0)};
+          participant.isFiller = placed->isFiller;
+        }
+      }
+    }
+    return results;
+  }
+
+  const ipl::FillerChanges& fixedChanges() const { return fixed_; }
+
+ private:
+  RepairOracle& base_;
+  const LayoutPlacementView& view_;
+  ipl::FillerChanges fixed_;
 };
 
 }  // namespace
@@ -698,8 +942,9 @@ void FillerRepairEngine::Impl::buildPlannerData()
     }
 
     ensureSlot(placement_.masters, static_cast<size_t>(id));
-    placement_.masters[id]
-        = PlacementSnapshot::MasterRef{info, cell->getLibCellId()};
+    const eLIB::TechSite* site = cell->getTechSite();
+    placement_.masters[id] = PlacementSnapshot::MasterRef{
+        info, cell->getLibCellId(), site != nullptr ? site->getName() : ""};
   }
 
   // --- candidate universe: fillerSetting only, resolved to Network master
@@ -1543,11 +1788,16 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   }
   const DbCoord replacementWidth = newMaster->getWidth().getStorage();
   const DbCoord replacementHeight = grid_->gridHeight(*newMaster).v;
-  if (oldMaster->width != replacementWidth
-      || oldMaster->height != replacementHeight) {
+  if (placement_.siteWidth <= 0 || replacementWidth <= 0
+      || replacementWidth % placement_.siteWidth != 0
+      || replacementHeight < 1 || replacementHeight > 2
+      || oldMaster->width <= 0
+      || oldMaster->width % placement_.siteWidth != 0
+      || oldMaster->height < 1 || oldMaster->height > 2) {
     addDiagnostic(Severity::Fatal,
-                  "TargetSizeMismatch",
-                  "target VT replacement must preserve width and height");
+                  "UnsupportedTargetFootprint",
+                  "target masters must be site-aligned rectangles one or "
+                  "two rows high");
     return result;
   }
 
@@ -1570,8 +1820,18 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
       = checkerRequest.has_value()
             ? toPlannerOrient(checkerRequest->orientation)
             : targetOrientation;
-  const Region initialInfluence = snapshotGuard(
+  Region initialInfluence = snapshotGuard(
       requestedRowId, requestedX, replacementWidth, replacementHeight);
+  const Region oldInfluence = snapshotGuard(
+      targetRowId, targetX, oldMaster->width, oldMaster->height);
+  initialInfluence.x.xl
+      = std::min(initialInfluence.x.xl, oldInfluence.x.xl);
+  initialInfluence.x.xh
+      = std::max(initialInfluence.x.xh, oldInfluence.x.xh);
+  initialInfluence.rowLo
+      = std::min(initialInfluence.rowLo, oldInfluence.rowLo);
+  initialInfluence.rowHi
+      = std::max(initialInfluence.rowHi, oldInfluence.rowHi);
 
   // Fail before registering an uninstantiated replacement master. The
   // rejected-request contract covers the in-memory Network registry too.
@@ -1719,6 +1979,335 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
             "} matchingPhysRows=[", matchingRows, "]"));
   }
 
+  const bool layoutChanged
+      = target.rowId != targetRowId || target.x != targetX
+        || replacement->width != oldMaster->width
+        || replacement->height != oldMaster->height;
+  if (layoutChanged) {
+    // The layout rewrite is deliberately local and immutable: identify every
+    // filler displaced by the proposed target, exact-cover the released site
+    // cells, then submit Delete/Add plus any VT swaps as one checker overlay.
+    const int newCol = static_cast<int>(target.x / placement_.siteWidth);
+    const int newWidthSites
+        = static_cast<int>(replacement->width / placement_.siteWidth);
+    const int newHeightRows = static_cast<int>(replacement->height);
+    const int oldCol = static_cast<int>(targetX / placement_.siteWidth);
+    const int oldWidthSites
+        = static_cast<int>(oldMaster->width / placement_.siteWidth);
+    const int oldHeightRows = static_cast<int>(oldMaster->height);
+    const int rowCount = static_cast<int>(placement_.rows.size());
+    const int colCount = grid_->getRowSiteCount().v;
+    if (target.x % placement_.siteWidth != 0 || newCol < 0
+        || newCol + newWidthSites > colCount || target.rowId < 0
+        || target.rowId + newHeightRows > rowCount) {
+      addDiagnostic(Severity::Fatal,
+                    "TargetFootprintOutOfGrid",
+                    "proposed target footprint is not a legal site rectangle");
+      return result;
+    }
+
+    std::set<InstanceId> removed;
+    for (int rowOffset = 0; rowOffset < newHeightRows; ++rowOffset) {
+      const RowId rowId = target.rowId + rowOffset;
+      for (int colOffset = 0; colOffset < newWidthSites; ++colOffset) {
+        const int colId = newCol + colOffset;
+        const Pixel* pixel = grid_->gridPixel(GridX{colId}, GridY{rowId});
+        if (pixel == nullptr || !pixel->is_valid
+            || pixel->padding_reserved_by != nullptr) {
+          addDiagnostic(Severity::Warning,
+                        "TargetFootprintOnIllegalSite",
+                        cat("target covers illegal/reserved site row=", rowId,
+                            " col=", colId));
+          return result;
+        }
+        const Node* occupant = pixel->cell;
+        if (occupant == nullptr || occupant->getId() == target.instanceId) {
+          continue;
+        }
+        const PlacedInstance* displaced = instance(occupant->getId());
+        if (displaced == nullptr || !displaced->isFiller) {
+          addDiagnostic(Severity::Warning,
+                        "TargetOverlapsNonFiller",
+                        cat("target overlaps non-filler instance ",
+                            occupant->getId(), " at row=", rowId,
+                            " col=", colId));
+          return result;
+        }
+        removed.insert(displaced->id);
+      }
+    }
+
+    std::set<internal::SiteCell> emptySites;
+    const auto addFootprint = [&emptySites](RowId rowId,
+                                            int colId,
+                                            int widthSites,
+                                            int heightRows) {
+      for (int rowOffset = 0; rowOffset < heightRows; ++rowOffset) {
+        for (int colOffset = 0; colOffset < widthSites; ++colOffset) {
+          emptySites.insert(
+              internal::SiteCell{rowId + rowOffset, colId + colOffset});
+        }
+      }
+    };
+    addFootprint(targetRowId, oldCol, oldWidthSites, oldHeightRows);
+    Region rewriteInfluence = initialInfluence;
+    for (const InstanceId id : removed) {
+      const PlacedInstance* filler = instance(id);
+      const MasterInfo* master
+          = filler != nullptr ? masterInfo(filler->masterId) : nullptr;
+      if (filler == nullptr || master == nullptr || !master->isFiller
+          || master->width <= 0
+          || master->width % placement_.siteWidth != 0
+          || master->height < 1 || master->height > 2) {
+        addDiagnostic(Severity::Fatal,
+                      "UnsupportedDisplacedFiller",
+                      cat("displaced filler ", id,
+                          " has an unsupported footprint"));
+        return result;
+      }
+      const int fillerCol
+          = static_cast<int>(filler->x / placement_.siteWidth);
+      const int fillerWidth
+          = static_cast<int>(master->width / placement_.siteWidth);
+      addFootprint(filler->rowId,
+                   fillerCol,
+                   fillerWidth,
+                   static_cast<int>(master->height));
+      rewriteInfluence.x.xl
+          = std::min(rewriteInfluence.x.xl, filler->x);
+      rewriteInfluence.x.xh
+          = std::max(rewriteInfluence.x.xh, filler->x + master->width);
+      rewriteInfluence.rowLo
+          = std::min(rewriteInfluence.rowLo, filler->rowId);
+      rewriteInfluence.rowHi = std::max(
+          rewriteInfluence.rowHi,
+          filler->rowId + static_cast<RowId>(master->height) - 1);
+    }
+    for (int rowOffset = 0; rowOffset < newHeightRows; ++rowOffset) {
+      for (int colOffset = 0; colOffset < newWidthSites; ++colOffset) {
+        emptySites.erase(
+            internal::SiteCell{target.rowId + rowOffset, newCol + colOffset});
+      }
+    }
+
+    // Every released cell must be legal and occupied only by the old target
+    // or a filler named in the Delete prefix. Otherwise exact-cover geometry
+    // would conceal an input placement error.
+    for (const internal::SiteCell& site : emptySites) {
+      if (site.rowId < 0 || site.rowId >= rowCount || site.colId < 0
+          || site.colId >= colCount) {
+        addDiagnostic(Severity::Fatal,
+                      "ReleasedSiteOutOfGrid",
+                      "released target/filler footprint leaves the core grid");
+        return result;
+      }
+      const Pixel* pixel
+          = grid_->gridPixel(GridX{site.colId}, GridY{site.rowId});
+      if (pixel == nullptr || !pixel->is_valid
+          || pixel->padding_reserved_by != nullptr) {
+        addDiagnostic(Severity::Fatal,
+                      "ReleasedSiteNotFillable",
+                      cat("released site is illegal/reserved row=", site.rowId,
+                          " col=", site.colId));
+        return result;
+      }
+      const Node* occupant = pixel->cell;
+      if (occupant != nullptr && occupant->getId() != target.instanceId
+          && removed.count(occupant->getId()) == 0) {
+        addDiagnostic(Severity::Fatal,
+                      "ReleasedSiteStillOccupied",
+                      cat("released site overlaps unchanged instance ",
+                          occupant->getId()));
+        return result;
+      }
+    }
+
+    std::vector<internal::FillerFootprint> footprints;
+    std::unordered_map<MasterId, eLIB::LibCellID> masterLibCells;
+    for (const MasterId masterId : placement_.fillerMasterIds) {
+      const MasterInfo* master = masterInfo(masterId);
+      if (master == nullptr || !master->isFiller || master->width <= 0
+          || master->width % placement_.siteWidth != 0
+          || master->height < 1 || master->height > 2) {
+        continue;
+      }
+      footprints.push_back(
+          internal::FillerFootprint{masterId,
+                                    static_cast<int>(master->width
+                                                     / placement_.siteWidth),
+                                    static_cast<int>(master->height)});
+      masterLibCells.emplace(masterId,
+                             placement_.masters[masterId]->libCellId);
+    }
+    if (footprints.empty()) {
+      addDiagnostic(Severity::Warning,
+                    "NoRetilingFillerMaster",
+                    "no configured one/two-row site-aligned filler master");
+      return result;
+    }
+
+    const internal::RetileResult tilings = internal::enumerateRetilings(
+        std::vector<internal::SiteCell>(emptySites.begin(), emptySites.end()),
+        footprints);
+    log_.msg("engine",
+             cat("layout rewrite: removed=", removed.size(),
+                 " emptySites=", emptySites.size(),
+                 " tilings=", tilings.solutions.size(),
+                 " searchStates=", tilings.searchStates,
+                 " truncated=", tilings.truncated));
+    if (tilings.solutions.empty()) {
+      addDiagnostic(Severity::Warning,
+                    tilings.truncated ? "RetilingBudgetExceeded"
+                                      : "ReleasedAreaNotTileable",
+                    "configured filler footprints cannot exactly cover the "
+                    "released sites");
+      return result;
+    }
+
+    ipl::FillerChanges deletionPrefix;
+    for (const InstanceId id : removed) {
+      const PlacedInstance* filler = instance(id);
+      CellChangeRecord deletion
+          = cellChangeRecord(id, filler != nullptr ? filler->masterId : -1);
+      deletion.op_ = OpType::Delete;
+      deletion.new_lib_cell_ = deletion.orig_lib_cell_;
+      deletionPrefix.push_back(std::move(deletion));
+    }
+
+    std::vector<ipl::Diagnostic> rejectedLayoutDiagnostics;
+    for (const std::vector<internal::TiledFiller>& tiling :
+         tilings.solutions) {
+      std::vector<LayoutAddition> additions;
+      ipl::FillerChanges fixed = deletionPrefix;
+      bool usable = true;
+      int addIndex = 0;
+      for (const internal::TiledFiller& tile : tiling) {
+        const MasterInfo* footprintMaster = masterInfo(tile.masterId);
+        if (footprintMaster == nullptr) {
+          usable = false;
+          break;
+        }
+
+        MasterId chosen = -1;
+        eUTL::PhysOrientation orientation(eUTL::PhysOrientationE::R0);
+        for (const MasterId candidate : placement_.fillerMasterIds) {
+          const MasterInfo* master = masterInfo(candidate);
+          if (master == nullptr
+              || master->width != footprintMaster->width
+              || master->height != footprintMaster->height) {
+            continue;
+          }
+          const std::string& siteName
+              = placement_.masters[candidate]->siteName;
+          if (siteName.empty()) {
+            continue;
+          }
+          const std::optional<eUTL::PhysOrientation> expected
+              = grid_->getSiteOrientation(GridX{tile.colId},
+                                          GridY{tile.rowId},
+                                          siteName);
+          if (!expected.has_value()
+              || !supportedOrientation(*expected)) {
+            continue;
+          }
+          if (chosen < 0
+              || (master->vt == replacement->vt
+                  && masterInfo(chosen)->vt != replacement->vt)) {
+            chosen = candidate;
+            orientation = *expected;
+          }
+        }
+        if (chosen < 0) {
+          usable = false;
+          break;
+        }
+
+        const std::string name
+            = cat("__fr_", target.instanceId, '_', tile.rowId, '_',
+                  tile.colId, '_', addIndex);
+        const DbCoord xAbsolute
+            = placement_.coreXl
+              + static_cast<DbCoord>(tile.colId) * placement_.siteWidth;
+        const DbCoord yAbsolute
+            = placement_.rowFrames[static_cast<size_t>(tile.rowId)].yLo;
+        CellChangeRecord addition{OpType::Add,
+                                  CellData{name},
+                                  eUTL::UvDist(xAbsolute),
+                                  eUTL::UvDist(yAbsolute),
+                                  eLIB::LibCellID(0, 0),
+                                  placement_.masters[chosen]->libCellId,
+                                  orientation};
+        const InstanceId syntheticId = -1 - addIndex++;
+        LayoutAddition local;
+        local.instanceId = syntheticId;
+        local.placed = PlacedInstance{
+            syntheticId,
+            chosen,
+            tile.rowId,
+            static_cast<DbCoord>(tile.colId) * placement_.siteWidth,
+            toPlannerOrient(orientation),
+            true};
+        local.record = addition;
+        additions.push_back(std::move(local));
+        fixed.push_back(std::move(addition));
+      }
+      if (!usable) {
+        continue;
+      }
+
+      LayoutPlacementView layoutView(
+          *this, target, removed, additions, masterLibCells);
+      LayoutOracle layoutOracle(*this, layoutView, fixed);
+      OracleRequest snapshotRequest;
+      snapshotRequest.requestId = 0;
+      snapshotRequest.targetPlace = target;
+      snapshotRequest.guardRegion = rewriteInfluence;
+      const OracleResult snapshot
+          = layoutOracle.checkPlaceWithOverlay(snapshotRequest);
+      if (snapshot.status != OracleStatus::Checked) {
+        for (const Diagnostic& diagnostic : snapshot.diagnostics) {
+          rejectedLayoutDiagnostics.push_back(
+              toPublicDiagnostic(diagnostic));
+        }
+        continue;
+      }
+      if (snapshot.violations.empty()) {
+        result.hasSolution = true;
+        result.changes = fixed;
+        addDiagnostic(Severity::Info,
+                      "LayoutRetiled",
+                      cat("removed ", removed.size(), " filler(s), added ",
+                          additions.size(), " filler(s)"));
+        return result;
+      }
+
+      FillerRepairRequest plannerRequest;
+      plannerRequest.targetPlace = target;
+      plannerRequest.violations = snapshot.violations;
+      internal::RepairPlanner planner(
+          layoutView, layoutOracle, repair_config_);
+      const FillerRepairResult planned = planner.repair(plannerRequest);
+      if (!planned.hasSolution) {
+        continue;
+      }
+      result.hasSolution = true;
+      result.changes
+          = mergeFillerChanges(fixed, planned.changes);
+      for (const Diagnostic& diagnostic : planned.diagnostics) {
+        result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
+      }
+      return result;
+    }
+
+    result.diagnostics.insert(result.diagnostics.end(),
+                              rejectedLayoutDiagnostics.begin(),
+                              rejectedLayoutDiagnostics.end());
+    addDiagnostic(Severity::Warning,
+                  "NoLegalRetiling",
+                  "no exact-cover filler layout passed the implant checker");
+    return result;
+  }
+
   // 2) Initial snapshot: the new target place with ZERO filler changes.
   // Snapshot and every later engine baseline/candidate go through this same
   // object -> one consistent oracle worldview.
@@ -1764,14 +2353,6 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
             " polarityMismatch=", stats.polarityMismatch, '}'));
     return result;
   }
-  if (!samePlacement) {
-    addDiagnostic(Severity::Warning,
-                  "UnsupportedTargetMove",
-                  "filler repair supports same-position target master swaps "
-                  "only");
-    return result;
-  }
-
   // 3) Pure search over this object's data-source and oracle interfaces.
   FillerRepairRequest request;
   request.targetPlace = target;

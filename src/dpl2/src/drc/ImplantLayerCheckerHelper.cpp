@@ -302,9 +302,9 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
     std::ostringstream buf;
     std::ostream& out = buf;
 
-    // [fillerRepair-fix] v5 adds base polarity to the v4 fillerSetting data;
-    // both are required to replay planner + checker faithfully.
-    out << "ImplantLayerCheckerDump 5\n";
+    // [fillerRepair-layout] v6 adds the master site name used to validate
+    // request-local filler Add orientation. Older dumps remain readable.
+    out << "ImplantLayerCheckerDump 6\n";
     out << "row_count " << checker.grid_->getRowCount().v << "\n";
     out << "col_count " << checker.grid_->getRowSiteCount().v << "\n";
     out << "row_height " << checker.rowHeight_ << "\n";
@@ -389,7 +389,8 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
     for (const MasterItem& master : checker.masterItems_) {
         out << master.masterId << ' ' << master.width << ' ' << master.height
             << ' ' << master.isFiller << ' ' << master.siteHeight << ' '
-            << master.shapes.size() << "\n";
+            << std::quoted(master.siteName) << ' ' << master.shapes.size()
+            << "\n";
         for (const MasterShape& shape : master.shapes) {
             out << shape.masterId << ' ' << shape.shapeId << ' ' << shape.layer
                 << ' ' << shape.rect.getXL().getStorage() << ' '
@@ -484,7 +485,7 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
     std::string tag;
     int version = 0;
     if (!(in >> tag >> version) || tag != "ImplantLayerCheckerDump"
-        || version < 1 || version > 5) {
+        || version < 1 || version > 6) {
         return ImplantInput();
     }
 
@@ -652,7 +653,15 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
         bool isFiller = false;
         Dbu siteHeight = 0;
         if (!(in >> master.masterId >> master.width >> master.height
-              >> isFiller >> siteHeight >> shapeCount)) {
+              >> isFiller >> siteHeight)) {
+            return ImplantInput();
+        }
+        // [fillerRepair-layout] v1-v5 did not preserve this field. Empty keeps
+        // their historical replay behavior; v6 performs the full site check.
+        if (version >= 6 && !(in >> std::quoted(master.siteName))) {
+            return ImplantInput();
+        }
+        if (!(in >> shapeCount)) {
             return ImplantInput();
         }
         master.isFiller = isFiller;

@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include <fillerRepair/FillerRetiler.h>
 #include <fillerRepair/PlacementView.h>
 #include <fillerRepair/RepairPlanner.h>
 #include <fillerRepair/RepairTypes.h>
@@ -5177,6 +5178,58 @@ void testPlannerUserGridMwMs1()
   EXPECT_EQ(fr::cellChangeRecordInstanceId(result2.changes[0]), 2012);
 }
 
+void testRetilerDifferentCellAreaUtilities()
+{
+  using dpl2::fillerRepair::internal::FillerFootprint;
+  using dpl2::fillerRepair::internal::SiteCell;
+  const std::vector<FillerFootprint> masters{{10, 4, 1},
+                                             {11, 2, 1},
+                                             {12, 1, 1}};
+  // Released filler area occupies 10%, 40%, and 100% of a synthetic
+  // ten-site local region. Every density must remain exactly tileable.
+  for (const int releasedSites : {1, 4, 10}) {
+    std::vector<SiteCell> sites;
+    for (int col = 0; col < releasedSites; ++col) {
+      sites.push_back(SiteCell{0, col});
+    }
+    const auto result
+        = dpl2::fillerRepair::internal::enumerateRetilings(sites, masters);
+    ASSERT_FALSE(result.solutions.empty());
+    int area = 0;
+    for (const auto& tile : result.solutions.front()) {
+      const auto master = std::find_if(
+          masters.begin(), masters.end(), [&](const FillerFootprint& item) {
+            return item.masterId == tile.masterId;
+          });
+      ASSERT_NE(master, masters.end());
+      area += master->widthSites * master->heightRows;
+    }
+    EXPECT_EQ(area, releasedSites);
+  }
+}
+
+void testRetilerUsesTwoRowFootprint()
+{
+  using namespace dpl2::fillerRepair::internal;
+  const std::vector<SiteCell> sites{{0, 0}, {0, 1}, {1, 0}, {1, 1}};
+  const RetileResult result = enumerateRetilings(
+      sites, {{20, 2, 2}, {21, 1, 1}});
+  ASSERT_FALSE(result.solutions.empty());
+  ASSERT_EQ(result.solutions.front().size(), 1U);
+  EXPECT_EQ(result.solutions.front().front().masterId, 20);
+  EXPECT_EQ(result.solutions.front().front().rowId, 0);
+  EXPECT_EQ(result.solutions.front().front().colId, 0);
+}
+
+void testRetilerBudgetFailsClosed()
+{
+  using namespace dpl2::fillerRepair::internal;
+  const RetileResult result = enumerateRetilings(
+      {{0, 0}, {0, 1}, {0, 2}}, {{30, 1, 1}}, RetileConfig{16, 1});
+  EXPECT_TRUE(result.solutions.empty());
+  EXPECT_TRUE(result.truncated);
+}
+
 void registerPlannerTests()
 {
   const std::vector<Test> tests = {
@@ -5306,6 +5359,10 @@ void registerPlannerTests()
       {"signature_class_mismatch_implies_signature_mismatch",
        testSignatureClassMismatchImpliesSignatureMismatch},
       {"planner_user_grid_mw_ms_1", testPlannerUserGridMwMs1},
+      {"retiler_different_cell_area_utilities",
+       testRetilerDifferentCellAreaUtilities},
+      {"retiler_uses_two_row_footprint", testRetilerUsesTwoRowFootprint},
+      {"retiler_budget_fails_closed", testRetilerBudgetFailsClosed},
   };
 
   for (const Test& test : tests) {

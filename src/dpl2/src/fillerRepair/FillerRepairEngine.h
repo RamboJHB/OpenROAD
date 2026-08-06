@@ -7,7 +7,9 @@
 // pinned to one design revision, and feeds the pure search (RepairPlanner) by
 // implementing its two seams: PlacementView and RepairOracle.
 //
-// repair() answers with a list of proposed filler swaps and changes nothing.
+// repair() answers with one atomic filler edit transaction and changes
+// nothing. It may Replace existing fillers or Delete/Add fillers while
+// retiling space released by a size-changing target.
 // UDM, Grid and Network come out exactly as they went in; committing is the
 // caller's decision.
 

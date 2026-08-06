@@ -6,7 +6,6 @@
 #include <infrastructure/network.h>
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
-#include <drc/PaddingChecker.h>
 #include <PlacementDRC.h>
 
 #include <algorithm>

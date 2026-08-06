@@ -142,6 +142,7 @@ file(MAKE_DIRECTORY "${DPL2_FR2_STAGE_ROOT}/fillerRepair")
 file(COPY "${DPL2_SRC}/fillerRepair2/"
      DESTINATION "${DPL2_FR2_STAGE_ROOT}/fillerRepair")
 add_library(dpl2_filler_repair2_compile_check OBJECT
+    "${DPL2_FR2_STAGE_ROOT}/fillerRepair/FillerRetiler.cpp"
     "${DPL2_FR2_STAGE_ROOT}/fillerRepair/RepairPlanner.cpp"
     "${DPL2_FR2_STAGE_ROOT}/fillerRepair/FillerRepairEngine.cpp")
 target_include_directories(

@@ -55,7 +55,10 @@ enum class MasterRole
   TargetNew,
   RepairFiller,
   ExtraUninstantiatedFiller,
-  MismatchedTarget
+  MismatchedTarget,
+  WiderTarget,
+  TargetOldDoubleHeight,
+  TargetNewDoubleHeight
 };
 
 struct DesignSetup
@@ -73,6 +76,7 @@ struct DesignSetup
   bool row0TailHardBlockage = false;
   bool row0TailSoftBlockage = false;
   bool row0ThirdHardMacro = false;
+  bool doubleHeightRepairLayout = false;
   int row0TailHaloWidth = 0;
 };
 

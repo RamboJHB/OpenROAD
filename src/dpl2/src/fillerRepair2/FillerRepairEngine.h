@@ -2,6 +2,8 @@
 // Copyright (c) 2026, The OpenROAD Authors
 
 // The runtime half of filler repair: everything that touches the database.
+// repair() is non-mutating and returns one checker-verified atomic transaction:
+// same-footprint Replace, or Delete/Add retiling for a changed target footprint.
 
 #pragma once
 

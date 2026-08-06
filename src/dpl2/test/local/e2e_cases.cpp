@@ -25,8 +25,9 @@ namespace frt = dpl2::fillerRepair::test;
 
 namespace {
 
-constexpr const char* kDefaultFillers = "FL2 FH2 FS2";
-constexpr const char* kFillersWithExtra = "FL2 FH2 FS2 FX4";
+constexpr const char* kDefaultFillers = "FL2 FH2 FS2 FH1 FL2D FH1D";
+constexpr const char* kFillersWithExtra
+    = "FL2 FH2 FS2 FH1 FL2D FH1D FX4";
 
 bool hasDiagnostic(const std::vector<dpl2::ipl::Diagnostic>& diagnostics,
                    const std::string& status)
@@ -94,12 +95,19 @@ bool bindRepairInfrastructure(frt::E2ETestDesign& design,
       return false;
     }
   }
-  return !registerTargetMaster
-         || network->addMaster(
-                design.master(frt::MasterRole::TargetNew),
-                setting,
-                grid,
-                &noEdgeTypes()) != nullptr;
+  if (!registerTargetMaster) {
+    return true;
+  }
+  for (const frt::MasterRole role : {
+           frt::MasterRole::TargetNew,
+           frt::MasterRole::WiderTarget,
+           frt::MasterRole::TargetNewDoubleHeight}) {
+    if (network->addMaster(
+            design.master(role), setting, grid, &noEdgeTypes()) == nullptr) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool syncInfrastructureNode(frt::E2ETestDesign& design,
@@ -847,6 +855,144 @@ TEST_P(FillerRepairEngineE2E, ViolatingTargetOverlayFindsFillerSwap)
 }
 
 TEST_P(FillerRepairEngineE2E,
+       WiderTargetDeletesOverlappedFillerAndRefillsReleasedSite)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::Target),
+      harness.design().master(frt::MasterRole::WiderTarget));
+
+  ASSERT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  ASSERT_EQ(outcome.changes.size(), 2U);
+  const auto deletion = std::find_if(
+      outcome.changes.begin(), outcome.changes.end(),
+      [](const dpl2::CellChangeRecord& change) {
+        return change.op_ == dpl2::OpType::Delete;
+      });
+  const auto addition = std::find_if(
+      outcome.changes.begin(), outcome.changes.end(),
+      [](const dpl2::CellChangeRecord& change) {
+        return change.op_ == dpl2::OpType::Add;
+      });
+  ASSERT_NE(deletion, outcome.changes.end());
+  ASSERT_NE(addition, outcome.changes.end());
+  const auto* deletedId
+      = std::get_if<eUNL::LeafCellID>(&deletion->cell_data_);
+  ASSERT_NE(deletedId, nullptr);
+  EXPECT_EQ(*deletedId,
+            harness.design().cell(frt::CellRole::TargetRightFiller));
+  const auto* addedName = std::get_if<std::string>(&addition->cell_data_);
+  ASSERT_NE(addedName, nullptr);
+  EXPECT_FALSE(addedName->empty());
+  EXPECT_EQ(addition->new_lib_cell_.getIndexValue(), 10);
+  EXPECT_EQ(addition->x_.getStorage(),
+            harness.design().rowOriginX(2) + 13);
+  const dpl2::Node* target = harness.network().getNode(
+      harness.design().cell(frt::CellRole::Target));
+  ASSERT_NE(target, nullptr);
+  EXPECT_EQ(addition->orientation_.getValue(),
+            target->getOrient().getValue());
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       TwoRowTargetUsesTwoRowFillerWithAlignedOrientation)
+{
+  frt::DesignSetup setup = GetParam().setup;
+  setup.doubleHeightRepairLayout = true;
+  EngineHarness harness(setup);
+  ASSERT_TRUE(harness.engineReady());
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::Target),
+      harness.design().master(frt::MasterRole::TargetNewDoubleHeight));
+
+  ASSERT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  ASSERT_EQ(outcome.changes.size(), 2U);
+  const auto deletion = std::find_if(
+      outcome.changes.begin(), outcome.changes.end(),
+      [](const dpl2::CellChangeRecord& change) {
+        return change.op_ == dpl2::OpType::Delete;
+      });
+  const auto addition = std::find_if(
+      outcome.changes.begin(), outcome.changes.end(),
+      [](const dpl2::CellChangeRecord& change) {
+        return change.op_ == dpl2::OpType::Add;
+      });
+  ASSERT_NE(deletion, outcome.changes.end());
+  ASSERT_NE(addition, outcome.changes.end());
+  const auto* deletedId
+      = std::get_if<eUNL::LeafCellID>(&deletion->cell_data_);
+  ASSERT_NE(deletedId, nullptr);
+  EXPECT_EQ(*deletedId,
+            harness.design().cell(frt::CellRole::TargetRightFiller));
+  EXPECT_EQ(addition->new_lib_cell_.getIndexValue(), 14);
+  EXPECT_EQ(addition->x_.getStorage(),
+            harness.design().rowOriginX(2) + 13);
+  EXPECT_EQ(addition->y_.getStorage(), 2 * frt::kRowHeight);
+  const dpl2::Node* target = harness.network().getNode(
+      harness.design().cell(frt::CellRole::Target));
+  ASSERT_NE(target, nullptr);
+  EXPECT_EQ(addition->orientation_.getValue(),
+            target->getOrient().getValue());
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       CheckerEntryReturnsAtomicLayoutRewriteWithoutMutation)
+{
+  CheckerHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.checkerReady());
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  ASSERT_TRUE(harness.setTargetMaster(frt::MasterRole::WiderTarget));
+
+  ASSERT_TRUE(harness.checkTarget());
+  ASSERT_EQ(harness.fillerChanges().size(), 2U);
+  EXPECT_EQ(std::count_if(harness.fillerChanges().begin(),
+                          harness.fillerChanges().end(),
+                          [](const dpl2::CellChangeRecord& change) {
+                            return change.op_ == dpl2::OpType::Delete;
+                          }),
+            1);
+  EXPECT_EQ(std::count_if(harness.fillerChanges().begin(),
+                          harness.fillerChanges().end(),
+                          [](const dpl2::CellChangeRecord& change) {
+                            return change.op_ == dpl2::OpType::Add;
+                          }),
+            1);
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       LayoutRewriteIsDeterministicAcrossConcurrentCheckerCalls)
+{
+  CheckerHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.checkerReady());
+  ASSERT_TRUE(harness.setTargetMaster(frt::MasterRole::WiderTarget));
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+
+  constexpr size_t kWorkers = 8;
+  std::array<bool, kWorkers> legal{};
+  std::array<dpl2::ipl::FillerChanges, kWorkers> changes;
+  std::vector<std::thread> workers;
+  for (size_t i = 0; i < kWorkers; ++i) {
+    workers.emplace_back([&harness, &legal, &changes, i]() {
+      legal[i] = harness.checkTarget(changes[i]);
+    });
+  }
+  for (std::thread& worker : workers) {
+    worker.join();
+  }
+  for (size_t i = 0; i < kWorkers; ++i) {
+    EXPECT_TRUE(legal[i]);
+    EXPECT_TRUE(sameChanges(changes.front(), changes[i]));
+  }
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
        CheckerEntryReturnsRepairChangesWithoutMutation)
 {
   // No setter call: ordinary checker instances must repair by default.
@@ -966,7 +1112,7 @@ TEST_P(FillerRepairEngineE2E,
 }
 
 TEST_P(FillerRepairEngineE2E,
-       SizeMismatchDoesNotRegisterReplacementMaster)
+       UnregisteredDifferentSizeMasterDoesNotMutateRegistry)
 {
   EngineHarness harness(GetParam().setup);
   ASSERT_TRUE(harness.engineReady());
@@ -977,7 +1123,8 @@ TEST_P(FillerRepairEngineE2E,
       harness.design().cell(frt::CellRole::Target), replacement);
   EXPECT_FALSE(outcome.hasSolution);
   EXPECT_TRUE(outcome.changes.empty());
-  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "TargetSizeMismatch"));
+  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics,
+                            "TargetMasterNotRegistered"));
   EXPECT_EQ(harness.network().getMasterId(replacement.getLibCellId()), -1);
 }
 

@@ -300,6 +300,7 @@ MasterItem master(MasterId masterId,
   master.width = SITE_WIDTH;
   master.height = ROW_HEIGHT;
   master.siteHeight = ROW_HEIGHT;
+  master.siteName = "core";
   master.isFiller = isFiller;
   // N-polar family layer on the bottom band, its P partner on the top band
   // (layer + 3 by construction above).
@@ -578,6 +579,10 @@ TEST(ImplantLayerCheckerHelperTest, DumpLoadPreservesFillerSetting)
             original.fillerSetting.fillerMasterIds);
   EXPECT_EQ(loaded.fillerSetting.avoidPatterns,
             original.fillerSetting.avoidPatterns);
+  ASSERT_EQ(loaded.masters.size(), original.masters.size());
+  for (size_t i = 0; i < loaded.masters.size(); ++i) {
+    EXPECT_EQ(loaded.masters[i].siteName, original.masters[i].siteName);
+  }
 
   ImplantLayerCheckerHelper loadedHelper;
   loadedHelper.initialize(loaded);
@@ -595,6 +600,10 @@ TEST(ImplantLayerCheckerHelperTest, DumpLoadPreservesFillerSetting)
             original.fillerSetting.fillerMasterIds);
   EXPECT_EQ(redumped.fillerSetting.avoidPatterns,
             original.fillerSetting.avoidPatterns);
+  ASSERT_EQ(redumped.masters.size(), original.masters.size());
+  for (size_t i = 0; i < redumped.masters.size(); ++i) {
+    EXPECT_EQ(redumped.masters[i].siteName, original.masters[i].siteName);
+  }
 
   std::remove(firstPath.c_str());
   std::remove(secondPath.c_str());

@@ -9,11 +9,9 @@
 // masters could replace this filler?" -- and it is read-only. Nothing here
 // changes the design; committing an answer is the caller's job.
 //
-// Threading: one repair at a time, so these const methods are NOT required to
-// be safe for concurrent readers -- the runtime fills per-row caches lazily
-// from inside them. What const does promise is that calling one never changes
-// what a later call answers, and that any reference handed out stays alive as
-// long as the view does.
+// Threading: runtime views are immutable after engine initialization or are
+// private to one repair call, so concurrent repair readers are supported.
+// Test doubles must provide the same stable-reference behavior when shared.
 
 #pragma once
 
@@ -73,10 +71,10 @@ class PlacementView
 
   virtual DbCoord siteWidth() const = 0;
 
-  // Sorted by x ascending (ties by id). Contract for multi-height (future):
+  // Sorted by x ascending (ties by id). Multi-height contract:
   // an instance spanning several rows is reported by every row it occupies.
-  // V1 designs are single-height. Returned by reference: this is the
-  // planner's hottest query (precheck, window building, ranking) and rows
+  // Returned by reference: this is the planner's hottest query (precheck,
+  // window building, ranking) and rows
   // hold thousands of instances on real designs -- per-call copies are the
   // dominant planner cost, so implementations must return stored buckets.
   virtual const std::vector<PlacedInstance>& instancesInRow(
@@ -89,7 +87,8 @@ class PlacementView
   // Configured replacement universe, sorted ascending and unique (the
   // default candidate filter relies on that order for determinism).
   virtual const std::vector<MasterId>& fillerMasterIds() const = 0;
-  // Build the exact checker/public wire record for one planner swap. This is
+  // Build the exact checker/public wire record for one planner replacement.
+  // Layout Delete/Add records are assembled by the runtime engine. This is
   // the sole mapping point from dense planner ids to UDM ids and coordinates.
   virtual CellChangeRecord cellChangeRecord(InstanceId instanceId,
                                             MasterId newMasterId) const = 0;

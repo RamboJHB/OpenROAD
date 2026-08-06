@@ -207,10 +207,9 @@ struct Violation
   std::vector<ViolationParticipant> participants;
 };
 
-// Readers for the shared change record. Repair only ever emits Replace with a
-// real LeafCellID; the id accessor returns -1 for the other shape of the
-// variant rather than pretending, so a caller that meets a future Add record
-// gets an obviously-wrong id instead of a plausible one.
+// Readers for the shared change record. Replace/Delete use a real LeafCellID;
+// Add uses a request-local name, so the id accessor intentionally returns -1
+// for Add rather than manufacturing a plausible instance id.
 inline const eUNL::LeafCellID* cellChangeRecordLeafCellId(
     const CellChangeRecord& change)
 {
@@ -250,7 +249,8 @@ struct FillerRepairRequest
   std::vector<Violation> violations;
 };
 
-// Out: the filler swaps that make it legal -- checker-verified, or empty.
+// Out: the atomic filler edits that make it legal -- checker-verified, or
+// empty. Edits can be same-footprint Replace or layout Delete/Add records.
 // `hasSolution` with no changes means there was nothing to fix.
 struct FillerRepairResult
 {

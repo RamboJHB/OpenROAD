@@ -781,7 +781,8 @@ class PhysDesMgr
       int64_t x,
       int64_t y,
       eUTL::PhysOrientation orient = eUTL::PhysOrientationE::R0,
-      PhysObjStatus status = PhysObjStatus::PLACED)
+      PhysObjStatus status = PhysObjStatus::PLACED,
+      const std::string& name = {})
   {
     PhysCellData data;
     data.valid = true;
@@ -789,6 +790,7 @@ class PhysDesMgr
     data.status = status;
     data.origin = eUTL::Point2D(eUTL::UvDist(x), eUTL::UvDist(y));
     data.orient = orient;
+    data.name = name;
     return cells_[id] = data;
   }
   PhysBlockage& addBlockage(int64_t xl,
@@ -954,6 +956,7 @@ class LibAcc
     modules_[name] = eFNL::ModuleID(0, id);
     eLIB::LibCell libCell;
     libCell.id_ = id;
+    libCell.name_ = name;
     lib_cells_[id] = libCell;
     phys_cells_[id] = cell;
   }
@@ -1010,6 +1013,9 @@ struct DesignDb
                      : eLIB::PhysMacroType::TypeE::CORE);
     cell.lib_cell_id_ = eLIB::LibCellID(0, libCellIndex);
     cell.site_ = &coreSite;
+    cell.lib_cell_ = std::make_shared<eLIB::LibCell>();
+    cell.lib_cell_->id_ = libCellIndex;
+    cell.lib_cell_->name_ = name;
     design.lib_acc_.addMaster(name, &cell);
     return cell;
   }

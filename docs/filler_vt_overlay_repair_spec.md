@@ -5,24 +5,26 @@ build, and validation instructions live only in `src/dpl2/HandOff.md`.
 
 ## 1. Purpose and scope
 
-Opto may replace one standard-cell master with a same-size VT alternative at
-the same placement. That overlay can make nearby filler implant shapes violate
-minimum-width or minimum-spacing rules. Filler repair searches for a set of
-same-size filler master replacements and asks `ImplantLayerChecker` to validate
-every candidate.
+Opto proposes one standard-cell master and placement. The proposed footprint
+may cover existing fillers or release sites previously occupied by the target.
+Filler repair removes displaced fillers, exactly refills every released legal
+site, and changes filler VT when needed. `ImplantLayerChecker` validates the
+complete target plus filler transaction before the caller commits anything.
 
 The current implementation supports:
 
 - one target standard cell per request;
-- target master replacement at the same row, x, and orientation;
-- one or more filler `Replace` operations;
-- same filler instance, position, orientation, width, and height;
+- site-aligned target placement with one- or two-row height;
+- one- or two-row configured filler masters;
+- filler `Replace`, `Delete`, and request-local `Add` operations;
+- exact gap/overlap-free retiling of sites released by a changed target;
+- added-filler orientation selected from the Grid row/site authority;
 - checker-verified minimum-width and minimum-spacing repair;
 - no database, Grid, or Network mutation.
 
-It does not move cells, change filler footprints, add/delete instances,
-split/merge fillers, repair multiple target cells together, or commit results.
-The caller owns commit and rollback.
+It does not move unrelated standard cells, repair several target cells in one
+request, support masters taller than two rows, or commit results. The caller
+owns commit and rollback.
 
 ## 2. Runtime API and ownership
 
@@ -65,10 +67,10 @@ all checks finish. After any Grid, Network, UDM, filler-setting, instance, or
 master-registration change, stop workers and create a new pair.
 
 `ImplantLayerChecker::check(...)` is the caller-facing entry. It first performs
-the ordinary target overlay check. If that check fails, filler repair is
-enabled, and an initialized engine is bound, it calls `engine.repair(request)`.
-On success it appends the returned records to the caller-owned vector. The
-checker stores no repair result.
+the ordinary target overlay check. With repair enabled and an initialized
+engine bound, it calls `engine.repair(request)` when direct DRC fails or the
+target footprint changed. On success it appends the returned records to the
+caller-owned vector. The checker stores no repair result.
 
 Repair is enabled by default on an ordinary checker. Checker-only helper tests
 disable it explicitly. The overlay oracle methods never call repair, which
@@ -97,9 +99,11 @@ struct CellChangeRecord
 using FillerChanges = std::vector<dpl2::CellChangeRecord>;
 ```
 
-Current repair emits only `Replace + LeafCellID`. Each record contains every
-field, including the unchanged position and orientation. Failure always
-returns an empty change list; partial repairs are never exposed.
+`Replace` and `Delete` identify an existing filler by `LeafCellID`. `Add`
+identifies a request-local filler by a deterministic string and carries its
+absolute x/y, new master, and Grid-derived orientation. The caller may resolve
+that request-local name into its final database identity at commit. Failure
+always returns an empty change list; partial repairs are never exposed.
 
 ID authorities are fixed:
 
@@ -141,11 +145,12 @@ checker initialization diagnostics. It then freezes:
 - a compatible replacement catalog for every placed filler master;
 - the checker rule reach and initial snapshot halo.
 
-A replacement enters a filler catalog entry only when it is configured,
+A replacement enters a filler VT catalog entry only when it is configured,
 registered, filler-classified, the same width and height, a different known VT,
-and has compatible bottom-band polarity. An empty catalog is allowed at init;
-an illegal target snapshot then returns `NoCompatibleFillerCandidate` without
-starting combinational search.
+and has compatible bottom-band polarity. The retiler separately records every
+configured, registered, site-aligned filler footprint that is one or two rows
+high. An empty VT catalog is allowed; a layout change still succeeds when an
+exact filler tiling is checker-legal without additional VT replacements.
 
 The supported coordinate envelope is validated rather than guessed: physical
 row iteration and Grid row IDs must agree, x origins must use the same frame,
@@ -174,23 +179,49 @@ modify placement.
 
 ## 7. Repair flow
 
-### 7.1 Request validation and initial snapshot
+### 7.1 Request validation
 
-The engine resolves the `CheckRequest` against its immutable snapshot and
-rejects an unknown/non-standard target, unsupported orientation, size-changing
-master, moved target, unregistered master, or master added after init.
+The engine resolves the `CheckRequest` against its immutable snapshot. It
+rejects an unknown/non-standard target, unsupported orientation, unregistered
+or post-init master, non-site-aligned width/x/y, target outside legal Grid
+pixels, or old/new target height outside one or two rows. The regional
+gap/overlap gate covers the union of old and proposed target influence rows.
 
-It then calls the same checker with:
+### 7.2 Layout rewrite
 
-- the proposed target placement;
-- an initial guard based on checker rule reach and the widest configured
-  filler master;
-- empty `FillerChanges`.
+When target row, x, width, or height changes, the engine:
 
-If this snapshot is legal, repair succeeds with no changes. If it is illegal,
-its violations become the planner input.
+1. scans every Grid pixel under the proposed target;
+2. rejects any unrelated non-filler occupant and records every displaced
+   `Node::isFiller()` instance for deletion;
+3. forms the released site set from the old target footprint plus all deleted
+   filler footprints, minus the proposed target footprint;
+4. verifies every released site is legal, unreserved, and occupied only by the
+   old target or an explicitly deleted filler;
+5. deterministically enumerates exact covers using configured one/two-row
+   filler footprints, largest footprint first;
+6. chooses a registered master for every tile, preferring the target VT when
+   available, and obtains orientation from
+   `Grid::getSiteOrientation(col, row, siteName)`;
+7. submits the target plus the complete `Delete`/`Add` transaction to the same
+   checker.
 
-### 7.2 Candidate generation and search
+Geometry enumeration is database-free and per-call. It returns at most 16
+tilings and visits at most 100000 exact-cover states. Hitting either limit is a
+safe failure. Synthetic negative planner IDs and Add names exist only inside
+that request; they are never inserted into Network or UDM.
+
+If an exact tiling is implant-legal, its fixed `Delete`/`Add` records are the
+result. If it still has implant violations, the existing VT planner runs over
+the immutable retiled view; its `Replace` records are merged into the same
+checker-verified transaction. A VT replacement of a request-local Add updates
+that Add record rather than creating a second record.
+
+When target geometry is unchanged, the engine first checks the proposed target
+with empty filler changes. A legal snapshot returns success with no changes;
+an illegal snapshot enters the VT planner directly.
+
+### 7.3 Candidate generation and search
 
 The planner is database-free and receives two seams from the engine:
 
@@ -202,7 +233,7 @@ The search pipeline is:
 1. Normalize violations without geometrically deduplicating distinct rules,
    layers, bands, or participants.
 2. Build L0 from participants, target-adjacent fillers, and bridge fillers.
-3. Generate all legal same-footprint swaps in the current window.
+3. Generate all legal same-footprint VT replacements in the current window.
 4. Rank fillers deterministically; keep every compatible master in each
    filler's domain.
 5. Enumerate filler subsets and domain assignments in ranked order.
@@ -221,7 +252,7 @@ reach horizontally and neighboring rows/cell rings needed to observe migrated
 violations. Fillers in guard-only space are check-only and cannot appear in a
 candidate.
 
-### 7.3 Acceptance rule
+### 7.4 Acceptance rule
 
 Each guard first receives an empty-filler baseline query. The baseline must
 reproduce the original snapshot; otherwise the request is stale or
@@ -262,9 +293,10 @@ only for the last window actually searched.
 
 Ordering is pinned at every stage, so an immutable input produces the same
 checker request sequence, result, and diagnostics. Each `repair()` creates its
-own planner, cache, and output. Concurrent calls may share an initialized
-checker/engine pair only while Grid, Network, UDM, and `fillerSetting` remain
-read-only.
+own exact-cover search, retiled placement view, planner, cache, synthetic IDs,
+and output. Concurrent calls may share an initialized checker/engine pair only
+while Grid, Network, UDM, and `fillerSetting` remain read-only. Initialization,
+binding, teardown, and database commit must not overlap worker calls.
 
 ## 9. Diagnostics and logging
 
@@ -278,7 +310,71 @@ disabled with `FR_VERBOSE=0`. It records request/frame data, candidate catalog
 statistics, windows and guards, enumeration/batch counts, baseline decisions,
 budgets, and the final outcome. Logging must not affect search behavior.
 
-## 10. Verification requirements
+## 10. Performance characteristics
+
+The planner is intentionally bounded by checker requests rather than elapsed
+time. Runtime cost therefore depends primarily on the number and size of
+checker batches, not on the number of planner objects allocated. Keep one
+initialized checker/engine pair for a design revision; constructing a pair per
+proposal measures initialization, not normal repair latency. Disable the
+diagnostic transcript with `FR_VERBOSE=0` for throughput runs.
+
+The following regression baseline was measured on 2026-08-06 using an Apple
+M4 (10 cores, 16 GB), macOS 26.2, Apple Clang 17, Release builds, and
+`FR_VERBOSE=0`. GoogleTest repetitions include fixture construction, so these
+numbers are conservative for a caller that reuses an initialized pair. They
+are comparison data for future changes, not a destination SLA.
+
+| Case | Repetitions / wall time | Average |
+|---|---:|---:|
+| planner ranked-pair search, synthetic oracle | 5000 / 0.31 s | 0.062 ms |
+| planner adaptive-L1 search, synthetic oracle | 2000 / 0.07 s | 0.035 ms |
+| clean target overlay | 3000 / 0.22 s | 0.073 ms |
+| one checker-verified filler replacement | 2000 / 1.08 s | 0.54 ms |
+| target growth with Delete/Add retiling | 1000 / 0.07 s | 0.07 ms |
+| two-row target/filler repair | 1000 / 0.09 s | 0.09 ms |
+| checker E2E at 5% filler density | 1000 / 0.87 s | 0.87 ms |
+| adaptive three-swap stress case | 25 / 2.10 s | 84 ms |
+
+The three-swap stress case is deliberately configured with a 4096-call window
+budget and batch size 64. Its transcript reports 1147 checker requests in 18
+batches: 1024 requests exhaustively disprove the initial ten-filler window,
+then adaptive L1 finds the three-swap answer after adding two fillers. This is
+an adversarial completeness test, not the default 512-call-window behavior.
+It identifies the real optimization target: reduce checker questions before
+trying to micro-optimize planner containers.
+
+Eight concurrent one-swap repairs completed 4000 calls in 0.92 s (about 4350
+calls/s), versus about 1850 calls/s in the serial fixture. The roughly 2.3x
+throughput improvement is useful but not linear because each checker batch can
+also use TBB internally; the destination must avoid oversubscribing outer opto
+workers and inner checker workers.
+
+The repository-local real-ODB smoke took 2.30 s for 50 fresh OpenROAD
+processes, about 46 ms/process. That includes executable startup, LEF/DEF read,
+ODB-to-test-UDM projection, DePlace/checker/engine initialization, and one
+repair. It proves wiring and repeatability, but it is not a hot-path repair
+measurement and the tiny design is not a scalability result.
+
+Optimization order is therefore:
+
+1. reuse the initialized checker/engine pair and run with `FR_VERBOSE=0`;
+2. tune `batchSize` and checker-call budgets from real-design p95/p99 request
+   counts while preserving fail-closed truncation;
+3. bound outer worker concurrency against the checker's internal TBB width;
+4. if the three-swap pattern is common, experiment with a staged search that
+   tries capped low-order subsets and directional adaptive growth before
+   returning to exhaustive proof of the smaller window;
+5. only after profiling shows them material, consider per-guard checker
+   baseline reuse or replacing the small request-ID `std::map` with contiguous
+   batch correlation.
+
+Step 4 must retain deterministic ordering and eventually revisit skipped
+subsets when a definitive no-solution answer is required. Cross-repair caches
+are intentionally not recommended: they complicate design-revision lifetime,
+consume unbounded memory, and are unsafe across commits.
+
+## 11. Verification requirements
 
 The maintained tests must cover:
 
@@ -290,22 +386,28 @@ The maintained tests must cover:
 - baseline mismatch, multiset delta, protocol failure, and budget exhaustion;
 - sparse filler density, opposite-direction adaptive growth, and empty
   compatible catalogs;
+- exact-cover retiling at 10%, 40%, and 100% released-area utility;
+- growing target removal/refill and one/two-row target/filler combinations;
+- Add/Delete validation, Grid-derived orientation, and atomic checker entry;
 - exact `CellChangeRecord` mapping and append-only caller behavior;
 - database, Grid, Network, and physical-record non-mutation on success and
   failure;
 - deterministic output, normal build, ASan, and
   `-Wall -Wextra -Werror` compilation.
 
-Helper dump replay is a test/debug path, not a runtime dependency. Dump v5
-stores row base polarity and the serializable filler-setting projection.
+Helper dump replay is a test/debug path, not a runtime dependency. Dump v6
+stores row base polarity, the serializable filler-setting projection, and
+master site names needed to validate Add orientation; v1-v5 remain readable.
 `test_filler_repair -load <dump.gz>` rebuilds helper data and runs the planner
 against the real checker without constructing UDM objects or mutating the
 dumped placement.
 
-## 11. Current limitations
+## 12. Current limitations
 
-- Repair remains swap-only; a valid solution requiring filler split/merge is
-  outside this implementation.
+- Only site-aligned rectangular target and filler footprints one or two rows
+  high are supported.
+- Exact-cover enumeration is bounded and can safely miss a later tiling after
+  16 solutions or 100000 visited states.
 - The search is bounded and can safely miss a solution outside its explored
   window or subset space.
 - Runtime initialization still requires real UDM-backed physical handles and

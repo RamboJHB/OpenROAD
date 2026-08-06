@@ -4,12 +4,16 @@
 #include <fillerRepair/FillerRepairEngine.h>
 
 #include <algorithm>
+#include <map>
 #include <optional>
 #include <set>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include <fillerRepair/FillerRetiler.h>
 #include <fillerRepair/RepairPlanner.h>
 #include <infrastructure/Grid.h>
 #include <infrastructure/Objects.h>
@@ -30,6 +34,7 @@ struct PlacementSnapshot
   {
     MasterInfo info;
     eLIB::LibCellID libCellId;
+    std::string siteName;
   };
   struct UdmRef
   {
@@ -208,7 +213,8 @@ class FillerCandidateCatalog
   bool hasPlacedCandidate_ = false;
 };
 
-// Non-owning adapter to the caller-owned checker.
+// Non-owning adapter to the caller-owned checker. The checker is initialized
+// once by its owner and is the sole DRC oracle for direct and repair checks.
 class CheckerOverlayClient
 {
  public:
@@ -229,7 +235,247 @@ class CheckerOverlayClient
   const ipl::ImplantLayerChecker* checker_ = nullptr;
 };
 
+// One request-local filler introduced by geometric retiling. Negative ids are
+// deliberately local to a repair call; neither Network nor UDM is modified.
+struct LayoutAddition
+{
+  InstanceId instanceId = -1;
+  PlacedInstance placed;
+  CellChangeRecord record;
+};
+
+ipl::FillerChanges mergeFillerChanges(const ipl::FillerChanges& fixed,
+                                      const ipl::FillerChanges& variable)
+{
+  ipl::FillerChanges merged = fixed;
+  for (const CellChangeRecord& change : variable) {
+    const std::string* name
+        = change.op_ == OpType::Add
+              ? std::get_if<std::string>(&change.cell_data_)
+              : nullptr;
+    if (name != nullptr) {
+      const auto existing = std::find_if(
+          merged.begin(), merged.end(), [&](const CellChangeRecord& item) {
+            const std::string* itemName
+                = item.op_ == OpType::Add
+                      ? std::get_if<std::string>(&item.cell_data_)
+                      : nullptr;
+            return itemName != nullptr && *itemName == *name;
+          });
+      if (existing != merged.end()) {
+        *existing = change;
+        continue;
+      }
+    }
+    merged.push_back(change);
+  }
+  return merged;
+}
+
+// Per-call placement view after applying target placement, filler deletions,
+// and one exact-cover tiling. It is immutable after construction and therefore
+// safe for concurrent repairs even though the shared engine snapshot is read.
+class LayoutPlacementView final : public PlacementView
+{
+ public:
+  LayoutPlacementView(
+      const PlacementView& base,
+      TargetPlace target,
+      std::set<InstanceId> removed,
+      std::vector<LayoutAddition> additions,
+      std::unordered_map<MasterId, eLIB::LibCellID> masterLibCells)
+      : base_(base),
+        target_(target),
+        removed_(std::move(removed)),
+        additions_(std::move(additions)),
+        master_lib_cells_(std::move(masterLibCells))
+  {
+    const MasterInfo* targetMaster = masterInfo(target_.masterId);
+    target_instance_ = PlacedInstance{target_.instanceId,
+                                      target_.masterId,
+                                      target_.rowId,
+                                      target_.x,
+                                      target_.orientation,
+                                      false};
+
+    for (const RowId rowId : base_.rows()) {
+      std::vector<PlacedInstance>& row = by_row_[rowId];
+      for (const PlacedInstance& placed : base_.instancesInRow(rowId)) {
+        if (placed.id != target_.instanceId
+            && removed_.count(placed.id) == 0) {
+          row.push_back(placed);
+        }
+      }
+    }
+    appendToRows(target_instance_, targetMaster);
+    for (const LayoutAddition& addition : additions_) {
+      synthetic_.emplace(addition.instanceId, addition.placed);
+      appendToRows(addition.placed, masterInfo(addition.placed.masterId));
+    }
+    for (auto& [rowId, row] : by_row_) {
+      (void) rowId;
+      std::sort(row.begin(), row.end(), [](const PlacedInstance& left,
+                                           const PlacedInstance& right) {
+        return left.x != right.x ? left.x < right.x : left.id < right.id;
+      });
+    }
+  }
+
+  const std::vector<RowId>& rows() const override { return base_.rows(); }
+  DbCoord siteWidth() const override { return base_.siteWidth(); }
+
+  const std::vector<PlacedInstance>& instancesInRow(
+      RowId rowId) const override
+  {
+    const auto found = by_row_.find(rowId);
+    return found != by_row_.end() ? found->second : emptyInstances();
+  }
+
+  const PlacedInstance* instance(InstanceId id) const override
+  {
+    if (id == target_.instanceId) {
+      return &target_instance_;
+    }
+    if (removed_.count(id) != 0) {
+      return nullptr;
+    }
+    const auto synthetic = synthetic_.find(id);
+    return synthetic != synthetic_.end() ? &synthetic->second
+                                         : base_.instance(id);
+  }
+
+  const MasterInfo* masterInfo(MasterId id) const override
+  {
+    return base_.masterInfo(id);
+  }
+
+  const std::vector<MasterId>& fillerMasterIds() const override
+  {
+    return base_.fillerMasterIds();
+  }
+
+  MasterCandidateResult getUsableMasterCandidates(
+      InstanceId instanceId) const override
+  {
+    return instanceId >= 0
+               ? base_.getUsableMasterCandidates(instanceId)
+               : PlacementView::getUsableMasterCandidates(instanceId);
+  }
+
+  CellChangeRecord cellChangeRecord(InstanceId instanceId,
+                                    MasterId newMasterId) const override
+  {
+    if (instanceId >= 0) {
+      return base_.cellChangeRecord(instanceId, newMasterId);
+    }
+    const auto addition = std::find_if(
+        additions_.begin(),
+        additions_.end(),
+        [instanceId](const LayoutAddition& item) {
+          return item.instanceId == instanceId;
+        });
+    if (addition == additions_.end()) {
+      return CellChangeRecord{};
+    }
+    CellChangeRecord record = addition->record;
+    const auto libCell = master_lib_cells_.find(newMasterId);
+    if (libCell != master_lib_cells_.end()) {
+      record.new_lib_cell_ = libCell->second;
+    }
+    return record;
+  }
+
+ private:
+  void appendToRows(const PlacedInstance& placed, const MasterInfo* master)
+  {
+    const int heightRows
+        = master != nullptr ? std::max<int>(master->height, 1) : 1;
+    for (int offset = 0; offset < heightRows; ++offset) {
+      PlacedInstance copy = placed;
+      copy.rowId += offset;
+      by_row_[copy.rowId].push_back(copy);
+    }
+  }
+
+  const PlacementView& base_;
+  TargetPlace target_;
+  std::set<InstanceId> removed_;
+  std::vector<LayoutAddition> additions_;
+  std::unordered_map<MasterId, eLIB::LibCellID> master_lib_cells_;
+  PlacedInstance target_instance_;
+  std::unordered_map<InstanceId, PlacedInstance> synthetic_;
+  std::map<RowId, std::vector<PlacedInstance>> by_row_;
+};
+
+// Prefixes every planner candidate with the fixed geometric Delete/Add
+// transaction. The real checker still decides all implant legality.
+class LayoutOracle final : public RepairOracle
+{
+ public:
+  LayoutOracle(RepairOracle& base,
+               const LayoutPlacementView& view,
+               ipl::FillerChanges fixed)
+      : base_(base), view_(view), fixed_(std::move(fixed))
+  {
+  }
+
+  OracleResult checkPlaceWithOverlay(const OracleRequest& request) override
+  {
+    std::vector<OracleResult> results = checkPlaceWithOverlays({request});
+    if (results.size() == 1) {
+      return std::move(results.front());
+    }
+    OracleResult failed;
+    failed.requestId = request.requestId;
+    failed.status = OracleStatus::CheckerError;
+    failed.diagnostics.push_back(
+        makeDiag(Severity::Fatal,
+                 "CheckerProtocolError",
+                 "checker returned the wrong result count for one layout "
+                 "overlay request"));
+    return failed;
+  }
+
+  std::vector<OracleResult> checkPlaceWithOverlays(
+      const std::vector<OracleRequest>& requests) override
+  {
+    std::vector<OracleRequest> merged = requests;
+    for (OracleRequest& request : merged) {
+      request.fillerChanges
+          = mergeFillerChanges(fixed_, request.fillerChanges);
+    }
+    std::vector<OracleResult> results = base_.checkPlaceWithOverlays(merged);
+    for (OracleResult& result : results) {
+      for (Violation& violation : result.violations) {
+        for (ViolationParticipant& participant : violation.participants) {
+          const PlacedInstance* placed
+              = view_.instance(participant.instanceId);
+          if (placed == nullptr) {
+            continue;
+          }
+          const MasterInfo* master = view_.masterInfo(placed->masterId);
+          participant.masterId = placed->masterId;
+          participant.rowId = placed->rowId;
+          participant.xRange
+              = XInterval{placed->x,
+                          placed->x + (master != nullptr ? master->width : 0)};
+          participant.isFiller = placed->isFiller;
+        }
+      }
+    }
+    return results;
+  }
+
+  const ipl::FillerChanges& fixedChanges() const { return fixed_; }
+
+ private:
+  RepairOracle& base_;
+  const LayoutPlacementView& view_;
+  ipl::FillerChanges fixed_;
+};
+
 }  // namespace
+
 class FillerRepairEngine::Impl final : private PlacementView,
                                        private RepairOracle
 {
@@ -240,7 +486,11 @@ class FillerRepairEngine::Impl final : private PlacementView,
   }
 
   bool init(const ipl::ImplantLayerChecker& checker);
-  // Gap/overlap coverage restricted to the rows a repair may edit.
+  // Gap/overlap coverage restricted to selected repair rows. repair() checks
+  // the initial target influence before oracle evaluation; adaptive candidates
+  // that edit farther rows are checked before entering the checker batch.
+  // This keeps the safety gate proportional to touched rows instead of the
+  // whole placed design.
   ipl::CheckResult localPrecheck(const Region& influence) const;
   RepairOutcome repair(const ipl::CheckRequest& request);
 
@@ -285,7 +535,8 @@ class FillerRepairEngine::Impl final : private PlacementView,
                        DbCoord x,
                        DbCoord width,
                        DbCoord heightRows) const;
-// Grows `table` so `id` is a valid index (ids can exceed the presized
+  // Grows `table` so `id` is a valid index (ids can exceed the presized
+  // container counts only if the Network id spaces are not dense).
   template <typename T>
   static void ensureSlot(std::vector<T>& table, size_t id)
   {
@@ -412,7 +663,13 @@ ViolationRelation toRelation(ipl::Relationship relationship)
 
 }  // namespace
 
+
 // --- is this region even placeable? -----------------------------------------
+// Answers "is every legal site in these rows covered exactly once" -- no gaps,
+// no overlaps. Repair refuses to run on a region that is not, because a swap
+// reasoned about a broken placement would be meaningless. Only the rows the
+// target can influence are checked; whole-design legality belongs to
+// infrastructure, not here.
 namespace internal {
 
 enum class CoverageFindingKind
@@ -441,6 +698,7 @@ inline const char* coverageFindingStatus(CoverageFindingKind kind)
 }
 
 // Returns findings in row/legal-span/x order. Adjacent findings of the same
+// kind in one row are coalesced, including across touching legal spans.
 std::vector<CoverageFinding> findCoverageFindings(
     std::vector<PlacementCoverageRow> rows)
 {
@@ -540,6 +798,17 @@ void FillerRepairEngine::Impl::buildPlannerData()
     return;
   }
 
+  // [PORT-ADAPT] The coordinate frame, and the biggest silent-wrongness risk
+  // in the port. RowId is the Grid row index and x is relative to the core's
+  // left edge, because that is the frame the checker builds its
+  // CheckRequest.rowId/colId in -- from these same Grid calls. Both sides
+  // must agree; nothing here re-derives or re-validates it.
+  //
+  // If your Grid indexes rows differently, or measures x from the die rather
+  // than the core, every lookup still compiles and every answer is about the
+  // wrong place. HandOff.md records the required envelope: no pad row before
+  // a standard row, y-sorted rows, and one shared row origin X at the core
+  // edge.
   placement_.siteWidth = grid->getSiteWidth().v;
   placement_.coreXl = grid->getCore().getXL().getStorage();
   const DbCoord coreYl = grid->getCore().getYL().getStorage();
@@ -570,7 +839,17 @@ void FillerRepairEngine::Impl::buildPlannerData()
                ? std::max<DbCoord>((height + placement_.rowHeight - 1) / placement_.rowHeight, 1)
                : 1;
   };
-// --- implant metadata: VT family / band polarity per master, derived from
+  // --- implant metadata: VT family / band polarity per master, derived from
+  // the master's implant shapes exactly like the checker (layer identity via
+  // the checker's TechLayerRelativeID, band anchored at the bottommost
+  // implant rect -- the rebuildMasterShapes rule).
+  // [PORT-ADAPT] The snapshot reads master implant shapes the same way the
+  // checker does -- layer identity through the checker's own
+  // TechLayerRelativeID, band anchored at the bottommost implant rect. That
+  // mirroring is deliberate: the two must agree about which shape sits on
+  // which band, or the planner ranks against geometry the checker does not
+  // see. If the checker's rebuildMasterShapes rule changes, this changes with
+  // it.
   const auto implantLayerOf =
       [&](eLIB::TechLayerRelativeID relId) -> const ipl::Layer* {
     for (const ipl::Layer& layer : checker->getLayers()) {
@@ -608,15 +887,22 @@ void FillerRepairEngine::Impl::buildPlannerData()
       continue;
     }
 
-// Node carry it, assigned from the configured filler list. The payload
+    // [PORT-ADAPT] Filler identity comes from infrastructure -- Master and
+    // Node carry it, assigned from the configured filler list. The payload
+    // never re-derives it from UDM macro flags, and must not start: the two
+    // disagree (a CORE_FILLER is also isCore()), and that disagreement was a
+    // real bug. Whatever your infrastructure's single filler authority is,
+    // this must read it.
     MasterInfo info;
     info.id = id;
     info.width = cell->getWidth().getStorage();
     info.height = heightInRows(cell->getHeight().getStorage());
-// One filler authority (infrastructure). The configured allow-list is a
+    // One filler authority (infrastructure). The configured allow-list is a
+    // separate concept -- which filler masters may be OFFERED as
+    // replacements -- and lives in placement_.fillerMasterIds.
     info.isFiller = nm->isFiller();
 
-// VT/polarity from implant RECT shapes (R0 frame).
+    // VT/polarity from implant RECT shapes (R0 frame).
     DbCoord bottomYl = 0;
     bool haveBottom = false;
     for (const auto& obs : cell->getObstruction()) {
@@ -648,10 +934,14 @@ void FillerRepairEngine::Impl::buildPlannerData()
     }
 
     ensureSlot(placement_.masters, static_cast<size_t>(id));
-    placement_.masters[id] = PlacementSnapshot::MasterRef{info, cell->getLibCellId()};
+    const eLIB::TechSite* site = cell->getTechSite();
+    placement_.masters[id] = PlacementSnapshot::MasterRef{
+        info, cell->getLibCellId(), site != nullptr ? site->getName() : ""};
   }
 
-// --- candidate universe: fillerSetting only, resolved to Network master
+  // --- candidate universe: fillerSetting only, resolved to Network master
+  // ids. Entries the Network does not know cannot be validated by the
+  // checker either (it builds masters from the Network) -> Warning + skip.
   {
     log_.msg("candidate",
              cat("provider source: fillerSetting configuredCount=",
@@ -673,7 +963,10 @@ void FillerRepairEngine::Impl::buildPlannerData()
                    masterDebug(*cell), "} networkMasterId=", id);
       });
       if (id < 0) {
-// Fatal: the checker validates candidates against Network masters, so
+        // Fatal: the checker validates candidates against Network masters, so
+        // a configured master the Network never imported means the snapshot
+        // was built against different inputs -- refuse instead of silently
+        // shrinking the candidate universe.
         addProblem(Severity::Fatal, "ConfiguredMasterNotInNetwork",
                    cat("configured filler master is not in Network: "
                        "configuredIndex=",
@@ -716,7 +1009,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
     });
   }
   if (placement_.fillerMasterIds.empty()) {
-// Empty allow list (or nothing usable in it) means repair could never
+    // Empty allow list (or nothing usable in it) means repair could never
+    // offer a swap -- fail init instead of failing every later repair.
     addProblem(Severity::Fatal, "NoConfiguredFillerMaster",
                cat("fillerSetting::getFillerPhysCells() yields no usable "
                    "filler master: configuredCount=",
@@ -725,7 +1019,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
                    " networkMasters=", network->getMasters().size()));
   }
 
-// --- placed instances: Grid supplies row and column (trusted, no
+  // --- placed instances: Grid supplies row and column (trusted, no
+  // cross-frame re-validation); PhysDesMgr supplies status and origin.
   placement_.instances.resize(network->getNodes().size());
   for (size_t networkNodeIndex = 0;
        networkNodeIndex < network->getNodes().size();
@@ -798,7 +1093,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
         placed,
         {lcId, cell->getLibCellId(), origin.getX(), origin.getY(),
          physCell.getOrient()}};
-// Multi-row instances appear in every row they occupy (one shared x
+    // Multi-row instances appear in every row they occupy (one shared x
+    // frame, so the copy keeps the same x).
     const DbCoord heightRows = std::max<DbCoord>(info.height, 1);
     for (DbCoord offset = 0; offset < heightRows; ++offset) {
       const RowId row = rowId + static_cast<RowId>(offset);
@@ -824,7 +1120,22 @@ void FillerRepairEngine::Impl::buildPlannerData()
                "no placed filler has a compatible configured VT master");
   }
 
-// The initial target snapshot only needs enough horizontal context for the
+  // The initial target snapshot only needs enough horizontal context for the
+  // checker's rules and the replacement-filler universe. Repair-window guards
+  // are sized later from the actual two-cell instance ring, so using the
+  // widest placed master here is both redundant and pathological when that
+  // master is a hard macro.
+  //
+  // ONE source decides rule reach: the checker. `getMaxRuleValue()` is
+  // literally how far, in sites, its own scan looks. Anything narrower cuts a
+  // run off at the edge of the snapshot, and the checker then reports a
+  // min-width violation that does not exist in the design.
+  //
+  // We deliberately do NOT compute reach ourselves from TechLayer width and
+  // spacing. That was the same number derived twice, and the two answers drift:
+  // the checker builds LEF58 rules whose minValue can exceed both raw values.
+  // It already cost us that bug once. And the converse is free -- an implant
+  // width the checker never turned into a rule is a width it never scans for.
   {
     DbCoord maxFillerWidth = 0;
     MasterId maxFillerMaster = -1;
@@ -836,6 +1147,14 @@ void FillerRepairEngine::Impl::buildPlannerData()
       }
     }
 
+    // [PORT-ADAPT] ImplantLayerChecker::getMaxRuleValue(). The whole guard
+    // sizing rests on this one number meaning "how far, in SITES, my scan
+    // looks". If your checker spells it differently, or returns DBU, fix it
+    // here and nowhere else -- but do not replace it with your own reach
+    // formula. See the block above for why that is the bug this avoids.
+    //
+    // Sites here, DBU everywhere else: this multiplication is the only place
+    // the two units meet.
     const int reachSites = checker->getMaxRuleValue();
     const DbCoord checkerReach =
         static_cast<DbCoord>(reachSites) * placement_.siteWidth;
@@ -875,17 +1194,23 @@ bool FillerRepairEngine::Impl::isReady() const
 bool FillerRepairEngine::Impl::isNonBlockingCheckerInitDiagnostic(
     const ipl::Diagnostic& diagnostic) const
 {
-// A non-placed Network node is outside both the checker snapshot and the
+  // A non-placed Network node is outside both the checker snapshot and the
+  // planner view. The checker reports the skip persistently, but it does not
+  // make the placed design's oracle incomplete.
   if (diagnostic.status == "skipped_phys_status") {
     return true;
   }
 
-// Missing rules are safe only for an implant layer unused by EVERY master
+  // Missing rules are safe only for an implant layer unused by EVERY master
+  // in the shared Network. This preserves informational diagnostics for spare
+  // technology layers without allowing a used layer to silently lose WIDTH or
+  // SPACING coverage. All other checker-init statuses fail closed below.
   if (diagnostic.status != "missing_rule_parameter"
       && diagnostic.status != "skipped_missing_rule_parameter") {
     return false;
   }
-  if (des_mgr_ == nullptr || network_ == nullptr || checker_overlay_.get() == nullptr) {
+  if (des_mgr_ == nullptr || network_ == nullptr
+      || checker_overlay_.get() == nullptr) {
     return false;
   }
 
@@ -947,7 +1272,6 @@ const MasterInfo* FillerRepairEngine::Impl::masterInfo(MasterId id) const
              : nullptr;
 }
 
-// --- seam 2: turning checker answers into oracle results --------------------
 MasterCandidateResult FillerRepairEngine::Impl::getUsableMasterCandidates(
     InstanceId fillerInstanceId) const
 {
@@ -998,6 +1322,7 @@ MasterCandidateResult FillerRepairEngine::Impl::getUsableMasterCandidates(
   return result;
 }
 
+// --- seam 2: turning checker answers into oracle results --------------------
 
 ipl::CheckRequest FillerRepairEngine::Impl::toCheckRequest(const TargetPlace& place) const
 {
@@ -1013,7 +1338,8 @@ ipl::CheckRequest FillerRepairEngine::Impl::toCheckRequest(const TargetPlace& pl
 
 ::Rect FillerRepairEngine::Impl::toGuardRect(const Region& region) const
 {
-// The checker's isInGuard uses the synthetic frame y = rowId * rowHeight;
+  // The checker's isInGuard uses the synthetic frame y = rowId * rowHeight;
+  // (rowHi+1)*rowHeight - 1 keeps a touching adjacent row out.
   const DbCoord yl = static_cast<DbCoord>(region.rowLo) * placement_.rowHeight;
   const DbCoord yh =
       static_cast<DbCoord>(region.rowHi + 1) * placement_.rowHeight - 1;
@@ -1042,7 +1368,7 @@ Violation FillerRepairEngine::Impl::toPlannerViolation(const ipl::Violation& v,
   for (const ipl::RowId rowId : v.rowIds) {
     out.rowIds.push_back(static_cast<RowId>(rowId));
   }
-// Participants synthesized from the instance ids (Node ids) via this view.
+  // Participants synthesized from the instance ids (Node ids) via this view.
   for (const ipl::InstanceId id : v.instances) {
     ViolationParticipant p;
     p.instanceId = static_cast<InstanceId>(id);
@@ -1060,6 +1386,12 @@ Violation FillerRepairEngine::Impl::toPlannerViolation(const ipl::Violation& v,
   return out;
 }
 
+// [PORT-ADAPT] CellChangeRecord's shape. This is the one place the search's
+// dense ids become UDM handles, so it is where a change to the shared record
+// -- a new field, a renamed one, a different CellData alternative -- has to
+// be absorbed. Every field must be filled: `orientation_` in particular is
+// read by the checker when it evaluates the swapped filler, so leaving it
+// default makes MX-placed rows evaluate the wrong implant band.
 CellChangeRecord FillerRepairEngine::Impl::cellChangeRecord(
     InstanceId instanceId,
     MasterId newMasterId) const
@@ -1076,7 +1408,8 @@ CellChangeRecord FillerRepairEngine::Impl::cellChangeRecord(
                        && static_cast<size_t>(instanceId) < placement_.instances.size()
                        && placement_.instances[instanceId].has_value();
   if (haveRef) {
-    const PlacementSnapshot::UdmRef& ref = placement_.instances[instanceId]->udm;
+    const PlacementSnapshot::UdmRef& ref
+        = placement_.instances[instanceId]->udm;
     record.cell_data_ = dpl2::CellData{ref.cellId};
     record.orig_lib_cell_ = ref.libCellId;
     record.x_ = ref.originX;
@@ -1113,7 +1446,8 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     return results;
   }
 
-// One (target, guard) + N candidates per batch, by engine construction; a
+  // One (target, guard) + N candidates per batch, by engine construction; a
+  // mixed batch is a protocol error.
   const OracleRequest& first = requests.front();
   for (const OracleRequest& request : requests) {
     const bool same =
@@ -1138,7 +1472,10 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     }
   }
 
-// The initial target influence was checked before planner search.
+  // The initial target influence was checked before planner search.
+  // Adaptive windows can later introduce fillers from additional rows. Check
+  // only requests that actually edit outside the initial influence, and keep
+  // illegal requests out of the checker batch without rejecting legal peers.
   const Region initialInfluence = snapshotGuard(first.targetPlace);
   std::vector<size_t> legalIndices;
   legalIndices.reserve(requests.size());
@@ -1199,13 +1536,30 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     changes.push_back(requests[index].fillerChanges);
   }
 
+  // [PORT-ADAPT] ImplantLayerChecker::checkPlaceWithOverlays -- THE call the
+  // whole feature is built on, and the one with real semantics behind it, not
+  // just a signature:
+  //
+  //   * one FillerChanges = one atomic candidate;
+  //   * results correlate BY INPUT ORDER, and results.size() must equal
+  //     candidates.size() -- a short or long batch invalidates all of it, and
+  //     the code below refuses the whole batch rather than guess;
+  //   * a candidate is judged against the guard region, so the guard is part
+  //     of the question (see quantizeGuard in RepairPlanner.cpp).
+  //
+  // If your checker batches differently, adapt here and keep those three
+  // properties. Dropping the count check to "salvage" a partial batch would
+  // silently mis-attribute answers to candidates.
   const std::vector<ipl::CheckResult> raw
       = checker_overlay_.check(target, guard, changes);
   log_.msg("engine",
            cat("overlay batch: ", changes.size(), " candidate(s) -> ",
                raw.size(), " result(s)"));
 
-// Ordered correlation is the final checker's entire batch protocol. Any
+  // Ordered correlation is the final checker's entire batch protocol. Any
+  // missing OR extra result invalidates the whole batch. Preserve only the
+  // returned cardinality so OracleGate can diagnose the exact mismatch; no
+  // checker finding from a mis-correlated batch is consumed.
   if (raw.size() != legalIndices.size()) {
     log_.msg("engine",
              cat("overlay batch protocol error: expected ", legalIndices.size(),
@@ -1226,6 +1580,22 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     return results;
   }
 
+  // [PORT-ADAPT] Depends on checker BEHAVIOUR, not on a signature, so it will
+  // compile happily while being wrong. If your checker does not repeat its
+  // init diagnostics into every result, this strip is harmless. If it repeats
+  // them differently -- a different count, or not as a leading run -- every
+  // candidate comes back illegal and repair silently never finds anything.
+  // The engine classifies that sequence once at init; check it matches.
+  //
+  // The checker repeats its start-up diagnostics in every single result --
+  // twice, in fact, once directly and once inside the embedded region result
+  // -- and counts them against isLegal. Those are harmless things it noticed
+  // at init, like a missing rule parameter on a layer no master uses.
+  //
+  // So strip every leading copy of that known sequence, and judge each
+  // candidate only on what this request produced. Without it one benign
+  // start-up note would make every candidate illegal forever. Anything
+  // structural never gets this far: rebuildOracle() already failed closed.
   const auto& initDiags = checker_overlay_.get()->getDiags();
   const auto requestDiagOffset =
       [&initDiags](const std::vector<ipl::Diagnostic>& diagnostics) {
@@ -1264,7 +1634,8 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
       out.violations.push_back(
           toPlannerViolation(v, first.targetPlace.instanceId));
     }
-// Candidate-shape classification: request-level validation failures come
+    // Candidate-shape classification: request-level validation failures come
+    // back as extra diagnostics with NO violations -> InvalidOverlay.
     if (out.violations.empty() && !r.isLegal && !out.diagnostics.empty()) {
       out.status = OracleStatus::InvalidOverlay;
       out.isLegal = false;
@@ -1334,6 +1705,9 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
+  // Resolve the checker request against the immutable engine snapshot. Do not
+  // reread candidate placement from the live Node: DePlace may already have
+  // changed that Node while the UDM commit is still pending.
   const int targetId = request.instanceId;
   const PlacedInstance* inst =
       targetId >= 0 ? instance(static_cast<InstanceId>(targetId)) : nullptr;
@@ -1351,11 +1725,13 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                   "checker supplied an invalid target placement request");
     return result;
   }
-  const eUNL::LeafCellID targetCell = placement_.instances[inst->id]->udm.cellId;
-  const Master* requestedMaster =
-      network_->getMaster(static_cast<int>(request.masterId));
-  const eLIB::PhysLibCell* newMaster =
-      requestedMaster != nullptr ? requestedMaster->getPhysLibCell() : nullptr;
+  const eUNL::LeafCellID targetCell
+      = placement_.instances[inst->id]->udm.cellId;
+  const Master* requestedMaster
+      = network_->getMaster(static_cast<int>(request.masterId));
+  const eLIB::PhysLibCell* newMaster
+      = requestedMaster != nullptr ? requestedMaster->getPhysLibCell()
+                                   : nullptr;
   if (newMaster == nullptr) {
     addDiagnostic(Severity::Fatal,
                   "TargetMasterUnknown",
@@ -1380,11 +1756,16 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   }
   const DbCoord replacementWidth = newMaster->getWidth().getStorage();
   const DbCoord replacementHeight = grid_->gridHeight(*newMaster).v;
-  if (oldMaster->width != replacementWidth
-      || oldMaster->height != replacementHeight) {
+  if (placement_.siteWidth <= 0 || replacementWidth <= 0
+      || replacementWidth % placement_.siteWidth != 0
+      || replacementHeight < 1 || replacementHeight > 2
+      || oldMaster->width <= 0
+      || oldMaster->width % placement_.siteWidth != 0
+      || oldMaster->height < 1 || oldMaster->height > 2) {
     addDiagnostic(Severity::Fatal,
-                  "TargetSizeMismatch",
-                  "target VT replacement must preserve width and height");
+                  "UnsupportedTargetFootprint",
+                  "target masters must be site-aligned rectangles one or "
+                  "two rows high");
     return result;
   }
 
@@ -1397,13 +1778,24 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   const Orient targetOrientation = inst->orientation;
 
   const RowId requestedRowId = static_cast<RowId>(request.rowId);
-  const DbCoord requestedX =
-      static_cast<DbCoord>(request.colId) * placement_.siteWidth;
+  const DbCoord requestedX
+      = static_cast<DbCoord>(request.colId) * placement_.siteWidth;
   const Orient requestedOrientation = toPlannerOrient(request.orientation);
-  const Region initialInfluence = snapshotGuard(
+  Region initialInfluence = snapshotGuard(
       requestedRowId, requestedX, replacementWidth, replacementHeight);
+  const Region oldInfluence = snapshotGuard(
+      targetRowId, targetX, oldMaster->width, oldMaster->height);
+  initialInfluence.x.xl
+      = std::min(initialInfluence.x.xl, oldInfluence.x.xl);
+  initialInfluence.x.xh
+      = std::max(initialInfluence.x.xh, oldInfluence.x.xh);
+  initialInfluence.rowLo
+      = std::min(initialInfluence.rowLo, oldInfluence.rowLo);
+  initialInfluence.rowHi
+      = std::max(initialInfluence.rowHi, oldInfluence.rowHi);
 
-// Fail before registering an uninstantiated replacement master. The
+  // Fail before registering an uninstantiated replacement master. The
+  // rejected-request contract covers the in-memory Network registry too.
   const ipl::CheckResult placement = localPrecheck(initialInfluence);
   if (!placement.isLegal) {
     result.diagnostics = placement.diagnostics;
@@ -1415,7 +1807,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   }
 
   // Master construction belongs to infrastructure because it requires the
-  // real edge table. Repair never invents an incomplete Network master.
+  // real edge table. Repair may refresh an existing snapshot, but it never
+  // invents an incomplete Network master.
   if (network_->getMaster(newMaster->getLibCellId()) == nullptr) {
     addDiagnostic(Severity::Fatal,
                   "TargetMasterNotRegistered",
@@ -1426,7 +1819,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
 
   const int newMasterId = network_->getMasterId(newMaster->getLibCellId());
   // Snapshot changes are an owner-level revision boundary. Never rebuild
-  // shared engine state inside a repair call.
+  // shared engine state inside a repair call: concurrent repairs must all see
+  // one immutable design revision.
   if (newMasterId >= 0
       && masterInfo(static_cast<MasterId>(newMasterId)) == nullptr) {
     addDiagnostic(Severity::Fatal,
@@ -1546,7 +1940,338 @@ RepairOutcome FillerRepairEngine::Impl::repair(
             "} matchingPhysRows=[", matchingRows, "]"));
   }
 
-// 2) Initial snapshot: the new target place with ZERO filler changes.
+  const bool layoutChanged
+      = target.rowId != targetRowId || target.x != targetX
+        || replacement->width != oldMaster->width
+        || replacement->height != oldMaster->height;
+  if (layoutChanged) {
+    // The layout rewrite is deliberately local and immutable: identify every
+    // filler displaced by the proposed target, exact-cover the released site
+    // cells, then submit Delete/Add plus any VT swaps as one checker overlay.
+    const int newCol = static_cast<int>(target.x / placement_.siteWidth);
+    const int newWidthSites
+        = static_cast<int>(replacement->width / placement_.siteWidth);
+    const int newHeightRows = static_cast<int>(replacement->height);
+    const int oldCol = static_cast<int>(targetX / placement_.siteWidth);
+    const int oldWidthSites
+        = static_cast<int>(oldMaster->width / placement_.siteWidth);
+    const int oldHeightRows = static_cast<int>(oldMaster->height);
+    const int rowCount = static_cast<int>(placement_.rows.size());
+    const int colCount = grid_->getRowSiteCount().v;
+    if (target.x % placement_.siteWidth != 0 || newCol < 0
+        || newCol + newWidthSites > colCount || target.rowId < 0
+        || target.rowId + newHeightRows > rowCount) {
+      addDiagnostic(Severity::Fatal,
+                    "TargetFootprintOutOfGrid",
+                    "proposed target footprint is not a legal site rectangle");
+      return result;
+    }
+
+    std::set<InstanceId> removed;
+    for (int rowOffset = 0; rowOffset < newHeightRows; ++rowOffset) {
+      const RowId rowId = target.rowId + rowOffset;
+      for (int colOffset = 0; colOffset < newWidthSites; ++colOffset) {
+        const int colId = newCol + colOffset;
+        const Pixel* pixel = grid_->gridPixel(GridX{colId}, GridY{rowId});
+        if (pixel == nullptr || !pixel->is_valid
+            || pixel->padding_reserved_by != nullptr) {
+          addDiagnostic(Severity::Warning,
+                        "TargetFootprintOnIllegalSite",
+                        cat("target covers illegal/reserved site row=", rowId,
+                            " col=", colId));
+          return result;
+        }
+        const Node* occupant = pixel->cell;
+        if (occupant == nullptr || occupant->getId() == target.instanceId) {
+          continue;
+        }
+        const PlacedInstance* displaced = instance(occupant->getId());
+        if (displaced == nullptr || !displaced->isFiller) {
+          addDiagnostic(Severity::Warning,
+                        "TargetOverlapsNonFiller",
+                        cat("target overlaps non-filler instance ",
+                            occupant->getId(), " at row=", rowId,
+                            " col=", colId));
+          return result;
+        }
+        removed.insert(displaced->id);
+      }
+    }
+
+    std::set<internal::SiteCell> emptySites;
+    const auto addFootprint = [&emptySites](RowId rowId,
+                                            int colId,
+                                            int widthSites,
+                                            int heightRows) {
+      for (int rowOffset = 0; rowOffset < heightRows; ++rowOffset) {
+        for (int colOffset = 0; colOffset < widthSites; ++colOffset) {
+          emptySites.insert(
+              internal::SiteCell{rowId + rowOffset, colId + colOffset});
+        }
+      }
+    };
+    addFootprint(targetRowId, oldCol, oldWidthSites, oldHeightRows);
+    Region rewriteInfluence = initialInfluence;
+    for (const InstanceId id : removed) {
+      const PlacedInstance* filler = instance(id);
+      const MasterInfo* master
+          = filler != nullptr ? masterInfo(filler->masterId) : nullptr;
+      if (filler == nullptr || master == nullptr || !master->isFiller
+          || master->width <= 0
+          || master->width % placement_.siteWidth != 0
+          || master->height < 1 || master->height > 2) {
+        addDiagnostic(Severity::Fatal,
+                      "UnsupportedDisplacedFiller",
+                      cat("displaced filler ", id,
+                          " has an unsupported footprint"));
+        return result;
+      }
+      const int fillerCol
+          = static_cast<int>(filler->x / placement_.siteWidth);
+      const int fillerWidth
+          = static_cast<int>(master->width / placement_.siteWidth);
+      addFootprint(filler->rowId,
+                   fillerCol,
+                   fillerWidth,
+                   static_cast<int>(master->height));
+      rewriteInfluence.x.xl
+          = std::min(rewriteInfluence.x.xl, filler->x);
+      rewriteInfluence.x.xh
+          = std::max(rewriteInfluence.x.xh, filler->x + master->width);
+      rewriteInfluence.rowLo
+          = std::min(rewriteInfluence.rowLo, filler->rowId);
+      rewriteInfluence.rowHi = std::max(
+          rewriteInfluence.rowHi,
+          filler->rowId + static_cast<RowId>(master->height) - 1);
+    }
+    for (int rowOffset = 0; rowOffset < newHeightRows; ++rowOffset) {
+      for (int colOffset = 0; colOffset < newWidthSites; ++colOffset) {
+        emptySites.erase(
+            internal::SiteCell{target.rowId + rowOffset, newCol + colOffset});
+      }
+    }
+
+    // Every released cell must be legal and occupied only by the old target
+    // or a filler named in the Delete prefix. Otherwise exact-cover geometry
+    // would conceal an input placement error.
+    for (const internal::SiteCell& site : emptySites) {
+      if (site.rowId < 0 || site.rowId >= rowCount || site.colId < 0
+          || site.colId >= colCount) {
+        addDiagnostic(Severity::Fatal,
+                      "ReleasedSiteOutOfGrid",
+                      "released target/filler footprint leaves the core grid");
+        return result;
+      }
+      const Pixel* pixel
+          = grid_->gridPixel(GridX{site.colId}, GridY{site.rowId});
+      if (pixel == nullptr || !pixel->is_valid
+          || pixel->padding_reserved_by != nullptr) {
+        addDiagnostic(Severity::Fatal,
+                      "ReleasedSiteNotFillable",
+                      cat("released site is illegal/reserved row=", site.rowId,
+                          " col=", site.colId));
+        return result;
+      }
+      const Node* occupant = pixel->cell;
+      if (occupant != nullptr && occupant->getId() != target.instanceId
+          && removed.count(occupant->getId()) == 0) {
+        addDiagnostic(Severity::Fatal,
+                      "ReleasedSiteStillOccupied",
+                      cat("released site overlaps unchanged instance ",
+                          occupant->getId()));
+        return result;
+      }
+    }
+
+    std::vector<internal::FillerFootprint> footprints;
+    std::unordered_map<MasterId, eLIB::LibCellID> masterLibCells;
+    for (const MasterId masterId : placement_.fillerMasterIds) {
+      const MasterInfo* master = masterInfo(masterId);
+      if (master == nullptr || !master->isFiller || master->width <= 0
+          || master->width % placement_.siteWidth != 0
+          || master->height < 1 || master->height > 2) {
+        continue;
+      }
+      footprints.push_back(
+          internal::FillerFootprint{masterId,
+                                    static_cast<int>(master->width
+                                                     / placement_.siteWidth),
+                                    static_cast<int>(master->height)});
+      masterLibCells.emplace(masterId,
+                             placement_.masters[masterId]->libCellId);
+    }
+    if (footprints.empty()) {
+      addDiagnostic(Severity::Warning,
+                    "NoRetilingFillerMaster",
+                    "no configured one/two-row site-aligned filler master");
+      return result;
+    }
+
+    const internal::RetileResult tilings = internal::enumerateRetilings(
+        std::vector<internal::SiteCell>(emptySites.begin(), emptySites.end()),
+        footprints);
+    log_.msg("engine",
+             cat("layout rewrite: removed=", removed.size(),
+                 " emptySites=", emptySites.size(),
+                 " tilings=", tilings.solutions.size(),
+                 " searchStates=", tilings.searchStates,
+                 " truncated=", tilings.truncated));
+    if (tilings.solutions.empty()) {
+      addDiagnostic(Severity::Warning,
+                    tilings.truncated ? "RetilingBudgetExceeded"
+                                      : "ReleasedAreaNotTileable",
+                    "configured filler footprints cannot exactly cover the "
+                    "released sites");
+      return result;
+    }
+
+    ipl::FillerChanges deletionPrefix;
+    for (const InstanceId id : removed) {
+      const PlacedInstance* filler = instance(id);
+      CellChangeRecord deletion
+          = cellChangeRecord(id, filler != nullptr ? filler->masterId : -1);
+      deletion.op_ = OpType::Delete;
+      deletion.new_lib_cell_ = deletion.orig_lib_cell_;
+      deletionPrefix.push_back(std::move(deletion));
+    }
+
+    std::vector<ipl::Diagnostic> rejectedLayoutDiagnostics;
+    for (const std::vector<internal::TiledFiller>& tiling :
+         tilings.solutions) {
+      std::vector<LayoutAddition> additions;
+      ipl::FillerChanges fixed = deletionPrefix;
+      bool usable = true;
+      int addIndex = 0;
+      for (const internal::TiledFiller& tile : tiling) {
+        const MasterInfo* footprintMaster = masterInfo(tile.masterId);
+        if (footprintMaster == nullptr) {
+          usable = false;
+          break;
+        }
+
+        MasterId chosen = -1;
+        eUTL::PhysOrientation orientation(eUTL::PhysOrientationE::R0);
+        for (const MasterId candidate : placement_.fillerMasterIds) {
+          const MasterInfo* master = masterInfo(candidate);
+          if (master == nullptr
+              || master->width != footprintMaster->width
+              || master->height != footprintMaster->height) {
+            continue;
+          }
+          const std::string& siteName
+              = placement_.masters[candidate]->siteName;
+          if (siteName.empty()) {
+            continue;
+          }
+          const std::optional<eUTL::PhysOrientation> expected
+              = grid_->getSiteOrientation(GridX{tile.colId},
+                                          GridY{tile.rowId},
+                                          siteName);
+          if (!expected.has_value()
+              || !supportedOrientation(*expected)) {
+            continue;
+          }
+          if (chosen < 0
+              || (master->vt == replacement->vt
+                  && masterInfo(chosen)->vt != replacement->vt)) {
+            chosen = candidate;
+            orientation = *expected;
+          }
+        }
+        if (chosen < 0) {
+          usable = false;
+          break;
+        }
+
+        const std::string name
+            = cat("__fr_", target.instanceId, '_', tile.rowId, '_',
+                  tile.colId, '_', addIndex);
+        const DbCoord xAbsolute
+            = placement_.coreXl
+              + static_cast<DbCoord>(tile.colId) * placement_.siteWidth;
+        const DbCoord yAbsolute
+            = placement_.rowFrames[static_cast<size_t>(tile.rowId)].yLo;
+        CellChangeRecord addition{OpType::Add,
+                                  CellData{name},
+                                  eUTL::UvDist(xAbsolute),
+                                  eUTL::UvDist(yAbsolute),
+                                  eLIB::LibCellID(0, 0),
+                                  placement_.masters[chosen]->libCellId,
+                                  orientation};
+        const InstanceId syntheticId = -1 - addIndex++;
+        LayoutAddition local;
+        local.instanceId = syntheticId;
+        local.placed = PlacedInstance{
+            syntheticId,
+            chosen,
+            tile.rowId,
+            static_cast<DbCoord>(tile.colId) * placement_.siteWidth,
+            toPlannerOrient(orientation),
+            true};
+        local.record = addition;
+        additions.push_back(std::move(local));
+        fixed.push_back(std::move(addition));
+      }
+      if (!usable) {
+        continue;
+      }
+
+      LayoutPlacementView layoutView(
+          *this, target, removed, additions, masterLibCells);
+      LayoutOracle layoutOracle(*this, layoutView, fixed);
+      OracleRequest snapshotRequest;
+      snapshotRequest.requestId = 0;
+      snapshotRequest.targetPlace = target;
+      snapshotRequest.guardRegion = rewriteInfluence;
+      const OracleResult snapshot
+          = layoutOracle.checkPlaceWithOverlay(snapshotRequest);
+      if (snapshot.status != OracleStatus::Checked) {
+        for (const Diagnostic& diagnostic : snapshot.diagnostics) {
+          rejectedLayoutDiagnostics.push_back(
+              toPublicDiagnostic(diagnostic));
+        }
+        continue;
+      }
+      if (snapshot.violations.empty()) {
+        result.hasSolution = true;
+        result.changes = fixed;
+        addDiagnostic(Severity::Info,
+                      "LayoutRetiled",
+                      cat("removed ", removed.size(), " filler(s), added ",
+                          additions.size(), " filler(s)"));
+        return result;
+      }
+
+      FillerRepairRequest plannerRequest;
+      plannerRequest.targetPlace = target;
+      plannerRequest.violations = snapshot.violations;
+      internal::RepairPlanner planner(
+          layoutView, layoutOracle, repair_config_);
+      const FillerRepairResult planned = planner.repair(plannerRequest);
+      if (!planned.hasSolution) {
+        continue;
+      }
+      result.hasSolution = true;
+      result.changes
+          = mergeFillerChanges(fixed, planned.changes);
+      for (const Diagnostic& diagnostic : planned.diagnostics) {
+        result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
+      }
+      return result;
+    }
+
+    result.diagnostics.insert(result.diagnostics.end(),
+                              rejectedLayoutDiagnostics.begin(),
+                              rejectedLayoutDiagnostics.end());
+    addDiagnostic(Severity::Warning,
+                  "NoLegalRetiling",
+                  "no exact-cover filler layout passed the implant checker");
+    return result;
+  }
+
+  // 2) Initial snapshot: the new target place with ZERO filler changes.
+  // Snapshot and every later engine baseline/candidate go through this same
+  // object -> one consistent oracle worldview.
   OracleRequest snapshotRequest;
   snapshotRequest.requestId = 0;
   snapshotRequest.targetPlace = target;
@@ -1589,15 +2314,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
             " polarityMismatch=", stats.polarityMismatch, '}'));
     return result;
   }
-  if (!samePlacement) {
-    addDiagnostic(Severity::Warning,
-                  "UnsupportedTargetMove",
-                  "filler repair supports same-position target master swaps "
-                  "only");
-    return result;
-  }
-
-// 3) Pure search over this object's data-source and oracle interfaces.
+  // 3) Pure search over this object's data-source and oracle interfaces.
   FillerRepairRequest plannerRequest;
   plannerRequest.targetPlace = target;
   plannerRequest.violations = snapshot.violations;
@@ -1609,11 +2326,13 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
   }
   if (!planned.hasSolution) {
-// Keep the public boundary atomic even if an internal search path ever
+    // Keep the public boundary atomic even if an internal search path ever
+    // reports exploratory records together with failure.
     return result;
   }
 
-// The planner request, checker request and public result all use this same
+  // The planner request, checker request and public result all use this same
+  // CellChangeRecord wire. Validate the accepted records, then copy directly.
   for (const CellChangeRecord& change : planned.changes) {
     const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(change);
     if (change.op_ != dpl2::OpType::Replace || cellId == nullptr
@@ -1689,7 +2408,10 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
     return result;
   }
 
-// Regional coverage gate only (spec: repair checks the rows it can edit;
+  // Regional coverage gate only (spec: repair checks the rows it can edit;
+  // whole-design placement legality is infrastructure's own gate). Legal
+  // spans were frozen from Grid pixels at initialization; placed spans are
+  // read live from PhysDesMgr for the row's snapshot nodes.
   std::vector<internal::PlacementCoverageRow> coverageRows;
   const RowId rowLo = std::max<RowId>(influence.rowLo, 0);
   const RowId rowHi = std::min<RowId>(
@@ -1761,7 +2483,8 @@ void FillerRepairEngine::Impl::buildLegalSpans()
        static_cast<size_t>(rowId) < placement_.rowFrames.size();
        ++rowId) {
     // A valid pixel not reserved by halo/padding requires exactly one placed
-    // cover; maximal runs of such pixels form the legal spans.
+    // cover; maximal runs of such pixels form the legal spans (core-left-
+    // relative like every planner x).
     std::vector<XInterval>& spans
         = placement_.legalSpans[static_cast<size_t>(rowId)];
     bool inSpan = false;
@@ -1854,7 +2577,12 @@ bool FillerRepairEngine::Impl::bindInfrastructure()
                  fillerSettings->getFillerPhysCells().size()));
     return false;
   }
-// Per-node Network<->UDM cross-validation was removed deliberately:
+  // Per-node Network<->UDM cross-validation was removed deliberately:
+  // infrastructure data is trusted as-is. The owner finishes master
+  // registration and setting binding before it initializes this immutable
+  // snapshot; each later target change arrives as a CheckRequest overlay.
+  // Nodes whose master or physical record is unusable are simply skipped by
+  // buildPlannerData.
 
   des_mgr_ = desMgr;
   filler_settings_ = fillerSettings;
@@ -1890,6 +2618,8 @@ bool FillerRepairEngine::Impl::ensureMasterRegistered(
   if (network_ == nullptr || filler_settings_ == nullptr) {
     return false;
   }
+  // Infrastructure owns Master creation because it has the real edge table.
+  // Repair only refreshes the allow-list classification on an existing one.
   Master* const registered = network_->getMaster(master.getLibCellId());
   if (registered == nullptr) {
     return false;
@@ -1952,6 +2682,7 @@ RepairOutcome FillerRepairEngine::repair(const ipl::CheckRequest& request)
 {
   return impl_->repair(request);
 }
+
 
 }  // namespace fillerRepair
 }  // namespace dpl2

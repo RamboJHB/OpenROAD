@@ -24,15 +24,19 @@ struct MasterSpec
   const char* name;
   int libIndex;
   int width;
+  int heightRows;
   bool isFiller;
   int nLayerRel;
   int pLayerRel;
 };
 
 constexpr MasterSpec kMasters[] = {
-    {"SL6", 0, 6, false, 0, 1}, {"TL4", 1, 4, false, 0, 1},
-    {"TH4", 2, 4, false, 2, 3}, {"FL2", 3, 2, true, 0, 1},
-    {"FH2", 4, 2, true, 2, 3},  {"FS2", 5, 2, true, 4, 5},
+    {"SL6", 0, 6, 1, false, 0, 1},
+    {"TL4", 1, 4, 1, false, 0, 1},
+    {"TH4", 2, 4, 1, false, 2, 3},
+    {"FL2", 3, 2, 1, true, 0, 1},
+    {"FH2", 4, 2, 1, true, 2, 3},
+    {"FS2", 5, 2, 1, true, 4, 5},
 };
 
 struct Placement
@@ -74,6 +78,9 @@ int masterIndex(MasterRole role)
     case MasterRole::RepairFiller: return 4;
     case MasterRole::ExtraUninstantiatedFiller: return 6;
     case MasterRole::MismatchedTarget: return 8;
+    case MasterRole::WiderTarget: return 9;
+    case MasterRole::TargetOldDoubleHeight: return 12;
+    case MasterRole::TargetNewDoubleHeight: return 13;
   }
   return -1;
 }
@@ -104,11 +111,18 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
         spec.name,
         spec.libIndex,
         spec.width,
-        kRowHeight,
+        spec.heightRows * kRowHeight,
         spec.isFiller && !setup.misclassifiedFillerMasters);
-    fake_udm::DesignDb::addShape(cell, spec.nLayerRel, 0, kRowHeight / 2);
-    fake_udm::DesignDb::addShape(
-        cell, spec.pLayerRel, kRowHeight / 2, kRowHeight);
+    for (int row = 0; row < spec.heightRows; ++row) {
+      const int bottomLayer = row % 2 == 0 ? spec.nLayerRel : spec.pLayerRel;
+      const int topLayer = row % 2 == 0 ? spec.pLayerRel : spec.nLayerRel;
+      fake_udm::DesignDb::addShape(
+          cell, bottomLayer, row * kRowHeight,
+          row * kRowHeight + kRowHeight / 2);
+      fake_udm::DesignDb::addShape(
+          cell, topLayer, row * kRowHeight + kRowHeight / 2,
+          (row + 1) * kRowHeight);
+    }
   }
   eLIB::PhysLibCell& extra = db.addMaster("FX4", 6, 4, kRowHeight, true);
   fake_udm::DesignDb::addShape(extra, 2, 0, kRowHeight / 2);
@@ -131,6 +145,49 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
   fake_udm::DesignDb::addShape(mismatched, 2, 0, kRowHeight / 2);
   fake_udm::DesignDb::addShape(mismatched, 3, kRowHeight / 2, kRowHeight);
 
+  eLIB::PhysLibCell& wider
+      = db.addMaster("TH5", 9, 5, kRowHeight, false);
+  fake_udm::DesignDb::addShape(wider, 2, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(wider, 3, kRowHeight / 2, kRowHeight);
+  eLIB::PhysLibCell& oneHighFiller
+      = db.addMaster("FH1", 10, 1, kRowHeight, true);
+  fake_udm::DesignDb::addShape(oneHighFiller, 2, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(
+      oneHighFiller, 3, kRowHeight / 2, kRowHeight);
+  eLIB::PhysLibCell& twoRowFiller
+      = db.addMaster("FL2D", 11, 2, 2 * kRowHeight, true);
+  fake_udm::DesignDb::addShape(twoRowFiller, 1, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(twoRowFiller, 0, kRowHeight / 2, kRowHeight);
+  fake_udm::DesignDb::addShape(
+      twoRowFiller, 0, kRowHeight, 3 * kRowHeight / 2);
+  fake_udm::DesignDb::addShape(
+      twoRowFiller, 1, 3 * kRowHeight / 2, 2 * kRowHeight);
+  eLIB::PhysLibCell& oldDouble
+      = db.addMaster("TL4D", 12, 4, 2 * kRowHeight, false);
+  fake_udm::DesignDb::addShape(oldDouble, 1, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(oldDouble, 0, kRowHeight / 2, kRowHeight);
+  fake_udm::DesignDb::addShape(oldDouble, 0, kRowHeight,
+                               3 * kRowHeight / 2);
+  fake_udm::DesignDb::addShape(oldDouble, 1, 3 * kRowHeight / 2,
+                               2 * kRowHeight);
+  eLIB::PhysLibCell& newDouble
+      = db.addMaster("TH5D", 13, 5, 2 * kRowHeight, false);
+  fake_udm::DesignDb::addShape(newDouble, 3, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(newDouble, 2, kRowHeight / 2, kRowHeight);
+  fake_udm::DesignDb::addShape(newDouble, 2, kRowHeight,
+                               3 * kRowHeight / 2);
+  fake_udm::DesignDb::addShape(newDouble, 3, 3 * kRowHeight / 2,
+                               2 * kRowHeight);
+  eLIB::PhysLibCell& oneDoubleFiller
+      = db.addMaster("FH1D", 14, 1, 2 * kRowHeight, true);
+  fake_udm::DesignDb::addShape(oneDoubleFiller, 3, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(
+      oneDoubleFiller, 2, kRowHeight / 2, kRowHeight);
+  fake_udm::DesignDb::addShape(
+      oneDoubleFiller, 2, kRowHeight, 3 * kRowHeight / 2);
+  fake_udm::DesignDb::addShape(
+      oneDoubleFiller, 3, 3 * kRowHeight / 2, 2 * kRowHeight);
+
   int rowIndexOffset = 0;
   if (setup.padRowFirst) {
     db.desMgr().addRow(setup.padRowOriginX,
@@ -142,11 +199,14 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
     rowIndexOffset = 1;
   }
   for (int row = 0; row < kStandardRows; ++row) {
-    db.desMgr().addRow(setup.rowOriginX[static_cast<size_t>(row)],
-                       row * kRowHeight,
-                       setup.rowSiteWidth[static_cast<size_t>(row)],
-                       kRowHeight,
-                       kRowSites);
+    eUNL::PhysRow& physicalRow
+        = db.desMgr().addRow(setup.rowOriginX[static_cast<size_t>(row)],
+                             row * kRowHeight,
+                             setup.rowSiteWidth[static_cast<size_t>(row)],
+                             kRowHeight,
+                             kRowSites);
+    physicalRow.orient_ = row % 2 == 0 ? eUTL::PhysOrientationE::MX
+                                       : eUTL::PhysOrientationE::R0;
   }
   if (setup.overlappingDoubleHeightRow) {
     // A second site class may cover two base placement rows. Append it after
@@ -180,17 +240,31 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
     if (setup.row0ThirdHardMacro && placement.cellIndex == 112) {
       continue;  // the two-row hard macro supplies this upper-row coverage
     }
+    if (setup.doubleHeightRepairLayout && placement.row == 3
+        && placement.cellIndex != 130 && placement.cellIndex != 132) {
+      continue;  // row-2 double-height cells cover [6,14)
+    }
     const int rowIndex = placement.row + rowIndexOffset;
     const eUTL::PhysOrientation orient = rowIndex % 2 == 0
                                              ? eUTL::PhysOrientationE::MX
                                              : eUTL::PhysOrientationE::R0;
-    const int libIndex = setup.row0ThirdHardMacro && placement.cellIndex == 102
-                             ? 7
-                             : placement.libIndex;
+    int libIndex = setup.row0ThirdHardMacro && placement.cellIndex == 102
+                       ? 7
+                       : placement.libIndex;
+    if (setup.doubleHeightRepairLayout && placement.row == 2) {
+      if (placement.cellIndex == 121 || placement.cellIndex == 123) {
+        libIndex = 11;
+      } else if (placement.cellIndex == 122) {
+        libIndex = 12;
+      }
+    }
+    const int x = setup.doubleHeightRepairLayout && placement.cellIndex == 132
+                      ? 14
+                      : placement.x;
     db.desMgr().addCell(
         eUNL::LeafCellID(0, placement.cellIndex),
         &db.design.lib_acc_.getPhysLibCell(libIndex),
-        setup.rowOriginX[static_cast<size_t>(placement.row)] + placement.x,
+        setup.rowOriginX[static_cast<size_t>(placement.row)] + x,
         placement.row * kRowHeight,
         orient);
   }
@@ -292,7 +366,7 @@ class FakeInfrastructureFixture final : public E2ETestInfrastructure
     grid_.initGrid(desMgr, padding_, 100, 100);
     network_.setCore(core);
     dpl2::fillerSetting filler_setting(fixture.design());
-    filler_setting.addFillerCell("FL2 FH2 FS2");
+    filler_setting.addFillerCell("FL2 FH2 FS2 FH1 FL2D FH1D");
 
     std::map<eLIB::LibCellID, const eLIB::PhysLibCell*> placedMasters;
     for (const Placement& placement : kPlacements) {
@@ -300,6 +374,10 @@ class FakeInfrastructureFixture final : public E2ETestInfrastructure
       const eUNL::PhysCell cell = desMgr->getPhysCell(id);
       if (!cell.isValid()) {
         if (setup.row0ThirdHardMacro && placement.cellIndex == 112) {
+          continue;
+        }
+        if (setup.doubleHeightRepairLayout && placement.row == 3
+            && placement.cellIndex != 130 && placement.cellIndex != 132) {
           continue;
         }
         return false;
@@ -318,6 +396,10 @@ class FakeInfrastructureFixture final : public E2ETestInfrastructure
       const eUNL::LeafCellID id(0, placement.cellIndex);
       if (!desMgr->getPhysCell(id).isValid()) {
         if (setup.row0ThirdHardMacro && placement.cellIndex == 112) {
+          continue;
+        }
+        if (setup.doubleHeightRepairLayout && placement.row == 3
+            && placement.cellIndex != 130 && placement.cellIndex != 132) {
           continue;
         }
         return false;

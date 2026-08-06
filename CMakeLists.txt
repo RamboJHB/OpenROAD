@@ -69,6 +69,10 @@ option(USE_SYSTEM_OPENSTA "Use system shared OpenSTA library" OFF)
 # Allow to use external shared abc libraries
 option(USE_SYSTEM_ABC "Use system shared ABC library" OFF)
 
+# Local validation only: build the ODB-to-dpl2 bridge and Tcl smoke command.
+# This is intentionally outside the fillerRepair migration payload.
+option(BUILD_DPL2_LOCAL_TEST "Build local dpl2 OpenROAD test wiring" OFF)
+
 project(OpenROAD VERSION 1
   LANGUAGES CXX
 )

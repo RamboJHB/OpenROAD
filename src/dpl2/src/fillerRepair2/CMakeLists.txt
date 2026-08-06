@@ -2,6 +2,7 @@
 # Copyright (c) 2026, The OpenROAD Authors
 
 add_library(dpl2_filler_repair OBJECT
+  FillerRetiler.cpp
   RepairPlanner.cpp
   FillerRepairEngine.cpp)
 add_library(dpl2::fillerRepair ALIAS dpl2_filler_repair)

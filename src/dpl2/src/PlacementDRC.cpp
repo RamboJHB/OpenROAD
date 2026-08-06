@@ -4,8 +4,6 @@
 #include <infrastructure/Grid.h>
 #include <infrastructure/network.h>
 
-#include <uv3d/Uv3d.hh>
-
 namespace dpl2 {
 
 PlacementDRC::PlacementDRC(Grid* grid) : grid_(grid)
@@ -38,7 +36,7 @@ bool PlacementDRC::checkDRC(const Node* cell, std::vector<CellChangeRecord>&
 bool PlacementDRC::checkDRC(const Node* cell,
                             const GridX x,
                             const GridY y,
-                            const eUNL::PhysOrientation& orient,
+                            const eUTL::PhysOrientation& orient,
                             std::vector<CellChangeRecord>& fcRecord) const
 {
   for (auto& checker : checkers_) {

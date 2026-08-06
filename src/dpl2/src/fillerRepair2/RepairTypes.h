@@ -150,7 +150,7 @@ struct Violation
   std::vector<ViolationParticipant> participants;
 };
 
-// Readers for the shared change record. Repair only ever emits Replace with a
+// Replace/Delete carry LeafCellID; request-local Add carries a string name.
 inline const eUNL::LeafCellID* cellChangeRecordLeafCellId(
     const CellChangeRecord& change)
 {
@@ -190,7 +190,7 @@ struct FillerRepairRequest
   std::vector<Violation> violations;
 };
 
-// Out: the filler swaps that make it legal -- checker-verified, or empty.
+// Out: checker-verified atomic filler edits, or empty.
 struct FillerRepairResult
 {
   bool hasSolution = false;

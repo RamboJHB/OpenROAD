@@ -232,6 +232,9 @@ struct MasterItem
     std::vector<MasterShape>
         rawShapes;       // original raw shapes (preserved input)
     Dbu siteHeight = 0;  // site height from the master's site type
+    // [fillerRepair-layout] Needed to validate the row orientation of an
+    // overlay Add without constructing a Network Node.
+    std::string siteName;
     // Serialized portable-input metadata. Runtime overlay validation reads
     // the authoritative Network Master classification.
     bool isFiller = false;
@@ -451,9 +454,16 @@ private:
     CheckShapes mergeGroupShapes(const CheckShapes& rawShapes,
                                  bool isCandidate) const;
 
-    OverlapInfo checkOverlap(const Node* node) const;
+    // [fillerRepair-layout] Uses the requested master/pose, not the mutable
+    // Network Node footprint, so size-changing targets see every occupant.
+    OverlapInfo checkOverlap(const CheckRequest& request) const;
+    bool targetFootprintChanged(const CheckRequest& request) const;
+    // [fillerRepair-layout] Batch setup validates target fields before a
+    // candidate exists; candidate validation additionally enforces the full
+    // Delete/Add transaction for a changed footprint.
     DiagVec validateOverlayRequest(const CheckRequest& request,
-                                   const FillerChanges& fillerChanges) const;
+                                   const FillerChanges& fillerChanges,
+                                   bool enforceLayoutTransaction = true) const;
     bool touchesInstance(const Violation& violation,
                          InstanceId instanceId) const;
     bool containsViolation(const Violation& oldViolation,

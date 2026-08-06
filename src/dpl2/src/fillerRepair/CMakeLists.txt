@@ -96,7 +96,9 @@ endfunction()
 # The pure pipeline. Built at C++17 on purpose: it must not acquire a
 # dependency on the runtime boundary or on a newer standard than a
 # destination's own placer may use.
-add_library(dpl2_filler_repair_planner OBJECT RepairPlanner.cpp)
+add_library(dpl2_filler_repair_planner OBJECT
+  FillerRetiler.cpp
+  RepairPlanner.cpp)
 dpl2_filler_repair_configure(dpl2_filler_repair_planner 17)
 add_library(dpl2::fillerRepairPlanner ALIAS dpl2_filler_repair_planner)
 
@@ -104,7 +106,10 @@ add_library(dpl2::fillerRepairPlanner ALIAS dpl2_filler_repair_planner)
 # reused from the target above: that one is pinned to C++17 for the
 # portability gate, and mixing standards across one link is not something to
 # rely on.
-add_library(dpl2_filler_repair OBJECT RepairPlanner.cpp FillerRepairEngine.cpp)
+add_library(dpl2_filler_repair OBJECT
+  FillerRetiler.cpp
+  RepairPlanner.cpp
+  FillerRepairEngine.cpp)
 dpl2_filler_repair_configure(dpl2_filler_repair 20)
 add_library(dpl2::fillerRepair ALIAS dpl2_filler_repair)
 

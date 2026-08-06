@@ -3,6 +3,47 @@
 This is the only migration and validation document for filler repair. The
 behavioral contract is `docs/filler_vt_overlay_repair_spec.md`.
 
+## Current status
+
+Implemented and verified in this branch:
+
+- one caller-facing checker entry with a non-owning, revision-scoped repair
+  engine; concurrent checks keep all request state local;
+- atomic, pre-commit `Replace`/`Delete`/`Add` filler transactions with no UDM,
+  Grid, Network, or filler-setting mutation;
+- same-footprint VT repair plus exact refill when a moved/resized one- or
+  two-row target displaces fillers or releases legal sites;
+- one- and two-row filler masters, Grid-authoritative Add orientation,
+  adaptive-L1/subset search, deterministic ranking, cache and fail-closed
+  budgets;
+- a complete GoogleTest source tree, a compact `fillerRepair2` migration
+  payload, dump replay, and repository-local OpenROAD/ODB command wiring;
+- 299 normal and 299 ASan tests, strict-warning compilation of the migration
+  payload, and repeatable local ODB smoke runs.
+
+The remaining risks are destination sign-off and bounded-search behavior, not
+missing runtime plumbing:
+
+- the local ODB smoke projects ODB into test-only UDM and therefore does not
+  prove destination UDM status values, handles, or lifecycle behavior;
+- row/frame conventions, obstruction-aware Grid occupancy, configured-master
+  registration with real edge data, and DRC dispatcher registration must be
+  verified in the destination;
+- exact-cover enumeration can safely miss a later tiling after 16 solutions
+  or 100000 states, and adaptive/subset budgets can safely return no solution
+  outside the explored space; neither path returns partial changes;
+- masters taller than two rows and multi-target transactions are unsupported;
+- checker-backed combinatorial search is the measured latency risk: the
+  adversarial three-swap case uses 1147 checker requests, while ordinary
+  repairs remain sub-millisecond in the local Release baseline;
+- opto worker concurrency must be tuned with the checker's internal TBB width,
+  and every placement commit requires workers to stop and the checker/engine
+  pair to be reconstructed for the new revision.
+
+Sections 5, 8, and 9 are the authoritative destination checklist, performance
+procedure, and final sign-off; Section 10 of the specification records the
+measured baseline and optimization order.
+
 ## 1. What to copy
 
 Recommended runtime payload:
@@ -12,7 +53,7 @@ src/dpl2/src/fillerRepair2/*
     -> <destination>/src/dpl2/src/fillerRepair/*
 ```
 
-`fillerRepair2` contains only runtime headers, two source files, and a small
+`fillerRepair2` contains only runtime headers, three source files, and a small
 CMake target. It excludes repository-local tests and test-only engine entry
 points. `src/dpl2/src/fillerRepair` remains the complete verification source
 and contains the portable tests.
@@ -39,11 +80,16 @@ matching changes when the destination does not already contain them.
   `CheckResult` per candidate in input order.
 - Ordinary checker instances default filler repair on; checker-helper-only
   instances disable it.
-- `ImplantLayerChecker` stores a non-owning engine pointer and calls it only
-  after direct DRC fails. It appends successful records to the caller vector.
+- `ImplantLayerChecker` stores a non-owning engine pointer. It calls repair
+  after direct DRC fails or whenever the requested target footprint changes;
+  the latter is required even when the target alone is implant-legal because
+  displaced fillers still need explicit commit records.
 - The checker obtains `PhysDesMgr` from its Grid, not global Session state.
 - Overlay checks are const/non-mutating, do not re-enter repair, and support
   concurrent reads after initialization.
+- Overlay validation accepts one atomic mix of filler `Replace`, `Delete`, and
+  request-local `Add`, validates complete one/two-row rectangles and row/site
+  orientation, and requires every target-overlapping filler to be deleted.
 - Checker master metadata may be lazily completed for a registered request
   master; shared tables must not be observed half-built.
 
@@ -111,9 +157,9 @@ add_subdirectory(<destination>/src/dpl2/src/fillerRepair fillerRepair)
 target_link_libraries(<owning-target> PRIVATE dpl2::fillerRepair)
 ```
 
-The runtime payload requires C++20. Its CMake lists `RepairPlanner.cpp` and
-`FillerRepairEngine.cpp`; the destination should link the target rather than
-repeat that source list.
+The runtime payload requires C++20. Its CMake lists `FillerRetiler.cpp`,
+`RepairPlanner.cpp`, and `FillerRepairEngine.cpp`; the destination should link
+the target rather than repeat that source list.
 
 The complete verification directory additionally exposes:
 
@@ -162,8 +208,12 @@ Before enabling repair on a real design, confirm:
 - Network includes every placed/fixed physical object intersecting the core,
   including hard macros; blockages remain Grid state.
 - configured filler masters are present in Network with real edge data;
+- configured target/filler widths are site-aligned and supported target/filler
+  heights are one or two logical rows;
 - `Node::isFiller()` is correct for placed fillers and replacement masters
   come from the configured filler list;
+- every configured filler master exposes its site name and Grid can return the
+  orientation for that site at the proposed row/column;
 - request row/column use the same frame as Grid and checker snapshots;
 - row iteration is y ordered, row origins agree with the core frame, and
   supported orientations are R0/R180/MX/MY;
@@ -207,8 +257,9 @@ and infrastructure.
 
 ## 7. Dump replay
 
-`ImplantLayerCheckerHelper::dump()` writes gzip dump v5. It preserves checker
-state, row base polarity, and the serializable filler-setting projection.
+`ImplantLayerCheckerHelper::dump()` writes gzip dump v6. It preserves checker
+state, row base polarity, the serializable filler-setting projection, and
+master site names for Add-orientation replay. Versions 1-5 remain readable.
 Loading remains backward-compatible, but filler repair replay requires a dump
 that contains configured filler master IDs.
 
@@ -229,7 +280,44 @@ helper Grid, Network, and checker, then drives the pure planner through the
 real overlay API. It does not construct `FillerRepairEngine`, require a loaded
 Design, or mutate the reconstructed placement.
 
-## 8. Final real-design sign-off
+## 8. Destination performance sign-off
+
+The reproducible repository baseline and its hardware are recorded in
+Section 10 of the specification. Do not tune from Debug, ASan, a transcript
+enabled with `FR_VERBOSE=1`, or one fresh process per proposal. Build Release,
+initialize one checker/engine pair, warm it once, and measure read-only calls
+before any commit.
+
+Collect separate p50/p95/p99 distributions for:
+
+- direct legal proposals returning no changes;
+- one- and multi-filler VT replacements;
+- target growth/move with Delete/Add retiling;
+- budget-truncated and definitive no-solution cases;
+- representative sparse and dense filler rows.
+
+For each slow call retain the `[fr]` fields `checker requests`, `batches`,
+`cacheHits`, adaptive `grown xN`, enumeration completeness, and retiler
+`searchStates`; wall time alone cannot distinguish checker cost from candidate
+growth. Measure again at 1, 2, 4, and 8 outer workers because the checker also
+parallelizes candidates internally. Choose the outer-worker count at the
+throughput knee rather than assuming one worker per core is optimal.
+
+Tune in this order: `FR_VERBOSE=0`, caller reuse of the pair, `batchSize`,
+per-window/per-repair budgets, then adaptive/subset caps. Change one setting at
+a time and rerun determinism, no-partial-result, ASan, and concurrency tests.
+Budget reductions may increase safe failures but must never change a failure
+into a partial repair. Do not add a cache whose lifetime crosses a database
+commit.
+
+The current review found no reason to optimize the exact-cover retiler or
+planner container choices first. The measured outlier is the checker-backed
+adaptive three-swap stress case, where 1147 candidate checks dominate 84 ms;
+planner-only searches remain tens of microseconds. If real designs reproduce
+that request pattern, evaluate staged low-order enumeration followed by early
+directional growth, with exhaustive fallback preserved for definitive search.
+
+## 9. Final real-design sign-off
 
 Portable tests prove the planner and checker protocol, not the destination's
 UDM import. Final sign-off requires one real-design run that confirms:
@@ -237,13 +325,14 @@ UDM import. Final sign-off requires one real-design run that confirms:
 1. engine initialization succeeds with the expected rows, site width,
    configured masters, and non-empty compatible catalog;
 2. a direct legal proposal returns no filler changes;
-3. a repairable illegal proposal returns only same-footprint filler
-   replacements and the checker accepts the complete overlay;
-4. an unrepairable or budget-truncated proposal returns no partial changes;
-5. UDM, Grid, and Network are unchanged before caller commit;
-6. concurrent read-only checks are clean under the destination sanitizer and
+3. a same-footprint repair returns checker-accepted `Replace` records;
+4. a growing/moving or one/two-row target returns one atomic, checker-accepted
+   `Delete`/`Add` plus optional `Replace` transaction with correct orientation;
+5. an unrepairable or budget-truncated proposal returns no partial changes;
+6. UDM, Grid, and Network are unchanged before caller commit;
+7. concurrent read-only checks are clean under the destination sanitizer and
    race-detection setup;
-7. post-commit infrastructure synchronization followed by pair reconstruction
+8. post-commit infrastructure synchronization followed by pair reconstruction
    sees the new revision.
 
 Remaining integration risks are limited to destination-specific UDM status

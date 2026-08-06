@@ -53,7 +53,8 @@ class PlacementView
 
   virtual DbCoord siteWidth() const = 0;
 
-// Sorted by x ascending (ties by id). Contract for multi-height (future):
+// Sorted by x ascending (ties by id). A multi-height instance is present in
+// every row it occupies.
   virtual const std::vector<PlacedInstance>& instancesInRow(
       RowId rowId) const = 0;
 
@@ -62,7 +63,7 @@ class PlacementView
 
 // Configured replacement universe, sorted ascending and unique (the
   virtual const std::vector<MasterId>& fillerMasterIds() const = 0;
-// Build the exact checker/public wire record for one planner swap. This is
+// Build one planner Replace record; the engine assembles layout Delete/Add.
   virtual CellChangeRecord cellChangeRecord(InstanceId instanceId,
                                             MasterId newMasterId) const = 0;
 // Has a working default built from the accessors above; virtual so a view

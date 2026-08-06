@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 
-#include <dpl2/DRCChecker.h>
+#include <drc/DRCChecker.h>
 #include <dpl2/DePlace.h>
 
 using eUTL::PhysOrientation;
@@ -22,7 +22,7 @@ class PlacementDRC
     void addChecker(DRCCheckerType type, std::unique_ptr<DRCChecker> checker);
     bool checkDRC(const Node* cell, std::vector<CellChangeRecord>& fcRecord) const;
     bool checkDRC(const Node* cell, GridX x, GridY y,
-                  const eUNL::PhysOrientation& orient,
+                  const eUTL::PhysOrientation& orient,
                   std::vector<CellChangeRecord>& fcRecord) const;
 
     DRCChecker* getChecker(DRCCheckerType type) const;

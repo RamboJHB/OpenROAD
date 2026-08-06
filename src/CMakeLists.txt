@@ -263,6 +263,9 @@ add_subdirectory(utl)
 add_subdirectory(dst)
 add_subdirectory(pdn)
 add_subdirectory(dft)
+if(BUILD_DPL2_LOCAL_TEST)
+  add_subdirectory(dpl2/local)
+endif()
 
 ################################################################
 
@@ -328,6 +331,11 @@ target_link_libraries(openroad
   ${TCL_LIBRARY}
   ${CMAKE_THREAD_LIBS_INIT}
 )
+
+if(BUILD_DPL2_LOCAL_TEST)
+  target_link_libraries(openroad dpl2_openroad_test)
+  target_compile_definitions(openroad PRIVATE DPL2_LOCAL_TEST)
+endif()
 
 if (NOT ${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
   # mpl2 aborts with link error on darwin and par causes abseil link error at startup on apple silicon so do not link it.

@@ -100,6 +100,12 @@ extern int Odbtcl_Init(Tcl_Interp* interp);
 extern int Upf_Init(Tcl_Interp* interp);
 }
 
+#ifdef DPL2_LOCAL_TEST
+namespace dpl2::local {
+void initOpenRoadTestCommands(ord::OpenRoad* openroad);
+}
+#endif
+
 // Main.cc set by main()
 extern const char* log_filename;
 extern const char* metrics_filename;
@@ -286,6 +292,9 @@ void OpenRoad::init(Tcl_Interp* tcl_interp)
   initDistributed(this);
   initSteinerTreeBuilder(this);
   dft::initDft(this);
+#ifdef DPL2_LOCAL_TEST
+  dpl2::local::initOpenRoadTestCommands(this);
+#endif
 
   // Import exported commands to global namespace.
   Tcl_Eval(tcl_interp, "sta::define_sta_cmds");
