@@ -570,9 +570,9 @@ void FillerRepairEngine::Impl::buildPlannerData()
   //
   // If your Grid indexes rows differently, or measures x from the die rather
   // than the core, every lookup still compiles and every answer is about the
-  // wrong place. CHECKER_REPAIR_CONTRACT.md "Row/column frames" spells out
-  // the envelope this assumes (no pad row before a standard row, y-sorted
-  // rows, one shared row origin X at the core edge).
+  // wrong place. HandOff.md records the required envelope: no pad row before
+  // a standard row, y-sorted rows, and one shared row origin X at the core
+  // edge.
   placement_.siteWidth = grid->getSiteWidth().v;
   placement_.coreXl = grid->getCore().getXL().getStorage();
   const DbCoord coreYl = grid->getCore().getYL().getStorage();

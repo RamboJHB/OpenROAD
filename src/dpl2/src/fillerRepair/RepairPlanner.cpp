@@ -1578,7 +1578,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
 // speculatively checking candidates that an earlier answer may make
 // unnecessary, and which way that lands depends on your thread count and on
 // what one candidate actually costs. If batches show up in a real profile,
-// that is the experiment to run. See fillerRepair/README.md "Search cost".
+// that is the experiment to run; the [fr] transcript reports both values.
 bool OracleGate::resolve(const Overlay* chunk,
                          const OverlayKey* chunkKeys,
                          std::size_t count,
