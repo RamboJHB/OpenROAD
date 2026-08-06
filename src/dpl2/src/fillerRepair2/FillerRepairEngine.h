@@ -25,9 +25,6 @@ struct RepairOutcome
   std::vector<ipl::Diagnostic> diagnostics;
 };
 
-// Called by the checker hook when lazy initialization is unavailable.
-void reportRepairUnavailable(const char* reason);
-
 class FillerRepairEngine
 {
  public:
@@ -37,9 +34,10 @@ class FillerRepairEngine
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
-  // Gets PhysDesMgr from Grid and the active fillerSetting from Network.
+  // Gets PhysDesMgr from Grid and the active fillerSetting from Network. The
+  // caller owns and supplies the initialized checker used as the sole oracle.
   // Configured masters must already exist in Network with real edge data.
-  bool init();
+  bool init(const ipl::ImplantLayerChecker& checker);
 
   // Non-mutating, pre-commit overlay repair.
   RepairOutcome repair(const ipl::CheckRequest& request);

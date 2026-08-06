@@ -8,8 +8,11 @@
 #include "E2ETestProvider.h"
 
 #include <algorithm>
+#include <array>
 #include <memory>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -196,9 +199,11 @@ class EngineHarness
                                   registerTargetMaster)) {
       return;
     }
+    checker_ = std::make_unique<dpl2::ipl::ImplantLayerChecker>(
+        objects_.infrastructure().grid(), objects_.infrastructure().network());
     engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>(
         objects_.infrastructure().grid(), objects_.infrastructure().network());
-    engine_ready_ = engine_->init();
+    engine_ready_ = engine_->init(*checker_);
   }
 
   bool engineReady() const { return engine_ready_; }
@@ -215,7 +220,7 @@ class EngineHarness
   }
   bool update()
   {
-    engine_ready_ = engine_->update();
+    engine_ready_ = engine_->update(*checker_);
     return engine_ready_;
   }
 
@@ -227,6 +232,7 @@ class EngineHarness
  private:
   ProviderObjects objects_;
   std::unique_ptr<dpl2::fillerSetting> filler_setting_;
+  std::unique_ptr<dpl2::ipl::ImplantLayerChecker> checker_;
   std::unique_ptr<dpl2::fillerRepair::FillerRepairEngine> engine_;
   bool engine_ready_ = false;
 };
@@ -234,7 +240,7 @@ class EngineHarness
 class CheckerHarness
 {
  public:
-  // bindSetting=false leaves Network unbound so fail-closed lazy init can be
+  // bindSetting=false leaves Network unbound so fail-closed initialization can be
   // tested without a DePlace owner.
   explicit CheckerHarness(const frt::DesignSetup& setup,
                           bool bindSetting = true)
@@ -256,6 +262,11 @@ class CheckerHarness
     checker_ = std::make_unique<dpl2::ipl::ImplantLayerChecker>(
         objects_.infrastructure().grid(),
         objects_.infrastructure().network());
+    engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>(
+        objects_.infrastructure().grid(), objects_.infrastructure().network());
+    if (engine_->init(*checker_)) {
+      checker_->setFillerRepairEngine(engine_.get());
+    }
     checker_ready_ = true;
   }
 
@@ -276,10 +287,18 @@ class CheckerHarness
   // repository-local regression changes that revision.
   bool update()
   {
+    // Break both borrowed links before destroying the checker they reference.
+    engine_.reset();
     checker_ = std::make_unique<dpl2::ipl::ImplantLayerChecker>(
         objects_.infrastructure().grid(),
         objects_.infrastructure().network());
-    return true;
+    engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>(
+        objects_.infrastructure().grid(), objects_.infrastructure().network());
+    const bool ready = engine_->init(*checker_);
+    if (ready) {
+      checker_->setFillerRepairEngine(engine_.get());
+    }
+    return ready;
   }
 
   bool bindSetting()
@@ -309,6 +328,11 @@ class CheckerHarness
   bool checkTarget()
   {
     fc_record_.clear();
+    return checkTarget(fc_record_);
+  }
+
+  bool checkTarget(std::vector<dpl2::CellChangeRecord>& changes)
+  {
     dpl2::Grid* grid = objects_.infrastructure().grid();
     dpl2::Network* network = objects_.infrastructure().network();
     dpl2::Node* target = network->getNode(
@@ -318,7 +342,7 @@ class CheckerHarness
                               grid->gridX(target),
                               grid->gridSnapDownY(target),
                               target->getOrient(),
-                              fc_record_);
+                              changes);
   }
 
   const std::vector<dpl2::CellChangeRecord>& fillerChanges() const
@@ -330,6 +354,7 @@ class CheckerHarness
   ProviderObjects objects_;
   std::unique_ptr<dpl2::fillerSetting> filler_setting_;
   std::unique_ptr<dpl2::ipl::ImplantLayerChecker> checker_;
+  std::unique_ptr<dpl2::fillerRepair::FillerRepairEngine> engine_;
   std::vector<dpl2::CellChangeRecord> fc_record_;
   bool checker_ready_ = false;
 };
@@ -379,10 +404,12 @@ TEST(FillerRepairInitializationDiagnostics,
                                        setting));
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
+  dpl2::ipl::ImplantLayerChecker checker(
+      objects.infrastructure().grid(), objects.infrastructure().network());
   engine.setDebugLogging(true);
 
   testing::internal::CaptureStdout();
-  const bool initialized = engine.init();
+  const bool initialized = engine.init(checker);
   dpl2::fillerRepair::RepairOutcome outcome;
   if (initialized) {
     outcome = engine.repair(
@@ -430,10 +457,12 @@ TEST(FillerRepairInitializationDiagnostics,
                                        setting));
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
+  dpl2::ipl::ImplantLayerChecker checker(
+      objects.infrastructure().grid(), objects.infrastructure().network());
   engine.setDebugLogging(true);
 
   testing::internal::CaptureStdout();
-  const bool initialized = engine.init();
+  const bool initialized = engine.init(checker);
   const std::string transcript = testing::internal::GetCapturedStdout();
 
   ASSERT_TRUE(initialized) << transcript;
@@ -463,10 +492,12 @@ TEST(FillerRepairInitializationDiagnostics,
                                        setting));
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
+  dpl2::ipl::ImplantLayerChecker checker(
+      objects.infrastructure().grid(), objects.infrastructure().network());
   engine.setDebugLogging(true);
 
   testing::internal::CaptureStdout();
-  const bool initialized = engine.init();
+  const bool initialized = engine.init(checker);
   const std::string transcript = testing::internal::GetCapturedStdout();
 
   ASSERT_TRUE(initialized) << transcript;
@@ -495,10 +526,12 @@ TEST(FillerRepairInitializationDiagnostics,
                                        setting));
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
+  dpl2::ipl::ImplantLayerChecker checker(
+      objects.infrastructure().grid(), objects.infrastructure().network());
   engine.setDebugLogging(true);
 
   testing::internal::CaptureStdout();
-  const bool initialized = engine.init();
+  const bool initialized = engine.init(checker);
   dpl2::fillerRepair::RepairOutcome outcome;
   if (initialized) {
     outcome = engine.repair(
@@ -571,7 +604,8 @@ TEST(FillerRepairInitializationDiagnostics,
                 &noEdgeTypes()),
             nullptr);
   dpl2::fillerRepair::FillerRepairEngine engine(grid, network);
-  ASSERT_TRUE(engine.init());
+  dpl2::ipl::ImplantLayerChecker checker(grid, network);
+  ASSERT_TRUE(engine.init(checker));
   EXPECT_EQ(network->getMaster(repairMaster.getLibCellId()), stale);
   EXPECT_TRUE(stale->isFiller());
 
@@ -844,6 +878,40 @@ TEST_P(FillerRepairEngineE2E,
   EXPECT_EQ(harness.design().snapshot(), beforeFailedCheck);
 }
 
+TEST_P(FillerRepairEngineE2E,
+       SharedCheckerAndEngineSupportConcurrentRepairs)
+{
+  CheckerHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.checkerReady());
+  ASSERT_TRUE(harness.setTargetMaster(frt::MasterRole::TargetNew));
+  const auto before = harness.design().snapshot();
+
+  constexpr size_t kWorkers = 8;
+  std::array<bool, kWorkers> legal{};
+  std::array<std::vector<dpl2::CellChangeRecord>, kWorkers> changes;
+  std::vector<std::thread> workers;
+  workers.reserve(kWorkers);
+  for (size_t i = 0; i < kWorkers; ++i) {
+    workers.emplace_back([&harness, &legal, &changes, i]() {
+      legal[i] = harness.checkTarget(changes[i]);
+    });
+  }
+  for (std::thread& worker : workers) {
+    worker.join();
+  }
+
+  for (size_t i = 0; i < kWorkers; ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_TRUE(legal[i]);
+    ASSERT_EQ(changes[i].size(), 1U);
+    EXPECT_EQ(changes[i].front().op_, dpl2::OpType::Replace);
+    EXPECT_EQ(changes[i].front().new_lib_cell_,
+              harness.design().master(frt::MasterRole::RepairFiller)
+                  .getLibCellId());
+  }
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
 TEST_P(FillerRepairEngineE2E, CheckerEntryCleanCandidateHasNoChanges)
 {
   CheckerHarness harness(GetParam().setup);
@@ -1002,7 +1070,9 @@ TEST_P(FillerRepairEngineE2E,
       = objects.infrastructure().network()->getMasters().size();
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
-  EXPECT_TRUE(engine.init());
+  dpl2::ipl::ImplantLayerChecker checker(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+  EXPECT_TRUE(engine.init(checker));
   EXPECT_GE(objects.infrastructure().network()->getMasterId(extraId), 0);
   EXPECT_EQ(objects.infrastructure().network()->getMasters().size(),
             masterCount);
@@ -1017,7 +1087,9 @@ TEST_P(FillerRepairEngineE2E, EmptyFillerAllowListErrorsOut)
   objects.infrastructure().network()->setFillerSetting(&emptySetting);
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
-  EXPECT_FALSE(engine.init());
+  dpl2::ipl::ImplantLayerChecker checker(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+  EXPECT_FALSE(engine.init(checker));
   const auto repair = engine.repair(
       objects.design().cell(frt::CellRole::Target),
       objects.design().master(frt::MasterRole::TargetNew));
@@ -1030,7 +1102,8 @@ TEST_P(FillerRepairEngineE2E, MissingInfrastructureErrorsOut)
   ProviderObjects objects(GetParam().setup, false);
   ASSERT_TRUE(objects.hasDesign());
   dpl2::fillerRepair::FillerRepairEngine engine(nullptr, nullptr);
-  EXPECT_FALSE(engine.init());
+  dpl2::ipl::ImplantLayerChecker checker(nullptr, nullptr);
+  EXPECT_FALSE(engine.init(checker));
   const auto repair = engine.repair(
       objects.design().cell(frt::CellRole::Target),
       objects.design().master(frt::MasterRole::TargetNew));
@@ -1040,7 +1113,7 @@ TEST_P(FillerRepairEngineE2E, MissingInfrastructureErrorsOut)
 
 // Grid's retained manager is the checker authority. Changing the global
 // current design after infrastructure creation must not redirect the checker
-// or the engine's private checker.
+// or the engine that borrows it as oracle.
 TEST_P(FillerRepairEngineE2E, GridManagerAvoidsGlobalSession)
 {
   auto provider = frt::makeE2ETestProvider();
@@ -1058,20 +1131,19 @@ TEST_P(FillerRepairEngineE2E, GridManagerAvoidsGlobalSession)
   ASSERT_NE(active, nullptr);
   active->activate();
   ASSERT_EQ(infrastructure->grid()->getDesMgr(), requested->desMgr());
-  dpl2::ipl::ImplantLayerChecker checker(infrastructure->grid(),
-                                         infrastructure->network());
-  EXPECT_TRUE(checker.getDiags().empty()) << diagnosticText(checker.getDiags());
-  EXPECT_EQ(checker.siteWidth(), infrastructure->grid()->getSiteWidth().v);
-
   dpl2::fillerSetting setting(requested->design());
   setting.addFillerCell(kDefaultFillers);
   ASSERT_TRUE(bindRepairInfrastructure(*requested,
                                        infrastructure->grid(),
                                        infrastructure->network(),
                                        setting));
+  dpl2::ipl::ImplantLayerChecker checker(infrastructure->grid(),
+                                         infrastructure->network());
+  EXPECT_TRUE(checker.getDiags().empty()) << diagnosticText(checker.getDiags());
+  EXPECT_EQ(checker.siteWidth(), infrastructure->grid()->getSiteWidth().v);
   dpl2::fillerRepair::FillerRepairEngine engine(infrastructure->grid(),
                                                  infrastructure->network());
-  ASSERT_TRUE(engine.init());
+  ASSERT_TRUE(engine.init(checker));
   const auto repair = engine.repair(
       requested->cell(frt::CellRole::Target),
       requested->master(frt::MasterRole::TargetNew));
@@ -1096,7 +1168,9 @@ TEST_P(FillerRepairEngineE2E, SettingDesignMismatchFailsClosed)
   infrastructure->network()->setFillerSetting(&setting);
   dpl2::fillerRepair::FillerRepairEngine engine(infrastructure->grid(),
                                                  infrastructure->network());
-  EXPECT_FALSE(engine.init());
+  dpl2::ipl::ImplantLayerChecker checker(infrastructure->grid(),
+                                         infrastructure->network());
+  EXPECT_FALSE(engine.init(checker));
   const auto repair = engine.repair(
       requested->cell(frt::CellRole::Target),
       requested->master(frt::MasterRole::TargetNew));
@@ -1106,7 +1180,7 @@ TEST_P(FillerRepairEngineE2E, SettingDesignMismatchFailsClosed)
 }
 
 // set_filler_option and DePlace's Network binding must precede repair. A
-// failed lazy init remains closed for that checker instance.
+// Failed initialization leaves the engine closed until the owner rebuilds it.
 TEST_P(FillerRepairEngineE2E, MissingConfigurationFailsClosed)
 {
   CheckerHarness harness(GetParam().setup, /*bindSetting=*/false);
@@ -1135,6 +1209,8 @@ TEST_P(FillerRepairEngineE2E, FailedInitFailsClosed)
   ASSERT_TRUE(objects.hasInfrastructure());
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
+  dpl2::ipl::ImplantLayerChecker checker(
+      objects.infrastructure().grid(), objects.infrastructure().network());
   const auto expectClosed = [&](const char* phase) {
     SCOPED_TRACE(phase);
     const auto repair = engine.repair(
@@ -1145,7 +1221,7 @@ TEST_P(FillerRepairEngineE2E, FailedInitFailsClosed)
     EXPECT_TRUE(hasDiagnostic(repair.diagnostics, "engine_not_initialized"));
   };
   expectClosed("before init");
-  EXPECT_FALSE(engine.init());
+  EXPECT_FALSE(engine.init(checker));
   expectClosed("after failed init");
 }
 
@@ -1162,8 +1238,10 @@ TEST_P(FillerRepairEngineE2E, EngineUsesOneInitialization)
                                        setting));
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), objects.infrastructure().network());
-  ASSERT_TRUE(engine.init());
-  EXPECT_FALSE(engine.init());
+  dpl2::ipl::ImplantLayerChecker checker(
+      objects.infrastructure().grid(), objects.infrastructure().network());
+  ASSERT_TRUE(engine.init(checker));
+  EXPECT_FALSE(engine.init(checker));
   const auto outcome = engine.repair(
       objects.design().cell(frt::CellRole::Target),
       objects.design().master(frt::MasterRole::TargetOld));
@@ -1418,7 +1496,9 @@ TEST_P(FillerRepairEngineE2E, EngineRejectsNullNetworkNode)
   network->getNodes().emplace_back(nullptr);
   dpl2::fillerRepair::FillerRepairEngine engine(
       objects.infrastructure().grid(), network);
-  EXPECT_FALSE(engine.init());
+  dpl2::ipl::ImplantLayerChecker checker(
+      objects.infrastructure().grid(), network);
+  EXPECT_FALSE(engine.init(checker));
   const auto repair = engine.repair(
       objects.design().cell(frt::CellRole::Target),
       objects.design().master(frt::MasterRole::TargetNew));

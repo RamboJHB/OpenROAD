@@ -8,7 +8,7 @@
 // candidates were tried, what blocked them, where it grew next. Lines are
 // prefixed "[fr][stage]" and go to stdout.
 //
-// ON by default -- a production run that gets a surprising answer should
+// ON by default -- a runtime run that gets a surprising answer should
 // already have the evidence, without a rebuild and a rerun. FR_VERBOSE=0
 // silences it. Logging never changes what the search does or accepts.
 

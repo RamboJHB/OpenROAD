@@ -1,10 +1,12 @@
 #pragma once
 
-#include "drc/ImplantLayerChecker.h"
-
+#include <map>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
+
+#include "drc/ImplantLayerChecker.h"
 
 namespace dpl2 {
 class Grid;
@@ -22,6 +24,21 @@ struct PlacedInst
     bool isFiller = false;
 };
 
+// Serializable projection of fillerSetting. The helper has no UDM Design, so
+// it preserves configured masters by checker MasterId while retaining every
+// scalar option and avoid-pattern entry needed for a faithful dump/load
+// round trip.
+struct FillerSettingData
+{
+    bool present = false;
+    bool followOrder = true;
+    bool checkDrc = true;
+    bool fitSpace = true;
+    std::string prefix = "ECOFILLER";
+    std::vector<MasterId> fillerMasterIds;
+    std::map<std::pair<int, int>, bool> avoidPatterns;
+};
+
 struct ImplantInput
 {
     std::vector<Layer> layers;
@@ -34,10 +51,12 @@ struct ImplantInput
     Layer::Polar basePolar = Layer::Polar::P;
     Dbu rowHeight = 0;
     Dbu siteWidth = 0;
+    FillerSettingData fillerSetting;
 };
 
 // ImplantLayerCheckerHelper is used for test flow
-class ImplantLayerCheckerHelper {
+class ImplantLayerCheckerHelper
+{
 public:
     ImplantLayerCheckerHelper();
     ~ImplantLayerCheckerHelper();
@@ -47,7 +66,8 @@ public:
     Network* getNetwork() const { return network_.get(); }
     void initChecker(ImplantLayerChecker& checker);
 
-    bool dump(const std::string& filePath, const ImplantLayerChecker& checker) const;
+    bool dump(const std::string& filePath,
+              const ImplantLayerChecker& checker) const;
     static ImplantInput load(const std::string& filePath);
 
 private:
@@ -61,7 +81,8 @@ private:
     std::vector<Rule> inputRules_;
     Dbu inputSiteWidth_ = 0;
     Dbu inputRowHeight_ = 0;
+    FillerSettingData inputFillerSetting_;
 };
 
-} // namespace ipl
-} // namespace dpl2
+}  // namespace ipl
+}  // namespace dpl2

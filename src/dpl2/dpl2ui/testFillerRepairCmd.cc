@@ -2,6 +2,7 @@
 
 #include <dpl2/DePlace.h>
 #include <drc/ImplantLayerChecker.h>
+#include <fillerRepair/FillerRepairEngine.h>
 #include <infrastructure/Grid.h>
 #include <infrastructure/Objects.h>
 #include <infrastructure/fillerSetting.h>
@@ -251,8 +252,8 @@ bool TestFillerRepairCmd::exec()
     return design->getLibAcc().getPhysLibCell(lcId).getLibCell().getName();
   };
 
-  // One checker for the whole run. Filler repair obtains its active setting
-  // from Network, which is already bound and populated by DePlace above.
+  // The command owns both objects. The checker only borrows the initialized
+  // engine; the engine borrows this checker as its DRC oracle.
   ipl::ImplantLayerChecker checker(grid, network);
   if (!checker.getDiags().empty()) {
     std::cout << "checker init diagnostics: " << checker.getDiags().size()
@@ -267,6 +268,12 @@ bool TestFillerRepairCmd::exec()
                 << "\n";
     }
   }
+  fillerRepair::FillerRepairEngine repairEngine(grid, network);
+  if (!repairEngine.init(checker)) {
+    std::cout << "ERROR: filler repair engine initialization failed\n";
+    return false;
+  }
+  checker.setFillerRepairEngine(&repairEngine);
 
   // =============================================================================
   // Targeted mode: one instance, one replacement master.

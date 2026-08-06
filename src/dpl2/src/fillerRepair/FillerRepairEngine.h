@@ -3,9 +3,8 @@
 
 // The runtime half of filler repair: everything that touches the database.
 //
-// It borrows the Grid and Network dpl2 already owns, builds a snapshot of
-// them, and privately owns one checker to ask questions of -- all pinned to a
-// single design revision. It then feeds the pure search (RepairPlanner) by
+// It borrows Grid, Network and the caller-owned checker, builds a snapshot
+// pinned to one design revision, and feeds the pure search (RepairPlanner) by
 // implementing its two seams: PlacementView and RepairOracle.
 //
 // repair() answers with a list of proposed filler swaps and changes nothing.
@@ -34,12 +33,6 @@ struct RepairOutcome
   std::vector<ipl::Diagnostic> diagnostics;
 };
 
-// Why a failing check produced no repair attempt at all. Emitted on the
-// [fr] transcript so a run that silently repairs nothing is diagnosable
-// without a rebuild; the message text stays inside this module rather than
-// in the checker's repair hook.
-void reportRepairUnavailable(const char* reason);
-
 class FillerRepairEngine
 {
  public:
@@ -53,21 +46,23 @@ class FillerRepairEngine
 
   // [PORT-DROP] Per-engine override for the [fr][stage] transcript, which is
   // ON by default and silenced globally by FR_VERBOSE=0. Nothing in the
-  // payload or in production calls this -- only the repository-local
+  // payload or in normal runtime calls this -- only the repository-local
   // regression, which does not travel. DELETE it and the Impl method behind
   // it (~10 lines) unless you want per-engine control that the environment
   // variable cannot give you.
   void setDebugLogging(bool enabled);
 
   // Gets PhysDesMgr from Grid and the active fillerSetting from Network;
-  // their designs must agree. Configured masters must already be registered
-  // by infrastructure with real edge data.
-  // UDM/infrastructure objects must outlive the engine. init() is one-shot.
-  bool init();
+  // their designs must agree. The caller owns both objects and supplies the
+  // already initialized checker that remains the sole DRC oracle. Configured
+  // masters must already be registered by infrastructure with real edge
+  // data. UDM/infrastructure/checker objects must outlive the engine. init()
+  // is one-shot and must finish before worker threads start.
+  bool init(const ipl::ImplantLayerChecker& checker);
 
-  // [PORT-DROP] Rebuilds the private snapshot in place. It pre-dates lazy
-  // init and no runtime path reaches it: an infrastructure revision requires
-  // its owner to construct a new ImplantLayerChecker. Only the
+  // [PORT-DROP] Rebuilds the private snapshot in place. No normal call path
+  // reaches it: an infrastructure revision requires its owner to construct
+  // and initialize a new checker/engine pair. Only the
   // repository-local regression drives snapshot refresh through here, and
   // that does not travel. DELETE it (~30 lines with its Impl half).
   //
@@ -75,7 +70,7 @@ class FillerRepairEngine
   // Grid/Network first if rows, blockages or the instance set changed; a
   // stale or incomplete Network makes it fail closed; not concurrent with
   // repair().
-  bool update();
+  bool update(const ipl::ImplantLayerChecker& checker);
 
   // Pre-commit implant overlay query. The only placement gate here is
   // regional: repair refuses to run on top of a gap/overlap inside the rows
@@ -85,7 +80,7 @@ class FillerRepairEngine
   RepairOutcome repair(const ipl::CheckRequest& request);
 
   // [PORT-DROP] The same repair, entered with raw UDM handles instead of a
-  // CheckRequest. Production always arrives through
+  // CheckRequest. The normal checker path already has this request;
   // ImplantLayerChecker::check(), which has the CheckRequest already built;
   // this overload exists so the repository-local regression can call the
   // engine without a checker, and that does not travel. DELETE it (~25 lines)

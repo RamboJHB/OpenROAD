@@ -4,8 +4,6 @@
 #include <fillerRepair/FillerRepairEngine.h>
 
 #include <algorithm>
-#include <atomic>
-#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -73,7 +71,7 @@ struct PlacementSnapshot
   DbCoord coreXl = 0;
   std::vector<RowId> rows;
   std::vector<RowFrame> rowFrames;
-  mutable std::vector<std::optional<std::vector<XInterval>>> legalSpans;
+  std::vector<std::vector<XInterval>> legalSpans;
   std::vector<std::optional<MasterRef>> masters;
   std::vector<std::optional<InstanceRef>> instances;
   std::vector<std::vector<PlacedInstance>> byRow;
@@ -210,32 +208,26 @@ class FillerCandidateCatalog
   bool hasPlacedCandidate_ = false;
 };
 
-// Owns the private checker and serializes its mutable-const overlay path.
+// Non-owning adapter to the caller-owned checker. The checker is initialized
+// once by its owner and is the sole DRC oracle for direct and repair checks.
 class CheckerOverlayClient
 {
  public:
-  void clear() { checker_.reset(); }
-  void reset(Grid* grid, Network* network)
-  {
-    checker_ = std::make_unique<ipl::ImplantLayerChecker>(grid, network);
-  }
-  ipl::ImplantLayerChecker* get() { return checker_.get(); }
-  const ipl::ImplantLayerChecker* get() const { return checker_.get(); }
+  void bind(const ipl::ImplantLayerChecker& checker) { checker_ = &checker; }
+  const ipl::ImplantLayerChecker* get() const { return checker_; }
   std::vector<ipl::CheckResult> check(
       const ipl::CheckRequest& target,
       const ::Rect& guard,
-      const std::vector<ipl::FillerChanges>& changes)
+      const std::vector<ipl::FillerChanges>& changes) const
   {
     if (checker_ == nullptr) {
       return std::vector<ipl::CheckResult>();
     }
-    std::lock_guard<std::mutex> lock(mutex_);
     return checker_->checkPlaceWithOverlays(target, guard, changes);
   }
 
  private:
-  std::unique_ptr<ipl::ImplantLayerChecker> checker_;
-  std::mutex mutex_;
+  const ipl::ImplantLayerChecker* checker_ = nullptr;
 };
 
 }  // namespace
@@ -249,7 +241,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
   {
   }
 
-  bool init();
+  bool init(const ipl::ImplantLayerChecker& checker);
   void setDebugLogging(bool enabled);
   // Gap/overlap coverage restricted to selected repair rows. repair() checks
   // the initial target influence before oracle evaluation; adaptive candidates
@@ -271,6 +263,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
   bool bindInfrastructure();
   bool ensureMasterRegistered(const eLIB::PhysLibCell& master);
   bool rebuildOracle();
+  void buildLegalSpans();
   void failInit(const std::string& status, const std::string& message);
   const std::vector<RowId>& rows() const override { return placement_.rows; }
   DbCoord siteWidth() const override { return placement_.siteWidth; }
@@ -332,7 +325,6 @@ class FillerRepairEngine::Impl final : private PlacementView,
   const std::vector<XInterval>& legalSpansForRow(RowId rowId) const;
   bool initialized_ = false;
   bool init_attempted_ = false;
-  std::atomic<bool> repair_active_{false};
 };
 
 namespace {
@@ -1473,18 +1465,6 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
         toPublicDiagnostic(makeDiag(severity, code, message)));
   };
 
-  if (repair_active_.exchange(true, std::memory_order_acq_rel)) {
-    addDiagnostic(Severity::Fatal,
-                  "ReentrantRepair",
-                  "repair() re-entered on one FillerRepairEngine");
-    return result;
-  }
-  struct ActiveGuard
-  {
-    std::atomic<bool>& flag;
-    ~ActiveGuard() { flag.store(false, std::memory_order_release); }
-  } activeGuard{repair_active_};
-
   if (!initialized_) {
     result.diagnostics = init_diagnostics_;
     addDiagnostic(Severity::Fatal,
@@ -1617,17 +1597,15 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   }
 
   const int newMasterId = network_->getMasterId(newMaster->getLibCellId());
-  // The checker entry may receive a master that DePlace registered after the
-  // engine snapshot was built. Rebuild the private oracle exactly once so the
-  // new Network master id is understood by both checker and planner.
+  // Snapshot changes are an owner-level revision boundary. Never rebuild
+  // shared engine state inside a repair call: concurrent repairs must all see
+  // one immutable design revision.
   if (newMasterId >= 0
-      && masterInfo(static_cast<MasterId>(newMasterId)) == nullptr
-      && !rebuildOracle()) {
-    initialized_ = false;
-    result.diagnostics = oracle_diagnostics_;
+      && masterInfo(static_cast<MasterId>(newMasterId)) == nullptr) {
     addDiagnostic(Severity::Fatal,
-                  "TargetMasterRegistrationFailed",
-                  "target master could not be added to the repair oracle");
+                  "StaleEngineSnapshot",
+                  "target master was registered after engine initialization; "
+                  "the owner must rebuild the engine before parallel checks");
     return result;
   }
   const MasterInfo* replacement = newMasterId >= 0
@@ -1851,12 +1829,14 @@ ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
 
 }  // namespace
 
-bool FillerRepairEngine::Impl::init()
+bool FillerRepairEngine::Impl::init(
+    const ipl::ImplantLayerChecker& checker)
 {
   if (init_attempted_) {
     return false;
   }
   init_attempted_ = true;
+  checker_overlay_.bind(checker);
   if (!bindInfrastructure()) {
     return false;
   }
@@ -1894,8 +1874,8 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
 
   // Regional coverage gate only (spec: repair checks the rows it can edit;
   // whole-design placement legality is infrastructure's own gate). Legal
-  // spans come lazily from Grid pixels for exactly these rows; placed spans
-  // are read live from PhysDesMgr for the row's snapshot nodes.
+  // spans were frozen from Grid pixels at initialization; placed spans are
+  // read live from PhysDesMgr for the row's snapshot nodes.
   std::vector<internal::PlacementCoverageRow> coverageRows;
   const RowId rowLo = std::max<RowId>(influence.rowLo, 0);
   const RowId rowHi = std::min<RowId>(
@@ -1952,35 +1932,47 @@ ipl::CheckResult FillerRepairEngine::Impl::localPrecheck(
 const std::vector<XInterval>& FillerRepairEngine::Impl::legalSpansForRow(
     RowId rowId) const
 {
-  auto& cached = placement_.legalSpans[static_cast<size_t>(rowId)];
-  if (cached.has_value()) {
-    return *cached;
+  static const std::vector<XInterval> empty;
+  if (rowId < 0
+      || static_cast<size_t>(rowId) >= placement_.legalSpans.size()) {
+    return empty;
   }
-  // A valid pixel not reserved by halo/padding requires exactly one placed
-  // cover; maximal runs of such pixels form the legal spans (core-left-
-  // relative like every planner x).
-  std::vector<XInterval> spans;
-  bool inSpan = false;
-  DbCoord spanStart = 0;
-  for (GridX x{0}; x < grid_->getRowSiteCount(); ++x) {
-    const Pixel* pixel = grid_->gridPixel(x, GridY{rowId});
-    const bool requiresCoverage = pixel != nullptr && pixel->is_valid
-                                  && pixel->padding_reserved_by == nullptr;
-    if (requiresCoverage && !inSpan) {
-      inSpan = true;
-      spanStart = static_cast<DbCoord>(x.v) * placement_.siteWidth;
-    } else if (!requiresCoverage && inSpan) {
-      inSpan = false;
-      spans.push_back({spanStart, static_cast<DbCoord>(x.v) * placement_.siteWidth});
+  return placement_.legalSpans[static_cast<size_t>(rowId)];
+}
+
+void FillerRepairEngine::Impl::buildLegalSpans()
+{
+  placement_.legalSpans.assign(placement_.rowFrames.size(), {});
+  for (RowId rowId = 0;
+       static_cast<size_t>(rowId) < placement_.rowFrames.size();
+       ++rowId) {
+    // A valid pixel not reserved by halo/padding requires exactly one placed
+    // cover; maximal runs of such pixels form the legal spans (core-left-
+    // relative like every planner x).
+    std::vector<XInterval>& spans
+        = placement_.legalSpans[static_cast<size_t>(rowId)];
+    bool inSpan = false;
+    DbCoord spanStart = 0;
+    for (GridX x{0}; x < grid_->getRowSiteCount(); ++x) {
+      const Pixel* pixel = grid_->gridPixel(x, GridY{rowId});
+      const bool requiresCoverage = pixel != nullptr && pixel->is_valid
+                                    && pixel->padding_reserved_by == nullptr;
+      if (requiresCoverage && !inSpan) {
+        inSpan = true;
+        spanStart = static_cast<DbCoord>(x.v) * placement_.siteWidth;
+      } else if (!requiresCoverage && inSpan) {
+        inSpan = false;
+        spans.push_back(
+            {spanStart,
+             static_cast<DbCoord>(x.v) * placement_.siteWidth});
+      }
+    }
+    if (inSpan) {
+      spans.push_back({spanStart,
+                       static_cast<DbCoord>(grid_->getRowSiteCount().v)
+                           * placement_.siteWidth});
     }
   }
-  if (inSpan) {
-    spans.push_back({spanStart,
-                     static_cast<DbCoord>(grid_->getRowSiteCount().v)
-                         * placement_.siteWidth});
-  }
-  cached = std::move(spans);
-  return *cached;
 }
 
 void FillerRepairEngine::Impl::failInit(const std::string& status,
@@ -2050,11 +2042,11 @@ bool FillerRepairEngine::Impl::bindInfrastructure()
     return false;
   }
   // Per-node Network<->UDM cross-validation was removed deliberately:
-  // infrastructure data is trusted as-is, and with lazy initialization the
-  // engine is typically created MID-CHECK, while the candidate Node already
-  // carries its proposed master ahead of the pending UDM commit
-  // (DePlace::isLegal updates the Node before checkDRC). Nodes whose master
-  // or physical record is unusable are simply skipped by buildPlannerData.
+  // infrastructure data is trusted as-is. The owner finishes master
+  // registration and setting binding before it initializes this immutable
+  // snapshot; each later target change arrives as a CheckRequest overlay.
+  // Nodes whose master or physical record is unusable are simply skipped by
+  // buildPlannerData.
 
   des_mgr_ = desMgr;
   filler_settings_ = fillerSettings;
@@ -2102,12 +2094,10 @@ bool FillerRepairEngine::Impl::ensureMasterRegistered(
 
 bool FillerRepairEngine::Impl::rebuildOracle()
 {
-  checker_overlay_.clear();
   oracle_diagnostics_.clear();
   repair_config_.verbose = log_.enabled();
-  // bindInfrastructure proved the engine manager and Grid manager agree.
-  checker_overlay_.reset(grid_, network_);
   buildPlannerData();
+  buildLegalSpans();
   bool checkerReady = true;
   for (const ipl::Diagnostic& diagnostic : checker_overlay_.get()->getDiags()) {
     if (isNonBlockingCheckerInitDiagnostic(diagnostic)) {
@@ -2140,14 +2130,6 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   return false;
 }
 
-void reportRepairUnavailable(const char* reason)
-{
-  DebugLog(debugLoggingDefault())
-      .msg("engine",
-           cat("repair unavailable: ",
-               reason != nullptr ? reason : "unspecified reason"));
-}
-
 FillerRepairEngine::FillerRepairEngine(Grid* grid, Network* network)
     : grid_(grid),
       network_(network),
@@ -2163,16 +2145,16 @@ void FillerRepairEngine::setDebugLogging(bool enabled)
   impl_->setDebugLogging(enabled);
 }
 
-bool FillerRepairEngine::init()
+bool FillerRepairEngine::init(const ipl::ImplantLayerChecker& checker)
 {
-  return impl_->init();
+  return impl_->init(checker);
 }
 
-bool FillerRepairEngine::update()
+bool FillerRepairEngine::update(const ipl::ImplantLayerChecker& checker)
 {
   auto replacement = std::make_unique<Impl>(grid_, network_);
   replacement->setDebugLogging(debug_logging_);
-  const bool initialized = replacement->init();
+  const bool initialized = replacement->init(checker);
   impl_ = std::move(replacement);
   return initialized;
 }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <map>
 #include <memory>
 #include <optional>
@@ -534,7 +535,67 @@ ImplantInput input(const DensityCase& density = FILLER_50_STD_50)
   input.basePolar = Layer::Polar::N;
   input.rowHeight = ROW_HEIGHT;
   input.siteWidth = SITE_WIDTH;
+  input.fillerSetting.present = true;
+  input.fillerSetting.followOrder = false;
+  input.fillerSetting.checkDrc = true;
+  input.fillerSetting.fitSpace = false;
+  input.fillerSetting.prefix = "ROUNDTRIP_FILL";
+  input.fillerSetting.fillerMasterIds
+      = {F1_FILL_MASTER, F2_FILL_MASTER, F3_FILL_MASTER};
+  input.fillerSetting.avoidPatterns[{
+      F1_FILL_MASTER, F2_FILL_MASTER}] = true;
+  input.fillerSetting.avoidPatterns[{
+      F2_FILL_MASTER, F1_FILL_MASTER}] = true;
   return input;
+}
+
+TEST(ImplantLayerCheckerHelperTest, DumpLoadPreservesFillerSetting)
+{
+  const ImplantInput original = input();
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(original);
+  ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
+  helper.initChecker(checker);
+
+  const std::string firstPath
+      = ::testing::TempDir() + "/implant_checker_filler_setting.dump";
+  const std::string secondPath
+      = ::testing::TempDir() + "/implant_checker_filler_setting_redump.dump";
+  ASSERT_TRUE(helper.dump(firstPath, checker));
+  const ImplantInput loaded = ImplantLayerCheckerHelper::load(firstPath);
+
+  EXPECT_TRUE(loaded.fillerSetting.present);
+  EXPECT_EQ(loaded.fillerSetting.followOrder,
+            original.fillerSetting.followOrder);
+  EXPECT_EQ(loaded.fillerSetting.checkDrc,
+            original.fillerSetting.checkDrc);
+  EXPECT_EQ(loaded.fillerSetting.fitSpace,
+            original.fillerSetting.fitSpace);
+  EXPECT_EQ(loaded.fillerSetting.prefix, original.fillerSetting.prefix);
+  EXPECT_EQ(loaded.fillerSetting.fillerMasterIds,
+            original.fillerSetting.fillerMasterIds);
+  EXPECT_EQ(loaded.fillerSetting.avoidPatterns,
+            original.fillerSetting.avoidPatterns);
+
+  ImplantLayerCheckerHelper loadedHelper;
+  loadedHelper.initialize(loaded);
+  ImplantLayerChecker loadedChecker(loadedHelper.getGrid(),
+                                    loadedHelper.getNetwork());
+  loadedHelper.initChecker(loadedChecker);
+  for (const MasterId masterId : loaded.fillerSetting.fillerMasterIds) {
+    const Master* master = loadedHelper.getNetwork()->getMaster(masterId);
+    ASSERT_NE(master, nullptr);
+    EXPECT_TRUE(master->isFiller());
+  }
+  ASSERT_TRUE(loadedHelper.dump(secondPath, loadedChecker));
+  const ImplantInput redumped = ImplantLayerCheckerHelper::load(secondPath);
+  EXPECT_EQ(redumped.fillerSetting.fillerMasterIds,
+            original.fillerSetting.fillerMasterIds);
+  EXPECT_EQ(redumped.fillerSetting.avoidPatterns,
+            original.fillerSetting.avoidPatterns);
+
+  std::remove(firstPath.c_str());
+  std::remove(secondPath.c_str());
 }
 
 Rect guard()

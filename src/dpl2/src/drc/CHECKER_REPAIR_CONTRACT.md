@@ -18,12 +18,10 @@ has to make** about code we do own; see `HandOff.md` §8.
 Checker DRC rules, shapes, scan behaviour and blocking-violation logic are
 **unchanged**. Nothing below alters what the checker decides.
 
-The four checker sources `DRCChecker.h`, `ImplantLayerChecker.h`,
-`ImplantLayerChecker.cpp`, and `ImplantLayerCheckerHelper.cpp` use a
-formatting-only 120-column pass so declarations, calls, conditions, and short
-enums stay together when readable. Includes and comments are not reordered or
-reflowed. A whitespace-stripped content hash was compared before and after the
-pass; all four files retained exactly the same non-whitespace content.
+`ImplantLayerChecker.{h,cpp}` and `ImplantLayerCheckerHelper.{h,cpp}` now use
+four-space indentation. The checker rule evaluation is unchanged; semantic
+edits are limited to the repair binding, concurrent read safety, and helper
+serialization listed below.
 
 ---
 
@@ -33,6 +31,8 @@ pass; all four files retained exactly the same non-whitespace content.
 
 ```cpp
 void ImplantLayerChecker::setFillerRepairEnabled(bool enabled);
+void ImplantLayerChecker::setFillerRepairEngine(
+    fillerRepair::FillerRepairEngine* engine);
 
 bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
                                 const PhysOrientation& orient,
@@ -40,15 +40,15 @@ bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y,
 ```
 
 Filler repair defaults to enabled. `ImplantLayerCheckerHelper::initChecker()`
-sets the switch false so checker-only tests never create the engine. With the
-switch off, an illegal candidate returns false without creating the engine or
-touching the record vector. With it on, the checker consults the repair engine;
+sets the switch false so checker-only tests never enter the engine. With the
+switch off, an illegal candidate returns false without touching the record
+vector. With it on, the checker consults the bound repair engine;
 when a checker-verified swap set exists, `check()` returns true and **appends**
 into the caller-owned vector. The checker stores no filler-change member —
 `getFillerChanges()`, `initFillerRepair()`, `updateFillerRepair()` and
 `precheckFillerRepair()` do not exist.
 
-### Overlay API (used by the engine's private oracle)
+### Overlay API (used by the engine's borrowed oracle)
 
 ```cpp
 std::vector<CheckResult> checkPlaceWithOverlays(
@@ -62,21 +62,21 @@ order**; result count must equal candidate count. A missing or extra result
 invalidates the whole batch — no finding from a mis-correlated batch is
 consumed.
 
-### Lazy engine and initialization failures
+### Ownership, initialization and revision boundary
 
-The engine is created on the first repair-enabled failing check. The checker reads
-`PhysDesMgr` only from the manager retained by Grid.
-DePlace binds its active `fillerSetting` to Network through a non-owning
-pointer. The checker neither owns nor accepts it; the lazy engine reads it
-directly from Network.
+The lifecycle owner constructs one checker and one engine after DePlace has
+bound `fillerSetting` to Network and infrastructure has registered all required
+masters. It then calls `engine.init(checker)` and
+`checker.setFillerRepairEngine(&engine)` before any worker starts. The checker
+borrows the engine, the engine borrows that same checker, and neither object
+owns the other. Their owner must keep both alive, with the engine destroyed
+before the checker.
 
-`set_filler_option` and checker initialization both precede repair. Missing
-`fillerSetting` or `PhysDesMgr` is therefore an integration error, not a
-retryable state. Missing context and structural
-`FillerRepairEngine::init()` failures both disable repair for that checker.
-The checker is bound to one infrastructure/configuration revision for its
-lifetime. Its owner constructs a new checker after that revision changes; no
-context or reset API is exposed.
+The checker reads `PhysDesMgr` only from Grid. Missing `fillerSetting`, Grid
+manager, or a structural engine initialization failure leaves repair unbound
+and fail-closed. A checker/engine pair describes one immutable infrastructure
+revision. After Grid, Network, UDM, fillerSetting or master registration
+changes, the owner stops workers and constructs a new pair.
 
 ### IDs and wire
 
@@ -98,7 +98,7 @@ record — there is no second representation to drift.
 `checkPlaceWithOverlay` and again inside the embedded `checkOverlayRegion`
 result — and folded into `isLegal`. The engine classifies that sequence at
 init: `skipped_phys_status`, and missing rule parameters on implant layers no
-Network master uses, are non-blocking; anything else makes `init()` fail
+Network master uses, are non-blocking; anything else makes `init(checker)` fail
 closed. After init succeeds the engine strips *every* leading repetition of the
 approved sequence from each result. A count-based single-prefix strip is wrong.
 
@@ -108,26 +108,31 @@ approved sequence from each result. A count-based single-prefix strip is wrong.
 
 ### `drc/ImplantLayerChecker.h` / `.cpp`
 
-1. **Repair wiring in `check()`** — the reserved block now calls the owned
+1. **Repair wiring in `check()`** — the reserved block now calls the borrowed
    engine with the exact `CheckRequest` that method already built only when
    `enableFillerRepair_` is true, and appends into the caller's `fcRecord`.
-   The switch defaults true. The checker keeps only the switch, lazy engine
-   and failed-init latch. A failed latch remains closed for that checker's
-   lifetime.
+   The switch defaults true. The checker keeps only the switch and a non-owning
+   engine pointer; it creates and destroys no engine.
 
 2. **Grid-bound design context**
    `ImplantLayerChecker(Grid*, Network*)` is the only constructor. It obtains
    `PhysDesMgr` from `Grid::getDesMgr()` and fails closed when Grid, Network or
-   the Grid manager is absent. `FillerRepairEngine::init()` takes no context
-   arguments and verifies Network's bound setting belongs to Grid's manager
-   before creating its private checker. No global design state is consulted.
+   the Grid manager is absent. `FillerRepairEngine::init(checker)` verifies
+   Network's bound setting belongs to Grid's manager and borrows the supplied
+   checker as the sole oracle. No global design state is consulted.
 
 3. **`checkDirect()` extends `masterItems_` lazily** when the request master
    was registered in Network after checker init — the
    `DePlace::isLegal` addMaster-then-check flow. Both builders are idempotent
-   by master id.
+   by master id. A shared mutex prevents parallel checks from observing a
+   partially rebuilt table. `buildMasters()` replaces its entries on rebuild;
+   it does not append duplicate raw shapes to existing masters.
 
-4. **`const char[N]` diagnostics** — string literals bound to a `std::string&`
+4. **Reentrant overlay evaluation** — candidate shape ids are per-call local
+   state rather than a mutable checker counter. Once initialization and master
+   registration finish, parallel direct/overlay calls only read checker data.
+
+5. **`const char[N]` diagnostics** — string literals bound to a `std::string&`
    parameter did not compile; the affected declarations take `const char*`.
 
 ### `drc/ImplantLayerCheckerHelper.cpp`
@@ -136,6 +141,9 @@ Follows the checker's own rename/removal (`groups_` → the current members;
 `buildRules()` reads the members set above). `initChecker()` explicitly leaves
 filler repair disabled, so helper-driven rule checks remain DRC-only. A test
 that intentionally exercises repair must enable it after helper initialization.
+Dump format v4 preserves fillerSetting presence, scalar flags, prefix,
+configured filler master ids and avoid-pattern map. Loading v1-v3 remains
+supported; those versions have no fillerSetting section.
 
 ### `drc/DRCChecker.h`
 
@@ -295,7 +303,7 @@ iteration frame — it feeds the track pattern and the footprint index.
 
 The chain is consistent only when both frames coincide for every placed node:
 no pad row before a standard row, y-sorted row iteration, and the shared row
-origin X equal to the core left edge. `FillerRepairEngine::init()` validates
+origin X equal to the core left edge. `FillerRepairEngine::init(checker)` validates
 this per node (`RowFrameMismatch` / `ColFrameMismatch` are Fatal), so a design
 outside the envelope fails loudly instead of being checked in mixed frames.
 
@@ -317,16 +325,18 @@ quantity is how that bug arrived once already, so there is now exactly one.
 
 ## 5. Shared-state requirements
 
-`fillerSetting` Design, `PhysDesMgr`, `Grid`, `Network` and one engine describe
-one design revision.
+`fillerSetting` Design, `PhysDesMgr`, `Grid`, `Network`, one checker and one
+engine describe one design revision.
 Network must contain every placed/fixed physical instance that can intersect
 the core, hard macros included; placement blockages remain Grid state and are
 not Network Nodes. Network also borrows DePlace's active `fillerSetting`.
 Infrastructure registers all configured masters with real edge data. The
 engine verifies the setting's manager equals `Grid::getDesMgr()`, looks up and
-classifies those existing masters, then constructs its private checker from
-Grid/Network. No Session fallback is allowed. Calls on one checker/engine pair
-must not overlap.
+classifies those existing masters, and borrows the caller's checker. No Session
+fallback is allowed. Calls may overlap after initialization: each repair owns
+its planner/cache/output, legal row spans are immutable, candidate ids are
+local, and checker master data is read-locked. Infrastructure mutation and
+`update()` must not overlap those calls.
 
 Initialization builds a compatibility catalog keyed by placed filler master.
 Only configured masters with identical width/height, different known VT and
@@ -339,10 +349,10 @@ metadata disagreement still blocks and returns no partial repair.
 
 ## 6. Verified boundary
 
-91 portable planner cases and 79 portable real-checker cases build, link and
+91 portable planner cases and 80 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
-gate (170/170, normal and ASan). Repository-local fake-UDM engine regression:
-108 cases. Full local suite 278/278, normal and ASan.
+gate (171/171, normal and ASan). Repository-local fake-UDM engine regression:
+111 cases. Full local suite 282/282, normal and ASan.
 
 Those counts build the full `fillerRepair/` verification package. Test CMake
 also stages `fillerRepair2/` under the destination directory name and strictly

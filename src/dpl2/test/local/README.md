@@ -4,7 +4,7 @@ Updated: 2026-08-06.
 
 **Not part of the migration payload.** It exists so the feature can be
 developed and gated with no real UDM present. It owns the UDM-compatible
-include tree (`fake_udm/`), the 108-case engine regression and its
+include tree (`fake_udm/`), the 111-case engine regression and its
 `E2ETestProvider`, and the runner scripts. No fake header or provider crosses
 into `src/dpl2/src/fillerRepair/`.
 
@@ -14,10 +14,10 @@ objects directly. Everything else it links is the same runtime chain a
 destination builds.
 
 ```sh
-ALL=1 ./run_fake_udm_e2e.sh                     # whole suite, 278 cases
+ALL=1 ./run_fake_udm_e2e.sh                     # whole suite, 282 cases
 SANITIZE=address ALL=1 ./run_fake_udm_e2e.sh
 ./run_fake_udm_e2e.sh                           # engine regression only
-./run_migration_gate.sh                         # destination code path, 170
+./run_migration_gate.sh                         # destination code path, 171
 SANITIZE=address ./run_migration_gate.sh
 ```
 
@@ -38,3 +38,6 @@ nobody could see it without a real UDM.
 Both local and migration configurations stage `fillerRepair2/` under the
 destination directory name and strictly compile its runtime sources. Runtime
 behavior remains exercised through the source-of-truth `fillerRepair/` tests.
+The local regression additionally runs eight simultaneous repairs through one
+checker/engine pair and verifies deterministic records plus zero database
+mutation.

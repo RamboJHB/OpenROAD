@@ -3,7 +3,7 @@
 Updated: 2026-08-06.
 
 This directory contains only runtime code used by the destination: the
-checker-owned engine, planner, two planner seams, shared types, logging, and a
+caller-owned engine, planner, two planner seams, shared types, logging, and a
 minimal CMake target. It intentionally contains no tests, fake UDM, standalone
 dependency discovery, test-only engine entry points, or migration audit tags.
 
@@ -32,28 +32,31 @@ API, shared-wire or diagnostic change here before migration.
 
 Test CMake stages this directory under the destination `fillerRepair/` name
 and compiles both runtime sources as C++20 with `-Wall -Wextra -Werror`. The
-278-test local suite and 170-test migration gate exercise the full
+282-test local suite and 171-test migration gate exercise the full
 source-of-truth directory.
 
 Runtime API:
 
 ```cpp
 FillerRepairEngine(Grid*, Network*);
-bool init();
+bool init(const ImplantLayerChecker& checker);
 RepairOutcome repair(const ipl::CheckRequest&);
 ```
 
 The destination checker constructor must be
 `ImplantLayerChecker(Grid*, Network*)`. It obtains `PhysDesMgr` only from
-Grid. DePlace binds its active `fillerSetting` to Network. Engine initialization
-reads that binding, verifies its Design manager against Grid's manager, and
-then constructs its private checker. Neither path reads Session.
+Grid. DePlace binds its active `fillerSetting` to Network. An outer owner
+constructs one checker and one engine, calls `engine.init(checker)`, then calls
+`checker.setFillerRepairEngine(&engine)` before starting worker threads. Engine
+initialization reads the Network binding, verifies its Design manager against
+Grid's manager, and borrows that same checker as its oracle. Neither path reads
+Session.
 
 Infrastructure must register every configured filler master with the real edge
-table before checking. Initialization only looks up each existing Network
-master and applies `Master::setFiller(true)` before the private checker is
-constructed; the engine never creates a master. The runtime remains one file but separates three private
-responsibilities: placement snapshot, compatible filler catalog, and serialized
+table before checker/engine initialization. Initialization only looks up each
+existing Network master and applies `Master::setFiller(true)`; the engine never
+creates a master. The runtime remains one file but separates three private
+responsibilities: placement snapshot, compatible filler catalog, and borrowed
 checker overlay calls. The catalog is built once using same width/height,
 different known VT and matching bottom-band polarity. When no placed filler
 has a catalog entry, the engine returns `NoCompatibleFillerCandidate` after the
@@ -63,3 +66,7 @@ baseline result and skips window/search work.
 on for ordinary checker instances; `ImplantLayerCheckerHelper` switches it off.
 Repair is non-mutating and returns the shared
 `ipl::FillerChanges`/`CellChangeRecord` wire for infrastructure to commit.
+Concurrent checks may share one initialized pair: planner/cache/output state is
+per call, legal row spans are eager immutable data, and checker master tables
+are read-locked. Grid, Network, UDM and fillerSetting must remain unchanged
+during that parallel phase; rebuild the pair between phases after a revision.

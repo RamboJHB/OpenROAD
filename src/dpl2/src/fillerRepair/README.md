@@ -6,9 +6,9 @@ Updated: 2026-08-06.
 for ordinary checker instances; `ImplantLayerCheckerHelper` switches it off
 for checker-only tests. Opto owns the `CellChangeRecord` vector; the checker
 appends checker-verified repair swaps into that reference and keeps **no**
-filler-change member state. The `FillerRepairEngine` is created **lazily** on
-the first enabled DRC-illegal check — a run whose checks all pass never pays
-engine initialization.
+filler-change member state. An outer lifecycle owner constructs one checker
+and one engine, initializes the engine with that checker, and binds it before
+worker threads start. Neither object owns the other.
 
 The shared wire is
 `CellChangeRecord{Replace, CellData{LeafCellID}, x_, y_,
@@ -17,9 +17,17 @@ also reserves a string name for future add operations; this swap-only engine
 emits and accepts only the existing-cell `LeafCellID` alternative.
 
 ```cpp
-// set_filler_option ran; DePlace bound its setting to Network
+// set_filler_option ran; DePlace bound its setting to Network and registered
+// all configured and target masters with the real edge table.
+ImplantLayerChecker checker(grid, network);
+FillerRepairEngine repairEngine(grid, network);
+if (!repairEngine.init(checker)) {
+  return false;
+}
+checker.setFillerRepairEngine(&repairEngine);
+
 std::vector<CellChangeRecord> fcRecord;
-bool legal = deplace->isLegal(cellId, lcId, fcRecord);   // -> checker.check(...)
+bool legal = checker.check(node, x, y, orient, fcRecord);
 if (legal && !fcRecord.empty()) {
   commitFillerSwaps(fcRecord);   // commit stays with opto/infrastructure
 }
@@ -83,38 +91,37 @@ invariant). It is never iterated -- only `find`/`emplace`/`size` -- so bucket
 order cannot reach search order.
 
 The engine's only placement gate is **regional**: repair refuses to run on a
-gap/overlap inside the rows it can edit (legal spans derived from Grid pixels
-lazily, per row). Whole-design placement legality is infrastructure's own
+gap/overlap inside the rows it can edit (legal spans frozen from Grid pixels
+at initialization). Whole-design placement legality is infrastructure's own
 gate — the engine has no global precheck.
 
 Infrastructure data is **trusted as-is**: RowId is the Grid row, x is
 core-left-relative (the same frame the checker's `CheckRequest` uses), and the
-engine performs no Network↔UDM cross-validation — with lazy init it typically
-runs mid-check, while the candidate Node already carries its proposed master
-ahead of the pending UDM commit.
+engine performs no Network↔UDM cross-validation. Registration and setting
+binding finish before initialization; a later target proposal is carried by
+the checker's request rather than written into the engine snapshot.
 
 Grid and Network are the two runtime context authorities.
 `ImplantLayerChecker(Grid*, Network*)` obtains `PhysDesMgr` only from
 `Grid::getDesMgr()`, never from Session. A missing Grid, Network or Grid
 manager fails closed. DePlace binds its active `fillerSetting` to Network;
-`FillerRepairEngine::init()` takes no context parameters and verifies that
-the bound setting's Design manager equals Grid's manager before creating its
-private checker. No global design lookup exists.
+`FillerRepairEngine::init(const ImplantLayerChecker&)` verifies that the bound
+setting's Design manager equals Grid's manager and borrows the supplied
+checker as its only oracle. No global design lookup exists.
 
 **One filler authority.** `fillerSetting::isFillerCell(LibCellID)` answers whether
 a master belongs to the configured `core_` list. Infrastructure stores that
 answer on `Master`; `Node` inherits it whenever it is added or updated.
 `set_filler_option` runs before filler placement, checker initialization and
 repair initialization. `Node::isFiller()` /
-`Master::isFiller()` are the only downstream queries, so no production path
+`Master::isFiller()` are the only downstream queries, so no runtime path
 re-derives filler identity from UDM macro flags. The same core list is the
 replacement candidate allow-list.
 
 Infrastructure registers every configured filler master with its real edge
-table before checking. Engine initialization only looks up those masters and
-calls `Master::setFiller(true)`; it never calls `addMaster` with incomplete
-edge data. Only after every configured master is present and classified does
-the engine construct its private checker.
+table before checker/engine construction. Engine initialization only looks up
+those masters and calls `Master::setFiller(true)`; it never calls `addMaster`
+with incomplete edge data.
 
 **Includes** use angle brackets throughout, resolved from the `src/` root
 (`<fillerRepair/RepairPlanner.h>`, `<infrastructure/Grid.h>`), matching the
@@ -122,10 +129,10 @@ delivered infrastructure/checker sources.
 
 The runtime snapshot keeps each planner master together with its LibCell id,
 and each placed instance together with its UDM mapping. This removes parallel
-tables that could drift during lazy master registration. Three private
+tables that could drift across a revision boundary. Three private
 components keep the engine orchestration small: `PlacementSnapshot` owns the
 immutable planner view, `FillerCandidateCatalog` precomputes usable replacements,
-and `CheckerOverlayClient` owns and serializes the checker overlay call.
+and `CheckerOverlayClient` borrows the caller-owned checker.
 Candidate queries are catalog lookups keyed by the current master rather than
 rescans of the configured list. If no placed filler has a same-size,
 different-VT, same-polarity replacement, repair returns
@@ -140,7 +147,7 @@ the per-engine log override. Copy its contents into the destination's existing
 It is a hand-maintained projection of this directory, which remains the source
 of truth; mirror every runtime/API change into both directories.
 
-The 278-test local suite and 170-test migration gate compile this full
+The 282-test local suite and 171-test migration gate compile this full
 directory. Test CMake additionally stages `fillerRepair2/` under the
 destination `fillerRepair/` name and compiles both runtime sources as C++20
 with `-Wall -Wextra -Werror`.
@@ -160,7 +167,7 @@ grep -rn "\[PORT-" <srcroot>/fillerRepair
   semantics, `getMaxRuleValue()`, and the guard's vertical reach. Those five
   first. **Not optional.**
 - **`[PORT-DROP]`** — you do not need it. Each one says what it costs to keep
-  and what breaks if you delete it, which in production is nothing.
+  and what breaks if you delete it, which in the destination runtime is nothing.
 - **`[PORT-TUNE]`** — four numbers whose answer lives on your hardware, not
   here: the oracle these were measured against answers in ~0 ns, so the cost
   of a real DRC call — the thing that decides them — is exactly what this
@@ -189,7 +196,7 @@ nothing else, which is what keeps it database-free and portable.
 
 | Path | Purpose |
 |---|---|
-| `FillerRepairEngine.h/.cpp` | runtime entry: snapshot over Grid/Network, regional coverage gate, owns the private checker and planner, implements both seams |
+| `FillerRepairEngine.h/.cpp` | runtime entry: snapshot over Grid/Network, regional coverage gate, borrows the caller-owned checker and implements both planner seams |
 | `PlacementView.h` | **seam 1** — read-only placement view the planner queries (`MasterInfo`, `PlacedInstance`, candidate query, span/binary-search helpers) |
 | `RepairOracle.h` | **seam 2** — legality oracle protocol (`OracleRequest/Result/Status`); not a second DRC checker |
 | `RepairPlanner.h/.cpp` | the search pipeline in flow order: swap model → violation signatures → L0/adaptive window → ranking → subset enumeration → oracle gate → driver, plus `RepairConfig` |
@@ -198,12 +205,12 @@ nothing else, which is what keeps it database-free and portable.
 | `CMakeLists.txt` | the module's own targets — `dpl2::fillerRepair` (payload, C++20) and `dpl2::fillerRepairPlanner` (pure pipeline, C++17); a destination adds the directory and links a target rather than listing sources |
 | `test/CMakeLists.txt` | the portable tests, added when `DPL2_FILLER_REPAIR_BUILD_TESTS=ON` |
 | `test/RepairPlannerTest.cpp` | 91 portable database-free planner cases; the two seam doubles and the synthetic master catalog are folded into this one file |
-| `test/FillerRepairCheckerE2ETest.cpp` | 79 portable real-checker, repair-window and planner-to-checker cases (see the fixture model below) |
+| `test/FillerRepairCheckerE2ETest.cpp` | 80 portable real-checker, repair-window and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript
 
 The deterministic `[fr][stage]` transcript is **on by default**, so a
-production run leaves a diagnosable trail without a rebuild or a rerun. Set
+real run leaves a diagnosable trail without a rebuild or a rerun. Set
 `FR_VERBOSE=0` to silence it (any other value, or unset, keeps it on); the
 same variable governs the planner tests. Logging never changes search order
 or acceptance.
@@ -305,17 +312,17 @@ Full migration instructions, including the destination checklist, are in
 
 - portable planner: 91 cases; portable checker E2E: 79 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
-- repository-local fake-UDM engine regression: 108 cases under
+- repository-local fake-UDM engine regression: 111 cases under
   `src/dpl2/test/local/`.
-- 2026-08-04 full local suite: 278/278 normal and ASan; migration gate
-  170/170 normal and ASan; standalone module build 170/170.
+- 2026-08-06 full local suite: 282/282 normal and ASan; migration gate
+  171/171 normal and ASan; standalone module build 171/171.
 
 ### Search cost
 
 Worst case measured on the no-solution path (120 editable fillers, every
 adaptive level searched to the caps, per-repair budget disabled), gcc 13
 `-O2`. Planner time excludes the oracle; **checker calls are the number that
-matters in production**, where each one is real DRC work:
+matters in the real runtime**, where each one is real DRC work:
 
 | | checker calls | batches | planner ms/repair |
 |---|---|---|---|
@@ -371,6 +378,6 @@ full batches. `checkPlaceWithOverlays` has a per-batch fixed cost — one
 empty-overlay region scan — with the candidates themselves run through
 `parallelFor`. Batches are already fuller now that the search stops
 generating cache hits (mean 28 rather than 16 per batch). Whether refilling
-them further wins depends on the production thread count and on how much a
+them further wins depends on the destination thread count and on how much a
 speculatively-sent candidate costs when an earlier one turns out clean; that
 needs measurement on real hardware, not a guess here.
