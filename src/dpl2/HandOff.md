@@ -7,8 +7,9 @@ behavioral contract is `docs/filler_vt_overlay_repair_spec.md`.
 
 Implemented and verified in this branch:
 
-- one caller-facing checker entry with a non-owning, revision-scoped repair
-  engine; concurrent checks keep all request state local;
+- DePlace as the sole Design/Grid/Network/filler-setting owner, a checker that
+  borrows that object set, and a revision-scoped repair engine that borrows
+  only the checker; concurrent checks keep all request state local;
 - atomic, pre-commit `Replace`/`Delete`/`Add` filler transactions with no UDM,
   Grid, Network, or filler-setting mutation;
 - same-footprint VT repair plus exact refill when a moved/resized one- or
@@ -76,6 +77,8 @@ matching changes when the destination does not already contain them.
 ### Checker
 
 - `DRCChecker` exposes the five-argument `check(..., fcRecord)` virtual.
+- `ImplantLayerChecker(Grid*, Design*, Network*)` borrows the object set
+  initialized by DePlace and exposes that same set to filler repair.
 - `ImplantLayerChecker` exposes `checkPlaceWithOverlays(...)` and returns one
   `CheckResult` per candidate in input order.
 - Ordinary checker instances default filler repair on; checker-helper-only
@@ -84,7 +87,9 @@ matching changes when the destination does not already contain them.
   after direct DRC fails or whenever the requested target footprint changes;
   the latter is required even when the target alone is implant-legal because
   displaced fillers still need explicit commit records.
-- The checker obtains `PhysDesMgr` from its Grid, not global Session state.
+- The checker obtains `PhysDesMgr` from the explicit Design, not global Session
+  state. DePlace owns object-set consistency; checker and engine do not compare
+  design identities.
 - Overlay checks are const/non-mutating, do not re-enter repair, and support
   concurrent reads after initialization.
 - Overlay validation accepts one atomic mix of filler `Replace`, `Delete`, and
@@ -127,7 +132,8 @@ src/dpl2/src/infrastructure/network.{h,cpp}
 - Grid occupancy includes fillers and all other non-terminal site occupants.
 - Logical row/site extents, not stale backing-vector capacity, define
   `isFullUtil()`.
-- DePlace binds its active `fillerSetting` to Network.
+- DePlace retains the active Design and owns Grid, Network, and
+  `fillerSetting`; it binds the setting to Network.
 - Before checker/engine construction,
   `DePlace::registerFillerRepairMasters()` registers every configured master
   with the real edge table and refreshes matching Nodes as fillers.
@@ -179,8 +185,8 @@ Initialization order is part of the contract:
 1. Load/synchronize UDM, Grid, and Network for one design revision.
 2. Configure `fillerSetting` and bind it to Network.
 3. Register configured filler masters through DePlace's real edge table.
-4. Construct `ImplantLayerChecker(grid, network)`.
-5. Construct `FillerRepairEngine(grid, network)` and call `init(checker)`.
+4. Construct `ImplantLayerChecker(grid, design, network)`.
+5. Construct `FillerRepairEngine(checker)` and call `init()`.
 6. Bind the initialized engine with `checker.setFillerRepairEngine(&engine)`.
 7. Start read-only worker calls.
 
@@ -203,8 +209,8 @@ API.
 
 Before enabling repair on a real design, confirm:
 
-- Grid, Network, checker, engine, `fillerSetting`, and UDM describe the same
-  revision and outlive all worker calls.
+- DePlace's Design, Grid, Network, and `fillerSetting` describe one revision;
+  DePlace, checker, and engine outlive all worker calls.
 - Network includes every placed/fixed physical object intersecting the core,
   including hard macros; blockages remain Grid state.
 - configured filler masters are present in Network with real edge data;

@@ -205,8 +205,10 @@ Layer::Polar ImplantLayerChecker::getPolar(RowId rowA, RowId rowB) const
     return (low % 2 == 0) ? opposite(basePolar_) : basePolar_;
 }
 
-ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network)
-    : DRCChecker(grid), network_(network)
+ImplantLayerChecker::ImplantLayerChecker(Grid* grid,
+                                         eUNL::Design* design,
+                                         Network* network)
+    : DRCChecker(grid), network_(network), design_(design)
 {
     if (grid_ == nullptr) {
         diagnostics_.push_back(
@@ -220,8 +222,21 @@ ImplantLayerChecker::ImplantLayerChecker(Grid* grid, Network* network)
              "fatal: ImplantLayerChecker requires an initialized Network"});
         return;
     }
-    PhysDesMgr* const desMgr = grid_->getDesMgr();
+    if (design_ == nullptr) {
+        diagnostics_.push_back(
+            {"missing_design",
+             "fatal: ImplantLayerChecker requires an explicit Design"});
+        return;
+    }
+    PhysDesMgr* const desMgr = design_->getPhysDesMgr();
     if (desMgr == nullptr) {
+        diagnostics_.push_back(
+            {"missing_design_phys_des_mgr",
+             "fatal: ImplantLayerChecker requires the explicit Design to own"
+             " a PhysDesMgr"});
+        return;
+    }
+    if (grid_->getDesMgr() == nullptr) {
         diagnostics_.push_back(
             {"missing_grid_phys_des_mgr",
              "fatal: ImplantLayerChecker requires Grid to retain its"
@@ -244,6 +259,8 @@ bool ImplantLayerChecker::hasUsableInfrastructure() const
         [](const Diagnostic& diagnostic) {
             return diagnostic.status == "missing_grid"
                    || diagnostic.status == "missing_network"
+                   || diagnostic.status == "missing_design"
+                   || diagnostic.status == "missing_design_phys_des_mgr"
                    || diagnostic.status == "missing_grid_phys_des_mgr";
         });
 }

@@ -332,7 +332,9 @@ using CheckShapes = std::vector<CheckShape>;
 class ImplantLayerChecker final : public DRCChecker
 {
 public:
-    ImplantLayerChecker(Grid* grid, Network* network);
+    ImplantLayerChecker(Grid* grid,
+                        eUNL::Design* design,
+                        Network* network);
     ~ImplantLayerChecker();
 
     bool check(const Node* cell,
@@ -370,6 +372,9 @@ public:
     Dbu siteWidth() const { return siteWidth_; }
     int getMaxRuleValue() const { return maxRuleValue_; }
     void setMaxRuleValue();
+    Grid* getGrid() const { return grid_; }
+    eUNL::Design* getDesign() const { return design_; }
+    Network* getNetwork() const { return network_; }
     const std::vector<std::unique_ptr<Node>>& getNodes() const
     {
         static const std::vector<std::unique_ptr<Node>> empty;
@@ -482,6 +487,8 @@ private:
     bool hasUsableInfrastructure() const;
 
     Network* network_ = nullptr;
+    // Non-owning infrastructure initialized and owned by DePlace.
+    eUNL::Design* design_ = nullptr;
     std::vector<Layer> layers_;
     std::unordered_map<std::string, std::vector<LayerId>> layerGroups_;
     std::vector<Rule> rules_;

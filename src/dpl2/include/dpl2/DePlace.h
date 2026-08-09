@@ -127,6 +127,8 @@ std::pair<int, int> findLeg(LeafCellID cellId, std::string moduleName);
 bool isLegal(LeafCellID cellId, LibCellID lcId,
     std::vector<CellChangeRecord>& fcRecord);
 PhysDesMgr* getDesMgr() {return desMgr_;};
+eUNL::Design* getDesign() { return design_; }
+const eUNL::Design* getDesign() const { return design_; }
 Grid* getGrid() {return grid_.get();};
 const Grid* getGrid() const {return grid_.get();};
 Network* getNetwork() {return network_.get();};

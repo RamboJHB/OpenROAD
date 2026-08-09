@@ -213,28 +213,6 @@ class FillerCandidateCatalog
   bool hasPlacedCandidate_ = false;
 };
 
-// Non-owning adapter to the caller-owned checker. The checker is initialized
-// once by its owner and is the sole DRC oracle for direct and repair checks.
-class CheckerOverlayClient
-{
- public:
-  void bind(const ipl::ImplantLayerChecker& checker) { checker_ = &checker; }
-  const ipl::ImplantLayerChecker* get() const { return checker_; }
-  std::vector<ipl::CheckResult> check(
-      const ipl::CheckRequest& target,
-      const ::Rect& guard,
-      const std::vector<ipl::FillerChanges>& changes) const
-  {
-    if (checker_ == nullptr) {
-      return std::vector<ipl::CheckResult>();
-    }
-    return checker_->checkPlaceWithOverlays(target, guard, changes);
-  }
-
- private:
-  const ipl::ImplantLayerChecker* checker_ = nullptr;
-};
-
 // One request-local filler introduced by geometric retiling. Negative ids are
 // deliberately local to a repair call; neither Network nor UDM is modified.
 struct LayoutAddition
@@ -480,12 +458,15 @@ class FillerRepairEngine::Impl final : private PlacementView,
                                        private RepairOracle
 {
  public:
-  Impl(Grid* grid, Network* network)
-      : grid_(grid), network_(network), log_(debugLoggingDefault())
+  explicit Impl(const ipl::ImplantLayerChecker& checker)
+      : checker_(checker),
+        grid_(checker.getGrid()),
+        network_(checker.getNetwork()),
+        log_(debugLoggingDefault())
   {
   }
 
-  bool init(const ipl::ImplantLayerChecker& checker);
+  bool init();
   void setDebugLogging(bool enabled);
   // Gap/overlap coverage restricted to selected repair rows. repair() checks
   // the initial target influence before oracle evaluation; adaptive candidates
@@ -553,6 +534,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
     }
   }
 
+  const ipl::ImplantLayerChecker& checker_;
   Grid* grid_ = nullptr;
   Network* network_ = nullptr;
   eUNL::PhysDesMgr* des_mgr_ = nullptr;
@@ -560,7 +542,6 @@ class FillerRepairEngine::Impl final : private PlacementView,
   std::vector<const eLIB::PhysLibCell*> filler_masters_;
   PlacementSnapshot placement_;
   FillerCandidateCatalog candidate_catalog_;
-  CheckerOverlayClient checker_overlay_;
   RepairConfig repair_config_;
   DebugLog log_;
   std::vector<Diagnostic> setup_diagnostics_;
@@ -791,7 +772,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
   eUNL::PhysDesMgr* desMgr = des_mgr_;
   Grid* grid = grid_;
   Network* network = network_;
-  const ipl::ImplantLayerChecker* checker = checker_overlay_.get();
+  const ipl::ImplantLayerChecker* checker = &checker_;
   const auto& fillerMasters = filler_masters_;
   placement_.clear();
   setup_diagnostics_.clear();
@@ -1217,8 +1198,7 @@ bool FillerRepairEngine::Impl::isNonBlockingCheckerInitDiagnostic(
       && diagnostic.status != "skipped_missing_rule_parameter") {
     return false;
   }
-  if (des_mgr_ == nullptr || network_ == nullptr
-      || checker_overlay_.get() == nullptr) {
+  if (des_mgr_ == nullptr || network_ == nullptr) {
     return false;
   }
 
@@ -1239,7 +1219,7 @@ bool FillerRepairEngine::Impl::isNonBlockingCheckerInitDiagnostic(
     }
   }
 
-  for (const ipl::Layer& layer : checker_overlay_.get()->getLayers()) {
+  for (const ipl::Layer& layer : checker_.getLayers()) {
     const std::string marker = cat("layer ", layer.getName(), " ");
     if (diagnostic.message.find(marker) != std::string::npos) {
       return usedLayerNames.count(layer.getName()) == 0;
@@ -1559,7 +1539,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   // properties. Dropping the count check to "salvage" a partial batch would
   // silently mis-attribute answers to candidates.
   const std::vector<ipl::CheckResult> raw
-      = checker_overlay_.check(target, guard, changes);
+      = checker_.checkPlaceWithOverlays(target, guard, changes);
   log_.msg("engine",
            cat("overlay batch: ", changes.size(), " candidate(s) -> ",
                raw.size(), " result(s)"));
@@ -1604,7 +1584,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   // candidate only on what this request produced. Without it one benign
   // start-up note would make every candidate illegal forever. Anything
   // structural never gets this far: rebuildOracle() already failed closed.
-  const auto& initDiags = checker_overlay_.get()->getDiags();
+  const auto& initDiags = checker_.getDiags();
   const auto requestDiagOffset =
       [&initDiags](const std::vector<ipl::Diagnostic>& diagnostics) {
         size_t offset = 0;
@@ -2410,14 +2390,12 @@ ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
 
 }  // namespace
 
-bool FillerRepairEngine::Impl::init(
-    const ipl::ImplantLayerChecker& checker)
+bool FillerRepairEngine::Impl::init()
 {
   if (init_attempted_) {
     return false;
   }
   init_attempted_ = true;
-  checker_overlay_.bind(checker);
   if (!bindInfrastructure()) {
     return false;
   }
@@ -2564,16 +2542,21 @@ void FillerRepairEngine::Impl::failInit(const std::string& status,
 
 bool FillerRepairEngine::Impl::bindInfrastructure()
 {
-  if (grid_ == nullptr || network_ == nullptr) {
+  eUNL::Design* const design = checker_.getDesign();
+  if (grid_ == nullptr || design == nullptr || network_ == nullptr) {
     failInit("missing_infrastructure",
-             cat("fatal: missing initialized Grid or Network: grid=",
-                 grid_ != nullptr, " network=", network_ != nullptr));
+             cat("fatal: missing initialized Grid, Design, or Network: grid=",
+                 grid_ != nullptr, " design=", design != nullptr,
+                 " network=", network_ != nullptr));
     return false;
   }
-  eUNL::PhysDesMgr* const desMgr = grid_->getDesMgr();
+  eUNL::PhysDesMgr* const desMgr = design->getPhysDesMgr();
   if (desMgr == nullptr) {
     failInit("missing_phys_des_mgr",
-             cat("fatal: missing PhysDesMgr: gridSiteWidth=",
+             cat("fatal: checker Design has no PhysDesMgr: design=",
+                 static_cast<const void*>(design),
+                 " designPhysDesMgr=", static_cast<const void*>(desMgr),
+                 " gridSiteWidth=",
                  grid_->getSiteWidth().v,
                  " gridRows=", grid_->getRowCount().v,
                  " networkNodes=", network_->getNodes().size(),
@@ -2587,24 +2570,11 @@ bool FillerRepairEngine::Impl::bindInfrastructure()
              "it before filler repair initialization");
     return false;
   }
-  eUNL::Design* settingDesign = fillerSettings->getDesign();
-  eUNL::PhysDesMgr* settingDesMgr
-      = settingDesign != nullptr ? settingDesign->getPhysDesMgr() : nullptr;
-  if (settingDesign == nullptr || settingDesMgr != desMgr) {
-    failInit("design_mismatch",
-             cat("fatal: fillerSetting and PhysDesMgr describe different "
-                 "designs: settingDesign=",
-                 static_cast<const void*>(settingDesign),
-                 " settingPhysDesMgr=",
-                 static_cast<const void*>(settingDesMgr),
-                 " requestedPhysDesMgr=", static_cast<const void*>(desMgr)));
-    return false;
-  }
   if (fillerSettings->getFillerPhysCells().empty()) {
     failInit("empty_filler_allow_list",
              cat("fatal: fillerSetting::getFillerPhysCells() is empty: "
                  "settingDesign=",
-                 static_cast<const void*>(settingDesign),
+                 static_cast<const void*>(fillerSettings->getDesign()),
                  " networkNodes=", network_->getNodes().size(),
                  " networkMasters=", network_->getMasters().size()));
     return false;
@@ -2680,7 +2650,7 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   buildPlannerData();
   buildLegalSpans();
   bool checkerReady = true;
-  for (const ipl::Diagnostic& diagnostic : checker_overlay_.get()->getDiags()) {
+  for (const ipl::Diagnostic& diagnostic : checker_.getDiags()) {
     if (isNonBlockingCheckerInitDiagnostic(diagnostic)) {
       log_.msg("engine",
                cat("non-blocking checker init diagnostic: ",
@@ -2697,7 +2667,7 @@ bool FillerRepairEngine::Impl::rebuildOracle()
              " nonPadRows=", placement_.rows.size(),
              " engineSiteWidth=", placement_.siteWidth,
              " gridSiteWidth=", grid_->getSiteWidth().v,
-             " checkerSiteWidth=", checker_overlay_.get()->siteWidth(), "}")});
+             " checkerSiteWidth=", checker_.siteWidth(), "}")});
     log_.msg("engine",
              cat("blocking checker init diagnostic: ", diagnostic.status,
                  " ", diagnostic.message));
@@ -2711,10 +2681,9 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   return false;
 }
 
-FillerRepairEngine::FillerRepairEngine(Grid* grid, Network* network)
-    : grid_(grid),
-      network_(network),
-      impl_(std::make_unique<Impl>(grid, network))
+FillerRepairEngine::FillerRepairEngine(
+    const ipl::ImplantLayerChecker& checker)
+    : checker_(checker), impl_(std::make_unique<Impl>(checker))
 {
 }
 
@@ -2726,16 +2695,16 @@ void FillerRepairEngine::setDebugLogging(bool enabled)
   impl_->setDebugLogging(enabled);
 }
 
-bool FillerRepairEngine::init(const ipl::ImplantLayerChecker& checker)
+bool FillerRepairEngine::init()
 {
-  return impl_->init(checker);
+  return impl_->init();
 }
 
-bool FillerRepairEngine::update(const ipl::ImplantLayerChecker& checker)
+bool FillerRepairEngine::update()
 {
-  auto replacement = std::make_unique<Impl>(grid_, network_);
+  auto replacement = std::make_unique<Impl>(checker_);
   replacement->setDebugLogging(debug_logging_);
-  const bool initialized = replacement->init(checker);
+  const bool initialized = replacement->init();
   impl_ = std::move(replacement);
   return initialized;
 }

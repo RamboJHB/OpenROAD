@@ -528,7 +528,8 @@ FillerRepairDumpReplayResult replayFillerRepairDump(
 
   ipl::ImplantLayerCheckerHelper helper;
   helper.initialize(input);
-  ipl::ImplantLayerChecker checker(helper.getGrid(), helper.getNetwork());
+  ipl::ImplantLayerChecker checker(
+      helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
   if (!checker.getDiags().empty()) {
     result.error = "reconstructed checker has initialization diagnostics";

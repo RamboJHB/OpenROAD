@@ -38,9 +38,10 @@ struct RepairOutcome
 class FillerRepairEngine
 {
  public:
-  // grid and network are the initialized dpl2 objects (normally
-  // DePlace::getGrid()/getNetwork()) and must outlive this engine.
-  FillerRepairEngine(Grid* grid, Network* network);
+  // The checker is the engine's only infrastructure seam. It exposes the
+  // Grid, Design and Network initialized by DePlace and must outlive the
+  // engine.
+  explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
   ~FillerRepairEngine();
 
   FillerRepairEngine(const FillerRepairEngine&) = delete;
@@ -54,13 +55,12 @@ class FillerRepairEngine
   // variable cannot give you.
   void setDebugLogging(bool enabled);
 
-  // Gets PhysDesMgr from Grid and the active fillerSetting from Network;
-  // their designs must agree. The caller owns both objects and supplies the
-  // already initialized checker that remains the sole DRC oracle. Configured
+  // Gets every infrastructure object from the checker, which remains the sole
+  // DRC oracle. Configured
   // masters must already be registered by infrastructure with real edge
   // data. UDM/infrastructure/checker objects must outlive the engine. init()
   // is one-shot and must finish before worker threads start.
-  bool init(const ipl::ImplantLayerChecker& checker);
+  bool init();
 
   // [PORT-DROP] Rebuilds the private snapshot in place. No normal call path
   // reaches it: an infrastructure revision requires its owner to construct
@@ -72,7 +72,7 @@ class FillerRepairEngine
   // Grid/Network first if rows, blockages or the instance set changed; a
   // stale or incomplete Network makes it fail closed; not concurrent with
   // repair().
-  bool update(const ipl::ImplantLayerChecker& checker);
+  bool update();
 
   // Pre-commit implant overlay query. The only placement gate here is
   // regional: repair refuses to run on top of a gap/overlap inside the rows
@@ -92,8 +92,7 @@ class FillerRepairEngine
 
  private:
   class Impl;
-  Grid* grid_ = nullptr;
-  Network* network_ = nullptr;
+  const ipl::ImplantLayerChecker& checker_;
   bool debug_logging_ = debugLoggingDefault();
   std::unique_ptr<Impl> impl_;
 };

@@ -252,14 +252,13 @@ bool TestFillerRepairCmd::exec()
     return replay.passed;
   }
 
-  eUNL::Session& sess = eUNL::Session::getSession();
-  eUNL::Design* design = sess.getCurrentDesign();
+  DePlace* de_place = DePlace::get();
+  eUNL::Design* design = de_place->getDesign();
   if (!design) {
     std::cout << "ERROR: no design loaded\n";
     return false;
   }
 
-  DePlace* de_place = DePlace::get();
   PhysDesMgr* desMgr = de_place->getDesMgr();
   if (!desMgr) {
     std::cout << "ERROR: DePlace not initialized (no desMgr)\n";
@@ -304,7 +303,7 @@ bool TestFillerRepairCmd::exec()
 
   // The command owns both objects. The checker only borrows the initialized
   // engine; the engine borrows this checker as its DRC oracle.
-  ipl::ImplantLayerChecker checker(grid, network);
+  ipl::ImplantLayerChecker checker(grid, design, network);
   if (!checker.getDiags().empty()) {
     std::cout << "checker init diagnostics: " << checker.getDiags().size()
               << "\n";
@@ -318,8 +317,8 @@ bool TestFillerRepairCmd::exec()
                 << "\n";
     }
   }
-  fillerRepair::FillerRepairEngine repairEngine(grid, network);
-  if (!repairEngine.init(checker)) {
+  fillerRepair::FillerRepairEngine repairEngine(checker);
+  if (!repairEngine.init()) {
     std::cout << "ERROR: filler repair engine initialization failed\n";
     return false;
   }

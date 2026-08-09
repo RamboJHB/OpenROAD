@@ -265,8 +265,7 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
         std::remove_if(checker.diagnostics_.begin(),
                        checker.diagnostics_.end(),
                        [](const Diagnostic& diagnostic) {
-                           return diagnostic.status
-                                  == "missing_grid_phys_des_mgr";
+                           return diagnostic.status == "missing_design";
                        }),
         checker.diagnostics_.end());
     // Populate masterItems_ indexed by MasterId (aligned with Network::masters_)

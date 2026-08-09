@@ -41,8 +41,8 @@ struct RepairOutcome
 class FillerRepairEngine
 {
  public:
-  FillerRepairEngine(Grid* grid, Network* network);
-  bool init(const ipl::ImplantLayerChecker& checker);
+  explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
+  bool init();
   RepairOutcome repair(const ipl::CheckRequest& request);
 };
 
@@ -53,18 +53,21 @@ The lifecycle owner constructs one checker and one engine for one immutable
 placement revision:
 
 ```cpp
-ipl::ImplantLayerChecker checker(grid, network);
-fillerRepair::FillerRepairEngine engine(grid, network);
-if (!engine.init(checker)) {
+ipl::ImplantLayerChecker checker(grid, design, network);
+fillerRepair::FillerRepairEngine engine(checker);
+if (!engine.init()) {
   return false;
 }
 checker.setFillerRepairEngine(&engine);
 ```
 
-The checker borrows the engine and the engine borrows the checker. Neither owns
-the other. Bind them before starting worker threads and keep both alive until
-all checks finish. After any Grid, Network, UDM, filler-setting, instance, or
-master-registration change, stop workers and create a new pair.
+DePlace is the only infrastructure owner and initializes Design, Grid, Network,
+and `fillerSetting`. The checker borrows that object set. The engine borrows
+only the checker and obtains the exact same objects through it. The checker in
+turn borrows the engine after initialization; neither owns the other. Bind them
+before starting worker threads and keep both alive until all checks finish.
+After any Grid, Network, UDM, filler-setting, instance, or master-registration
+change, stop workers and create a new pair.
 
 `ImplantLayerChecker::check(...)` is the caller-facing entry. It first performs
 the ordinary target overlay check. With repair enabled and an initialized
@@ -115,9 +118,13 @@ ID authorities are fixed:
 
 ## 4. Infrastructure authorities
 
-`Grid` supplies `PhysDesMgr` and legal placement pixels. `Network` supplies the
-placed Nodes, registered Masters, and a non-owning pointer to DePlace's active
-`fillerSetting`. Global Session state is not consulted.
+DePlace initializes and retains the non-owning `Design*`, Grid, Network, and
+`fillerSetting`. The checker borrows those objects, and the engine obtains them
+only from the checker. `Grid` supplies legal placement pixels. `Network`
+supplies the placed Nodes, registered Masters, and a non-owning pointer to
+DePlace's active `fillerSetting`. The engine performs no cross-object design
+identity checks; that consistency is guaranteed by DePlace ownership. Global
+Session state is not consulted by checker or engine.
 
 Filler identity has two explicit authorities:
 
@@ -136,9 +143,9 @@ represented as Nodes.
 
 ## 5. Initialization contract
 
-`init(checker)` is one-shot and fail-closed. It verifies the shared design
-context, row/column frames, master metadata, configured filler mappings, and
-checker initialization diagnostics. It then freezes:
+`init()` is one-shot and fail-closed. It reads infrastructure through the bound
+checker and verifies row/column frames, master metadata, configured filler
+mappings, and checker initialization diagnostics. It then freezes:
 
 - the placement/master snapshot used by the planner;
 - legal row segments derived from Grid pixels;
