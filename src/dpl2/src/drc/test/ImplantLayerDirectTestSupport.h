@@ -124,10 +124,7 @@ inline void expectMatches(const ImplantInput& input,
 // explicit UvDist/DbuValueInt32 casting in test code.
 inline ::Rect makeRect(Dbu xl, Dbu yl, Dbu xh, Dbu yh)
 {
-    return ::Rect(UvDist(eUTL::DbuValueInt32(static_cast<int32_t>(xl))),
-                  UvDist(eUTL::DbuValueInt32(static_cast<int32_t>(yl))),
-                  UvDist(eUTL::DbuValueInt32(static_cast<int32_t>(xh))),
-                  UvDist(eUTL::DbuValueInt32(static_cast<int32_t>(yh))));
+    return ::Rect(UvDist(xl), UvDist(yl), UvDist(xh), UvDist(yh));
 }
 
 } // namespace directtest

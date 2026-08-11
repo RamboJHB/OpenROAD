@@ -19,8 +19,9 @@ Implemented and verified in this branch:
   budgets;
 - a complete GoogleTest source tree, a compact `fillerRepair2` migration
   payload, dump replay, and repository-local OpenROAD/ODB command wiring;
-- 299 normal and 299 ASan tests, strict-warning compilation of the migration
-  payload, and repeatable local ODB smoke runs.
+- 317 normal and 317 ASan tests, including 15 destination checker direct-rule
+  cases, strict-warning compilation of the migration payload, and repeatable
+  local ODB smoke runs.
 
 The remaining risks are destination sign-off and bounded-search behavior, not
 missing runtime plumbing:
@@ -255,11 +256,15 @@ suite contains:
 - database-free planner GoogleTests using seam doubles;
 - checker/planner E2E GoogleTests using the real `ImplantLayerChecker` and
   helper-built data, without constructing UDM objects.
+- destination checker direct-rule GoogleTests covering one-/two-/three-row
+  masters, six implant layers, width/spacing boundaries, and inter-layer
+  spacing.
 
 Repository-local full regression:
 
 ```sh
-src/dpl2/test/build_all.sh
+ALL=1 src/dpl2/test/build_all.sh
+ALL=1 SANITIZE=address src/dpl2/test/build_all.sh
 ```
 
 This adds fake-UDM engine/infrastructure cases. It validates the local boundary

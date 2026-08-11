@@ -22,6 +22,7 @@ set(DPL2_TEST_UDM_LIBRARIES "" CACHE STRING
 find_package(GTest REQUIRED)
 find_package(Boost REQUIRED)
 find_package(TBB REQUIRED)
+find_package(ZLIB REQUIRED)
 
 set(DPL2_SRC "${CMAKE_CURRENT_LIST_DIR}/../src")
 
@@ -177,6 +178,31 @@ target_link_libraries(
   dpl2_filler_repair_compile_check PRIVATE
   dpl2_fr_chain_common dpl2::fillerRepair)
 dpl2_configure_chain_target(dpl2_filler_repair_compile_check delivered)
+
+# Destination checker GoogleTests, built against the same delivered checker
+# and test-only UDM switch as the rest of this harness.
+add_executable(
+  dpl2_implant_checker_simple_test
+  "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp"
+  "${DPL2_SRC}/drc/test/ImplantLayerCheckerSimpleTests.cpp")
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  set_source_files_properties(
+    "${DPL2_SRC}/drc/test/ImplantLayerCheckerSimpleTests.cpp"
+    PROPERTIES COMPILE_OPTIONS "-Wno-missing-field-initializers")
+endif()
+target_include_directories(
+  dpl2_implant_checker_simple_test
+  PRIVATE "${DPL2_SRC}/drc/test")
+target_link_libraries(
+  dpl2_implant_checker_simple_test
+  PRIVATE GTest::gtest_main ZLIB::ZLIB
+          dpl2_fr_chain_common dpl2::fillerRepair)
+dpl2_configure_chain_target(dpl2_implant_checker_simple_test strict)
+gtest_discover_tests(
+  dpl2_implant_checker_simple_test
+  TEST_PREFIX "checker-simple."
+  NO_PRETTY_VALUES
+  DISCOVERY_TIMEOUT 30)
 
 # --- Fake-UDM only ---------------------------------------------------------
 # The historical engine regression is the one target that cannot be built

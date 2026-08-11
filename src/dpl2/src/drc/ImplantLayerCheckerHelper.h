@@ -63,6 +63,7 @@ public:
 
     void initialize(const ImplantInput& input);
     Grid* getGrid() const { return grid_.get(); }
+    eUNL::Design* getDesign() const { return nullptr; }
     Network* getNetwork() const { return network_.get(); }
     void initChecker(ImplantLayerChecker& checker);
 
