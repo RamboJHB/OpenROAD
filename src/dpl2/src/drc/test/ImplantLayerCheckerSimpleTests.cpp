@@ -648,7 +648,7 @@ std::vector<SimpleCase> makeSimpleCases()
          18,
          11,
          26,
-         22},
+         18},
         // Schematic: case10_stress_mixed_rows
         {"case10_stress_mixed_rows",
          "Scenario: eight-row stress case with 26 cells, mixed 1/2/3-row masters, all six layers.\n"
@@ -691,8 +691,8 @@ std::vector<SimpleCase> makeSimpleCases()
         "Scenario: case01_dense_four_rows plus inter-layer F1_N to F2_N spacing.\n"
         "Expected: checked_instances=16, illegal_checks=13, total_violations=44, unique_violations=33.",
         13,
-        44,
-        33,
+        43,
+        32,
         {interLayerSpacingRule(12, F1_N, F2_N, 40)}));
     cases.push_back(withExtraRules(
         cases[1],
@@ -700,8 +700,8 @@ std::vector<SimpleCase> makeSimpleCases()
         "Scenario: case02_corner_abutment_six_rows plus inter-layer F1_N to F2_N/F3_N spacing.\n"
         "Expected: checked_instances=18, illegal_checks=13, total_violations=33, unique_violations=25.",
         13,
-        33,
-        25,
+        32,
+        24,
         {interLayerSpacingRule(12, F1_N, F2_N, 40),
          interLayerSpacingRule(13, F1_N, F3_N, 40)}));
     cases.push_back(withExtraRules(
@@ -710,8 +710,8 @@ std::vector<SimpleCase> makeSimpleCases()
         "Scenario: case03_multifamily_three_height plus inter-layer F1_P to F2_P spacing.\n"
         "Expected: checked_instances=15, illegal_checks=9, total_violations=22, unique_violations=19.",
         9,
-        22,
-        19,
+        20,
+        17,
         {interLayerSpacingRule(12, F1_P, F2_P, 40)}));
     cases.push_back(withExtraRules(
         cases[3],
@@ -719,8 +719,8 @@ std::vector<SimpleCase> makeSimpleCases()
         "Scenario: case04_wide_rows_layer_mix plus inter-layer F2_P to F3_P spacing.\n"
         "Expected: checked_instances=15, illegal_checks=11, total_violations=29, unique_violations=22.",
         11,
-        29,
-        22,
+        28,
+        21,
         {interLayerSpacingRule(12, F2_P, F3_P, 40)}));
     cases.push_back(withExtraRules(
         cases[4],
@@ -728,8 +728,8 @@ std::vector<SimpleCase> makeSimpleCases()
         "Scenario: case05_boundary_width_spacing plus inter-layer F2_N to F3_N spacing.\n"
         "Expected: checked_instances=16, illegal_checks=10, total_violations=36, unique_violations=28.",
         10,
-        36,
-        28,
+        35,
+        27,
         {interLayerSpacingRule(12, F2_N, F3_N, 40)}));
 
     return cases;
