@@ -373,7 +373,7 @@ public:
     Dbu siteWidth() const { return siteWidth_; }
     int getMaxRuleValue() const { return maxRuleValue_; }
     void setMaxRuleValue();
-    // [FRPORT] FillerRepairEngine::init() borrows this same object set.
+    // [FRPORT] FillerRepairEngine construction borrows this same object set.
     Grid* getGrid() const { return grid_; }
     eUNL::Design* getDesign() const { return design_; }
     Network* getNetwork() const { return network_; }

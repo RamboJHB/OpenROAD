@@ -40,7 +40,8 @@ class FillerRepairEngine
  public:
   // The checker is the engine's only infrastructure seam. It exposes the
   // Grid, Design and Network initialized by DePlace and must outlive the
-  // engine.
+  // engine. Construction eagerly builds the immutable repair snapshot before
+  // the object can be published to checker worker threads.
   explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
   ~FillerRepairEngine();
 
@@ -55,12 +56,11 @@ class FillerRepairEngine
   // variable cannot give you.
   void setDebugLogging(bool enabled);
 
-  // Gets every infrastructure object from the checker, which remains the sole
-  // DRC oracle. Configured
-  // masters must already be registered by infrastructure with real edge
-  // data. UDM/infrastructure/checker objects must outlive the engine. init()
-  // is one-shot and must finish before worker threads start.
-  bool init();
+  // Bind this engine to the checker only when this returns true. Diagnostics
+  // are retained for callers and also printed by the constructor when eager
+  // initialization fails (unless FR_VERBOSE=0).
+  bool isReady() const;
+  const std::vector<ipl::Diagnostic>& getInitDiagnostics() const;
 
   // [PORT-DROP] Rebuilds the private snapshot in place. No normal call path
   // reaches it: an infrastructure revision requires its owner to construct

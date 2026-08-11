@@ -170,19 +170,20 @@ class FillerCandidateCatalog
         break;
       }
     }
-    log.msg("candidate", [&] {
-      return cat("catalog ready: configured=",
-                 placement.fillerMasterIds.size(),
-                 " masterPairChecks=", aggregate_.checked,
-                 " compatiblePairs=", aggregate_.compatible,
-                 " placedCandidate=", hasPlacedCandidate_,
-                 " rejects{notFiller=", aggregate_.notFiller,
-                 " unknownVt=", aggregate_.unknownVt,
-                 " sameVt=", aggregate_.sameVt,
-                 " widthMismatch=", aggregate_.widthMismatch,
-                 " heightMismatch=", aggregate_.heightMismatch,
-                 " polarityMismatch=", aggregate_.polarityMismatch, '}');
-    });
+    log.block("candidate",
+              "Candidate compatibility catalog",
+              {{"configured masters",
+                cat(placement.fillerMasterIds.size())},
+               {"master-pair checks", cat(aggregate_.checked)},
+               {"compatible pairs", cat(aggregate_.compatible)},
+               {"placed candidate", cat(hasPlacedCandidate_)},
+               {"reject: not filler", cat(aggregate_.notFiller)},
+               {"reject: unknown VT", cat(aggregate_.unknownVt)},
+               {"reject: same VT", cat(aggregate_.sameVt)},
+               {"reject: width mismatch", cat(aggregate_.widthMismatch)},
+               {"reject: height mismatch", cat(aggregate_.heightMismatch)},
+               {"reject: polarity mismatch",
+                cat(aggregate_.polarityMismatch)}});
   }
 
   const std::vector<MasterId>& candidates(MasterId sourceMaster) const
@@ -458,15 +459,26 @@ class FillerRepairEngine::Impl final : private PlacementView,
                                        private RepairOracle
 {
  public:
-  explicit Impl(const ipl::ImplantLayerChecker& checker)
+  explicit Impl(const ipl::ImplantLayerChecker& checker, bool debugLogging)
       : checker_(checker),
         grid_(checker.getGrid()),
         network_(checker.getNetwork()),
-        log_(debugLoggingDefault())
+        log_(debugLogging)
   {
+    log_.section("engine", "ENGINE INITIALIZATION");
+    buildInitialSnapshot();
+    if (!initialized_) {
+      log_.block("engine",
+                 "Initialization failed",
+                 {{"diagnostics", cat(init_diagnostics_.size())}});
+    }
   }
 
-  bool init();
+  bool ready() const { return initialized_; }
+  const std::vector<ipl::Diagnostic>& initDiagnostics() const
+  {
+    return init_diagnostics_;
+  }
   void setDebugLogging(bool enabled);
   // Gap/overlap coverage restricted to selected repair rows. repair() checks
   // the initial target influence before oracle evaluation; adaptive candidates
@@ -482,10 +494,10 @@ class FillerRepairEngine::Impl final : private PlacementView,
   static constexpr int kSnapshotHaloRows = 1;
 
   void buildPlannerData();
-  bool isReady() const;
+  bool snapshotIsValid() const;
   bool isNonBlockingCheckerInitDiagnostic(
       const ipl::Diagnostic& diagnostic) const;
-  bool bindInfrastructure();
+  void buildInitialSnapshot();
   bool ensureMasterRegistered(const eLIB::PhysLibCell& master);
   bool rebuildOracle();
   void buildLegalSpans();
@@ -549,7 +561,6 @@ class FillerRepairEngine::Impl final : private PlacementView,
   std::vector<ipl::Diagnostic> oracle_diagnostics_;
   const std::vector<XInterval>& legalSpansForRow(RowId rowId) const;
   bool initialized_ = false;
-  bool init_attempted_ = false;
 };
 
 namespace {
@@ -932,26 +943,34 @@ void FillerRepairEngine::Impl::buildPlannerData()
   // ids. Entries the Network does not know cannot be validated by the
   // checker either (it builds masters from the Network) -> Warning + skip.
   {
-    log_.msg("candidate",
-             cat("provider source: fillerSetting configuredCount=",
-                 fillerMasters.size(), " networkMasters=",
-                 network->getMasters().size()));
+    log_.section("candidate", "CONFIGURED FILLER MASTERS");
+    log_.block("candidate",
+               "Candidate provider source",
+               {{"source", "fillerSetting"},
+                {"configured count", cat(fillerMasters.size())},
+                {"network masters", cat(network->getMasters().size())}});
+    std::vector<std::vector<std::string>> configuredRows;
+    configuredRows.reserve(fillerMasters.size());
     for (size_t configuredIndex = 0;
          configuredIndex < fillerMasters.size();
          ++configuredIndex) {
       const eLIB::PhysLibCell* cell = fillerMasters[configuredIndex];
       if (cell == nullptr) {
-        log_.msg("candidate",
-                 cat("configured[", configuredIndex,
-                     "] physLibCell=null decision=skip"));
+        configuredRows.push_back({cat(configuredIndex),
+                                  "physLibCell=null",
+                                  "-",
+                                  "skip",
+                                  "-"});
         continue;
       }
       const int id = network->getMasterId(cell->getLibCellId());
-      log_.msg("candidate", [&] {
-        return cat("configured[", configuredIndex, "] {",
-                   masterDebug(*cell), "} networkMasterId=", id);
-      });
+      const std::string description = masterDebug(*cell);
       if (id < 0) {
+        configuredRows.push_back({cat(configuredIndex),
+                                  description,
+                                  cat(id),
+                                  "reject",
+                                  "not in Network"});
         // Fatal: the checker validates candidates against Network masters, so
         // a configured master the Network never imported means the snapshot
         // was built against different inputs -- refuse instead of silently
@@ -966,6 +985,11 @@ void FillerRepairEngine::Impl::buildPlannerData()
       }
       const MasterInfo* info = masterInfo(static_cast<MasterId>(id));
       if (info == nullptr) {
+        configuredRows.push_back({cat(configuredIndex),
+                                  description,
+                                  cat(id),
+                                  "reject",
+                                  "planner metadata missing"});
         addProblem(Severity::Fatal, "ConfiguredMasterMissingMetadata",
                    cat("configured filler master has no planner metadata: "
                        "configuredIndex=",
@@ -973,29 +997,35 @@ void FillerRepairEngine::Impl::buildPlannerData()
                        " {", masterDebug(*cell), "}"));
         continue;
       }
-      log_.msg("candidate", [&] {
-        return cat("configured[", configuredIndex, "] accepted master=", id,
-                   " filler=", info->isFiller, " vt=", info->vt,
-                   " width=", info->width, " heightRows=", info->height,
-                   " bottom=", polarityName(info->bottomBandPolarity));
-      });
+      configuredRows.push_back(
+          {cat(configuredIndex),
+           description,
+           cat(id),
+           "accept",
+           cat("filler=", info->isFiller, " vt=", info->vt,
+               " width=", info->width, " heightRows=", info->height,
+               " bottom=", polarityName(info->bottomBandPolarity))});
       placement_.fillerMasterIds.push_back(static_cast<MasterId>(id));
     }
+    log_.table("candidate",
+               "Configured master decisions",
+               {"index", "physical master", "network ID", "decision", "metadata / reason"},
+               configuredRows);
     std::sort(placement_.fillerMasterIds.begin(), placement_.fillerMasterIds.end());
     placement_.fillerMasterIds.erase(
         std::unique(placement_.fillerMasterIds.begin(), placement_.fillerMasterIds.end()),
         placement_.fillerMasterIds.end());
-    log_.msg("candidate", [&] {
-      std::string ids;
-      for (const MasterId id : placement_.fillerMasterIds) {
-        if (!ids.empty()) {
-          ids += ',';
-        }
-        ids += std::to_string(id);
+    std::string ids;
+    for (const MasterId id : placement_.fillerMasterIds) {
+      if (!ids.empty()) {
+        ids += ',';
       }
-      return cat("provider ready: acceptedCount=", placement_.fillerMasterIds.size(),
-                 " masterIds=[", ids, ']');
-    });
+      ids += std::to_string(id);
+    }
+    log_.block("candidate",
+               "Candidate provider ready",
+               {{"accepted count", cat(placement_.fillerMasterIds.size())},
+                {"master IDs", cat('[', ids, ']')}});
   }
   if (placement_.fillerMasterIds.empty()) {
     // Empty allow list (or nothing usable in it) means repair could never
@@ -1150,14 +1180,16 @@ void FillerRepairEngine::Impl::buildPlannerData()
 
     const bool fillerWidthWins = maxFillerWidth > checkerReach;
     placement_.defaultHaloX = std::max(checkerReach, maxFillerWidth);
-    log_.msg(
+    log_.block(
         "engine",
-        cat("default halo source: kind=",
-            fillerWidthWins ? "FILLER_MASTER_WIDTH" : "CHECKER_RULE_REACH",
-            " checkerReach{sites=", reachSites, " dbu=", checkerReach,
-            "} widestConfiguredFiller{master=", maxFillerMaster,
-            " dbu=", maxFillerWidth,
-            "} defaultHaloX=", placement_.defaultHaloX));
+        "Default halo source",
+        {{"kind",
+          fillerWidthWins ? "FILLER_MASTER_WIDTH" : "CHECKER_RULE_REACH"},
+         {"checker reach (sites)", cat(reachSites)},
+         {"checker reach (DBU)", cat(checkerReach)},
+         {"widest filler master", cat(maxFillerMaster)},
+         {"widest filler (DBU)", cat(maxFillerWidth)},
+         {"default halo X", cat(placement_.defaultHaloX)}});
   }
 
   const auto placedCount = std::count_if(
@@ -1166,14 +1198,17 @@ void FillerRepairEngine::Impl::buildPlannerData()
   const auto masterCount = std::count_if(
       placement_.masters.begin(), placement_.masters.end(),
       [](const auto& slot) { return slot.has_value(); });
-  log_.msg("engine",
-           cat("placement view: ", placedCount, " node(s), ",
-               masterCount, " master(s), ", placement_.fillerMasterIds.size(),
-               " configured filler master(s), siteWidth=", placement_.siteWidth,
-               " defaultHaloX=", placement_.defaultHaloX));
+  log_.block("engine",
+             "Placement view",
+             {{"nodes", cat(placedCount)},
+              {"masters", cat(masterCount)},
+              {"configured filler masters",
+               cat(placement_.fillerMasterIds.size())},
+              {"site width", cat(placement_.siteWidth)},
+              {"default halo X", cat(placement_.defaultHaloX)}});
 }
 
-bool FillerRepairEngine::Impl::isReady() const
+bool FillerRepairEngine::Impl::snapshotIsValid() const
 {
   return std::none_of(
       setup_diagnostics_.begin(), setup_diagnostics_.end(),
@@ -1233,7 +1268,9 @@ void FillerRepairEngine::Impl::addProblem(Severity severity,
                                const std::string& message)
 {
   setup_diagnostics_.push_back(makeDiag(severity, code, message));
-  log_.msg("engine", cat(code, ": ", message));
+  log_.block("engine",
+             "Setup diagnostic",
+             {{"code", code}, {"message", message}});
 }
 
 const std::vector<PlacedInstance>& FillerRepairEngine::Impl::instancesInRow(
@@ -1540,18 +1577,20 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   // silently mis-attribute answers to candidates.
   const std::vector<ipl::CheckResult> raw
       = checker_.checkPlaceWithOverlays(target, guard, changes);
-  log_.msg("engine",
-           cat("overlay batch: ", changes.size(), " candidate(s) -> ",
-               raw.size(), " result(s)"));
+  log_.block("engine",
+             "Overlay batch",
+             {{"candidates", cat(changes.size())},
+              {"results", cat(raw.size())}});
 
   // Ordered correlation is the final checker's entire batch protocol. Any
   // missing OR extra result invalidates the whole batch. Preserve only the
   // returned cardinality so OracleGate can diagnose the exact mismatch; no
   // checker finding from a mis-correlated batch is consumed.
   if (raw.size() != legalIndices.size()) {
-    log_.msg("engine",
-             cat("overlay batch protocol error: expected ", legalIndices.size(),
-                 " result(s), received ", raw.size()));
+    log_.block("engine",
+               "Overlay batch protocol error",
+               {{"expected results", cat(legalIndices.size())},
+                {"received results", cat(raw.size())}});
     if (!precheckFiltered) {
       return std::vector<OracleResult>(raw.size());
     }
@@ -1683,6 +1722,7 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
     const eLIB::PhysLibCell* newMaster)
 {
   RepairOutcome result;
+  log_.section("engine", "REPAIR REQUEST");
   const auto addDiagnostic = [&result](Severity severity,
                                        const std::string& code,
                                        const std::string& message) {
@@ -1694,11 +1734,11 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
     result.diagnostics = init_diagnostics_;
     addDiagnostic(Severity::Fatal,
                   "engine_not_initialized",
-                  "init() must succeed before repair()");
+                  "engine construction did not produce a ready snapshot");
     return result;
   }
 
-  if (!isReady()) {
+  if (!snapshotIsValid()) {
     for (const Diagnostic& diagnostic : setup_diagnostics_) {
       result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
     }
@@ -1879,7 +1919,7 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
     const DbCoord requestYRelative
         = grid_->gridYToDbu(GridY{requestedRowId}).v;
     const DbCoord requestYAbsolute = coreYl + requestYRelative;
-    std::string matchingRows;
+    std::vector<std::vector<std::string>> matchingRows;
     if (physical.isValid()) {
       const DbCoord physicalY = physical.getOrigin().getY().getStorage();
       RowId physicalRowId = 0;
@@ -1893,70 +1933,92 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
         const bool containsRequest
             = requestYAbsolute >= rowYl && requestYAbsolute < rowYh;
         if (containsPhysical || containsRequest) {
-          if (!matchingRows.empty()) {
-            matchingRows += "; ";
-          }
-          matchingRows += cat(
-              "{iterationId=", physicalRowId,
-              " site=\"", row.getSite().getName(), "\"",
-              " pad=", row.getSite().getIsPad(),
-              " y=[", rowYl, ",", rowYh, ")",
-              " height=", row.getSite().getHeight().getStorage(),
-              " orient=", orientationName(row.getOrient()),
-              " containsPhysical=", containsPhysical,
-              " containsRequest=", containsRequest, "}");
+          matchingRows.push_back(
+              {cat(physicalRowId),
+               row.getSite().getName(),
+               cat(row.getSite().getIsPad()),
+               cat('[', rowYl, ',', rowYh, ')'),
+               cat(row.getSite().getHeight().getStorage()),
+               orientationName(row.getOrient()),
+               cat(containsPhysical),
+               cat(containsRequest)});
         }
         ++physicalRowId;
       }
     }
-    if (matchingRows.empty()) {
-      matchingRows = "none";
-    }
     const MasterInfo* requestedMasterInfo = masterInfo(target.masterId);
-    log_.msg(
+    log_.section("engine", "TARGET SNAPSHOT FRAME");
+    log_.block(
         "engine",
-        cat("snapshot frame: request{source=",
-            checkerRequest.has_value() ? "checker" : "direct",
-            " inst=", target.instanceId,
-            " master=", target.masterId,
-            " row=", requestedRowId,
-            " col=",
-            placement_.siteWidth > 0 ? requestedX / placement_.siteWidth : -1,
-            " xDbu=", requestedX,
-            " yRelativeDbu=", requestYRelative,
-            " yAbsoluteDbu=", requestYAbsolute,
-            " orient=", orientationName(toUdmOrient(requestedOrientation)),
-            "} engineSnapshot{master=", oldMasterId,
-            " row=", targetRowId,
-            " xDbu=", targetX,
-            " orient=", orientationName(toUdmOrient(targetOrientation)),
-            " samePlacement=", samePlacement,
-            "} network{master=", targetNode->getMaster()->getId(),
-            " left=", targetNode->getLeft().v,
-            " bottom=", targetNode->getBottom().v,
-            " gridRow=", grid_->gridSnapDownY(targetNode).v,
-            " gridCol=", grid_->gridX(targetNode).v,
-            " orient=", orientationName(targetNode->getOrient()),
-            "} physical{valid=", physical.isValid(),
-            physical.isValid()
-                ? cat(" masterLib=",
-                      physical.getPhysMaster()
-                          .getLibCellId()
-                          .getIndexValue(),
-                      " origin=(",
-                      physical.getOrigin().getX().getStorage(), ",",
-                      physical.getOrigin().getY().getStorage(), ")",
-                      " orient=", orientationName(physical.getOrient()))
-                : std::string(),
-            "} masterBands{oldBottom=",
-            polarityName(oldBottomBandPolarity),
-            " requestedBottom=",
-            requestedMasterInfo != nullptr
-                ? polarityName(requestedMasterInfo->bottomBandPolarity)
-                : "missing",
-            " requestedHeightRows=",
-            requestedMasterInfo != nullptr ? requestedMasterInfo->height : -1,
-            "} matchingPhysRows=[", matchingRows, "]"));
+        "Request",
+        {{"source", checkerRequest.has_value() ? "checker" : "direct"},
+         {"instance", cat(target.instanceId)},
+         {"master", cat(target.masterId)},
+         {"row", cat(requestedRowId)},
+         {"column",
+          cat(placement_.siteWidth > 0
+                  ? requestedX / placement_.siteWidth
+                  : -1)},
+         {"x (DBU)", cat(requestedX)},
+         {"y relative (DBU)", cat(requestYRelative)},
+         {"y absolute (DBU)", cat(requestYAbsolute)},
+         {"orientation",
+          orientationName(toUdmOrient(requestedOrientation))}});
+    log_.block("engine",
+               "Engine snapshot",
+               {{"master", cat(oldMasterId)},
+                {"row", cat(targetRowId)},
+                {"x (DBU)", cat(targetX)},
+                {"orientation",
+                 orientationName(toUdmOrient(targetOrientation))},
+                {"same placement", cat(samePlacement)}});
+    log_.block("engine",
+               "Network node",
+               {{"master", cat(targetNode->getMaster()->getId())},
+                {"left", cat(targetNode->getLeft().v)},
+                {"bottom", cat(targetNode->getBottom().v)},
+                {"grid row", cat(grid_->gridSnapDownY(targetNode).v)},
+                {"grid column", cat(grid_->gridX(targetNode).v)},
+                {"orientation", orientationName(targetNode->getOrient())}});
+    log_.block(
+        "engine",
+        "Physical cell",
+        {{"valid", cat(physical.isValid())},
+         {"master lib",
+          physical.isValid()
+              ? cat(physical.getPhysMaster()
+                        .getLibCellId()
+                        .getIndexValue())
+              : "-"},
+         {"origin",
+          physical.isValid()
+              ? cat('(', physical.getOrigin().getX().getStorage(), ',',
+                    physical.getOrigin().getY().getStorage(), ')')
+              : "-"},
+         {"orientation",
+          physical.isValid() ? orientationName(physical.getOrient()) : "-"}});
+    log_.block(
+        "engine",
+        "Master bands",
+        {{"old bottom", polarityName(oldBottomBandPolarity)},
+         {"requested bottom",
+          requestedMasterInfo != nullptr
+              ? polarityName(requestedMasterInfo->bottomBandPolarity)
+              : "missing"},
+         {"requested height (rows)",
+          cat(requestedMasterInfo != nullptr ? requestedMasterInfo->height
+                                             : -1)}});
+    log_.table("engine",
+               "Matching physical rows",
+               {"iteration ID",
+                "site",
+                "pad",
+                "y range",
+                "height",
+                "orientation",
+                "has physical",
+                "has request"},
+               matchingRows);
   }
 
   const bool layoutChanged
@@ -2129,12 +2191,14 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
     const internal::RetileResult tilings = internal::enumerateRetilings(
         std::vector<internal::SiteCell>(emptySites.begin(), emptySites.end()),
         footprints);
-    log_.msg("engine",
-             cat("layout rewrite: removed=", removed.size(),
-                 " emptySites=", emptySites.size(),
-                 " tilings=", tilings.solutions.size(),
-                 " searchStates=", tilings.searchStates,
-                 " truncated=", tilings.truncated));
+    log_.section("engine", "LAYOUT REWRITE");
+    log_.block("engine",
+               "Retiling search",
+               {{"removed fillers", cat(removed.size())},
+                {"empty sites", cat(emptySites.size())},
+                {"tilings", cat(tilings.solutions.size())},
+                {"search states", cat(tilings.searchStates)},
+                {"truncated", cat(tilings.truncated)}});
     if (tilings.solutions.empty()) {
       addDiagnostic(Severity::Warning,
                     tilings.truncated ? "RetilingBudgetExceeded"
@@ -2305,10 +2369,12 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   snapshotRequest.requestId = 0;
   snapshotRequest.targetPlace = target;
   snapshotRequest.guardRegion = initialInfluence;
-  log_.msg("engine",
-           cat("snapshot: target inst=", target.instanceId, " newMaster=",
-               target.masterId, " guard=",
-               show(snapshotRequest.guardRegion)));
+  log_.section("engine", "INITIAL OVERLAY CHECK");
+  log_.block("engine",
+             "Target snapshot",
+             {{"instance", cat(target.instanceId)},
+              {"new master", cat(target.masterId)},
+              {"guard", show(snapshotRequest.guardRegion)}});
 
   const OracleResult snapshot = checkPlaceWithOverlay(snapshotRequest);
   if (snapshot.status != OracleStatus::Checked) {
@@ -2399,26 +2465,6 @@ ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
 }
 
 }  // namespace
-
-bool FillerRepairEngine::Impl::init()
-{
-  if (init_attempted_) {
-    return false;
-  }
-  init_attempted_ = true;
-  if (!bindInfrastructure()) {
-    return false;
-  }
-
-  initialized_ = rebuildOracle();
-  if (!initialized_) {
-    init_diagnostics_.insert(init_diagnostics_.end(),
-                             oracle_diagnostics_.begin(),
-                             oracle_diagnostics_.end());
-    return false;
-  }
-  return true;
-}
 
 void FillerRepairEngine::Impl::setDebugLogging(bool enabled)
 {
@@ -2548,9 +2594,12 @@ void FillerRepairEngine::Impl::failInit(const std::string& status,
                                         const std::string& message)
 {
   init_diagnostics_.push_back({status, message});
+  log_.block("engine",
+             "Initialization diagnostic",
+             {{"status", status}, {"message", message}});
 }
 
-bool FillerRepairEngine::Impl::bindInfrastructure()
+void FillerRepairEngine::Impl::buildInitialSnapshot()
 {
   eUNL::Design* const design = checker_.getDesign();
   if (grid_ == nullptr || design == nullptr || network_ == nullptr) {
@@ -2558,7 +2607,7 @@ bool FillerRepairEngine::Impl::bindInfrastructure()
              cat("fatal: missing initialized Grid, Design, or Network: grid=",
                  grid_ != nullptr, " design=", design != nullptr,
                  " network=", network_ != nullptr));
-    return false;
+    return;
   }
   eUNL::PhysDesMgr* const desMgr = design->getPhysDesMgr();
   if (desMgr == nullptr) {
@@ -2571,14 +2620,14 @@ bool FillerRepairEngine::Impl::bindInfrastructure()
                  " gridRows=", grid_->getRowCount().v,
                  " networkNodes=", network_->getNodes().size(),
                  " networkMasters=", network_->getMasters().size()));
-    return false;
+    return;
   }
   const fillerSetting* const fillerSettings = network_->getFillerSetting();
   if (fillerSettings == nullptr) {
     failInit("missing_filler_setting",
              "fatal: Network has no active fillerSetting; DePlace must bind "
              "it before filler repair initialization");
-    return false;
+    return;
   }
   if (fillerSettings->getFillerPhysCells().empty()) {
     failInit("empty_filler_allow_list",
@@ -2587,7 +2636,7 @@ bool FillerRepairEngine::Impl::bindInfrastructure()
                  static_cast<const void*>(fillerSettings->getDesign()),
                  " networkNodes=", network_->getNodes().size(),
                  " networkMasters=", network_->getMasters().size()));
-    return false;
+    return;
   }
   if (network_->getNodes().empty() || network_->getMasters().empty()) {
     failInit("empty_infrastructure",
@@ -2600,7 +2649,7 @@ bool FillerRepairEngine::Impl::bindInfrastructure()
                  " gridSitesPerRow=", grid_->getRowSiteCount().v,
                  " configuredFillers=",
                  fillerSettings->getFillerPhysCells().size()));
-    return false;
+    return;
   }
   // Per-node Network<->UDM cross-validation was removed deliberately:
   // infrastructure data is trusted as-is. The owner finishes master
@@ -2634,7 +2683,20 @@ bool FillerRepairEngine::Impl::bindInfrastructure()
                    " gridRows=", grid_->getRowCount().v));
     }
   }
-  return init_diagnostics_.empty();
+  if (init_diagnostics_.empty()) {
+    initialized_ = rebuildOracle();
+    if (!initialized_) {
+      init_diagnostics_.insert(init_diagnostics_.end(),
+                               oracle_diagnostics_.begin(),
+                               oracle_diagnostics_.end());
+      for (const ipl::Diagnostic& diagnostic : oracle_diagnostics_) {
+        log_.block("engine",
+                   "Initialization diagnostic",
+                   {{"status", diagnostic.status},
+                    {"message", diagnostic.message}});
+      }
+    }
+  }
 }
 
 bool FillerRepairEngine::Impl::ensureMasterRegistered(
@@ -2662,9 +2724,10 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   bool checkerReady = true;
   for (const ipl::Diagnostic& diagnostic : checker_.getDiags()) {
     if (isNonBlockingCheckerInitDiagnostic(diagnostic)) {
-      log_.msg("engine",
-               cat("non-blocking checker init diagnostic: ",
-                   diagnostic.status, " ", diagnostic.message));
+      log_.block("engine",
+                 "Non-blocking checker initialization diagnostic",
+                 {{"status", diagnostic.status},
+                  {"message", diagnostic.message}});
       continue;
     }
     checkerReady = false;
@@ -2678,11 +2741,12 @@ bool FillerRepairEngine::Impl::rebuildOracle()
              " engineSiteWidth=", placement_.siteWidth,
              " gridSiteWidth=", grid_->getSiteWidth().v,
              " checkerSiteWidth=", checker_.siteWidth(), "}")});
-    log_.msg("engine",
-             cat("blocking checker init diagnostic: ", diagnostic.status,
-                 " ", diagnostic.message));
+    log_.block("engine",
+               "Blocking checker initialization diagnostic",
+               {{"status", diagnostic.status},
+                {"message", diagnostic.message}});
   }
-  if (checkerReady && isReady()) {
+  if (checkerReady && snapshotIsValid()) {
     return true;
   }
   for (const Diagnostic& diagnostic : setup_diagnostics_) {
@@ -2693,7 +2757,8 @@ bool FillerRepairEngine::Impl::rebuildOracle()
 
 FillerRepairEngine::FillerRepairEngine(
     const ipl::ImplantLayerChecker& checker)
-    : checker_(checker), impl_(std::make_unique<Impl>(checker))
+    : checker_(checker),
+      impl_(std::make_unique<Impl>(checker, debug_logging_))
 {
 }
 
@@ -2705,16 +2770,21 @@ void FillerRepairEngine::setDebugLogging(bool enabled)
   impl_->setDebugLogging(enabled);
 }
 
-bool FillerRepairEngine::init()
+bool FillerRepairEngine::isReady() const
 {
-  return impl_->init();
+  return impl_->ready();
+}
+
+const std::vector<ipl::Diagnostic>&
+FillerRepairEngine::getInitDiagnostics() const
+{
+  return impl_->initDiagnostics();
 }
 
 bool FillerRepairEngine::update()
 {
-  auto replacement = std::make_unique<Impl>(checker_);
-  replacement->setDebugLogging(debug_logging_);
-  const bool initialized = replacement->init();
+  auto replacement = std::make_unique<Impl>(checker_, debug_logging_);
+  const bool initialized = replacement->ready();
   impl_ = std::move(replacement);
   return initialized;
 }

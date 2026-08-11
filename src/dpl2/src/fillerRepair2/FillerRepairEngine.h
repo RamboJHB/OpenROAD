@@ -36,8 +36,10 @@ class FillerRepairEngine
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
-  // Gets all initialized infrastructure from the checker, the sole oracle.
-  bool init();
+  // Construction eagerly builds the immutable snapshot from the checker.
+  // Bind this engine only when it is ready.
+  bool isReady() const;
+  const std::vector<ipl::Diagnostic>& getInitDiagnostics() const;
 
   // Non-mutating, pre-commit overlay repair.
   RepairOutcome repair(const ipl::CheckRequest& request);

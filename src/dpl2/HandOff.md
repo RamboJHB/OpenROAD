@@ -192,8 +192,10 @@ Initialization order is part of the contract:
 2. Configure `fillerSetting` and bind it to Network.
 3. Register configured filler masters through DePlace's real edge table.
 4. Construct `ImplantLayerChecker(grid, design, network)`.
-5. Construct `FillerRepairEngine(checker)` and call `init()`.
-6. Bind the initialized engine with `checker.setFillerRepairEngine(&engine)`.
+5. Construct `FillerRepairEngine(checker)`; construction eagerly builds its
+   immutable snapshot.
+6. Require `engine.isReady()`, report `engine.getInitDiagnostics()` on failure,
+   and only then bind it with `checker.setFillerRepairEngine(&engine)`.
 7. Start read-only worker calls.
 
 Example caller:
@@ -207,9 +209,9 @@ if (legal) {
 ```
 
 The caller owns both objects and the result vector. Repair never commits. If
-initialization fails, do not bind the engine. If the design revision changes,
-stop workers and rebuild the checker/engine pair; there is no reset/context
-API.
+initialization fails, the engine prints `[fr][engine]` diagnostics by default
+and the caller must not bind it. If the design revision changes, stop workers
+and rebuild the checker/engine pair; there is no reset/context API.
 
 ## 5. Destination assumptions to verify
 
@@ -312,10 +314,13 @@ Collect separate p50/p95/p99 distributions for:
 - budget-truncated and definitive no-solution cases;
 - representative sparse and dense filler rows.
 
-For each slow call retain the `[fr]` fields `checker requests`, `batches`,
-`cacheHits`, adaptive `grown xN`, enumeration completeness, and retiler
-`searchStates`; wall time alone cannot distinguish checker cost from candidate
-growth. Measure again at 1, 2, 4, and 8 outer workers because the checker also
+For each slow call retain the structured `[fr]` transcript fields `checker
+requests`, `batches`, `cache hits`, adaptive `Grown repair window LN`,
+enumeration `coverage`, and retiler `search states`; wall time alone cannot
+distinguish checker cost from candidate growth. Section separators identify
+each initialization, snapshot, adaptive window, checker gate, and result;
+repeated data is rendered as wrapped tables rather than long single lines.
+Measure again at 1, 2, 4, and 8 outer workers because the checker also
 parallelizes candidates internally. Choose the outer-worker count at the
 throughput knee rather than assuming one worker per core is optimal.
 

@@ -88,7 +88,7 @@ public:
     return true;
   }
 private:
-  // [FRPORT] Borrowed configuration used by FillerRepairEngine::init().
+  // [FRPORT] Borrowed configuration used by FillerRepairEngine construction.
   const fillerSetting* filler_setting_ = nullptr;
   int cells_cnt_ = 0;
   Rect core_; // Core area of the design.

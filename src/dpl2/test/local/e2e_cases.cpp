@@ -48,6 +48,48 @@ std::string diagnosticText(
   return text;
 }
 
+void expectReadableVerboseTranscript(const std::string& transcript)
+{
+  size_t begin = 0;
+  while (begin < transcript.size()) {
+    const size_t end = transcript.find('\n', begin);
+    const std::string line
+        = transcript.substr(begin, end == std::string::npos
+                                       ? std::string::npos
+                                       : end - begin);
+    if (line.rfind("[fr][", 0) == 0) {
+      EXPECT_LE(line.size(), 112U) << line;
+    }
+    if (end == std::string::npos) {
+      break;
+    }
+    begin = end + 1;
+  }
+}
+
+bool transcriptLineContains(const std::string& transcript,
+                            const std::string& label,
+                            const std::string& value)
+{
+  size_t begin = 0;
+  while (begin < transcript.size()) {
+    const size_t end = transcript.find('\n', begin);
+    const std::string line
+        = transcript.substr(begin, end == std::string::npos
+                                       ? std::string::npos
+                                       : end - begin);
+    if (line.find(label) != std::string::npos
+        && line.find(value) != std::string::npos) {
+      return true;
+    }
+    if (end == std::string::npos) {
+      break;
+    }
+    begin = end + 1;
+  }
+  return false;
+}
+
 
 bool sameChanges(const dpl2::ipl::FillerChanges& lhs,
                  const dpl2::ipl::FillerChanges& rhs)
@@ -215,7 +257,7 @@ class EngineHarness
         objects_.infrastructure().network());
     engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>(
         *checker_);
-    engine_ready_ = engine_->init();
+    engine_ready_ = engine_->isReady();
   }
 
   bool engineReady() const { return engine_ready_; }
@@ -277,7 +319,7 @@ class CheckerHarness
         objects_.infrastructure().network());
     engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>(
         *checker_);
-    if (engine_->init()) {
+    if (engine_->isReady()) {
       checker_->setFillerRepairEngine(engine_.get());
     }
     checker_ready_ = true;
@@ -308,7 +350,7 @@ class CheckerHarness
         objects_.infrastructure().network());
     engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>(
         *checker_);
-    const bool ready = engine_->init();
+    const bool ready = engine_->isReady();
     if (ready) {
       checker_->setFillerRepairEngine(engine_.get());
     }
@@ -420,11 +462,9 @@ TEST(FillerRepairInitializationDiagnostics,
       objects.infrastructure().grid(),
       objects.design().design(),
       objects.infrastructure().network());
-  dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  engine.setDebugLogging(true);
-
   testing::internal::CaptureStdout();
-  const bool initialized = engine.init();
+  dpl2::fillerRepair::FillerRepairEngine engine(checker);
+  const bool initialized = engine.isReady();
   dpl2::fillerRepair::RepairOutcome outcome;
   if (initialized) {
     outcome = engine.repair(
@@ -435,24 +475,27 @@ TEST(FillerRepairInitializationDiagnostics,
 
   ASSERT_TRUE(initialized) << transcript;
   EXPECT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
-  EXPECT_NE(transcript.find("[fr][engine] default halo source:"),
+  expectReadableVerboseTranscript(transcript);
+  EXPECT_NE(transcript.find("[fr][engine] Default halo source"),
             std::string::npos);
   // The placed hard macro is 6 sites wide, but only configured filler
   // masters may contribute a width floor. Both that floor and checker reach
   // are 2 here, so the macro does not inflate the initial snapshot halo.
-  EXPECT_NE(transcript.find("kind=CHECKER_RULE_REACH"), std::string::npos);
-  EXPECT_NE(transcript.find("widestConfiguredFiller{"),
+  EXPECT_NE(transcript.find("CHECKER_RULE_REACH"), std::string::npos);
+  EXPECT_TRUE(transcriptLineContains(transcript, "checker reach (sites)", "2"));
+  EXPECT_TRUE(transcriptLineContains(transcript, "checker reach (DBU)", "2"));
+  EXPECT_TRUE(transcriptLineContains(transcript, "widest filler (DBU)", "2"));
+  EXPECT_TRUE(transcriptLineContains(transcript, "default halo X", "2"));
+  EXPECT_NE(transcript.find("[6,14) rows[1,3]"), std::string::npos);
+  EXPECT_NE(transcript.find("===== TARGET SNAPSHOT FRAME ====="),
             std::string::npos);
-  EXPECT_NE(transcript.find("dbu=2}"), std::string::npos);
-  EXPECT_NE(transcript.find("checkerReach{sites="), std::string::npos);
-  EXPECT_NE(transcript.find("defaultHaloX=2"), std::string::npos);
-  EXPECT_NE(transcript.find("guard=[6,14) rows[1,3]"), std::string::npos);
-  EXPECT_NE(transcript.find("[fr][engine] snapshot frame: request{"),
+  EXPECT_NE(transcript.find("[fr][engine] Request"), std::string::npos);
+  EXPECT_NE(transcript.find("[fr][engine] Engine snapshot"),
             std::string::npos);
-  EXPECT_NE(transcript.find("engineSnapshot{"), std::string::npos);
-  EXPECT_NE(transcript.find("network{"), std::string::npos);
-  EXPECT_NE(transcript.find("physical{"), std::string::npos);
-  EXPECT_NE(transcript.find("matchingPhysRows=["), std::string::npos);
+  EXPECT_NE(transcript.find("[fr][engine] Network node"), std::string::npos);
+  EXPECT_NE(transcript.find("[fr][engine] Physical cell"), std::string::npos);
+  EXPECT_NE(transcript.find("[fr][engine] Matching physical rows"),
+            std::string::npos);
 }
 
 TEST(FillerRepairInitializationDiagnostics,
@@ -474,21 +517,18 @@ TEST(FillerRepairInitializationDiagnostics,
       objects.infrastructure().grid(),
       objects.design().design(),
       objects.infrastructure().network());
-  dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  engine.setDebugLogging(true);
-
   testing::internal::CaptureStdout();
-  const bool initialized = engine.init();
+  dpl2::fillerRepair::FillerRepairEngine engine(checker);
+  const bool initialized = engine.isReady();
   const std::string transcript = testing::internal::GetCapturedStdout();
 
   ASSERT_TRUE(initialized) << transcript;
-  EXPECT_NE(transcript.find("kind=FILLER_MASTER_WIDTH"), std::string::npos);
-  EXPECT_NE(transcript.find("checkerReach{sites=2 dbu=2}"),
-            std::string::npos);
-  EXPECT_NE(transcript.find("widestConfiguredFiller{"),
-            std::string::npos);
-  EXPECT_NE(transcript.find("dbu=4}"), std::string::npos);
-  EXPECT_NE(transcript.find("defaultHaloX=4"), std::string::npos);
+  expectReadableVerboseTranscript(transcript);
+  EXPECT_NE(transcript.find("FILLER_MASTER_WIDTH"), std::string::npos);
+  EXPECT_TRUE(transcriptLineContains(transcript, "checker reach (sites)", "2"));
+  EXPECT_TRUE(transcriptLineContains(transcript, "checker reach (DBU)", "2"));
+  EXPECT_TRUE(transcriptLineContains(transcript, "widest filler (DBU)", "4"));
+  EXPECT_TRUE(transcriptLineContains(transcript, "default halo X", "4"));
 }
 
 TEST(FillerRepairInitializationDiagnostics,
@@ -510,21 +550,18 @@ TEST(FillerRepairInitializationDiagnostics,
       objects.infrastructure().grid(),
       objects.design().design(),
       objects.infrastructure().network());
-  dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  engine.setDebugLogging(true);
-
   testing::internal::CaptureStdout();
-  const bool initialized = engine.init();
+  dpl2::fillerRepair::FillerRepairEngine engine(checker);
+  const bool initialized = engine.isReady();
   const std::string transcript = testing::internal::GetCapturedStdout();
 
   ASSERT_TRUE(initialized) << transcript;
-  EXPECT_NE(transcript.find("kind=CHECKER_RULE_REACH"), std::string::npos);
-  EXPECT_NE(transcript.find("checkerReach{sites=6 dbu=6}"),
-            std::string::npos);
-  EXPECT_NE(transcript.find("widestConfiguredFiller{"),
-            std::string::npos);
-  EXPECT_NE(transcript.find("dbu=2}"), std::string::npos);
-  EXPECT_NE(transcript.find("defaultHaloX=6"), std::string::npos);
+  expectReadableVerboseTranscript(transcript);
+  EXPECT_NE(transcript.find("CHECKER_RULE_REACH"), std::string::npos);
+  EXPECT_TRUE(transcriptLineContains(transcript, "checker reach (sites)", "6"));
+  EXPECT_TRUE(transcriptLineContains(transcript, "checker reach (DBU)", "6"));
+  EXPECT_TRUE(transcriptLineContains(transcript, "widest filler (DBU)", "2"));
+  EXPECT_TRUE(transcriptLineContains(transcript, "default halo X", "6"));
 }
 
 TEST(FillerRepairInitializationDiagnostics,
@@ -545,11 +582,9 @@ TEST(FillerRepairInitializationDiagnostics,
       objects.infrastructure().grid(),
       objects.design().design(),
       objects.infrastructure().network());
-  dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  engine.setDebugLogging(true);
-
   testing::internal::CaptureStdout();
-  const bool initialized = engine.init();
+  dpl2::fillerRepair::FillerRepairEngine engine(checker);
+  const bool initialized = engine.isReady();
   dpl2::fillerRepair::RepairOutcome outcome;
   if (initialized) {
     outcome = engine.repair(
@@ -560,20 +595,23 @@ TEST(FillerRepairInitializationDiagnostics,
 
   ASSERT_TRUE(initialized) << transcript;
   EXPECT_FALSE(outcome.hasSolution);
-  EXPECT_NE(transcript.find(
-                "[fr][candidate] provider source: fillerSetting "
-                "configuredCount=1"),
+  expectReadableVerboseTranscript(transcript);
+  EXPECT_NE(transcript.find("[fr][candidate] Candidate provider source"),
             std::string::npos);
-  EXPECT_NE(transcript.find("[fr][candidate] configured[0]"),
+  EXPECT_NE(transcript.find("fillerSetting"), std::string::npos);
+  EXPECT_TRUE(transcriptLineContains(transcript, "configured count", "1"));
+  EXPECT_NE(transcript.find("[fr][candidate] Configured master decisions"),
             std::string::npos);
-  EXPECT_NE(transcript.find("filler=1 vt="), std::string::npos);
-  EXPECT_NE(transcript.find("width=4 heightRows=1 bottom=N"),
+  EXPECT_NE(transcript.find("filler=1"), std::string::npos);
+  EXPECT_NE(transcript.find("width=4"), std::string::npos);
+  EXPECT_NE(transcript.find("heightRows=1"), std::string::npos);
+  EXPECT_NE(transcript.find("bottom=N"), std::string::npos);
+  EXPECT_NE(transcript.find("[fr][candidate] Candidate compatibility catalog"),
             std::string::npos);
-  EXPECT_NE(transcript.find("[fr][candidate] catalog ready:"),
-            std::string::npos);
-  EXPECT_NE(transcript.find("compatiblePairs=0 placedCandidate=0"),
-            std::string::npos);
-  EXPECT_NE(transcript.find("widthMismatch=1"), std::string::npos);
+  EXPECT_TRUE(transcriptLineContains(transcript, "compatible pairs", "0"));
+  EXPECT_TRUE(transcriptLineContains(transcript, "placed candidate", "0"));
+  EXPECT_TRUE(
+      transcriptLineContains(transcript, "reject: width mismatch", "1"));
   EXPECT_TRUE(hasDiagnostic(outcome.diagnostics,
                             "NoCompatibleFillerCandidate"));
   EXPECT_EQ(transcript.find("[fr][swapgen]"), std::string::npos);
@@ -624,7 +662,7 @@ TEST(FillerRepairInitializationDiagnostics,
   dpl2::ipl::ImplantLayerChecker checker(
       grid, objects.design().design(), network);
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  ASSERT_TRUE(engine.init());
+  ASSERT_TRUE(engine.isReady());
   EXPECT_EQ(network->getMaster(repairMaster.getLibCellId()), stale);
   EXPECT_TRUE(stale->isFiller());
 
@@ -1252,7 +1290,7 @@ TEST_P(FillerRepairEngineE2E,
       objects.design().design(),
       objects.infrastructure().network());
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  EXPECT_TRUE(engine.init());
+  EXPECT_TRUE(engine.isReady());
   EXPECT_GE(objects.infrastructure().network()->getMasterId(extraId), 0);
   EXPECT_EQ(objects.infrastructure().network()->getMasters().size(),
             masterCount);
@@ -1270,7 +1308,7 @@ TEST_P(FillerRepairEngineE2E, EmptyFillerAllowListErrorsOut)
       objects.design().design(),
       objects.infrastructure().network());
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  EXPECT_FALSE(engine.init());
+  EXPECT_FALSE(engine.isReady());
   const auto repair = engine.repair(
       objects.design().cell(frt::CellRole::Target),
       objects.design().master(frt::MasterRole::TargetNew));
@@ -1284,7 +1322,7 @@ TEST_P(FillerRepairEngineE2E, MissingInfrastructureErrorsOut)
   ASSERT_TRUE(objects.hasDesign());
   dpl2::ipl::ImplantLayerChecker checker(nullptr, nullptr, nullptr);
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  EXPECT_FALSE(engine.init());
+  EXPECT_FALSE(engine.isReady());
   const auto repair = engine.repair(
       objects.design().cell(frt::CellRole::Target),
       objects.design().master(frt::MasterRole::TargetNew));
@@ -1324,7 +1362,7 @@ TEST_P(FillerRepairEngineE2E, ExplicitDesignAvoidsGlobalSession)
   EXPECT_TRUE(checker.getDiags().empty()) << diagnosticText(checker.getDiags());
   EXPECT_EQ(checker.siteWidth(), infrastructure->grid()->getSiteWidth().v);
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  ASSERT_TRUE(engine.init());
+  ASSERT_TRUE(engine.isReady());
   const auto repair = engine.repair(
       requested->cell(frt::CellRole::Target),
       requested->master(frt::MasterRole::TargetNew));
@@ -1351,7 +1389,7 @@ TEST_P(FillerRepairEngineE2E, EngineGetsInfrastructureFromChecker)
   EXPECT_EQ(checker.getNetwork(), objects.infrastructure().network());
 
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  EXPECT_TRUE(engine.init());
+  EXPECT_TRUE(engine.isReady());
 }
 
 // set_filler_option and DePlace's Network binding must precede repair. A
@@ -1377,7 +1415,7 @@ TEST_P(FillerRepairEngineE2E, MissingConfigurationFailsClosed)
   EXPECT_FALSE(harness.fillerChanges().empty());
 }
 
-TEST_P(FillerRepairEngineE2E, FailedInitFailsClosed)
+TEST_P(FillerRepairEngineE2E, FailedEagerInitializationPrintsAndFailsClosed)
 {
   ProviderObjects objects(GetParam().setup);
   ASSERT_TRUE(objects.hasDesign());
@@ -1386,22 +1424,28 @@ TEST_P(FillerRepairEngineE2E, FailedInitFailsClosed)
       objects.infrastructure().grid(),
       objects.design().design(),
       objects.infrastructure().network());
+  testing::internal::CaptureStdout();
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  const auto expectClosed = [&](const char* phase) {
-    SCOPED_TRACE(phase);
-    const auto repair = engine.repair(
-        objects.design().cell(frt::CellRole::Target),
-        objects.design().master(frt::MasterRole::TargetNew));
-    EXPECT_FALSE(repair.hasSolution);
-    EXPECT_TRUE(repair.changes.empty());
-    EXPECT_TRUE(hasDiagnostic(repair.diagnostics, "engine_not_initialized"));
-  };
-  expectClosed("before init");
-  EXPECT_FALSE(engine.init());
-  expectClosed("after failed init");
+  const std::string transcript = testing::internal::GetCapturedStdout();
+  EXPECT_FALSE(engine.isReady());
+  EXPECT_FALSE(engine.getInitDiagnostics().empty());
+  if (dpl2::fillerRepair::debugLoggingDefault()) {
+    expectReadableVerboseTranscript(transcript);
+    EXPECT_NE(transcript.find("[fr][engine] Initialization diagnostic"),
+              std::string::npos);
+    EXPECT_NE(transcript.find("missing_filler_setting"), std::string::npos);
+    EXPECT_NE(transcript.find("[fr][engine] Initialization failed"),
+              std::string::npos);
+  }
+  const auto repair = engine.repair(
+      objects.design().cell(frt::CellRole::Target),
+      objects.design().master(frt::MasterRole::TargetNew));
+  EXPECT_FALSE(repair.hasSolution);
+  EXPECT_TRUE(repair.changes.empty());
+  EXPECT_TRUE(hasDiagnostic(repair.diagnostics, "engine_not_initialized"));
 }
 
-TEST_P(FillerRepairEngineE2E, EngineUsesOneInitialization)
+TEST_P(FillerRepairEngineE2E, EngineIsReadyAfterEagerConstruction)
 {
   ProviderObjects objects(GetParam().setup);
   ASSERT_TRUE(objects.hasDesign());
@@ -1417,8 +1461,8 @@ TEST_P(FillerRepairEngineE2E, EngineUsesOneInitialization)
       objects.design().design(),
       objects.infrastructure().network());
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  ASSERT_TRUE(engine.init());
-  EXPECT_FALSE(engine.init());
+  ASSERT_TRUE(engine.isReady());
+  EXPECT_TRUE(engine.isReady());
   const auto outcome = engine.repair(
       objects.design().cell(frt::CellRole::Target),
       objects.design().master(frt::MasterRole::TargetOld));
@@ -1674,7 +1718,7 @@ TEST_P(FillerRepairEngineE2E, EngineRejectsNullNetworkNode)
   dpl2::ipl::ImplantLayerChecker checker(
       objects.infrastructure().grid(), objects.design().design(), network);
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
-  EXPECT_FALSE(engine.init());
+  EXPECT_FALSE(engine.isReady());
   const auto repair = engine.repair(
       objects.design().cell(frt::CellRole::Target),
       objects.design().master(frt::MasterRole::TargetNew));

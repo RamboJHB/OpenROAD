@@ -165,33 +165,34 @@ void logCandidateProviderTrace(const PlacementView& view,
   const PlacedInstance* inst = view.instance(fillerId);
   const MasterInfo* current
       = inst != nullptr ? view.masterInfo(inst->masterId) : nullptr;
-  log.msg("candidate", [&] {
-    const std::string instanceInfo
-        = inst == nullptr
-              ? "instance=MISSING"
-              : cat("instance{row=", inst->rowId, " x=", inst->x,
-                    " orient=", candidateOrientName(inst->orientation),
-                    " filler=", inst->isFiller,
-                    " currentMaster=", inst->masterId, '}');
-    const std::string currentInfo
-        = current == nullptr
-              ? "current{metadata=MISSING}"
-              : cat("current{master=", current->id,
-                    " filler=", current->isFiller, " vt=", current->vt,
-                    " width=", current->width, " height=", current->height,
-                    " bottom=",
-                    candidatePolarityName(current->bottomBandPolarity), '}');
-    return cat("provider request filler=", fillerId, ' ', instanceInfo, ' ',
-               currentInfo, " configuredCount=", view.fillerMasterIds().size(),
-               " returnedCount=", result.candidates.size(),
-               " diagnosticCount=", result.diagnostics.size());
-  });
+  log.block(
+      "candidate",
+      "Candidate provider request",
+      {{"filler", cat(fillerId)},
+       {"instance",
+        inst == nullptr
+            ? "MISSING"
+            : cat("row=", inst->rowId, " x=", inst->x,
+                  " orient=", candidateOrientName(inst->orientation),
+                  " filler=", inst->isFiller,
+                  " currentMaster=", inst->masterId)},
+       {"current master",
+        current == nullptr
+            ? "metadata=MISSING"
+            : cat("master=", current->id, " filler=", current->isFiller,
+                  " vt=", current->vt, " width=", current->width,
+                  " height=", current->height, " bottom=",
+                  candidatePolarityName(current->bottomBandPolarity))},
+       {"configured count", cat(view.fillerMasterIds().size())},
+       {"returned count", cat(result.candidates.size())},
+       {"diagnostic count", cat(result.diagnostics.size())}});
 
   // A zero result gets the full rejection matrix. On the normal path, avoid
   // repeating the whole configured library for every editable filler and log
   // only the candidates the provider actually returned.
   const bool logRejected
       = result.candidates.empty() || !result.diagnostics.empty();
+  std::vector<std::vector<std::string>> configuredRows;
   for (const MasterId id : view.fillerMasterIds()) {
     const MasterInfo* candidate = view.masterInfo(id);
     const bool returned = providerReturned(result, id);
@@ -240,25 +241,39 @@ void logCandidateProviderTrace(const PlacementView& view,
     const char* decision = returned ? (reasons.empty() ? "accept"
                                                        : "returned-with-conflict")
                                     : "reject";
-    log.msg("candidate", [&] {
-      const std::string metadata
-          = candidate == nullptr
-                ? "metadata=MISSING"
-                : cat("filler=", candidate->isFiller,
-                      " vt=", candidate->vt, " width=", candidate->width,
-                      " height=", candidate->height, " bottom=",
-                      candidatePolarityName(candidate->bottomBandPolarity));
-      return cat("configured master=", id, ' ', metadata,
-                 " decision=", decision, " reasons=",
-                 reasons.empty() ? "NONE" : reasons);
-    });
+    configuredRows.push_back(
+        {cat(id),
+         candidate == nullptr ? "MISSING" : cat(candidate->isFiller),
+         candidate == nullptr ? "-" : cat(candidate->vt),
+         candidate == nullptr ? "-" : cat(candidate->width),
+         candidate == nullptr ? "-" : cat(candidate->height),
+         candidate == nullptr
+             ? "-"
+             : candidatePolarityName(candidate->bottomBandPolarity),
+         decision,
+         reasons.empty() ? "NONE" : reasons});
   }
+  log.table("candidate",
+            cat("Configured choices for filler ", fillerId),
+            {"master",
+             "filler",
+             "VT",
+             "width",
+             "height",
+             "bottom",
+             "decision",
+             "reasons"},
+            configuredRows);
 
+  std::vector<std::string> diagnosticItems;
+  diagnosticItems.reserve(result.diagnostics.size());
   for (const Diagnostic& diagnostic : result.diagnostics) {
-    log.msg("candidate",
-            cat("provider diagnostic filler=", fillerId,
-                " code=", diagnostic.code,
-                " message=", diagnostic.message));
+    diagnosticItems.push_back(
+        cat("filler=", fillerId, " code=", diagnostic.code,
+            " message=", diagnostic.message));
+  }
+  if (!diagnosticItems.empty()) {
+    log.list("candidate", "Provider diagnostics", diagnosticItems);
   }
 }
 
@@ -270,6 +285,11 @@ SwapGenerationResult generateSwaps(
     const DebugLog& log)
 {
   SwapGenerationResult result;
+  const bool verbose = log.enabled();
+  log.section("swapgen", cat("SWAP GENERATION L", window.level));
+  std::vector<std::vector<std::string>> emittedRows;
+  std::vector<std::vector<std::string>> rejectedRows;
+  std::vector<std::vector<std::string>> fillerRows;
 
   for (const InstanceId fillerId : window.editableFillers) {
     MasterCandidateResult candidates =
@@ -285,8 +305,15 @@ SwapGenerationResult generateSwaps(
       result.diagnostics.push_back(
           makeDiag(Severity::Info, "NoUsableMaster",
                    cat("filler ", fillerId, ": no same-size replacement")));
-      log.msg("swapgen",
-              cat("filler ", fillerId, " -> 0 candidates, no swaps"));
+      const PlacedInstance* filler = view.instance(fillerId);
+      if (verbose) {
+        fillerRows.push_back(
+            {cat(fillerId),
+             filler != nullptr ? cat(filler->rowId) : "-",
+             filler != nullptr ? cat(filler->x) : "-",
+             "0",
+             "no usable master"});
+      }
       continue;
     }
 
@@ -304,38 +331,52 @@ SwapGenerationResult generateSwaps(
             makeDiag(Severity::Warning, "RejectedCandidate",
                      cat("filler ", fillerId, " -> master ",
                          candidate, ": ", error)));
-        log.msg("swapgen", [&] {
-          return cat("reject filler=", fillerId, " master=",
-                     candidate, " reason=", error);
-        });
+        if (verbose) {
+          rejectedRows.push_back({cat(fillerId), cat(candidate), error});
+        }
         continue;
       }
       result.swaps.push_back(*swap);
       ++emitted;
-      // Deferred: this is the innermost loop of swap generation, so a
-      // silenced transcript must not pay for the string.
-      log.msg("swapgen", [&] {
-        return cat("emit filler=", swap->instanceId, " row=", swap->rowId,
-                   " span=", show(swap->span), " master ", swap->oldMasterId,
-                   "(vt", swap->oldVt, ") -> ", swap->newMasterId, "(vt",
-                   swap->newVt, ')');
-      });
+      if (verbose) {
+        emittedRows.push_back({cat(swap->instanceId),
+                               cat(swap->rowId),
+                               show(swap->span),
+                               cat(swap->oldMasterId),
+                               cat(swap->oldVt),
+                               cat(swap->newMasterId),
+                               cat(swap->newVt)});
+      }
     }
-    log.msg("swapgen",
-            [&] {
-              const PlacedInstance* filler = view.instance(fillerId);
-              return filler != nullptr
-                         ? cat("filler ", fillerId, " (row=", filler->rowId,
-                               " x=", filler->x, ") -> ", emitted, " swap(s)")
-                         : cat("filler ", fillerId,
-                               " disappeared from PlacementView");
-            });
+    const PlacedInstance* filler = view.instance(fillerId);
+    if (verbose) {
+      fillerRows.push_back(
+          {cat(fillerId),
+           filler != nullptr ? cat(filler->rowId) : "-",
+           filler != nullptr ? cat(filler->x) : "-",
+           cat(emitted),
+           filler != nullptr ? "ready" : "disappeared from PlacementView"});
+    }
   }
 
-  log.msg("swapgen",
-          cat("window L", window.level, ": ", window.editableFillers.size(),
-              " editable filler(s) -> ", result.swaps.size(),
-              " swap(s) total"));
+  log.table("swapgen",
+            "Per-filler summary",
+            {"filler", "row", "x", "swaps", "status"},
+            fillerRows);
+  if (!rejectedRows.empty()) {
+    log.table("swapgen",
+              "Rejected swap candidates",
+              {"filler", "master", "reason"},
+              rejectedRows);
+  }
+  log.table("swapgen",
+            "Emitted swaps",
+            {"filler", "row", "span", "old master", "old VT", "new master", "new VT"},
+            emittedRows);
+  log.block("swapgen",
+            cat("Window L", window.level, " summary"),
+            {{"editable fillers", cat(window.editableFillers.size())},
+             {"swaps", cat(result.swaps.size())}});
   return result;
 }
 
@@ -405,6 +446,10 @@ std::vector<NormalizedViolation> normalizeViolations(
   std::vector<NormalizedViolation> result;
   result.reserve(request.violations.size());
   int rowFallbacks = 0;
+  std::vector<std::vector<std::string>> violationRows;
+  if (log.enabled()) {
+    violationRows.reserve(request.violations.size());
+  }
 
   for (size_t i = 0; i < request.violations.size(); ++i) {
     const Violation& raw = request.violations[i];
@@ -443,22 +488,42 @@ std::vector<NormalizedViolation> normalizeViolations(
     std::sort(nv.cellAnchors.begin(), nv.cellAnchors.end());
     std::sort(nv.fillerParticipants.begin(), nv.fillerParticipants.end());
 
-    log.msg("normalize",
-            cat("violation#", i, " rule=", raw.ruleId, ' ', kindName(raw.kind),
-                '/', relationName(raw.relation), " layer=", raw.primaryLayer,
-                (raw.secondaryLayer ? cat('/', *raw.secondaryLayer) : std::string()),
-                " rows=", nv.rowIds.size(),
-                (nv.rowIdFallback ? " (fallback to anchor row)" : ""),
-                " xWindow=", show(raw.xWindow), " -> footprint=",
-                show(nv.xRange), " anchors=", nv.cellAnchors.size(),
-                " fillers=", nv.fillerParticipants.size()));
+    if (log.enabled()) {
+      violationRows.push_back(
+          {cat(i),
+           cat(raw.ruleId),
+           cat(kindName(raw.kind), '/', relationName(raw.relation)),
+           cat(raw.primaryLayer,
+               raw.secondaryLayer ? cat('/', *raw.secondaryLayer)
+                                  : std::string()),
+           cat(nv.rowIds.size(),
+               nv.rowIdFallback ? " (anchor fallback)" : ""),
+           show(raw.xWindow),
+           show(nv.xRange),
+           cat(nv.cellAnchors.size()),
+           cat(nv.fillerParticipants.size())});
+    }
 
     result.push_back(std::move(nv));
   }
 
-  log.msg("normalize",
-          cat("normalized ", result.size(), " violation(s); rowFallbacks=",
-              rowFallbacks, " anchor=", request.targetPlace.instanceId));
+  log.table("normalize",
+            "Normalized violations",
+            {"#",
+             "rule",
+             "kind / relation",
+             "layer",
+             "rows",
+             "x window",
+             "footprint",
+             "anchors",
+             "fillers"},
+            violationRows);
+  log.block("normalize",
+            "Normalization summary",
+            {{"normalized violations", cat(result.size())},
+             {"row fallbacks", cat(rowFallbacks)},
+             {"anchor", cat(request.targetPlace.instanceId)}});
   return result;
 }
 
@@ -644,13 +709,15 @@ RepairWindow finalizeWindow(int level,
                               guardRows.front(),
                               guardRows.back()};
 
-  log.msg("window",
-          cat(level == 0 ? cat("start") : cat("grown x", level),
-              " rows=[", window.rows.front(), ",", window.rows.back(),
-              "] x=", show(window.x), " editable=",
-              window.editableFillers.size(), " bridge=",
-              window.bridgeFillers.size(), " -> guard=",
-              show(window.guardRegion)));
+  log.block("window",
+            level == 0 ? "Initial repair window"
+                       : cat("Grown repair window L", level),
+            {{"rows",
+              cat('[', window.rows.front(), ',', window.rows.back(), ']')},
+             {"x", show(window.x)},
+             {"editable fillers", cat(window.editableFillers.size())},
+             {"bridge fillers", cat(window.bridgeFillers.size())},
+             {"guard", show(window.guardRegion)}});
   return window;
 }
 
@@ -775,13 +842,15 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
     growLeft = true;
     growRight = true;
   }
-  log.msg("window",
-          cat("expand from L", current.level, ": blocking=",
-              blocking.size(), " direction=",
-              growLeft ? "left" : "",
-              growLeft && growRight ? "+" : "",
-              growRight ? "right" : "", " stepPerRow=",
-              std::max(1, fillersPerRow)));
+  log.section("window", cat("ADAPTIVE EXPANSION FROM L", current.level));
+  log.block("window",
+            "Expansion request",
+            {{"blocking violations", cat(blocking.size())},
+             {"direction",
+              cat(growLeft ? "left" : "",
+                  growLeft && growRight ? "+" : "",
+                  growRight ? "right" : "")},
+             {"step per row", cat(std::max(1, fillersPerRow))}});
 
   const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);
   const XInterval anchorSpan{
@@ -870,17 +939,21 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
   // case, try the opposite side once before declaring the window exhausted.
   const bool primaryAdded = addOnSides(growLeft, growRight);
   if (!primaryAdded && growLeft != growRight) {
-    log.msg("window",
-            cat("primary adaptive direction ", growLeft ? "left" : "right",
-                " added no filler -> try ", growLeft ? "right" : "left"));
+    log.block("window",
+              "Direction fallback",
+              {{"primary", growLeft ? "left" : "right"},
+               {"result", "added no filler"},
+               {"fallback", growLeft ? "right" : "left"}});
     addOnSides(growRight, growLeft);
   }
 
-  log.msg("window",
-          cat("adaptive step L", current.level, " -> L",
-              current.level + 1, " addedLeft=", addedLeftTotal,
-              " addedRight=", addedRightTotal, " editableTotal=",
-              editable.size()));
+  log.block("window",
+            "Adaptive step result",
+            {{"from level", cat(current.level)},
+             {"to level", cat(current.level + 1)},
+             {"added left", cat(addedLeftTotal)},
+             {"added right", cat(addedRightTotal)},
+             {"editable total", cat(editable.size())}});
 
   return finalizeWindow(current.level + 1,
                         rowSet,
@@ -1066,13 +1139,18 @@ std::vector<FillerDomain> rankFillers(
                    });
 
   if (log.enabled()) {
-    log.msg("rank",
-            cat(ranked.size(), " filler domain(s) over ", swaps.size(),
-                " swap(s), anchorVt=", anchorVt,
-                ", demoted(thirdVt)=", demoted));
+    log.section("rank", "FILLER RANKING");
+    log.block("rank",
+              "Ranking summary",
+              {{"filler domains", cat(ranked.size())},
+               {"swaps", cat(swaps.size())},
+               {"anchor VT", cat(anchorVt)},
+               {"demoted third-VT choices", cat(demoted)}});
     // Print the actual domain order consumed by SubsetSearcher. Each line
     // contains the filler-level key followed by the complete, still-reachable
     // master domain (anchor/majority choices first, third VT last).
+    std::vector<std::vector<std::string>> rankingRows;
+    rankingRows.reserve(ranked.size());
     for (size_t rank = 0; rank < ranked.size(); ++rank) {
       const FillerDomain& domain = ranked[rank];
       const FillerKey key = fillerKey(domain);
@@ -1081,12 +1159,26 @@ std::vector<FillerDomain> rankFillers(
         options += cat(options.empty() ? "" : ",", "m", swap.newMasterId,
                        ":vt", swap.newVt);
       }
-      log.msg("rank",
-              cat("#", rank, " filler=", domain.instanceId,
-                  " key{direct=", key.direct, " bridge=", key.bridge,
-                  " width=", key.width, " x=", key.x, " row=", key.row,
-                  "} domain=[", options, ']'));
+      rankingRows.push_back({cat(rank),
+                             cat(domain.instanceId),
+                             cat(key.direct),
+                             cat(key.bridge),
+                             cat(key.width),
+                             cat(key.x),
+                             cat(key.row),
+                             cat('[', options, ']')});
     }
+    log.table("rank",
+              "Ranked filler domains",
+              {"rank",
+               "filler",
+               "direct",
+               "bridge",
+               "width",
+               "x",
+               "row",
+               "master domains"},
+              rankingRows);
   }
   return ranked;
 }
@@ -1122,11 +1214,13 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
 {
   EnumerationPlan plan;
   if (ranked.empty() || budget <= 0) {
-    log.msg("enumerate",
-            cat("skip enumeration: domains=", ranked.size(),
-                " budget=", budget));
+    log.section("enumerate", "OVERLAY ENUMERATION");
+    log.block("enumerate",
+              "Enumeration skipped",
+              {{"domains", cat(ranked.size())}, {"budget", cat(budget)}});
     return plan;
   }
+  log.section("enumerate", "OVERLAY ENUMERATION");
 
   // Rank-indexed mirror of `freshFillers`, so the leaf test is one array read
   // rather than a search. See the header for why skipping the rest is exact.
@@ -1176,6 +1270,7 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   bool budgetHit = false;
   int comboFresh = 0;      // fresh members in `combo`, maintained incrementally
   long long skippedAsAsked = 0;  // candidates the previous level already asked
+  std::vector<std::vector<std::string>> subsetRows;
 
   // Both recursions pass themselves as `self` rather than going through
   // std::function: this is the innermost loop of enumeration (millions of
@@ -1251,10 +1346,12 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
     choose(choose, size, 0, cap);
     // Per-size accounting makes it obvious when a large-window member cap or
     // the checker budget, rather than the legality oracle, removed candidates.
-    log.msg("enumerate",
-            cat("subsetSize=", size, " memberPrefix=", cap, '/',
-                fillerTotal, " -> emitted=", plan.overlays.size() - before,
-                budgetHit ? " (budget reached)" : ""));
+    if (log.enabled()) {
+      subsetRows.push_back({cat(size),
+                            cat(cap, '/', fillerTotal),
+                            cat(plan.overlays.size() - before),
+                            budgetHit ? "budget reached" : "ready"});
+    }
   }
   // Reaching the budget on the final element is still a complete search.
   // Derive completeness from what was actually emitted so space == budget
@@ -1267,16 +1364,23 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
                == space;
 
   if (incremental) {
-    log.msg("enumerate",
-            cat("incremental: fresh filler(s)=", freshFillers.size(), '/',
-                fillerTotal, " -> skipped ", skippedAsAsked,
-                " candidate(s) already answered at the previous level"));
+    log.block("enumerate",
+              "Incremental enumeration",
+              {{"fresh fillers", cat(freshFillers.size(), '/', fillerTotal)},
+               {"previously answered candidates", cat(skippedAsAsked)}});
   }
-  log.msg("enumerate",
-          cat(fillerTotal, " filler domain(s), ", optionTotal,
-              " option(s), space=", space,
-              plan.complete ? " (complete)" : " (truncated)", " -> ",
-              plan.overlays.size(), " overlay candidate(s), maxSize=", maxSize));
+  log.table("enumerate",
+            "Subset enumeration",
+            {"subset size", "member prefix", "emitted", "status"},
+            subsetRows);
+  log.block("enumerate",
+            "Enumeration summary",
+            {{"filler domains", cat(fillerTotal)},
+             {"options", cat(optionTotal)},
+             {"space", cat(space)},
+             {"coverage", plan.complete ? "complete" : "truncated"},
+             {"overlay candidates", cat(plan.overlays.size())},
+             {"maximum subset size", cat(maxSize)}});
   return plan;
 }
 
@@ -1352,24 +1456,31 @@ OracleGate::OracleGate(const PlacementView& dataSource,
 
 bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
 {
+  log_.section("gate", "BASELINE CHECK");
   const Region& guard = window.guardRegion;
   const OverlayKey key = overlayKey(guard, {});  // empty overlay = baseline
   auto it = cache_.find(key);
   if (it != cache_.end()) {
     ++cache_hits_;
-    log_.msg("gate", cat("baseline cache hit for guard ", show(guard)));
+    log_.block("gate",
+               "Baseline cache hit",
+               {{"guard", show(guard)}});
   } else {
     if (budget <= 0) {
-      log_.msg("gate", "baseline skipped: checker budget is exhausted");
+      log_.block("gate",
+                 "Baseline skipped",
+                 {{"reason", "checker budget is exhausted"}});
       return false;
     }
     OracleRequest request;
     request.requestId = next_request_id_++;
     request.targetPlace = anchor_;
     request.guardRegion = guard;
-    log_.msg("gate",
-             cat("baseline send id=", request.requestId, " guard=",
-                 show(guard), " budgetBefore=", budget));
+    log_.block("gate",
+               "Baseline request",
+               {{"request ID", cat(request.requestId)},
+                {"guard", show(guard)},
+                {"budget before", cat(budget)}});
     const OracleResult result = oracle_.checkPlaceWithOverlay(request);
     ++requests_sent_;
     --budget;
@@ -1379,11 +1490,14 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
           cat("baseline echoed id ", result.requestId, " != ", request.requestId)));
       return false;
     }
-    log_.msg("gate",
-             cat("baseline recv id=", result.requestId, " status=",
-                 static_cast<int>(result.status), " legal=", result.isLegal,
-                 " violations=", result.violations.size(), " diagnostics=",
-                 result.diagnostics.size(), " budgetAfter=", budget));
+    log_.block("gate",
+               "Baseline result",
+               {{"request ID", cat(result.requestId)},
+                {"status", cat(static_cast<int>(result.status))},
+                {"legal", cat(result.isLegal)},
+                {"violations", cat(result.violations.size())},
+                {"diagnostics", cat(result.diagnostics.size())},
+                {"budget after", cat(budget)}});
     it = cache_.emplace(key, result).first;
   }
 
@@ -1401,9 +1515,10 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
     baseline_ = nullptr;
     return false;
   }
-  log_.msg("gate",
-           cat("baseline for guard ", show(guard), ": ",
-               baseline_->violations.size(), " violation(s)"));
+  log_.block("gate",
+             "Baseline summary",
+             {{"guard", show(guard)},
+              {"violations", cat(baseline_->violations.size())}});
 
   // Baseline consistency gate: refuse to search on a stale/inconsistent
   // snapshot.
@@ -1444,9 +1559,11 @@ bool OracleGate::checkBaselineConsistency(const RepairWindow& window)
           cat("original rule=", original.ruleId, ' ', show(original.xWindow),
               " lies in the guard but is absent from the baseline; input "
               "snapshot is stale/inconsistent -- refusing to search")));
-      log_.msg("gate",
-               cat("baseline MISMATCH: original ", show(original.xWindow),
-                   " not reproduced -> abort window"));
+      log_.block("gate",
+                 "Baseline mismatch",
+                 {{"original", show(original.xWindow)},
+                  {"reason", "not reproduced"},
+                  {"decision", "abort window"}});
       return false;
     }
   }
@@ -1467,17 +1584,19 @@ bool OracleGate::checkBaselineConsistency(const RepairWindow& window)
           cat("baseline carries an in-window violation rule=", b.ruleId, ' ',
               show(b.xWindow), " that is not among the original snapshot; "
               "input is inconsistent -- refusing to search")));
-      log_.msg("gate",
-               cat("baseline MISMATCH: unexpected in-window ", show(b.xWindow),
-                   " -> abort window"));
+      log_.block("gate",
+                 "Baseline mismatch",
+                 {{"unexpected in-window", show(b.xWindow)},
+                  {"decision", "abort window"}});
       return false;
     }
   }
 
-  log_.msg("gate",
-           cat("baseline consistent: ", inGuardOriginals,
-               " in-guard original(s) all reproduced, no unexpected in-window "
-               "violation"));
+  log_.block("gate",
+             "Baseline consistent",
+             {{"in-guard originals", cat(inGuardOriginals)},
+              {"reproduced", "all"},
+              {"unexpected in-window violations", "none"}});
   return true;
 }
 
@@ -1620,19 +1739,26 @@ bool OracleGate::resolve(const Overlay* chunk,
     --budget;
   }
   if (requests.empty()) {
-    log_.msg("gate", [&] {
-      return cat("batch avoided: chunk=", count, " cached=", cachedInChunk,
-                 " skippedForBudget=", skippedForBudget);
-    });
+    if (log_.enabled()) {
+      log_.block("gate",
+                 "Checker batch avoided",
+                 {{"chunk", cat(count)},
+                  {"cached", cat(cachedInChunk)},
+                  {"skipped for budget", cat(skippedForBudget)}});
+    }
     return true;
   }
 
-  log_.msg("gate", [&] {
-    return cat("batch send: chunk=", count, " uncached=", requests.size(),
-               " cached=", cachedInChunk,
-               " skippedForBudget=", skippedForBudget, " guard=", show(guard),
-               " budget ", budgetBefore, " -> ", budget);
-  });
+  if (log_.enabled()) {
+    log_.block("gate",
+               "Checker batch request",
+               {{"chunk", cat(count)},
+                {"uncached", cat(requests.size())},
+                {"cached", cat(cachedInChunk)},
+                {"skipped for budget", cat(skippedForBudget)},
+                {"guard", show(guard)},
+                {"budget", cat(budgetBefore, " -> ", budget)}});
+  }
   std::vector<OracleResult> results =
       oracle_.checkPlaceWithOverlays(requests);
   ++batches_sent_;
@@ -1645,9 +1771,10 @@ bool OracleGate::resolve(const Overlay* chunk,
         Severity::Fatal, "CheckerProtocolError",
         cat("batch returned ", results.size(), " result(s) for ",
             requests.size(), " request(s)")));
-    log_.msg("gate",
-             cat("batch protocol error: results=", results.size(),
-                 " requests=", requests.size()));
+    log_.block("gate",
+               "Checker batch protocol error",
+               {{"results", cat(results.size())},
+                {"requests", cat(requests.size())}});
     return false;
   }
   // Non-const: each id is validated to appear exactly once, so the result it
@@ -1659,8 +1786,9 @@ bool OracleGate::resolve(const Overlay* chunk,
       diagnostics_.push_back(makeDiag(
           Severity::Fatal, "CheckerProtocolError",
           cat("duplicate requestId ", result.requestId)));
-      log_.msg("gate",
-               cat("batch protocol error: duplicate id=", result.requestId));
+      log_.block("gate",
+                 "Checker batch protocol error",
+                 {{"duplicate request ID", cat(result.requestId)}});
       return false;
     }
   }
@@ -1670,9 +1798,9 @@ bool OracleGate::resolve(const Overlay* chunk,
       diagnostics_.push_back(makeDiag(
           Severity::Fatal, "CheckerProtocolError",
           cat("missing result for requestId ", requests[i].requestId)));
-      log_.msg("gate",
-               cat("batch protocol error: missing id=",
-                   requests[i].requestId));
+      log_.block("gate",
+                 "Checker batch protocol error",
+                 {{"missing request ID", cat(requests[i].requestId)}});
       return false;
     }
     const std::size_t index = pending[i];
@@ -1680,12 +1808,14 @@ bool OracleGate::resolve(const Overlay* chunk,
         &cache_.emplace(chunkKeys[index], std::move(*it->second))
              .first->second;
   }
-  log_.msg("gate", [&] {
-    return cat("batch recv: results=", results.size(),
-               " cacheSize=", cache_.size(),
-               " requestsTotal=", requests_sent_,
-               " batchesTotal=", batches_sent_);
-  });
+  if (log_.enabled()) {
+    log_.block("gate",
+               "Checker batch result",
+               {{"results", cat(results.size())},
+                {"cache size", cat(cache_.size())},
+                {"requests total", cat(requests_sent_)},
+                {"batches total", cat(batches_sent_)}});
+  }
   return true;
 }
 
@@ -1695,10 +1825,14 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
                                             int& budget)
 {
   SearchResult sr;
-  log_.msg("gate",
-           cat("search start: candidates=", candidates.size(), " batchSize=",
-               config_.batchSize, " budget=", budget, " window=",
-               show(window.area()), " guard=", show(guard)));
+  log_.section("gate", "CANDIDATE SEARCH");
+  log_.block("gate",
+             "Search input",
+             {{"candidates", cat(candidates.size())},
+              {"batch size", cat(config_.batchSize)},
+              {"budget", cat(budget)},
+              {"window", show(window.area())},
+              {"guard", show(guard)}});
 
   size_t next = 0;
   std::vector<OverlayKey> chunkKeys;          // reused across chunks
@@ -1732,11 +1866,15 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
       if (summary.clean) {
         sr.foundClean = true;
         sr.cleanOverlay = candidates[i];
-        log_.msg("gate",
-                 cat("clean overlay #", i, " (", candidates[i].size(),
-                     " swap(s)) residual=0 newInWindow=0 relatedInHalo=0 ",
-                     "unrelatedInHalo=", summary.unrelatedInHalo,
-                     " -> accept"));
+        log_.block("gate",
+                   "Clean overlay accepted",
+                   {{"candidate", cat(i)},
+                    {"swaps", cat(candidates[i].size())},
+                    {"residual originals", "0"},
+                    {"new in window", "0"},
+                    {"related in halo", "0"},
+                    {"unrelated in halo", cat(summary.unrelatedInHalo)},
+                    {"decision", "accept"}});
         return sr;
       }
       // Track best non-clean for diagnostics (fewer blocking findings, then
@@ -1753,14 +1891,16 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
         sr.hasBest = true;
         sr.bestOverlay = candidates[i];
         sr.bestSummary = summary;
-        log_.msg("gate",
-                 cat("best candidate #", i, " swaps=", candidates[i].size(),
-                     " usable=", summary.usable,
-                     " inconsistent=", summary.inconsistent,
-                     " residual=", summary.residualOriginals,
-                     " newInWindow=", summary.newInWindow,
-                     " relatedInHalo=", summary.relatedInHalo,
-                     " unrelatedInHalo=", summary.unrelatedInHalo));
+        log_.block("gate",
+                   "Best candidate updated",
+                   {{"candidate", cat(i)},
+                    {"swaps", cat(candidates[i].size())},
+                    {"usable", cat(summary.usable)},
+                    {"inconsistent", cat(summary.inconsistent)},
+                    {"residual originals", cat(summary.residualOriginals)},
+                    {"new in window", cat(summary.newInWindow)},
+                    {"related in halo", cat(summary.relatedInHalo)},
+                    {"unrelated in halo", cat(summary.unrelatedInHalo)}});
       }
     }
     next = chunkEnd;
@@ -1769,10 +1909,12 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
       break;
     }
   }
-  log_.msg("gate",
-           cat("search end: clean=false best=", sr.hasBest,
-               " budgetExhausted=", sr.budgetExhausted,
-               " budgetRemaining=", budget));
+  log_.block("gate",
+             "Search result",
+             {{"clean", "false"},
+              {"has best candidate", cat(sr.hasBest)},
+              {"budget exhausted", cat(sr.budgetExhausted)},
+              {"budget remaining", cat(budget)}});
   return sr;
 }
 
@@ -1885,21 +2027,26 @@ FillerRepairResult RepairPlanner::repair(
   // The transcript starts with both the immutable request and every search
   // knob. This makes a runtime failure reproducible from one captured log
   // without relying on hidden defaults.
-  log_.msg("planner",
-           cat("repair start: anchor inst=", request.targetPlace.instanceId,
-               " master=", request.targetPlace.masterId,
-               " row=", request.targetPlace.rowId,
-               " x=", request.targetPlace.x,
-               " violations=", request.violations.size()));
-  log_.msg("planner",
-           cat("config: budget/window=", config_.checkerCallBudgetPerWindow,
-               " batch=", config_.batchSize,
-               " maxSubset=", config_.maxSubsetSize,
-               " memberCaps=[", config_.memberCapSize2, ',',
-               config_.memberCapSize3, ',', config_.memberCapSize4,
-               "] adaptiveStep=", config_.adaptiveStepFillers,
-               " maxAdaptiveLevels=", config_.maxAdaptiveLevels,
-               " budget/repair=", config_.checkerCallBudgetPerRepair));
+  log_.section("planner", "REPAIR PLANNING");
+  log_.block("planner",
+             "Repair request",
+             {{"anchor instance", cat(request.targetPlace.instanceId)},
+              {"master", cat(request.targetPlace.masterId)},
+              {"row", cat(request.targetPlace.rowId)},
+              {"x", cat(request.targetPlace.x)},
+              {"violations", cat(request.violations.size())}});
+  log_.block(
+      "planner",
+      "Search configuration",
+      {{"budget per window", cat(config_.checkerCallBudgetPerWindow)},
+       {"batch size", cat(config_.batchSize)},
+       {"maximum subset", cat(config_.maxSubsetSize)},
+       {"member caps",
+        cat('[', config_.memberCapSize2, ',', config_.memberCapSize3, ',',
+            config_.memberCapSize4, ']')},
+       {"adaptive step", cat(config_.adaptiveStepFillers)},
+       {"maximum adaptive levels", cat(config_.maxAdaptiveLevels)},
+       {"budget per repair", cat(config_.checkerCallBudgetPerRepair)}});
 
   // Placement coverage is intentionally not checked here: the engine's
   // regional gate runs before this, and whole-design legality is
@@ -1909,8 +2056,10 @@ FillerRepairResult RepairPlanner::repair(
     result.hasSolution = true;
     result.diagnostics.push_back(makeDiag(
         Severity::Info, "EmptySnapshot", "no violations in initial snapshot"));
-    log_.msg("planner",
-             "empty violation snapshot -> hasSolution=true, 0 changes");
+    log_.section("planner", "REPAIR RESULT");
+    log_.block("planner",
+               "Empty violation snapshot",
+               {{"has solution", "true"}, {"changes", "0"}});
     return result;
   }
 
@@ -1920,10 +2069,12 @@ FillerRepairResult RepairPlanner::repair(
 
   const DbCoord ruleDistance =
       estimateRuleDistance(request.violations, view_.siteWidth());
-  log_.msg("planner",
-           cat("normalized=", violations.size(), " siteWidth=",
-               view_.siteWidth(), " ruleDistance=", ruleDistance,
-               " -> build L0 window"));
+  log_.block("planner",
+             "L0 window input",
+             {{"normalized violations", cat(violations.size())},
+              {"site width", cat(view_.siteWidth())},
+              {"rule distance", cat(ruleDistance)},
+              {"next step", "build L0 window"}});
   OracleGate gate(view_, oracle_, request.targetPlace, request.violations,
                   view_.siteWidth(), ruleDistance, config_, log_);
 
@@ -1965,10 +2116,11 @@ FillerRepairResult RepairPlanner::repair(
           cat("window ", label, " not searched: checker requests=",
               gate.requestsSent(), " reached checkerCallBudgetPerRepair=",
               config_.checkerCallBudgetPerRepair, " -> truncated")));
-      log_.msg("planner",
-               cat("per-repair checker budget ",
-                   config_.checkerCallBudgetPerRepair,
-                   " exhausted before ", label, " -> truncated"));
+      log_.block("planner",
+                 "Per-repair checker budget exhausted",
+                 {{"budget", cat(config_.checkerCallBudgetPerRepair)},
+                  {"before window", label},
+                  {"result", "truncated"}});
       lastSearchedDefinitive = false;
       break;
     }
@@ -1976,11 +2128,13 @@ FillerRepairResult RepairPlanner::repair(
     // One loop iteration is one independently budgeted search question. The
     // window and guard are logged before generating swaps so a transcript can
     // explain exactly which fillers were editable versus check-only.
-    log_.msg("planner",
-             cat("search ", label, ": area=", show(window.area()),
-                 " guard=", show(window.guardRegion), " editable=",
-                 window.editableFillers.size(), " bridge=",
-                 window.bridgeFillers.size()));
+    log_.section("planner", cat("SEARCH WINDOW ", label));
+    log_.block("planner",
+               "Window input",
+               {{"area", show(window.area())},
+                {"guard", show(window.guardRegion)},
+                {"editable fillers", cat(window.editableFillers.size())},
+                {"bridge fillers", cat(window.bridgeFillers.size())}});
 
     if (window.editableFillers.empty()) {
       result.diagnostics.push_back(makeDiag(
@@ -2023,7 +2177,9 @@ FillerRepairResult RepairPlanner::repair(
               Severity::Fatal, "BaselineGateFailed",
               cat("baseline gate failed at window ", label,
                   " (see BaselineUnusable/BaselineMismatch above)")));
-          log_.msg("planner", "baseline gate failed -> abort");
+          log_.block("planner",
+                     "Window aborted",
+                     {{"reason", "baseline gate failed"}});
           return result;
         }
 
@@ -2052,7 +2208,9 @@ FillerRepairResult RepairPlanner::repair(
           result.diagnostics.push_back(makeDiag(
               Severity::Fatal, "CheckerProtocolError",
               "batch protocol violated; rejecting this repair"));
-          log_.msg("planner", "checker protocol error -> abort");
+          log_.block("planner",
+                     "Window aborted",
+                     {{"reason", "checker protocol error"}});
           return result;
         }
 
@@ -2065,21 +2223,27 @@ FillerRepairResult RepairPlanner::repair(
                   " change(s); checker requests=", gate.requestsSent(),
                   " batches=", gate.batchesSent(),
                   " cacheHits=", gate.cacheHits())));
-          log_.msg("planner",
-                   cat("SOLUTION at ", label, ": ", result.changes.size(),
-                       " change(s), requests=", gate.requestsSent(),
-                       " cacheHits=", gate.cacheHits()));
+          log_.section("planner", "REPAIR RESULT");
+          log_.block("planner",
+                     "Solution",
+                     {{"window", label},
+                      {"changes", cat(result.changes.size())},
+                      {"checker requests", cat(gate.requestsSent())},
+                      {"cache hits", cat(gate.cacheHits())}});
           return result;
         }
 
         if (betterBest(sr, best)) {
           best = sr;
-          log_.msg("planner",
-                   cat("best-so-far updated at ", label, ": swaps=",
-                       best.bestOverlay.size(), " residual=",
-                       best.bestSummary.residualOriginals, " newInWindow=",
-                       best.bestSummary.newInWindow, " relatedInHalo=",
-                       best.bestSummary.relatedInHalo));
+          log_.block("planner",
+                     "Best-so-far updated",
+                     {{"window", label},
+                      {"swaps", cat(best.bestOverlay.size())},
+                      {"residual originals",
+                       cat(best.bestSummary.residualOriginals)},
+                      {"new in window", cat(best.bestSummary.newInWindow)},
+                      {"related in halo",
+                       cat(best.bestSummary.relatedInHalo)}});
         }
         currentDefinitive = plan.complete && !sr.budgetExhausted;
         lastSearchedDefinitive = currentDefinitive;
@@ -2093,10 +2257,13 @@ FillerRepairResult RepairPlanner::repair(
                 currentDefinitive
                     ? "complete enumeration, definitively no clean overlay"
                     : "truncated (size caps or budget), no clean overlay found")));
-        log_.msg("planner",
-                 cat("window ", label, " no clean overlay (",
-                     currentDefinitive ? "definitive" : "truncated",
-                     ") -> adaptive expansion"));
+        log_.block("planner",
+                   "Window exhausted",
+                   {{"window", label},
+                    {"clean overlay", "none"},
+                    {"coverage",
+                     currentDefinitive ? "definitive" : "truncated"},
+                    {"next step", "adaptive expansion"}});
       }
     }
 
@@ -2109,9 +2276,11 @@ FillerRepairResult RepairPlanner::repair(
           Severity::Info, "ExpansionCutoff",
           cat("window ", label, " reached maxAdaptiveLevels=",
               config_.maxAdaptiveLevels, " -> stop escalation (truncated)")));
-      log_.msg("planner",
-               cat("window ", label, " adaptive level cap ",
-                   config_.maxAdaptiveLevels, " -> truncated"));
+      log_.block("planner",
+                 "Expansion cutoff",
+                 {{"window", label},
+                  {"adaptive level cap", cat(config_.maxAdaptiveLevels)},
+                  {"result", "truncated"}});
       // Farther windows were never searched, so no-solution is not definitive.
       lastSearchedDefinitive = false;
       break;
@@ -2128,9 +2297,10 @@ FillerRepairResult RepairPlanner::repair(
           Severity::Info, "ExpansionCutoff",
           cat("window ", label,
               " adaptive step adds no new editable filler -> stop escalation")));
-      log_.msg("planner",
-               cat("window ", label,
-                   " adaptive step adds no filler -> expansion cutoff"));
+      log_.block("planner",
+                 "Expansion cutoff",
+                 {{"window", label},
+                  {"reason", "adaptive step adds no filler"}});
       break;
     }
     window = expanded;
@@ -2153,10 +2323,13 @@ FillerRepairResult RepairPlanner::repair(
             " relatedInHalo=", best.bestSummary.relatedInHalo,
             " unrelatedInHalo=", best.bestSummary.unrelatedInHalo)));
   }
-  log_.msg("planner",
-           cat("NO SOLUTION (", lastSearchedDefinitive ? "definitive" : "truncated",
-               "), requests=", gate.requestsSent(),
-               " cacheHits=", gate.cacheHits()));
+  log_.section("planner", "REPAIR RESULT");
+  log_.block("planner",
+             "No solution",
+             {{"coverage",
+               lastSearchedDefinitive ? "definitive" : "truncated"},
+              {"checker requests", cat(gate.requestsSent())},
+              {"cache hits", cat(gate.cacheHits())}});
   return result;
 }
 

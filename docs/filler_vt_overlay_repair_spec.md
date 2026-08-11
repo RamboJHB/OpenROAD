@@ -42,7 +42,8 @@ class FillerRepairEngine
 {
  public:
   explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
-  bool init();
+  bool isReady() const;
+  const std::vector<ipl::Diagnostic>& getInitDiagnostics() const;
   RepairOutcome repair(const ipl::CheckRequest& request);
 };
 
@@ -55,7 +56,8 @@ placement revision:
 ```cpp
 ipl::ImplantLayerChecker checker(grid, design, network);
 fillerRepair::FillerRepairEngine engine(checker);
-if (!engine.init()) {
+if (!engine.isReady()) {
+  report(engine.getInitDiagnostics());
   return false;
 }
 checker.setFillerRepairEngine(&engine);
@@ -63,9 +65,10 @@ checker.setFillerRepairEngine(&engine);
 
 DePlace is the only infrastructure owner and initializes Design, Grid, Network,
 and `fillerSetting`. The checker borrows that object set. The engine borrows
-only the checker and obtains the exact same objects through it. The checker in
-turn borrows the engine after initialization; neither owns the other. Bind them
-before starting worker threads and keep both alive until all checks finish.
+only the checker and obtains the exact same objects through it. Construction
+eagerly builds the engine snapshot. The checker in turn borrows the ready engine;
+neither owns the other. Bind them before starting worker threads and keep both
+alive until all checks finish.
 After any Grid, Network, UDM, filler-setting, instance, or master-registration
 change, stop workers and create a new pair.
 
@@ -148,7 +151,7 @@ represented as Nodes.
 
 ## 5. Initialization contract
 
-`init()` is one-shot and fail-closed. It reads infrastructure through the bound
+Construction is eager and fail-closed. It reads infrastructure through the
 checker and verifies row/column frames, master metadata, configured filler
 mappings, and checker initialization diagnostics. It then freezes:
 
@@ -156,6 +159,11 @@ mappings, and checker initialization diagnostics. It then freezes:
 - legal row segments derived from Grid pixels;
 - a compatible replacement catalog for every placed filler master;
 - the checker rule reach and initial snapshot halo.
+
+Failure leaves `isReady()` false and retains every reason in
+`getInitDiagnostics()`. The same diagnostics are printed as `[fr][engine] init
+diagnostic` lines by default; `FR_VERBOSE=0` disables that debug transcript.
+Callers must never bind an engine that is not ready.
 
 A replacement enters a filler VT catalog entry only when it is configured,
 registered, filler-classified, the same width and height, a different known VT,
@@ -321,6 +329,17 @@ The deterministic `[fr][stage]` transcript is enabled by default and can be
 disabled with `FR_VERBOSE=0`. It records request/frame data, candidate catalog
 statistics, windows and guards, enumeration/batch counts, baseline decisions,
 budgets, and the final outcome. Logging must not affect search behavior.
+
+The transcript is structured for direct terminal use: initialization, target
+snapshot, layout rewrite, planning, each adaptive window, baseline, candidate
+search, and final result have visible section boundaries. Single records use
+aligned key/value blocks; repeated masters, rows, violations, swaps, rankings,
+and subset counts use wrapped tables; diagnostics use lists or labeled blocks.
+The formatter limits the payload of every physical line to 96 characters
+(112 including the longest current `[fr][stage]` prefix) and emits each
+multi-line record with one stdio write so concurrent calls are less likely to
+interleave inside a record. Formatting changes neither the recorded values nor
+the search.
 
 ## 10. Performance characteristics
 

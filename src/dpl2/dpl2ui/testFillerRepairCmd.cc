@@ -321,8 +321,13 @@ bool TestFillerRepairCmd::exec()
     }
   }
   fillerRepair::FillerRepairEngine repairEngine(checker);
-  if (!repairEngine.init()) {
+  if (!repairEngine.isReady()) {
     std::cout << "ERROR: filler repair engine initialization failed\n";
+    for (const ipl::Diagnostic& diagnostic :
+         repairEngine.getInitDiagnostics()) {
+      std::cout << "  " << diagnostic.status << ": " << diagnostic.message
+                << "\n";
+    }
     return false;
   }
   checker.setFillerRepairEngine(&repairEngine);
