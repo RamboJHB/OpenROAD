@@ -1,6 +1,4 @@
 #include <FillerRepairDumpReplay.hh>
-// [FRPORT] Optional dump-to-planner/checker bridge for migration debugging.
-
 #include <algorithm>
 #include <cstdint>
 #include <map>
@@ -503,6 +501,7 @@ void printChanges(const ipl::FillerChanges& changes, std::ostream& out)
 
 }  // namespace
 
+// [FRPORT] Optional -load entry that reconstructs and runs the migrated engine.
 FillerRepairDumpReplayResult replayFillerRepairDump(
     const std::string& filePath,
     const FillerRepairDumpReplayOptions& options,

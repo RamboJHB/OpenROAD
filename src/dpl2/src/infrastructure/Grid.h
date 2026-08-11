@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
-// [FRPORT] Engine/checker Grid contract for rows, pixels, and orientations.
 #pragma once
 
 #include <functional>
@@ -65,6 +64,7 @@ class Grid
                 int max_displacement_y);
   void allocateGrid();
   void examineRows(PhysDesMgr* desMgr);
+  // [FRPORT] Checker/engine initialization uses the same DePlace-owned design.
   PhysDesMgr* getDesMgr() const { return desMgr_; }
   std::unordered_set<int> getRowCoordinates() const;
 
@@ -92,7 +92,7 @@ class Grid
   GridY gridRoundY(const Node* cell) const;
   GridY gridEndY(const Node* cell) const;
 
-  // [fillerRepair-fix] Grid cell of a placed node, used by
+  // [FRPORT] [fillerRepair-fix] Grid cell of a placed node, used by
   // ImplantLayerChecker::getSnapshot. Composition of gridX/gridSnapDownY, so
   // the pair is always in the same frame as those two calls.
   std::pair<GridX, GridY> gridXY(const Node* cell) const;
@@ -138,6 +138,7 @@ class Grid
           void(Pixel* pixel, int edgeDirection, GridX x, GridY y)>& visitor)
       const;
 
+  // [FRPORT] Placement snapshot dimensions and bounds-safe pixel access.
   GridY getRowCount() const { return row_count_; }
   GridX getRowSiteCount() const { return row_site_count_; }
   DbuX getSiteWidth() const { return site_width_; }
@@ -147,6 +148,7 @@ class Grid
   Pixel& pixel(GridY y, GridX x) { return pixels_[y.v][x.v]; }
   const Pixel& pixel(GridY y, GridX x) const { return pixels_[y.v][x.v]; }
 
+  // [FRPORT] Added fillers use the legal row/site orientation.
   std::optional<PhysOrientation> getSiteOrientation(GridX x,
                                                   GridY y,
                                                   std::string site_name) const;
@@ -168,6 +170,7 @@ class Grid
   bool isMultiHeight(const PhysLibCell& master) const;
 
 
+  // [FRPORT] Public non-mutating gap/overlap precheck support.
   bool isFullUtil() const;
 
  private:
@@ -210,6 +213,7 @@ class Grid
                    const std::function<void(const PhysRow&)>& func) const;
 
   utl::Logger* logger_ = nullptr;
+  // [FRPORT] Non-owning link back to DePlace's physical design manager.
   PhysDesMgr* desMgr_ = nullptr;
   std::shared_ptr<Padding> padding_;
   Pixels pixels_;

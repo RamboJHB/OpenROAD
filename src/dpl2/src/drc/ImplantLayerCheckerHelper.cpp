@@ -1,6 +1,4 @@
 #include "drc/ImplantLayerCheckerHelper.h"
-// [FRPORT] Preserves filler settings and disables repair in checker-only replay.
-
 #include <algorithm>
 #include <iomanip>
 #include <iostream>
@@ -152,7 +150,7 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
     inputBasePolar_ = input.basePolar;
     inputSiteWidth_ = input.siteWidth;
     inputRowHeight_ = input.rowHeight;
-    // [fillerRepair-fix] Retain the candidate/configuration projection so a
+    // [FRPORT] [fillerRepair-fix] Retain the candidate/configuration projection so a
     // loaded helper can be dumped again without a UDM Design.
     inputFillerSetting_ = input.fillerSetting;
 
@@ -195,6 +193,7 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
         std::unique_ptr<Master> master = std::make_unique<Master>();
         master->setId(i);
         master->setDbMaster(LibCellID(0, static_cast<int>(i)));
+        // [FRPORT] Reconstruct the Master filler authority used by engine init.
         const bool configuredFiller
             = input.fillerSetting.present
               && std::find(input.fillerSetting.fillerMasterIds.begin(),
@@ -260,7 +259,7 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
     checker.basePolar_ = inputBasePolar_;
     checker.rowHeight_ = inputRowHeight_;
     checker.siteWidth_ = inputSiteWidth_;
-    // Helper checks have no bound engine. Keep their semantics checker-only.
+    // [FRPORT] Helper checks have no bound engine. Keep their semantics checker-only.
     checker.setFillerRepairEnabled(false);
     checker.diagnostics_.erase(
         std::remove_if(checker.diagnostics_.begin(),
@@ -311,6 +310,7 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
     out << "site_width " << checker.siteWidth_ << "\n";
     out << "base_polar " << enumInt(checker.basePolar_) << "\n";
 
+    // [FRPORT] Preserve the engine's complete filler configuration in dumps.
     FillerSettingData fillerData = inputFillerSetting_;
     const fillerSetting* setting = checker.network_ != nullptr
                                        ? checker.network_->getFillerSetting()
@@ -514,6 +514,7 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
         input.basePolar = enumValue<Layer::Polar>(basePolar);
     }
 
+    // [FRPORT] Restore filler candidates/options for test_filler_repair -load.
     if (version >= 4) {
         if (!(in >> section >> input.fillerSetting.present)
             || section != "filler_setting") {

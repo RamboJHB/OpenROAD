@@ -1,6 +1,4 @@
 #include "fillerSetting.h"
-// [FRPORT] Resolves the configured filler masters consumed by the engine.
-
 #include <algorithm>
 #include <iterator>
 #include <sstream>
@@ -69,6 +67,7 @@ fillerSetting::needAvoidAbut(std::pair<int, int> twoLibCell) const
     return avoid_pattern_.find(twoLibCell) != avoid_pattern_.end();
 }
 
+// [FRPORT] Resolve the configured IDs to physical masters for engine init.
 std::vector<const eLIB::PhysLibCell*> fillerSetting::getFillerPhysCells() const
 {
     std::vector<const eLIB::PhysLibCell*> result;
@@ -82,6 +81,7 @@ std::vector<const eLIB::PhysLibCell*> fillerSetting::getFillerPhysCells() const
     return result;
 }
 
+// [FRPORT] Single configuration predicate used while importing Network masters.
 bool fillerSetting::isFillerCell(eLIB::LibCellID libCellId) const
 {
     return std::find(core_.begin(), core_.end(), libCellId) != core_.end();

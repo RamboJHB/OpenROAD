@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
-// [FRPORT] Owns the shared objects and registers repair masters with edge data.
-
 #include <dpl2/DePlace.h>
 #include <infrastructure/Grid.h>
 #include <infrastructure/network.h>
@@ -23,7 +21,7 @@ DePlace::DePlace(PhysDesMgr* desMgr)
   design_ = eUNL::Session::getSession().getCurrentDesign();
   padding_->setDesginManager(desMgr);
   filler_setting_ = std::make_unique<fillerSetting>(design_);
-  // [fillerRepair-fix] Network is filler repair's single infrastructure
+  // [FRPORT] [fillerRepair-fix] Network is filler repair's single infrastructure
   // seam; checker no longer needs a DePlace-specific provider.
   network_->setFillerSetting(filler_setting_.get());
 }
@@ -42,7 +40,7 @@ DePlace::DePlace()
   this->design_ = design;
   padding_->setDesginManager(desMgr_);
   filler_setting_ = std::make_unique<fillerSetting>(design);
-  // [fillerRepair-fix] Network borrows the setting; DePlace owns both.
+  // [FRPORT] [fillerRepair-fix] Network borrows the setting; DePlace owns both.
   network_->setFillerSetting(filler_setting_.get());
   if (!data_loaded_) {
     importDb();
@@ -56,6 +54,8 @@ DePlace::DePlace()
 
 DePlace::~DePlace() = default;
 
+// [FRPORT] Register configured filler masters through DePlace so they receive
+// the same real edge-table data as every other Network master.
 bool DePlace::registerFillerRepairMasters()
 {
   if (filler_setting_ == nullptr || network_ == nullptr || grid_ == nullptr
@@ -265,7 +265,7 @@ Rect DePlace::getCoreArea()
   return rect.getRect();
 }
 
-// [fillerRepair-fix] Paints one node's footprint into the grid.
+// [FRPORT] [fillerRepair-fix] Paints one node's footprint into the grid.
 //
 // The predicate is "does this node stand on sites", NOT "is it a standard
 // cell". Both callers used to test `getType() == Node::CELL`, which drops

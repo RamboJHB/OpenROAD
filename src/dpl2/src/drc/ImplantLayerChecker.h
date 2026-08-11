@@ -1,6 +1,4 @@
 #pragma once
-// [FRPORT] Checker/engine boundary: overlay oracle and non-owning binding.
-
 #include <infrastructure/network.h>
 
 #include <cstdint>
@@ -26,6 +24,7 @@ using eUTL::Rect;
 
 namespace dpl2 {
 namespace fillerRepair {
+// [FRPORT] Checker only borrows the caller-owned engine.
 class FillerRepairEngine;
 }
 
@@ -342,18 +341,19 @@ public:
                GridX x,
                GridY y,
                const eUTL::PhysOrientation& orient) const override;
+    // [FRPORT] Repair-aware checker entry appends engine output for opto commit.
     bool check(const Node* cell,
                GridX x,
                GridY y,
                const eUTL::PhysOrientation& orient,
                std::vector<CellChangeRecord>& fcRecord) const override;
 
-    // [fillerRepair-fix] Repair is enabled for the normal checker path.
+    // [FRPORT] [fillerRepair-fix] Repair is enabled for the normal checker path.
     // ImplantLayerCheckerHelper disables it for checker-only tests.
     void setFillerRepairEnabled(bool enabled) { enableFillerRepair_ = enabled; }
     bool isFillerRepairEnabled() const { return enableFillerRepair_; }
 
-    // [fillerRepair-fix] Non-owning, initialization-time binding. The caller
+    // [FRPORT] [fillerRepair-fix] Non-owning, initialization-time binding. The caller
     // owns both objects and must keep the engine alive while this checker can
     // be called. Bind before starting checker worker threads.
     void setFillerRepairEngine(fillerRepair::FillerRepairEngine* engine)
@@ -373,6 +373,7 @@ public:
     Dbu siteWidth() const { return siteWidth_; }
     int getMaxRuleValue() const { return maxRuleValue_; }
     void setMaxRuleValue();
+    // [FRPORT] FillerRepairEngine::init() borrows this same object set.
     Grid* getGrid() const { return grid_; }
     eUNL::Design* getDesign() const { return design_; }
     Network* getNetwork() const { return network_; }
@@ -393,7 +394,7 @@ private:
     bool init(PhysDesMgr* desMgr);
     void ensureMasterData(MasterId masterId) const;
 
-    // The caller-owned engine is initialized and bound before checking. On a
+    // [FRPORT] The caller-owned engine is initialized and bound before checking. On a
     // repairable failure the records are APPENDED to the caller's fcRecord;
     // the checker keeps no filler-change member state.
     bool repairFillers(const CheckRequest& request,
@@ -506,7 +507,7 @@ private:
     // a candidate master registered by infrastructure before check().
     mutable std::shared_mutex masterItemsMutex_;
 
-    // Filler repair is enabled by default, but the checker only borrows the
+    // [FRPORT] Filler repair is enabled by default, but the checker only borrows the
     // engine supplied by its owner. ImplantLayerCheckerHelper disables repair.
     bool enableFillerRepair_ = true;
     fillerRepair::FillerRepairEngine* fillerRepairEngine_ = nullptr;

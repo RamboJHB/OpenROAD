@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2024-2025, The OpenROAD Authors
-// [FRPORT] Shared filler classification and CellChangeRecord wire contract.
-
 #pragma once
 #include <string>
 #include <variant>
@@ -44,7 +42,8 @@ class Master
 {
  public:
   bool isMultiRow() const;
-  // Master classification is assigned from fillerSetting::isFillerCell() when
+  // [FRPORT] Master classification is assigned from
+  // fillerSetting::isFillerCell() when
   // infrastructure imports or refreshes the configured filler core list.
   bool isFiller() const;
   void setFiller(bool filler) { is_filler_ = filler; }
@@ -66,6 +65,7 @@ class Master
   const PhysLibCell* phys_lib_cell_{nullptr};
   Rect boundary_box_;
   bool is_multi_row_{false};
+  // [FRPORT] Authoritative filler classification shared by infra and engine.
   bool is_filler_{false};
   std::vector<MasterEdge> edges_;
   int bottom_pwr_{0};
@@ -120,6 +120,7 @@ class Node
   int64_t area() const;
 
   bool isTerminal() const;
+  // [FRPORT] Engine classification reads the Node type inherited from Master.
   bool isFiller() const;
   bool isStdCell() const;
   bool isBlock() const;
@@ -240,6 +241,7 @@ class Pin
   DbuY offsetY_{0};
 };
 
+// [FRPORT] Shared checker/engine output wire consumed by opto commit code.
 enum class OpType : uint8_t {
     Replace = 0,
     Delete = 1,

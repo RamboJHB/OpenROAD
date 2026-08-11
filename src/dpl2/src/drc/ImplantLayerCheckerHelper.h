@@ -1,6 +1,4 @@
 #pragma once
-// [FRPORT] Dump/replay support for the optional test_filler_repair -load flow.
-
 #include <map>
 #include <memory>
 #include <string>
@@ -25,7 +23,7 @@ struct PlacedInst
     bool isFiller = false;
 };
 
-// [fillerRepair-fix] Serializable projection of fillerSetting. A checker dump
+// [FRPORT] [fillerRepair-fix] Serializable projection of fillerSetting. A checker dump
 // has no UDM Design,
 // so configured cells are stored by checker MasterId while every scalar option
 // and avoid-pattern entry is preserved.
@@ -83,6 +81,7 @@ private:
     std::vector<Rule> inputRules_;
     Dbu inputSiteWidth_ = 0;
     Dbu inputRowHeight_ = 0;
+    // [FRPORT] Retained so -load can initialize the same repair candidates.
     FillerSettingData inputFillerSetting_;
 };
 

@@ -1,5 +1,4 @@
 #pragma once
-// [FRPORT] FillerRepairEngine reads this configuration through Network.
 #include "dpl2/DePlace.h"
 
 #include <vector>
@@ -13,6 +12,7 @@ public:
     explicit fillerSetting(eUNL::Design* design);
     ~fillerSetting() = default;
 
+    // [FRPORT] Engine policy and generated-cell naming consume these settings.
     ADD_SETTER_GETTER_PP(bool, FollowOrder, follow_order_);
     ADD_SETTER_GETTER_PP(bool, CheckDRC, check_drc_);
     ADD_SETTER_GETTER_PP(bool, FitSpace, fit_space_);
@@ -22,6 +22,8 @@ public:
     void addFillerCell(std::string fillerCellName);
     void addAvoidPattern(std::string avoidPattern);
 
+    // [FRPORT] Engine initialization and DePlace master registration consume
+    // these read-only views.
     // getter
     const std::vector<eLIB::LibCellID>& getFillerCells() const { return core_; }
     std::vector<const eLIB::PhysLibCell*> getFillerPhysCells() const;

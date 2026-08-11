@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2024-2025, The OpenROAD Authors
-// [FRPORT] Implements the shared Master/Node filler classification contract.
-
 #include <Objects.h>
 
 
@@ -137,6 +135,8 @@ bool Node::isTerminal() const
 {
   return (type_ == TERMINAL);
 }
+// [FRPORT] Keep Node/Master filler classification identical across infra,
+// checker snapshots, and FillerRepairEngine initialization.
 bool Node::isFiller() const
 {
   return (type_ == FILLER);

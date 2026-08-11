@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2021-2025, The OpenROAD Authors
-// [FRPORT] Engine-facing Network contract for filler settings and ID lookup.
-
 #pragma once
 #include <memory>
 #include <string>
@@ -21,13 +19,14 @@ class fillerSetting;
 class Network
 {
 public:
-  // [fillerRepair-fix] Non-owning binding to DePlace's active setting.
+  // [FRPORT] [fillerRepair-fix] Non-owning binding to DePlace's active setting.
   // DePlace owns both objects and guarantees the setting outlives Network.
   void setFillerSetting(const fillerSetting* setting) { filler_setting_ = setting; }
   const fillerSetting* getFillerSetting() const { return filler_setting_; }
 
   std::vector<std::unique_ptr<Node>>& getNodes() { return nodes_; }
   std::vector<std::unique_ptr<Master>>& getMasters() {return masters_;}
+  // [FRPORT] Imported Nodes inherit the authoritative Master filler flag.
   // For creating and adding cells.
   bool addNode(LeafCellID cellId, const PhysDesMgr* desMgr);
   Node* getNode(LeafCellID cellId);
@@ -56,6 +55,7 @@ public:
     return ret;
   }
 
+  // [FRPORT] Test/opto proposals refresh the Node from a registered Master.
   bool updateNode(Node* ndi,
                   const PhysDesMgr* desMgr,
                   const PhysLibCell& physLibCell);
@@ -63,6 +63,7 @@ public:
   void setCore(const Rect& core) { core_ = core; }
   const Rect& getCore() const { return core_; }
   Master* getMaster(LibCellID db_master);
+  // [FRPORT] Configured fillers must be registered through this edge-aware path.
   // For creating masters.
   Master* addMaster(const PhysLibCell& db_master,
                     const fillerSetting& filler_setting,
@@ -87,6 +88,7 @@ public:
     return true;
   }
 private:
+  // [FRPORT] Borrowed configuration used by FillerRepairEngine::init().
   const fillerSetting* filler_setting_ = nullptr;
   int cells_cnt_ = 0;
   Rect core_; // Core area of the design.

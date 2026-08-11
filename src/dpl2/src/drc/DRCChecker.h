@@ -1,6 +1,4 @@
 #pragma once
-// [FRPORT] DRC entry accepts caller-owned filler changes from repair.
-
 #include <array>
 #include <string>
 #include <vector>
@@ -35,7 +33,7 @@ class DRCChecker
   // Core checking interface -- pure virtual, overridden by each rule.
   virtual bool check(const Node* cell, GridX x, GridY y, const eUTL::PhysOrientation& orient) const = 0;
 
-  // [fillerRepair-fix] Repair-aware form: a checker that can fix the
+  // [FRPORT] [fillerRepair-fix] Repair-aware form: a checker that can fix the
   // candidate by editing fillers appends its records to `fcRecord` and
   // returns true. Declared here so ImplantLayerChecker's `override` is valid
   // and so callers holding a DRCChecker* reach the repair path. The default

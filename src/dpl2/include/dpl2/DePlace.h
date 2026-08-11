@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
-// [FRPORT] Infrastructure owner API for binding and registering filler repair.
 #pragma once
 
 #include <boost/geometry/core/cs.hpp>
@@ -115,7 +114,9 @@ DePlace(const DePlace&) = delete;
 DePlace& operator=(const DePlace&) = delete;
 void setFixedGridCells();
 void setPlacedGridCells();
-// [fillerRepair-fix] shared body of the two above: paints one node's
+// [FRPORT] [fillerRepair-fix] Paint filler occupancy into the shared Grid used
+// by precheck and repair.
+// This is the shared body of the two above: paints one node's
 // footprint (and its padding reservation) into the grid.
 void paintGridCell(Node* cell);
 void setGridCell(Node* cell, Pixel* pixel);
@@ -150,6 +151,8 @@ Rect getCoreArea();
  * Grid::gridX(DbuX) use, NOT the absolute frame of getCoreArea().
  */
 Rect getBoundingBox(const Rect& region, int rings = 3) const;
+// [FRPORT] Expose DePlace's owned setting and register configured masters with
+// its real EdgeTypeTable before constructing FillerRepairEngine.
 fillerSetting* getFillerSetting() { return filler_setting_.get();};
 // Network Master construction stays with the infrastructure owner that has
 // the real edge table. Call after updating fillerSetting and before checker
@@ -247,6 +250,7 @@ bool data_loaded_  = false;
 std::unique_ptr<Grid> grid_;
 RtreeBox regions_rtree_;
 
+// [FRPORT] DePlace uniquely owns the setting borrowed by Network and the engine.
 // filler cell config
 std::unique_ptr<fillerSetting> filler_setting_;
 

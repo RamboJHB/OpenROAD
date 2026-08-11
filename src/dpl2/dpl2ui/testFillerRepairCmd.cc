@@ -1,10 +1,9 @@
 #include <testFillerRepairCmd.hh>
-// [FRPORT] Wires DePlace, checker, and engine for destination testing.
-
 #include <FillerRepairDumpReplay.hh>
 
 #include <dpl2/DePlace.h>
 #include <drc/ImplantLayerChecker.h>
+// [FRPORT] Optional test command constructs and binds the repair engine.
 #include <fillerRepair/FillerRepairEngine.h>
 #include <infrastructure/Grid.h>
 #include <infrastructure/Objects.h>
@@ -165,6 +164,7 @@ struct ProposalResult
   std::vector<CellChangeRecord> changes;
 };
 
+// [FRPORT] Exercise the repair-aware checker entry and restore the Network view.
 ProposalResult evaluateProposal(const ipl::ImplantLayerChecker& checker,
                                 Grid* grid,
                                 Network* network,
@@ -226,7 +226,7 @@ bool TestFillerRepairCmd::exec()
   }
   const bool targeted = haveInstance;
 
-  // A helper dump is self-contained: rebuild its Grid/Network/checker and
+  // [FRPORT] A helper dump is self-contained: rebuild its Grid/Network/checker and
   // run the pure planner before touching Session, DePlace, or UDM.
   if (!loadOpt.empty()) {
     FillerRepairDumpReplayOptions options;
@@ -280,6 +280,8 @@ bool TestFillerRepairCmd::exec()
     return false;
   }
 
+  // [FRPORT] Read DePlace's owned setting and register its candidates through
+  // the real infrastructure edge table before engine initialization.
   fillerSetting* setting = de_place->getFillerSetting();
 
   // set all filler as candidate
@@ -302,7 +304,7 @@ bool TestFillerRepairCmd::exec()
     return design->getLibAcc().getPhysLibCell(lcId).getLibCell().getName();
   };
 
-  // The command owns both objects. The checker only borrows the initialized
+  // [FRPORT] The command owns both objects. The checker only borrows the initialized
   // engine; the engine borrows this checker as its DRC oracle.
   ipl::ImplantLayerChecker checker(grid, design, network);
   if (!checker.getDiags().empty()) {
@@ -425,6 +427,7 @@ bool TestFillerRepairCmd::exec()
       continue;
     }
     ++baselineChecked;
+    // [FRPORT] Baseline uses the same repair-aware checker entry as opto.
     std::vector<CellChangeRecord> fcRecord;
     const bool legal = checker.check(node.get(), grid->gridX(node.get()),
                                      grid->gridSnapDownY(node.get()),

@@ -1,8 +1,6 @@
 // 1-808
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
-// [FRPORT] Implements the Grid queries and filler-inclusive occupancy contract.
-
 #include <algorithm>
 #include <cmath>
 #include <Grid.h>
@@ -62,6 +60,7 @@ void Grid::allocateGrid()
   row_sites_.resize(row_count_.v);
 }
 
+// [FRPORT] Retain DePlace's physical design manager for checker/engine init.
 void Grid::examineRows(PhysDesMgr* desMgr)
 {
   desMgr_ = desMgr;
@@ -320,6 +319,7 @@ void Grid::initGrid(PhysDesMgr* desMgr,
 
   markBlocked(desMgr);
 }
+// [FRPORT] Repair snapshots probe adaptive windows and require safe bounds.
 Pixel* Grid::gridPixel(GridX grid_x, GridY grid_y) const
 {
   if (grid_x >= 0 && grid_x < row_site_count_ && grid_y >= 0
@@ -497,7 +497,7 @@ GridY Grid::gridSnapDownY(const Node* cell) const
   return cell != nullptr ? gridSnapDownY(cell->getBottom()) : GridY{0};
 }
 
-// [fillerRepair-fix] see Grid.h: (column, row) of a placed node.
+// [FRPORT] [fillerRepair-fix] see Grid.h: (column, row) of a placed node.
 std::pair<GridX, GridY> Grid::gridXY(const Node* cell) const
 {
   return cell != nullptr
@@ -505,7 +505,7 @@ std::pair<GridX, GridY> Grid::gridXY(const Node* cell) const
              : std::make_pair(GridX{0}, GridY{0});
 }
 
-// See Grid.h. Walks pixels outward and counts DISTINCT placed cells; a cell
+// [FRPORT] See Grid.h. Walks pixels outward and counts DISTINCT placed cells; a cell
 // spans several pixels, so the count advances when the occupant changes.
 Rect Grid::getBoundingBox(const Rect& region, int rings) const
 {
@@ -599,6 +599,7 @@ GridY Grid::gridEndY(const Node* cell) const
              : GridY{0};
 }
 
+// [FRPORT] Convert planner row indices back to the Grid's real DBU coordinates.
 DbuY Grid::gridYToDbu(GridY y) const
 {
   if (y.v < 0 || row_index_to_y_dbu_.empty()) {
@@ -698,6 +699,7 @@ bool Grid::isMultiHeight(const PhysLibCell& master) const
 //  - an empty grid is not "full". It used to warn and then return true,
 //    which is a false positive at exactly the moment the function knows it
 //    has nothing to report on.
+// [FRPORT] Precheck scans only valid placement sites and includes fillers.
 bool Grid::isFullUtil() const
 {
   if (pixels_.empty() || row_count_ <= 0 || row_site_count_ <= 0) {
@@ -1014,6 +1016,7 @@ GridRect Grid::gridWithin(const DbuRect& rect) const
           .yhi = gridSnapDownY(rect.yh)};
 }
 
+// [FRPORT] Resolve legal orientation for filler Add records.
 std::optional<PhysOrientation>
 Grid::getSiteOrientation(GridX x, GridY y, std::string site_name) const
 {

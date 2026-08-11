@@ -1,7 +1,5 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2021-2025, The OpenROAD Authors
-// [FRPORT] Imports and refreshes masters/nodes used by filler repair.
-
 #include <network.h>
 
 #include <infrastructure/Grid.h>
@@ -167,6 +165,8 @@ Master* Network::getMaster(LibCellID db_master)
   return masters_[it->second].get();
 }
 
+// [FRPORT] Refresh filler classification for existing masters and use the real
+// Grid/EdgeTypeTable when a configured candidate must be registered.
 Master* Network::addMaster(const PhysLibCell& db_master,
                            const fillerSetting& filler_setting,
                            const Grid* grid,
@@ -271,6 +271,7 @@ Node* Network::getNode(LeafCellID cellId)
   return nodes_[it->second].get();
 }
 
+// [FRPORT] Node classification follows the registered Master filler authority.
 bool Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
 {
   if (desMgr == nullptr) {
@@ -312,6 +313,8 @@ bool Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
   return true;
 }
 
+// [FRPORT] Repair test proposals require an atomic, classification-preserving
+// refresh and a clean failure for an unregistered master.
 bool Network::updateNode(Node* ndi,
                          const PhysDesMgr* desMgr,
                          const PhysLibCell& physLibCell)

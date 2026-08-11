@@ -1,7 +1,6 @@
 #include "drc/ImplantLayerChecker.h"
-// [FRPORT] Implements repair dispatch and non-mutating overlay checks.
-
 #include <dpl2/network.h>
+// [FRPORT] Required only for the checker-to-engine dispatch below.
 #include <fillerRepair/FillerRepairEngine.h>
 #include <tbb/enumerable_thread_specific.h>
 
@@ -858,6 +857,7 @@ void ImplantLayerChecker::rebuildMasterShapes()
 // --------------------------------------------------------------------------------
 // Checker Entry Interface
 // --------------------------------------------------------------------------------
+// [FRPORT] The base checker entry delegates to the repair-aware overload.
 bool ImplantLayerChecker::check(const Node* node,
                                 GridX x,
                                 GridY y,
@@ -900,6 +900,7 @@ bool ImplantLayerChecker::check(const Node* node,
         && fillerRepairEngine_ == nullptr) {
         return false;
     }
+    // [FRPORT] Dispatch failed checks to the initialized caller-owned engine.
     if ((!isLegal || needsLayoutRepair) && enableFillerRepair_
         && fillerRepairEngine_ != nullptr) {
         isLegal = repairFillers(request, fcRecord);
@@ -907,6 +908,7 @@ bool ImplantLayerChecker::check(const Node* node,
     return isLegal;
 }
 
+// [FRPORT] Translate the checker request into engine output appended for opto.
 bool ImplantLayerChecker::repairFillers(
     const CheckRequest& request,
     std::vector<CellChangeRecord>& fcRecord) const

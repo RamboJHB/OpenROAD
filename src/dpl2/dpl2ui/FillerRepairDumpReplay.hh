@@ -1,12 +1,10 @@
 #pragma once
-// [FRPORT] Optional dump-replay API used by test_filler_repair -load.
-
 #include <iosfwd>
 #include <string>
 
 namespace dpl2 {
 
-// [fillerRepair-fix] Data-only control/result types for dump replay. Runtime
+// [FRPORT] [fillerRepair-fix] Data-only control/result types for dump replay. Runtime
 // callers continue to use FillerRepairEngine directly.
 struct FillerRepairDumpReplayOptions
 {
@@ -31,7 +29,7 @@ struct FillerRepairDumpReplayResult
   std::string error;
 };
 
-// Replays checker + pure filler planner directly from a gzip checker-helper
+// [FRPORT] Replays checker + pure filler planner directly from a gzip checker-helper
 // dump. It needs no loaded design and never mutates the reconstructed model.
 FillerRepairDumpReplayResult replayFillerRepairDump(
     const std::string& filePath,

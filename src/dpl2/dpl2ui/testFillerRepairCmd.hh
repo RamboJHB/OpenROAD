@@ -1,6 +1,4 @@
 #pragma once
-// [FRPORT] Optional destination test command declaration for filler repair.
-
 #include <app/appPackage.hh>
 #include <unl/nlCci.hh>
 #include <util/tclCommand.hh>
@@ -39,6 +37,7 @@ namespace dpl2 {
 //
 // No placement is committed. Master registration may extend Network's catalog;
 // proposal Node masters are restored and UDM is never written.
+// [FRPORT] Optional command surface for exercising the migrated engine.
 class TestFillerRepairCmd : public uvTCL::CciCommand
 {
  public:
