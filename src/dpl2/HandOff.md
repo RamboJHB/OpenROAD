@@ -112,6 +112,11 @@ src/dpl2/src/drc/ImplantLayerChecker.{h,cpp}
 - `ipl::FillerChanges` is a vector of that same record.
 - `Master::isFiller()` and `Node::isFiller()` are the downstream filler
   authority. `Node::isStdCell()` excludes fillers.
+- Added filler names extend dpl's coordinate rule as
+  `prefix + "_FR_" + row + "_" + startColumn + "_W" + width + "_H" +
+  height + "_" + addIndex`, without spaces and with
+  `fillerSetting::getPrefix()` as `prefix`; `width` and `height` are physical
+  DBU dimensions.
 - `Network` non-owningly stores the active `fillerSetting`.
 - `Network::addNode`/`updateNode` fail closed on missing manager, invalid
   physical mapping, or unregistered master; `updateNode` preserves physical

@@ -107,6 +107,11 @@ identifies a request-local filler by a deterministic string and carries its
 absolute x/y, new master, and Grid-derived orientation. The caller may resolve
 that request-local name into its final database identity at commit. Failure
 always returns an empty change list; partial repairs are never exposed.
+The `Add` name extends dpl's coordinate-based filler naming with dimensions
+and a request-local sequence:
+`fillerSetting::getPrefix() + "_FR_" + row + "_" + startColumn + "_W" +
+width + "_H" + height + "_" + addIndex`, with no spaces.
+`width` and `height` are the added master's physical DBU dimensions.
 
 ID authorities are fixed:
 

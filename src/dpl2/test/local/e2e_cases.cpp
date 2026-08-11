@@ -191,7 +191,8 @@ class EngineHarness
 {
  public:
   explicit EngineHarness(const frt::DesignSetup& setup,
-                         bool registerTargetMaster = true)
+                         bool registerTargetMaster = true,
+                         const std::string& fillerPrefix = "ECOFILLER")
       : objects_(setup)
   {
     if (!objects_.hasDesign() || !objects_.hasInfrastructure()) {
@@ -199,6 +200,7 @@ class EngineHarness
     }
     filler_setting_ = std::make_unique<dpl2::fillerSetting>(
         objects_.design().design());
+    filler_setting_->setPrefix(fillerPrefix);
     filler_setting_->addFillerCell(kDefaultFillers);
     if (!bindRepairInfrastructure(objects_.design(),
                                   objects_.infrastructure().grid(),
@@ -894,7 +896,7 @@ TEST_P(FillerRepairEngineE2E,
             harness.design().cell(frt::CellRole::TargetRightFiller));
   const auto* addedName = std::get_if<std::string>(&addition->cell_data_);
   ASSERT_NE(addedName, nullptr);
-  EXPECT_FALSE(addedName->empty());
+  EXPECT_EQ(*addedName, "ECOFILLER_FR_2_13_W1_H8_0");
   EXPECT_EQ(addition->new_lib_cell_.getIndexValue(), 10);
   EXPECT_EQ(addition->x_.getStorage(),
             harness.design().rowOriginX(2) + 13);
@@ -904,6 +906,27 @@ TEST_P(FillerRepairEngineE2E,
   EXPECT_EQ(addition->orientation_.getValue(),
             target->getOrient().getValue());
   EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E, AddedFillerUsesConfiguredDplPrefixAndCoordinates)
+{
+  EngineHarness harness(
+      GetParam().setup, /*registerTargetMaster=*/true, "REPAIR_FILL_");
+  ASSERT_TRUE(harness.engineReady());
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::Target),
+      harness.design().master(frt::MasterRole::WiderTarget));
+  ASSERT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+
+  const auto addition = std::find_if(
+      outcome.changes.begin(), outcome.changes.end(),
+      [](const dpl2::CellChangeRecord& change) {
+        return change.op_ == dpl2::OpType::Add;
+      });
+  ASSERT_NE(addition, outcome.changes.end());
+  const auto* addedName = std::get_if<std::string>(&addition->cell_data_);
+  ASSERT_NE(addedName, nullptr);
+  EXPECT_EQ(*addedName, "REPAIR_FILL__FR_2_13_W1_H8_0");
 }
 
 TEST_P(FillerRepairEngineE2E,

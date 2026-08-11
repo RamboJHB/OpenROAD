@@ -2163,9 +2163,19 @@ RepairOutcome FillerRepairEngine::Impl::repair(
           break;
         }
 
-        const std::string name
-            = cat("__fr_", target.instanceId, '_', tile.rowId, '_',
-                  tile.colId, '_', addIndex);
+        // Extend dpl's coordinate name with physical dimensions and sequence.
+        const std::string name = cat(filler_settings_->getPrefix(),
+                                     "_FR_",
+                                     tile.rowId,
+                                     '_',
+                                     tile.colId,
+                                     "_W",
+                                     footprintMaster->width,
+                                     "_H",
+                                     footprintMaster->height
+                                         * placement_.rowHeight,
+                                     '_',
+                                     addIndex);
         const DbCoord xAbsolute
             = placement_.coreXl
               + static_cast<DbCoord>(tile.colId) * placement_.siteWidth;
