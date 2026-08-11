@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
+// [FRPORT] Infrastructure owner API for binding and registering filler repair.
 #pragma once
 
 #include <boost/geometry/core/cs.hpp>

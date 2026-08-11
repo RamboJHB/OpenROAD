@@ -1,4 +1,5 @@
 #include <FillerRepairDumpReplay.hh>
+// [FRPORT] Optional dump-to-planner/checker bridge for migration debugging.
 
 #include <algorithm>
 #include <cstdint>

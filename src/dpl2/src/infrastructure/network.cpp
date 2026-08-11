@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2021-2025, The OpenROAD Authors
+// [FRPORT] Imports and refreshes masters/nodes used by filler repair.
 
 #include <network.h>
 

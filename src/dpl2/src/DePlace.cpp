@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
+// [FRPORT] Owns the shared objects and registers repair masters with edge data.
 
 #include <dpl2/DePlace.h>
 #include <infrastructure/Grid.h>

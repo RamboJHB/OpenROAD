@@ -1,4 +1,5 @@
 #pragma once
+// [FRPORT] Optional dump-replay API used by test_filler_repair -load.
 
 #include <iosfwd>
 #include <string>

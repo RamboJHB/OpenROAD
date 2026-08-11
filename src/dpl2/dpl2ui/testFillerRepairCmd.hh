@@ -1,4 +1,5 @@
 #pragma once
+// [FRPORT] Optional destination test command declaration for filler repair.
 
 #include <app/appPackage.hh>
 #include <unl/nlCci.hh>

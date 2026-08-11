@@ -1,4 +1,5 @@
 #include "drc/ImplantLayerCheckerHelper.h"
+// [FRPORT] Preserves filler settings and disables repair in checker-only replay.
 
 #include <algorithm>
 #include <iomanip>

@@ -1,4 +1,5 @@
 #pragma once
+// [FRPORT] Checker/engine boundary: overlay oracle and non-owning binding.
 
 #include <infrastructure/network.h>
 

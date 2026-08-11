@@ -1,6 +1,7 @@
 // 1-808
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
+// [FRPORT] Implements the Grid queries and filler-inclusive occupancy contract.
 
 #include <algorithm>
 #include <cmath>

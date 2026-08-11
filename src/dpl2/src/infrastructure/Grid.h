@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
+// [FRPORT] Engine/checker Grid contract for rows, pixels, and orientations.
 #pragma once
 
 #include <functional>

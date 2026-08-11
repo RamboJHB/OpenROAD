@@ -1,4 +1,5 @@
 #pragma once
+// [FRPORT] DRC entry accepts caller-owned filler changes from repair.
 
 #include <array>
 #include <string>
