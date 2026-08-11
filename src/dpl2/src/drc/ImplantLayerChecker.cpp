@@ -1121,28 +1121,76 @@ CheckShapes ImplantLayerChecker::getSnapshot(
     ColId col0 = std::max(request.colId - maxRuleValue_, 0);
     ColId col1 = std::min(request.colId + width + maxRuleValue_ - 1,
                           grid_->getRowSiteCount().v - 1);
+    std::set<InstanceId> collectedNodes;
+    auto shapesForNode = [&](const Node* node) {
+        const std::pair<GridX, GridY> coord = grid_->gridXY(node);
+        return getNodeShape(node->getId(),
+                            node->getMaster()->getId(),
+                            coord.second.v,
+                            coord.first.v,
+                            node->getOrient(),
+                            false);
+    };
+    auto appendNode = [&](const Node* node) {
+        if (node == nullptr || node->getMaster() == nullptr
+            || excludedNodes.find(node->getId()) != excludedNodes.end()
+            || !collectedNodes.insert(node->getId()).second) {
+            return CheckShapes{};
+        }
+        CheckShapes shapes = shapesForNode(node);
+        snapshot.insert(snapshot.end(), shapes.begin(), shapes.end());
+        return shapes;
+    };
+    CheckShapes frontier;
     for (RowId r = row0; r <= row1; r++) {
         for (ColId c = col0; c <= col1; c++) {
             Pixel* p = grid_->gridPixel(GridX{c}, GridY{r});
-            if (p && p->cell) {
-                const Node* node = p->cell;
-                const InstanceId nodeId = node->getId();
-                if (excludedNodes.find(nodeId) != excludedNodes.end()) {
-                    continue;
-                }
-                if (node->getMaster() == nullptr) {
-                    continue;
-                }
-                const std::pair<GridX, GridY> coord = grid_->gridXY(node);
-                const CheckShapes& shapes
-                    = getNodeShape(nodeId,
-                                   node->getMaster()->getId(),
-                                   coord.second.v,
-                                   coord.first.v,
-                                   node->getOrient(),
-                                   false);
-                snapshot.insert(snapshot.end(), shapes.begin(), shapes.end());
+            CheckShapes shapes = appendNode(p == nullptr ? nullptr : p->cell);
+            frontier.insert(frontier.end(), shapes.begin(), shapes.end());
+        }
+    }
+
+    // The rule-radius crop can cut through a longer abutting implant run.
+    // Follow same-slot/layer contacts past that crop so the local merge keeps
+    // the same owners as the committed full-row run.
+    for (size_t i = 0; i < frontier.size(); ++i) {
+        const CheckShape shape = frontier[i];
+        const ColId left
+            = shape.x.xl > 0 ? (shape.x.xl - 1) / siteWidth_ : -1;
+        const ColId right = static_cast<ColId>(
+            (static_cast<int64_t>(shape.x.xh) + siteWidth_ - 1)
+            / siteWidth_);
+        for (ColId col : {left, right}) {
+            if (col < 0 || col >= grid_->getRowSiteCount().v) {
+                continue;
             }
+            Pixel* pixel = grid_->gridPixel(GridX{col}, GridY{shape.rowId});
+            const Node* node = pixel == nullptr ? nullptr : pixel->cell;
+            if (node == nullptr || node->getMaster() == nullptr
+                || excludedNodes.find(node->getId()) != excludedNodes.end()
+                || collectedNodes.find(node->getId()) != collectedNodes.end()) {
+                continue;
+            }
+            const CheckShapes candidateShapes = shapesForNode(node);
+            const bool connects = std::any_of(
+                candidateShapes.begin(),
+                candidateShapes.end(),
+                [&](const CheckShape& candidate) {
+                    return candidate.rowId == shape.rowId
+                           && candidate.bandSlot == shape.bandSlot
+                           && candidate.layer == shape.layer
+                           && touchesOrOverlaps(candidate.x, shape.x);
+                });
+            if (!connects) {
+                continue;
+            }
+            collectedNodes.insert(node->getId());
+            snapshot.insert(snapshot.end(),
+                            candidateShapes.begin(),
+                            candidateShapes.end());
+            frontier.insert(frontier.end(),
+                            candidateShapes.begin(),
+                            candidateShapes.end());
         }
     }
 
@@ -1546,7 +1594,14 @@ std::vector<CheckOutcome> ImplantLayerChecker::evalRule(
                         outcomes.push_back(outcome);
                         continue;
                     }
-                    outcome.xWindow = gap(checkTarget.x, neighbor.x);
+                    // Unlike same-layer spacing, distinct implant layers can
+                    // legally be queried while their x intervals overlap.
+                    // Keep a normalized window so the target-local outcome is
+                    // evaluated instead of being skipped as a reversed gap.
+                    outcome.xWindow
+                        = touchesOrOverlaps(checkTarget.x, neighbor.x)
+                              ? intersect(checkTarget.x, neighbor.x)
+                              : gap(checkTarget.x, neighbor.x);
                     outcome.measuredValue
                         = rule.getSource() == RuleSource::Lef58Spacing
                                   && rlt == Relationship::InterRow
