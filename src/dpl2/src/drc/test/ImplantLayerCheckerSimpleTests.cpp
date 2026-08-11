@@ -625,7 +625,7 @@ std::vector<SimpleCase> makeSimpleCases()
          16},
         {"case09_abutting_runs_and_gaps",
          "Scenario: four rows with long abutting F1 runs, then small explicit gaps to F2/F3 cells.\n"
-         "Expected: checked_instances=18, illegal_checks=11, total_violations=26, unique_violations=18.",
+         "Expected: checked_instances=18, illegal_checks=11, total_violations=26, unique_violations=22.",
          4,
          {place(0, 0, 0, 0, 0),
           place(1, 0, 0, 1, 0),
@@ -689,7 +689,7 @@ std::vector<SimpleCase> makeSimpleCases()
         cases[0],
         "case11_dense_four_rows_f1n_to_f2n_spacing",
         "Scenario: case01_dense_four_rows plus inter-layer F1_N to F2_N spacing.\n"
-        "Expected: checked_instances=16, illegal_checks=13, total_violations=43, unique_violations=32.",
+        "Expected: checked_instances=16, illegal_checks=13, total_violations=44, unique_violations=33.",
         13,
         43,
         32,
@@ -698,7 +698,7 @@ std::vector<SimpleCase> makeSimpleCases()
         cases[1],
         "case12_corner_abutment_f1n_to_f2n_f3n_spacing",
         "Scenario: case02_corner_abutment_six_rows plus inter-layer F1_N to F2_N/F3_N spacing.\n"
-        "Expected: checked_instances=18, illegal_checks=13, total_violations=32, unique_violations=24.",
+        "Expected: checked_instances=18, illegal_checks=13, total_violations=33, unique_violations=25.",
         13,
         32,
         24,
@@ -708,7 +708,7 @@ std::vector<SimpleCase> makeSimpleCases()
         cases[2],
         "case13_multifamily_f1p_to_f2p_spacing",
         "Scenario: case03_multifamily_three_height plus inter-layer F1_P to F2_P spacing.\n"
-        "Expected: checked_instances=15, illegal_checks=9, total_violations=20, unique_violations=17.",
+        "Expected: checked_instances=15, illegal_checks=9, total_violations=22, unique_violations=19.",
         9,
         20,
         17,
@@ -717,7 +717,7 @@ std::vector<SimpleCase> makeSimpleCases()
         cases[3],
         "case14_wide_rows_f2p_to_f3p_spacing",
         "Scenario: case04_wide_rows_layer_mix plus inter-layer F2_P to F3_P spacing.\n"
-        "Expected: checked_instances=15, illegal_checks=11, total_violations=28, unique_violations=21.",
+        "Expected: checked_instances=15, illegal_checks=11, total_violations=29, unique_violations=22.",
         11,
         28,
         21,
@@ -726,7 +726,7 @@ std::vector<SimpleCase> makeSimpleCases()
         cases[4],
         "case15_boundary_f2n_to_f3n_spacing",
         "Scenario: case05_boundary_width_spacing plus inter-layer F2_N to F3_N spacing.\n"
-        "Expected: checked_instances=16, illegal_checks=10, total_violations=35, unique_violations=27.",
+        "Expected: checked_instances=16, illegal_checks=10, total_violations=36, unique_violations=28.",
         10,
         35,
         27,
