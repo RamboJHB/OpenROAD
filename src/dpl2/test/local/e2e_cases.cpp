@@ -28,6 +28,8 @@ namespace {
 constexpr const char* kDefaultFillers = "FL2 FH2 FS2 FH1 FL2D FH1D";
 constexpr const char* kFillersWithExtra
     = "FL2 FH2 FS2 FH1 FL2D FH1D FX4";
+constexpr const char* kFillersWithOppositeOneSiteFirst
+    = "FH1P FL2 FH2 FS2 FH1 FL2D FH1D";
 
 bool hasDiagnostic(const std::vector<dpl2::ipl::Diagnostic>& diagnostics,
                    const std::string& status)
@@ -234,7 +236,8 @@ class EngineHarness
  public:
   explicit EngineHarness(const frt::DesignSetup& setup,
                          bool registerTargetMaster = true,
-                         const std::string& fillerPrefix = "ECOFILLER")
+                         const std::string& fillerPrefix = "ECOFILLER",
+                         const std::string& fillerMasters = kDefaultFillers)
       : objects_(setup)
   {
     if (!objects_.hasDesign() || !objects_.hasInfrastructure()) {
@@ -243,7 +246,7 @@ class EngineHarness
     filler_setting_ = std::make_unique<dpl2::fillerSetting>(
         objects_.design().design());
     filler_setting_->setPrefix(fillerPrefix);
-    filler_setting_->addFillerCell(kDefaultFillers);
+    filler_setting_->addFillerCell(fillerMasters);
     if (!bindRepairInfrastructure(objects_.design(),
                                   objects_.infrastructure().grid(),
                                   objects_.infrastructure().network(),
@@ -938,6 +941,39 @@ TEST_P(FillerRepairEngineE2E,
   EXPECT_EQ(addition->new_lib_cell_.getIndexValue(), 10);
   EXPECT_EQ(addition->x_.getStorage(),
             harness.design().rowOriginX(2) + 13);
+  const dpl2::Node* target = harness.network().getNode(
+      harness.design().cell(frt::CellRole::Target));
+  ASSERT_NE(target, nullptr);
+  EXPECT_EQ(addition->orientation_.getValue(),
+            target->getOrient().getValue());
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       RetilingTriesAlternateMasterWhenFirstPolarityIsIllegal)
+{
+  EngineHarness harness(GetParam().setup,
+                        /*registerTargetMaster=*/true,
+                        "ECOFILLER",
+                        kFillersWithOppositeOneSiteFirst);
+  ASSERT_TRUE(harness.engineReady());
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::Target),
+      harness.design().master(frt::MasterRole::WiderTarget));
+
+  ASSERT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  const auto addition = std::find_if(
+      outcome.changes.begin(),
+      outcome.changes.end(),
+      [](const dpl2::CellChangeRecord& change) {
+        return change.op_ == dpl2::OpType::Add;
+      });
+  ASSERT_NE(addition, outcome.changes.end());
+  EXPECT_EQ(addition->new_lib_cell_.getIndexValue(), 10);
+  const auto* addedName = std::get_if<std::string>(&addition->cell_data_);
+  ASSERT_NE(addedName, nullptr);
+  EXPECT_EQ(*addedName, "ECOFILLER_FR_2_13_W1_H8_0");
   const dpl2::Node* target = harness.network().getNode(
       harness.design().cell(frt::CellRole::Target));
   ASSERT_NE(target, nullptr);

@@ -214,6 +214,12 @@ class FillerCandidateCatalog
   bool hasPlacedCandidate_ = false;
 };
 
+struct LayoutMasterOption
+{
+  MasterId masterId;
+  eUTL::PhysOrientation orientation;
+};
+
 // One request-local filler introduced by geometric retiling. Negative ids are
 // deliberately local to a repair call; neither Network nor UDM is modified.
 struct LayoutAddition
@@ -221,7 +227,36 @@ struct LayoutAddition
   InstanceId instanceId = -1;
   PlacedInstance placed;
   CellChangeRecord record;
+  std::vector<LayoutMasterOption> masterOptions;
 };
+
+CellChangeRecord invalidCellChangeRecord()
+{
+  CellChangeRecord record{OpType::Replace,
+                          CellData{eUNL::LeafCellID(0, 0)},
+                          eUTL::UvDist(int64_t{0}),
+                          eUTL::UvDist(int64_t{0}),
+                          eLIB::LibCellID(0, 0),
+                          eLIB::LibCellID(0, 0),
+                          eUTL::PhysOrientation(
+                              eUTL::PhysOrientationE::R0)};
+  return record;
+}
+
+bool advanceLayoutAssignment(
+    std::vector<size_t>& indices,
+    const std::vector<LayoutAddition>& additions)
+{
+  for (size_t remaining = additions.size(); remaining > 0; --remaining) {
+    const size_t index = remaining - 1;
+    ++indices[index];
+    if (indices[index] < additions[index].masterOptions.size()) {
+      return true;
+    }
+    indices[index] = 0;
+  }
+  return false;
+}
 
 ipl::FillerChanges mergeFillerChanges(const ipl::FillerChanges& fixed,
                                       const ipl::FillerChanges& variable)
@@ -336,9 +371,25 @@ class LayoutPlacementView final : public PlacementView
   MasterCandidateResult getUsableMasterCandidates(
       InstanceId instanceId) const override
   {
-    return instanceId >= 0
-               ? base_.getUsableMasterCandidates(instanceId)
-               : PlacementView::getUsableMasterCandidates(instanceId);
+    if (instanceId >= 0) {
+      return base_.getUsableMasterCandidates(instanceId);
+    }
+    MasterCandidateResult result;
+    const auto addition = std::find_if(
+        additions_.begin(),
+        additions_.end(),
+        [instanceId](const LayoutAddition& item) {
+          return item.instanceId == instanceId;
+        });
+    if (addition == additions_.end()) {
+      return result;
+    }
+    for (const LayoutMasterOption& option : addition->masterOptions) {
+      if (option.masterId != addition->placed.masterId) {
+        result.candidates.push_back(option.masterId);
+      }
+    }
+    return result;
   }
 
   CellChangeRecord cellChangeRecord(InstanceId instanceId,
@@ -354,13 +405,22 @@ class LayoutPlacementView final : public PlacementView
           return item.instanceId == instanceId;
         });
     if (addition == additions_.end()) {
-      return CellChangeRecord{};
+      return invalidCellChangeRecord();
+    }
+    const auto option = std::find_if(
+        addition->masterOptions.begin(),
+        addition->masterOptions.end(),
+        [newMasterId](const LayoutMasterOption& item) {
+          return item.masterId == newMasterId;
+        });
+    const auto libCell = master_lib_cells_.find(newMasterId);
+    if (option == addition->masterOptions.end()
+        || libCell == master_lib_cells_.end()) {
+      return invalidCellChangeRecord();
     }
     CellChangeRecord record = addition->record;
-    const auto libCell = master_lib_cells_.find(newMasterId);
-    if (libCell != master_lib_cells_.end()) {
-      record.new_lib_cell_ = libCell->second;
-    }
+    record.new_lib_cell_ = libCell->second;
+    record.orientation_ = option->orientation;
     return record;
   }
 
@@ -2180,10 +2240,11 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     }
 
     std::vector<ipl::Diagnostic> rejectedLayoutDiagnostics;
+    int layoutAssignmentsChecked = 0;
+    bool layoutAssignmentsTruncated = false;
     for (const std::vector<internal::TiledFiller>& tiling :
          tilings.solutions) {
       std::vector<LayoutAddition> additions;
-      ipl::FillerChanges fixed = deletionPrefix;
       bool usable = true;
       int addIndex = 0;
       for (const internal::TiledFiller& tile : tiling) {
@@ -2195,6 +2256,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
 
         MasterId chosen = -1;
         eUTL::PhysOrientation orientation(eUTL::PhysOrientationE::R0);
+        std::vector<LayoutMasterOption> masterOptions;
         for (const MasterId candidate : placement_.fillerMasterIds) {
           const MasterInfo* master = masterInfo(candidate);
           if (master == nullptr
@@ -2215,6 +2277,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
               || !supportedOrientation(*expected)) {
             continue;
           }
+          masterOptions.push_back(
+              LayoutMasterOption{candidate, *expected});
           if (chosen < 0
               || (master->vt == replacement->vt
                   && masterInfo(chosen)->vt != replacement->vt)) {
@@ -2226,6 +2290,14 @@ RepairOutcome FillerRepairEngine::Impl::repair(
           usable = false;
           break;
         }
+        const auto chosenOption = std::find_if(
+            masterOptions.begin(),
+            masterOptions.end(),
+            [chosen](const LayoutMasterOption& option) {
+              return option.masterId == chosen;
+            });
+        std::rotate(masterOptions.begin(), chosenOption,
+                    chosenOption + 1);
 
         // Extend dpl's coordinate name with physical dimensions and sequence.
         const std::string name = cat(filler_settings_->getPrefix(),
@@ -2263,63 +2335,107 @@ RepairOutcome FillerRepairEngine::Impl::repair(
             toPlannerOrient(orientation),
             true};
         local.record = addition;
+        local.masterOptions = std::move(masterOptions);
         additions.push_back(std::move(local));
-        fixed.push_back(std::move(addition));
       }
       if (!usable) {
         continue;
       }
 
-      LayoutPlacementView layoutView(
-          *this, target, removed, additions, masterLibCells);
-      LayoutOracle layoutOracle(*this, layoutView, fixed);
-      OracleRequest snapshotRequest;
-      snapshotRequest.requestId = 0;
-      snapshotRequest.targetPlace = target;
-      snapshotRequest.guardRegion = rewriteInfluence;
-      const OracleResult snapshot
-          = layoutOracle.checkPlaceWithOverlay(snapshotRequest);
-      if (snapshot.status != OracleStatus::Checked) {
-        for (const Diagnostic& diagnostic : snapshot.diagnostics) {
-          rejectedLayoutDiagnostics.push_back(
-              toPublicDiagnostic(diagnostic));
+      std::vector<size_t> assignment(additions.size(), 0);
+      bool haveAssignment = true;
+      while (haveAssignment) {
+        if (repair_config_.checkerCallBudgetPerRepair > 0
+            && layoutAssignmentsChecked
+                   >= repair_config_.checkerCallBudgetPerRepair) {
+          layoutAssignmentsTruncated = true;
+          break;
         }
-        continue;
-      }
-      if (snapshot.violations.empty()) {
-        result.hasSolution = true;
-        result.changes = fixed;
-        addDiagnostic(Severity::Info,
-                      "LayoutRetiled",
-                      cat("removed ", removed.size(), " filler(s), added ",
-                          additions.size(), " filler(s)"));
-        return result;
-      }
+        ++layoutAssignmentsChecked;
 
-      FillerRepairRequest plannerRequest;
-      plannerRequest.targetPlace = target;
-      plannerRequest.violations = snapshot.violations;
-      internal::RepairPlanner planner(
-          layoutView, layoutOracle, repair_config_);
-      const FillerRepairResult planned = planner.repair(plannerRequest);
-      if (!planned.hasSolution) {
-        continue;
+        std::vector<LayoutAddition> seededAdditions = additions;
+        ipl::FillerChanges fixed = deletionPrefix;
+        for (size_t index = 0; index < seededAdditions.size(); ++index) {
+          LayoutAddition& addition = seededAdditions[index];
+          const LayoutMasterOption& option
+              = addition.masterOptions[assignment[index]];
+          const auto libCell = masterLibCells.find(option.masterId);
+          if (libCell == masterLibCells.end()) {
+            usable = false;
+            break;
+          }
+          addition.placed.masterId = option.masterId;
+          addition.placed.orientation = toPlannerOrient(option.orientation);
+          addition.record.new_lib_cell_ = libCell->second;
+          addition.record.orientation_ = option.orientation;
+          fixed.push_back(addition.record);
+        }
+        if (!usable) {
+          break;
+        }
+
+        LayoutPlacementView layoutView(
+            *this, target, removed, seededAdditions, masterLibCells);
+        LayoutOracle layoutOracle(*this, layoutView, fixed);
+        OracleRequest snapshotRequest;
+        snapshotRequest.requestId = 0;
+        snapshotRequest.targetPlace = target;
+        snapshotRequest.guardRegion = rewriteInfluence;
+        const OracleResult snapshot
+            = layoutOracle.checkPlaceWithOverlay(snapshotRequest);
+        if (snapshot.status != OracleStatus::Checked) {
+          for (const Diagnostic& diagnostic : snapshot.diagnostics) {
+            rejectedLayoutDiagnostics.push_back(
+                toPublicDiagnostic(diagnostic));
+          }
+          haveAssignment
+              = advanceLayoutAssignment(assignment, additions);
+          continue;
+        }
+        if (snapshot.violations.empty()) {
+          result.hasSolution = true;
+          result.changes = fixed;
+          addDiagnostic(Severity::Info,
+                        "LayoutRetiled",
+                        cat("removed ", removed.size(), " filler(s), added ",
+                            additions.size(), " filler(s)"));
+          return result;
+        }
+
+        FillerRepairRequest plannerRequest;
+        plannerRequest.targetPlace = target;
+        plannerRequest.violations = snapshot.violations;
+        internal::RepairPlanner planner(
+            layoutView, layoutOracle, repair_config_);
+        const FillerRepairResult planned = planner.repair(plannerRequest);
+        if (planned.hasSolution) {
+          result.hasSolution = true;
+          result.changes
+              = mergeFillerChanges(fixed, planned.changes);
+          for (const Diagnostic& diagnostic : planned.diagnostics) {
+            result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
+          }
+          return result;
+        }
+        break;
       }
-      result.hasSolution = true;
-      result.changes
-          = mergeFillerChanges(fixed, planned.changes);
-      for (const Diagnostic& diagnostic : planned.diagnostics) {
-        result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
+      if (layoutAssignmentsTruncated) {
+        break;
       }
-      return result;
     }
 
     result.diagnostics.insert(result.diagnostics.end(),
                               rejectedLayoutDiagnostics.begin(),
                               rejectedLayoutDiagnostics.end());
     addDiagnostic(Severity::Warning,
-                  "NoLegalRetiling",
-                  "no exact-cover filler layout passed the implant checker");
+                  layoutAssignmentsTruncated
+                      ? "RetilingMasterAssignmentBudgetExceeded"
+                      : "NoLegalRetiling",
+                  layoutAssignmentsTruncated
+                      ? "retiled master assignments exhausted the repair "
+                        "checker-call budget"
+                      : "no exact-cover filler layout passed the implant "
+                        "checker");
     return result;
   }
 

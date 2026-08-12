@@ -57,9 +57,9 @@ struct RetileResult
 };
 
 // Enumerates deterministic exact covers of `emptySites`. Input filler masters
-// are collapsed by footprint: VT alternatives are handled later by the normal
-// checker-guided swap search, so geometry enumeration never repeats the same
-// tiling merely because a footprint has several VT masters.
+// are collapsed by footprint: master/orientation alternatives are handled
+// later by the normal checker-guided search, so geometry enumeration never
+// repeats the same tiling merely because a footprint has several masters.
 RetileResult enumerateRetilings(std::vector<SiteCell> emptySites,
                                 std::vector<FillerFootprint> footprints,
                                 RetileConfig config = {});

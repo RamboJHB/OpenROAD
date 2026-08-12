@@ -154,6 +154,12 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
   fake_udm::DesignDb::addShape(oneHighFiller, 2, 0, kRowHeight / 2);
   fake_udm::DesignDb::addShape(
       oneHighFiller, 3, kRowHeight / 2, kRowHeight);
+  eLIB::PhysLibCell& oppositeOneHighFiller
+      = db.addMaster("FH1P", 15, 1, kRowHeight, true);
+  fake_udm::DesignDb::addShape(
+      oppositeOneHighFiller, 3, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(
+      oppositeOneHighFiller, 2, kRowHeight / 2, kRowHeight);
   eLIB::PhysLibCell& twoRowFiller
       = db.addMaster("FL2D", 11, 2, 2 * kRowHeight, true);
   fake_udm::DesignDb::addShape(twoRowFiller, 1, 0, kRowHeight / 2);
