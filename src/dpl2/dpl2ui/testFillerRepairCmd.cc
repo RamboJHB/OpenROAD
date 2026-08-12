@@ -63,11 +63,9 @@ Footprint footprintOf(const eLIB::PhysLibCell& cell)
                    cell.getHeight().getStorage()};
 }
 
-// Candidates are drawn ONLY from masters already registered in Network. Two
-// reasons: Network::updateNode requires the master to be present, and
-// registering new ones here would grow shared state (and, with no
-// EdgeTypeTable to hand, grow it undecorated) for a command that is supposed
-// to leave the database exactly as it found it.
+// Candidates are drawn ONLY from masters already registered in Network. The
+// immutable engine snapshot resolves new_lib_cell_ through that registry;
+// registering masters here would also grow shared state without an edge table.
 std::map<Footprint, std::vector<const eLIB::PhysLibCell*>> buildCandidateIndex(
     Network* network)
 {
@@ -155,8 +153,8 @@ const eLIB::PhysLibCell* findMaster(eUNL::Design* design,
   return &design->getLibAcc().getPhysLibCell(libCell->getId());
 }
 
-// Everything one proposal needs, so the sweep and the targeted path share
-// exactly one definition of "swap it in, ask, put it back".
+// Everything one proposal needs, so the sweep and targeted path share one
+// non-mutating CellChangeRecord call.
 struct ProposalResult
 {
   bool evaluated = false;
@@ -164,30 +162,28 @@ struct ProposalResult
   std::vector<CellChangeRecord> changes;
 };
 
-// [FRPORT] Exercise the repair-aware checker entry and restore the Network view.
+// [FRPORT] Exercise the CellChangeRecord -> checker -> engine call chain.
 ProposalResult evaluateProposal(const ipl::ImplantLayerChecker& checker,
-                                Grid* grid,
-                                Network* network,
                                 PhysDesMgr* desMgr,
                                 Node* node,
                                 const eLIB::PhysLibCell& original,
                                 const eLIB::PhysLibCell& candidate)
 {
   ProposalResult result;
-  if (!network->updateNode(node, desMgr, candidate)) {
+  const eUNL::PhysCell physical = desMgr->getPhysCell(node->getDbInst());
+  if (!physical.isValid()) {
     return result;
   }
+  const eUTL::Point2D origin = physical.getOrigin();
+  const CellChangeRecord targetChange{OpType::Replace,
+                                      CellData{node->getDbInst()},
+                                      origin.getX(),
+                                      origin.getY(),
+                                      original.getLibCellId(),
+                                      candidate.getLibCellId(),
+                                      physical.getOrient()};
   result.evaluated = true;
-  result.legal = checker.check(node, grid->gridX(node),
-                               grid->gridSnapDownY(node), node->getOrient(),
-                               result.changes);
-  // The command is observational: restore the shared Network view even when
-  // the proposal is illegal. UDM was never changed.
-  if (!network->updateNode(node, desMgr, original)) {
-    result.evaluated = false;
-    result.legal = false;
-    result.changes.clear();
-  }
+  result.legal = checker.repair(targetChange, result.changes);
   return result;
 }
 
@@ -379,9 +375,8 @@ bool TestFillerRepairCmd::exec()
                 << "); repair supports same-size swaps only\n";
       return false;
     }
-    // updateNode resolves the master through Network, so it has to be there
-    // already. Registering it here would leave an undecorated master behind
-    // in shared state.
+    // The engine snapshot resolves the proposal through Network, so the
+    // candidate must have been registered before engine construction.
     if (network->getMaster(candidate->getLibCellId()) == nullptr) {
       std::cout << "ERROR: master " << masterOpt << " is not registered in "
                    "Network (no placed instance uses it)\n";
@@ -394,10 +389,10 @@ bool TestFillerRepairCmd::exec()
     std::cout << "  master: " << nameOf(original->getLibCellId()) << " -> "
               << nameOf(candidate->getLibCellId()) << "\n";
 
-    const ProposalResult proposal = evaluateProposal(
-        checker, grid, network, desMgr, node, *original, *candidate);
+    const ProposalResult proposal
+        = evaluateProposal(checker, desMgr, node, *original, *candidate);
     if (!proposal.evaluated) {
-      std::cout << "ERROR: could not apply and restore the Network proposal\n";
+      std::cout << "ERROR: could not build the CellChangeRecord proposal\n";
       return false;
     }
 
@@ -491,9 +486,9 @@ bool TestFillerRepairCmd::exec()
       }
       ++proposals;
       const ProposalResult proposal = evaluateProposal(
-          checker, grid, network, desMgr, node.get(), *original, *candidate);
+          checker, desMgr, node.get(), *original, *candidate);
       if (!proposal.evaluated) {
-        std::cout << "ERROR: could not apply and restore proposal for node="
+        std::cout << "ERROR: could not build proposal for node="
                   << node->getId() << "\n";
         return false;
       }

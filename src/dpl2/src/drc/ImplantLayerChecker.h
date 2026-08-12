@@ -348,6 +348,12 @@ public:
                const eUTL::PhysOrientation& orient,
                std::vector<CellChangeRecord>& fcRecord) const override;
 
+    // [FRPORT] Opto-facing, non-mutating repair entry for one standard-cell
+    // Replace record. On success only the required filler edits are appended;
+    // the caller retains and commits the target record itself.
+    bool repair(const CellChangeRecord& targetChange,
+                std::vector<CellChangeRecord>& fcRecord) const;
+
     // [FRPORT] [fillerRepair-fix] Repair is enabled for the normal checker path.
     // ImplantLayerCheckerHelper disables it for checker-only tests.
     void setFillerRepairEnabled(bool enabled) { enableFillerRepair_ = enabled; }

@@ -5,21 +5,22 @@
 // construction uses the adjacent fake-UDM provider; this suite is deliberately
 // outside the migration payload.
 
-#include "E2ETestProvider.h"
+#include <drc/ImplantLayerChecker.h>
+#include <gtest/gtest.h>
+#include <infrastructure/Grid.h>
+#include <infrastructure/fillerSetting.h>
+#include <infrastructure/network.h>
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
 
-#include <gtest/gtest.h>
-
-#include <drc/ImplantLayerChecker.h>
-#include <infrastructure/Grid.h>
-#include <infrastructure/fillerSetting.h>
-#include <infrastructure/network.h>
+#include "E2ETestProvider.h"
 
 namespace frt = dpl2::fillerRepair::test;
 
@@ -109,6 +110,28 @@ bool sameChanges(const dpl2::ipl::FillerChanges& lhs,
     }
   }
   return true;
+}
+
+std::optional<dpl2::CellChangeRecord> makeTargetChange(
+    frt::E2ETestDesign& design,
+    dpl2::Network& network,
+    frt::MasterRole newMaster,
+    std::optional<eUTL::PhysOrientation> orientation = std::nullopt)
+{
+  const eUNL::LeafCellID target = design.cell(frt::CellRole::Target);
+  const dpl2::Node* node = network.getNode(target);
+  const eUNL::PhysCell physical = design.desMgr()->getPhysCell(target);
+  if (node == nullptr || node->getMaster() == nullptr || !physical.isValid()) {
+    return std::nullopt;
+  }
+  const eUTL::Point2D origin = physical.getOrigin();
+  return dpl2::CellChangeRecord{dpl2::OpType::Replace,
+                                dpl2::CellData{target},
+                                origin.getX(),
+                                origin.getY(),
+                                node->getMaster()->getDbMaster(),
+                                design.master(newMaster).getLibCellId(),
+                                orientation.value_or(physical.getOrient())};
 }
 
 // addMaster dereferences the edge-type table unconditionally; these cases
@@ -331,6 +354,12 @@ class CheckerHarness
   bool checkerReady() const { return checker_ready_; }
   frt::E2ETestDesign& design() { return objects_.design(); }
   dpl2::ipl::ImplantLayerChecker& checker() { return *checker_; }
+
+  bool repair(const dpl2::CellChangeRecord& targetChange,
+              dpl2::ipl::FillerChanges& changes)
+  {
+    return checker_->repair(targetChange, changes);
+  }
 
   bool syncInfrastructureCell(frt::CellRole role)
   {
@@ -871,6 +900,201 @@ TEST_P(FillerRepairEngineE2E, CleanTargetOverlayReturnsNoChanges)
       harness.design().master(frt::MasterRole::TargetOld));
   EXPECT_TRUE(outcome.hasSolution);
   EXPECT_TRUE(outcome.changes.empty());
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       StdCellChangeRecordMasterSwapReturnsFillerRepairWithoutMutation)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  const auto targetChange = makeTargetChange(
+      harness.design(), harness.network(), frt::MasterRole::TargetNew);
+  ASSERT_TRUE(targetChange.has_value());
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  const dpl2::Node* target
+      = harness.network().getNode(harness.design().cell(frt::CellRole::Target));
+  ASSERT_NE(target, nullptr);
+  const int masterBefore = target->getMaster()->getId();
+  const auto orientationBefore = target->getOrient().getValue();
+  const size_t masterCountBefore = harness.network().getMasters().size();
+
+  const auto outcome = harness.engine().repair(*targetChange);
+
+  ASSERT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  ASSERT_EQ(outcome.changes.size(), 1U);
+  EXPECT_EQ(
+      outcome.changes.front().new_lib_cell_,
+      harness.design().master(frt::MasterRole::RepairFiller).getLibCellId());
+  EXPECT_EQ(target->getMaster()->getId(), masterBefore);
+  EXPECT_EQ(target->getOrient().getValue(), orientationBefore);
+  EXPECT_EQ(harness.network().getMasters().size(), masterCountBefore);
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       StdCellChangeRecordSupportsRotationWithoutMasterSwap)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  const auto targetChange
+      = makeTargetChange(harness.design(),
+                         harness.network(),
+                         frt::MasterRole::TargetOld,
+                         eUTL::PhysOrientation(eUTL::PhysOrientationE::R180));
+  ASSERT_TRUE(targetChange.has_value());
+  ASSERT_NE(targetChange->orientation_.getValue(),
+            harness.network()
+                .getNode(harness.design().cell(frt::CellRole::Target))
+                ->getOrient()
+                .getValue());
+  const dpl2::Node* target
+      = harness.network().getNode(harness.design().cell(frt::CellRole::Target));
+  ASSERT_NE(target, nullptr);
+  const int masterBefore = target->getMaster()->getId();
+  const auto orientationBefore = target->getOrient().getValue();
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+
+  const auto outcome = harness.engine().repair(*targetChange);
+
+  EXPECT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  EXPECT_TRUE(outcome.changes.empty());
+  EXPECT_EQ(target->getMaster()->getId(), masterBefore);
+  EXPECT_EQ(target->getOrient().getValue(), orientationBefore);
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E, CheckerStdCellChangeRecordEntryCompletesCallChain)
+{
+  CheckerHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.checkerReady());
+  const auto targetChange = makeTargetChange(harness.design(),
+                                             *harness.checker().getNetwork(),
+                                             frt::MasterRole::TargetNew);
+  ASSERT_TRUE(targetChange.has_value());
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+  dpl2::ipl::FillerChanges fillerChanges;
+
+  ASSERT_TRUE(harness.repair(*targetChange, fillerChanges));
+
+  ASSERT_EQ(fillerChanges.size(), 1U);
+  EXPECT_EQ(
+      fillerChanges.front().new_lib_cell_,
+      harness.design().master(frt::MasterRole::RepairFiller).getLibCellId());
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       CheckerStdCellChangeRecordFailurePreservesCallerChanges)
+{
+  CheckerHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.checkerReady());
+  const auto valid = makeTargetChange(harness.design(),
+                                      *harness.checker().getNetwork(),
+                                      frt::MasterRole::TargetNew);
+  ASSERT_TRUE(valid.has_value());
+  dpl2::CellChangeRecord malformed = *valid;
+  malformed.op_ = dpl2::OpType::Add;
+  dpl2::ipl::FillerChanges fillerChanges{*valid};
+  const dpl2::ipl::FillerChanges beforeChanges = fillerChanges;
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+
+  EXPECT_FALSE(harness.repair(malformed, fillerChanges));
+
+  EXPECT_TRUE(sameChanges(beforeChanges, fillerChanges));
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       StdCellChangeRecordRepairsAreConcurrentAndDeterministic)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  const auto targetChange = makeTargetChange(
+      harness.design(), harness.network(), frt::MasterRole::TargetNew);
+  ASSERT_TRUE(targetChange.has_value());
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+
+  constexpr size_t kWorkers = 8;
+  std::array<dpl2::fillerRepair::RepairOutcome, kWorkers> outcomes;
+  std::vector<std::thread> workers;
+  workers.reserve(kWorkers);
+  for (size_t index = 0; index < kWorkers; ++index) {
+    workers.emplace_back([&harness, &targetChange, &outcomes, index]() {
+      outcomes[index] = harness.engine().repair(*targetChange);
+    });
+  }
+  for (std::thread& worker : workers) {
+    worker.join();
+  }
+
+  for (size_t index = 0; index < kWorkers; ++index) {
+    SCOPED_TRACE(index);
+    ASSERT_TRUE(outcomes[index].hasSolution)
+        << diagnosticText(outcomes[index].diagnostics);
+    EXPECT_TRUE(sameChanges(outcomes.front().changes, outcomes[index].changes));
+  }
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       StdCellChangeRecordRejectsMalformedInputWithoutMutation)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  const auto valid = makeTargetChange(
+      harness.design(), harness.network(), frt::MasterRole::TargetNew);
+  ASSERT_TRUE(valid.has_value());
+  const frt::PhysicalSnapshot before = harness.design().snapshot();
+
+  dpl2::CellChangeRecord malformed = *valid;
+  malformed.op_ = dpl2::OpType::Add;
+  auto outcome = harness.engine().repair(malformed);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(outcome.changes.empty());
+  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "InvalidStdCellChangeOp"));
+
+  malformed = *valid;
+  malformed.cell_data_ = std::string("not-a-leaf-cell");
+  outcome = harness.engine().repair(malformed);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "InvalidStdCellChangeTarget"));
+
+  malformed = *valid;
+  malformed.orig_lib_cell_ = malformed.new_lib_cell_;
+  outcome = harness.engine().repair(malformed);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(
+      hasDiagnostic(outcome.diagnostics, "StdCellOriginalMasterMismatch"));
+
+  malformed = *valid;
+  malformed.new_lib_cell_ = harness.design()
+                                .master(frt::MasterRole::MismatchedTarget)
+                                .getLibCellId();
+  outcome = harness.engine().repair(malformed);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(
+      hasDiagnostic(outcome.diagnostics, "StdCellNewMasterNotRegistered"));
+
+  malformed = *valid;
+  malformed.x_ = eUTL::UvDist(std::numeric_limits<uint32_t>::max());
+  outcome = harness.engine().repair(malformed);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(
+      hasDiagnostic(outcome.diagnostics, "StdCellChangeNotSiteAligned"));
+
+  malformed = *valid;
+  malformed.y_ = eUTL::UvDist(malformed.y_.getStorage() + 1);
+  outcome = harness.engine().repair(malformed);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "StdCellChangeNotRowAligned"));
+
+  malformed = *valid;
+  malformed.orientation_ = eUTL::PhysOrientation(eUTL::PhysOrientationE::R90);
+  outcome = harness.engine().repair(malformed);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(
+      hasDiagnostic(outcome.diagnostics, "UnsupportedStdCellOrientation"));
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 

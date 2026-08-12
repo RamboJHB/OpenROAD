@@ -81,6 +81,12 @@ class FillerRepairEngine
   // from the exact CheckRequest built by ImplantLayerChecker::check().
   RepairOutcome repair(const ipl::CheckRequest& request);
 
+  // Opto-facing entry for one pre-commit standard-cell Replace record. The
+  // record carries the proposed master, absolute origin and orientation. The
+  // target record is validated and remains caller-owned; the outcome contains
+  // only the checker-verified filler transaction needed to legalize it.
+  RepairOutcome repair(const CellChangeRecord& targetChange);
+
   // [PORT-DROP] The same repair, entered with raw UDM handles instead of a
   // CheckRequest. The normal checker path already has this request;
   // ImplantLayerChecker::check(), which has the CheckRequest already built;

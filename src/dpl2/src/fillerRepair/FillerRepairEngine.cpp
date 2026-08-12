@@ -4,6 +4,7 @@
 #include <fillerRepair/FillerRepairEngine.h>
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <optional>
 #include <set>
@@ -547,6 +548,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
   // whole placed design.
   ipl::CheckResult localPrecheck(const Region& influence) const;
   RepairOutcome repair(const ipl::CheckRequest& request);
+  RepairOutcome repair(const CellChangeRecord& targetChange);
   RepairOutcome repair(eUNL::LeafCellID targetCell,
                        const eLIB::PhysLibCell& newMaster);
 
@@ -594,7 +596,8 @@ class FillerRepairEngine::Impl final : private PlacementView,
   RepairOutcome repairImpl(
       std::optional<ipl::CheckRequest> checkerRequest,
       std::optional<eUNL::LeafCellID> targetCell,
-      const eLIB::PhysLibCell* newMaster);
+      const eLIB::PhysLibCell* newMaster,
+      const char* requestSource);
 
   // Grows `table` so `id` is a valid index (ids can exceed the presized
   // container counts only if the Network id spaces are not dense).
@@ -1766,20 +1769,126 @@ Region FillerRepairEngine::Impl::snapshotGuard(RowId rowId,
 RepairOutcome FillerRepairEngine::Impl::repair(
     const ipl::CheckRequest& request)
 {
-  return repairImpl(request, std::nullopt, nullptr);
+  return repairImpl(request, std::nullopt, nullptr, "checker");
+}
+
+RepairOutcome FillerRepairEngine::Impl::repair(
+    const CellChangeRecord& targetChange)
+{
+  // Let the common path report initialization/snapshot failures before this
+  // adapter reads either object. A default request is never inspected when
+  // the engine is not ready.
+  if (!initialized_ || !snapshotIsValid()) {
+    return repairImpl(
+        ipl::CheckRequest{}, std::nullopt, nullptr, "cell change");
+  }
+
+  RepairOutcome result;
+  const auto reject
+      = [&](const std::string& status, const std::string& message) {
+          result.diagnostics.push_back(
+              toPublicDiagnostic(makeDiag(Severity::Fatal, status, message)));
+          log_.section("engine", "REPAIR REQUEST");
+          log_.block("engine",
+                     "Rejected standard-cell change",
+                     {{"status", status}, {"message", message}});
+        };
+
+  if (targetChange.op_ != OpType::Replace) {
+    reject("InvalidStdCellChangeOp",
+           "standard-cell repair accepts exactly one Replace record");
+    return result;
+  }
+  const eUNL::LeafCellID* targetCell
+      = std::get_if<eUNL::LeafCellID>(&targetChange.cell_data_);
+  if (targetCell == nullptr) {
+    reject("InvalidStdCellChangeTarget",
+           "standard-cell Replace must identify an existing LeafCellID");
+    return result;
+  }
+
+  const int targetId = network_->getNodeId(*targetCell);
+  if (targetId < 0
+      || static_cast<size_t>(targetId) >= placement_.instances.size()
+      || !placement_.instances[static_cast<size_t>(targetId)].has_value()) {
+    reject("UnknownTarget",
+           "standard-cell change target is absent from the engine snapshot");
+    return result;
+  }
+  const PlacementSnapshot::UdmRef& original
+      = placement_.instances[static_cast<size_t>(targetId)]->udm;
+  if (targetChange.orig_lib_cell_ != original.libCellId) {
+    reject("StdCellOriginalMasterMismatch",
+           "standard-cell change original master does not match the engine "
+           "snapshot");
+    return result;
+  }
+
+  const int newMasterId = network_->getMasterId(targetChange.new_lib_cell_);
+  if (newMasterId < 0
+      || masterInfo(static_cast<MasterId>(newMasterId)) == nullptr) {
+    reject("StdCellNewMasterNotRegistered",
+           "standard-cell change new master was not registered before "
+           "engine construction");
+    return result;
+  }
+  if (!supportedOrientation(targetChange.orientation_)) {
+    reject("UnsupportedStdCellOrientation",
+           "standard-cell change orientation must be R0, R180, MX, or MY");
+    return result;
+  }
+
+  const int64_t xRelative = targetChange.x_.getStorage() - placement_.coreXl;
+  const int64_t yRelative
+      = targetChange.y_.getStorage() - grid_->getCore().getYL().getStorage();
+  if (placement_.siteWidth <= 0 || xRelative < 0
+      || xRelative % placement_.siteWidth != 0) {
+    reject("StdCellChangeNotSiteAligned",
+           "standard-cell change x origin is not aligned to a legal site");
+    return result;
+  }
+  const int64_t col = xRelative / placement_.siteWidth;
+  if (col < 0 || col > std::numeric_limits<ipl::ColId>::max()) {
+    reject("StdCellChangeNotSiteAligned",
+           "standard-cell change x origin is outside the Grid column range");
+    return result;
+  }
+  if (yRelative < std::numeric_limits<int>::min()
+      || yRelative > std::numeric_limits<int>::max()) {
+    reject("StdCellChangeNotRowAligned",
+           "standard-cell change y origin is outside the Grid row range");
+    return result;
+  }
+  const ipl::RowId row
+      = grid_->gridSnapDownY(DbuY{static_cast<int>(yRelative)}).v;
+  if (row < 0 || row >= grid_->getRowCount().v
+      || grid_->gridYToDbu(GridY{row}).v != yRelative) {
+    reject("StdCellChangeNotRowAligned",
+           "standard-cell change y origin is not aligned to a legal row");
+    return result;
+  }
+
+  ipl::CheckRequest request;
+  request.instanceId = static_cast<ipl::InstanceId>(targetId);
+  request.masterId = static_cast<ipl::MasterId>(newMasterId);
+  request.rowId = row;
+  request.colId = static_cast<ipl::ColId>(col);
+  request.orientation = targetChange.orientation_;
+  return repairImpl(request, std::nullopt, nullptr, "cell change");
 }
 
 RepairOutcome FillerRepairEngine::Impl::repair(
     eUNL::LeafCellID targetCell,
     const eLIB::PhysLibCell& newMaster)
 {
-  return repairImpl(std::nullopt, targetCell, &newMaster);
+  return repairImpl(std::nullopt, targetCell, &newMaster, "direct");
 }
 
 RepairOutcome FillerRepairEngine::Impl::repairImpl(
     std::optional<ipl::CheckRequest> checkerRequest,
     std::optional<eUNL::LeafCellID> targetCell,
-    const eLIB::PhysLibCell* newMaster)
+    const eLIB::PhysLibCell* newMaster,
+    const char* requestSource)
 {
   RepairOutcome result;
   log_.section("engine", "REPAIR REQUEST");
@@ -2011,7 +2120,7 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
     log_.block(
         "engine",
         "Request",
-        {{"source", checkerRequest.has_value() ? "checker" : "direct"},
+        {{"source", requestSource},
          {"instance", cat(target.instanceId)},
          {"master", cat(target.masterId)},
          {"row", cat(requestedRowId)},
@@ -2916,6 +3025,10 @@ RepairOutcome FillerRepairEngine::repair(const ipl::CheckRequest& request)
   return impl_->repair(request);
 }
 
+RepairOutcome FillerRepairEngine::repair(const CellChangeRecord& targetChange)
+{
+  return impl_->repair(targetChange);
+}
 
 }  // namespace fillerRepair
 }  // namespace dpl2

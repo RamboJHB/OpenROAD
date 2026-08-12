@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <iterator>
 #include <limits>
 #include <mutex>
 #include <physlib/techRuleCheck.hh>
@@ -908,6 +909,23 @@ bool ImplantLayerChecker::check(const Node* node,
     return isLegal;
 }
 
+bool ImplantLayerChecker::repair(const CellChangeRecord& targetChange,
+                                 std::vector<CellChangeRecord>& fcRecord) const
+{
+    if (!enableFillerRepair_ || fillerRepairEngine_ == nullptr) {
+        return false;
+    }
+    fillerRepair::RepairOutcome outcome
+        = fillerRepairEngine_->repair(targetChange);
+    if (!outcome.hasSolution) {
+        return false;
+    }
+    fcRecord.insert(fcRecord.end(),
+                    std::make_move_iterator(outcome.changes.begin()),
+                    std::make_move_iterator(outcome.changes.end()));
+    return true;
+}
+
 // [FRPORT] Translate the checker request into engine output appended for opto.
 bool ImplantLayerChecker::repairFillers(
     const CheckRequest& request,
@@ -921,8 +939,9 @@ bool ImplantLayerChecker::repairFillers(
         return false;
     }
     // Append-only into the caller's record; the checker stores nothing.
-    fcRecord.insert(
-        fcRecord.end(), outcome.changes.begin(), outcome.changes.end());
+    fcRecord.insert(fcRecord.end(),
+                    std::make_move_iterator(outcome.changes.begin()),
+                    std::make_move_iterator(outcome.changes.end()));
     return true;
 }
 

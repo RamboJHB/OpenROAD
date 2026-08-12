@@ -43,6 +43,7 @@ class FillerRepairEngine
 
   // Non-mutating, pre-commit overlay repair.
   RepairOutcome repair(const ipl::CheckRequest& request);
+  RepairOutcome repair(const CellChangeRecord& targetChange);
 
  private:
   class Impl;

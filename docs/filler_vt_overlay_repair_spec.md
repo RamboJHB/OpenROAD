@@ -45,6 +45,7 @@ class FillerRepairEngine
   bool isReady() const;
   const std::vector<ipl::Diagnostic>& getInitDiagnostics() const;
   RepairOutcome repair(const ipl::CheckRequest& request);
+  RepairOutcome repair(const CellChangeRecord& targetChange);
 };
 
 }  // namespace dpl2::fillerRepair
@@ -72,11 +73,18 @@ alive until all checks finish.
 After any Grid, Network, UDM, filler-setting, instance, or master-registration
 change, stop workers and create a new pair.
 
-`ImplantLayerChecker::check(...)` is the caller-facing entry. It first performs
+`ImplantLayerChecker::check(...)` remains the Node-facing entry. It first performs
 the ordinary target overlay check. With repair enabled and an initialized
 engine bound, it calls `engine.repair(request)` when direct DRC fails or the
 target footprint changed. On success it appends the returned records to the
 caller-owned vector. The checker stores no repair result.
+
+For a pre-commit opto proposal, the preferred entry is
+`ImplantLayerChecker::repair(targetChange, fillerChanges)`. `targetChange` is
+one caller-owned standard-cell `Replace` record; the checker delegates to
+`engine.repair(targetChange)` without changing the Node, Network, Grid, or UDM.
+Success appends only the required filler records. The caller commits its
+original target record and the returned filler transaction atomically.
 
 Repair is enabled by default on an ordinary checker. Checker-only helper tests
 disable it explicitly. The overlay oracle methods never call repair, which
@@ -115,6 +123,14 @@ and a request-local sequence:
 `fillerSetting::getPrefix() + "_FR_" + row + "_" + startColumn + "_W" +
 width + "_H" + height + "_" + addIndex`, with no spaces.
 `width` and `height` are the added master's physical DBU dimensions.
+
+The std-cell input overload accepts exactly one `Replace` record with
+`LeafCellID` data. `orig_lib_cell_` must match the immutable engine snapshot;
+`new_lib_cell_` must have been registered before engine construction; x/y are
+the proposed absolute physical origin; and orientation must be R0, R180, MX,
+or MY. Keeping the same master with a different orientation represents a
+rotation. Changing `new_lib_cell_` represents a master swap; both may be
+combined. Invalid or stale input fails with diagnostics and empty changes.
 
 ID authorities are fixed:
 
@@ -201,7 +217,9 @@ modify placement.
 
 ### 7.1 Request validation
 
-The engine resolves the `CheckRequest` against its immutable snapshot. It
+The engine converts a valid std-cell `CellChangeRecord` to the same
+`CheckRequest` used by the checker entry, then resolves that request against
+its immutable snapshot. It
 rejects an unknown/non-standard target, unsupported orientation, unregistered
 or post-init master, non-site-aligned width/x/y, target outside legal Grid
 pixels, or old/new target height outside one or two rows. The regional

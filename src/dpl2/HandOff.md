@@ -201,14 +201,22 @@ Initialization order is part of the contract:
 Example caller:
 
 ```cpp
-std::vector<CellChangeRecord> changes;
-const bool legal = checker.check(node, x, y, orient, changes);
+CellChangeRecord targetChange{
+    OpType::Replace, CellData{cellId}, x, y,
+    oldMasterId, newMasterId, newOrientation};
+std::vector<CellChangeRecord> fillerChanges;
+const bool legal = checker.repair(targetChange, fillerChanges);
 if (legal) {
-  commitTargetAndFillerChanges(changes);
+  commitAtomically(targetChange, fillerChanges);
 }
 ```
 
-The caller owns both objects and the result vector. Repair never commits. If
+The input x/y are absolute physical coordinates. Keeping the master and
+changing orientation rotates the target; changing `new_lib_cell_` swaps its
+master. The API validates the original master against the engine snapshot and
+requires the new master to be registered before construction. It never
+temporarily changes the Network Node. The caller owns both objects, the target
+record, and the result vector; repair never commits. If
 initialization fails, the engine prints `[fr][engine]` diagnostics by default
 and the caller must not bind it. If the design revision changes, stop workers
 and rebuild the checker/engine pair; there is no reset/context API.

@@ -36,7 +36,7 @@ namespace dpl2 {
 // configured filler master with the infrastructure-owned edge table.
 //
 // No placement is committed. Master registration may extend Network's catalog;
-// proposal Node masters are restored and UDM is never written.
+// proposal evaluation never changes a Node or writes UDM.
 // [FRPORT] Optional command surface for exercising the migrated engine.
 class TestFillerRepairCmd : public uvTCL::CciCommand
 {
