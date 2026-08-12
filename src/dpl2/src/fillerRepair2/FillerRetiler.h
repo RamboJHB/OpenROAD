@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
+// Database-free exact-cover tiling for placement cells released by a target
+// Add/Delete transaction. Implant legality and VT choice stay with the
+// checker-guided planner; this layer only guarantees gap/overlap-free geometry.
+
 #pragma once
 
 #include <cstddef>

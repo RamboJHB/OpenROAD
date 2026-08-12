@@ -108,6 +108,7 @@ struct TargetPlace
   RowId rowId = 0;
   DbCoord x = 0;
   Orient orientation = Orient::R0;
+  OpType operation = OpType::Replace;
 };
 
 enum class ViolationKind

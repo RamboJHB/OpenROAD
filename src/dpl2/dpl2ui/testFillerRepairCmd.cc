@@ -14,11 +14,15 @@
 #include <phys/physDesMgr.hh>
 #include <util/iter.hh>
 
+#include <algorithm>
+#include <cctype>
+#include <cstdint>
 #include <exception>
 #include <functional>
 #include <iostream>
 #include <limits>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,6 +43,100 @@ namespace {
 constexpr int kMaxProposals = 2000;
 constexpr int kMaxReportedLines = 50;
 
+enum class CommandOperation
+{
+  Sweep,
+  Replace,
+  Delete,
+  Add
+};
+
+std::string lowerCase(std::string text)
+{
+  std::transform(text.begin(), text.end(), text.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return text;
+}
+
+const char* operationName(CommandOperation operation)
+{
+  switch (operation) {
+    case CommandOperation::Sweep:
+      return "SWEEP";
+    case CommandOperation::Replace:
+      return "REPLACE";
+    case CommandOperation::Delete:
+      return "DELETE";
+    case CommandOperation::Add:
+      return "ADD";
+  }
+  return "UNKNOWN";
+}
+
+std::optional<CommandOperation> parseOperation(const std::string& text)
+{
+  const std::string normalized = lowerCase(text);
+  if (normalized == "replace") {
+    return CommandOperation::Replace;
+  }
+  if (normalized == "delete") {
+    return CommandOperation::Delete;
+  }
+  if (normalized == "add") {
+    return CommandOperation::Add;
+  }
+  return {};
+}
+
+const char* orientationName(eUTL::PhysOrientation orientation)
+{
+  switch (orientation.getValue()) {
+    case eUTL::PhysOrientationE::R0:
+      return "R0";
+    case eUTL::PhysOrientationE::R90:
+      return "R90";
+    case eUTL::PhysOrientationE::R180:
+      return "R180";
+    case eUTL::PhysOrientationE::R270:
+      return "R270";
+    case eUTL::PhysOrientationE::MX:
+      return "MX";
+    case eUTL::PhysOrientationE::MX90:
+      return "MX90";
+    case eUTL::PhysOrientationE::MY:
+      return "MY";
+    case eUTL::PhysOrientationE::MY90:
+      return "MY90";
+  }
+  return "UNKNOWN";
+}
+
+std::optional<eUTL::PhysOrientation> parseOrientation(
+    const std::string& text)
+{
+  std::string normalized = text;
+  std::transform(normalized.begin(),
+                 normalized.end(),
+                 normalized.begin(),
+                 [](unsigned char ch) {
+                   return static_cast<char>(std::toupper(ch));
+                 });
+  if (normalized == "R0") {
+    return eUTL::PhysOrientationE::R0;
+  }
+  if (normalized == "R180") {
+    return eUTL::PhysOrientationE::R180;
+  }
+  if (normalized == "MX") {
+    return eUTL::PhysOrientationE::MX;
+  }
+  if (normalized == "MY") {
+    return eUTL::PhysOrientationE::MY;
+  }
+  return {};
+}
+
 // Same footprint means the Grid occupancy does not change when the master is
 // swapped, so a proposal needs no unplace/place around it -- which is what
 // keeps this command non-destructive.
@@ -51,9 +149,10 @@ struct Footprint
   {
     return width != other.width ? width < other.width : height < other.height;
   }
-  bool operator==(const Footprint& other) const
+
+  bool operator!=(const Footprint& other) const
   {
-    return width == other.width && height == other.height;
+    return width != other.width || height != other.height;
   }
 };
 
@@ -115,7 +214,9 @@ Node* findNode(Network* network,
                const std::string& instance)
 {
   if (isAllDigits(instance)) {
-    return network->getNode(std::stoi(instance));
+    int nodeId = -1;
+    return parseNonNegativeInt(instance, nodeId) ? network->getNode(nodeId)
+                                                  : nullptr;
   }
   for (auto& node : network->getNodes()) {
     if (!node) {
@@ -137,7 +238,10 @@ const eLIB::PhysLibCell* findMaster(eUNL::Design* design,
                                     const std::string& masterName)
 {
   if (isAllDigits(masterName) && network != nullptr) {
-    const int masterId = std::stoi(masterName);
+    int masterId = -1;
+    if (!parseNonNegativeInt(masterName, masterId)) {
+      return nullptr;
+    }
     Master* master = network->getMaster(masterId);
     if (master != nullptr) {
       return master->getPhysLibCell();
@@ -153,8 +257,8 @@ const eLIB::PhysLibCell* findMaster(eUNL::Design* design,
   return &design->getLibAcc().getPhysLibCell(libCell->getId());
 }
 
-// Everything one proposal needs, so the sweep and targeted path share one
-// non-mutating CellChangeRecord call.
+// Everything one transaction needs, so sweep and targeted paths share the
+// same non-mutating checker entry.
 struct ProposalResult
 {
   bool evaluated = false;
@@ -163,42 +267,244 @@ struct ProposalResult
 };
 
 // [FRPORT] Exercise the CellChangeRecord -> checker -> engine call chain.
-ProposalResult evaluateProposal(const ipl::ImplantLayerChecker& checker,
-                                PhysDesMgr* desMgr,
-                                Node* node,
-                                const eLIB::PhysLibCell& original,
-                                const eLIB::PhysLibCell& candidate)
+ProposalResult evaluateTarget(const ipl::ImplantLayerChecker& checker,
+                              const CellChangeRecord& targetChange)
 {
   ProposalResult result;
-  const eUNL::PhysCell physical = desMgr->getPhysCell(node->getDbInst());
-  if (!physical.isValid()) {
-    return result;
-  }
-  const eUTL::Point2D origin = physical.getOrigin();
-  const CellChangeRecord targetChange{OpType::Replace,
-                                      CellData{node->getDbInst()},
-                                      origin.getX(),
-                                      origin.getY(),
-                                      original.getLibCellId(),
-                                      candidate.getLibCellId(),
-                                      physical.getOrient()};
   result.evaluated = true;
   result.legal = checker.repair(targetChange, result.changes);
   return result;
+}
+
+std::optional<CellChangeRecord> makeExistingTarget(
+    PhysDesMgr* desMgr,
+    const Node& node,
+    OpType operation,
+    LibCellID newMaster,
+    std::optional<eUTL::PhysOrientation> orientation = {})
+{
+  const eUNL::PhysCell physical = desMgr->getPhysCell(node.getDbInst());
+  const Master* original = node.getMaster();
+  if (!physical.isValid() || original == nullptr) {
+    return {};
+  }
+  const eUTL::Point2D origin = physical.getOrigin();
+  const LibCellID originalMaster = original->getDbMaster();
+  return CellChangeRecord{operation,
+                          CellData{node.getDbInst()},
+                          origin.getX(),
+                          origin.getY(),
+                          originalMaster,
+                          operation == OpType::Delete ? originalMaster
+                                                      : newMaster,
+                          orientation.value_or(physical.getOrient())};
+}
+
+struct ChangeCounts
+{
+  int adds = 0;
+  int deletes = 0;
+  int replaces = 0;
+};
+
+ChangeCounts countChanges(const std::vector<CellChangeRecord>& changes)
+{
+  ChangeCounts counts;
+  for (const CellChangeRecord& change : changes) {
+    if (change.op_ == OpType::Add) {
+      ++counts.adds;
+    } else if (change.op_ == OpType::Delete) {
+      ++counts.deletes;
+    } else {
+      ++counts.replaces;
+    }
+  }
+  return counts;
+}
+
+bool validateTransaction(CommandOperation targetOperation,
+                         const ProposalResult& proposal,
+                         const std::function<bool(LibCellID)>& isFiller,
+                         std::string& error)
+{
+  if (!proposal.legal) {
+    if (!proposal.changes.empty()) {
+      error = "failed repair returned a partial filler transaction";
+      return false;
+    }
+    return true;
+  }
+
+  const ChangeCounts counts = countChanges(proposal.changes);
+  if (targetOperation == CommandOperation::Delete && counts.adds == 0) {
+    error = "successful std-cell Delete did not add filler into its hole";
+    return false;
+  }
+  if (targetOperation == CommandOperation::Add && counts.deletes == 0) {
+    error = "successful std-cell Add did not delete any covered filler";
+    return false;
+  }
+  if (targetOperation == CommandOperation::Replace
+      && (counts.adds != 0 || counts.deletes != 0)) {
+    error = "same-footprint Replace returned an unexpected filler Add/Delete";
+    return false;
+  }
+  for (const CellChangeRecord& change : proposal.changes) {
+    const bool hasLeaf = std::holds_alternative<LeafCellID>(change.cell_data_);
+    if ((change.op_ == OpType::Add && hasLeaf)
+        || (change.op_ != OpType::Add && !hasLeaf)) {
+      error = "filler transaction contains an operation/cell-data mismatch";
+      return false;
+    }
+    const std::string* addName = std::get_if<std::string>(&change.cell_data_);
+    if (change.op_ == OpType::Add
+        && (addName == nullptr || addName->empty())) {
+      error = "filler Add record has an empty request-local name";
+      return false;
+    }
+    const bool validMasters
+        = change.op_ == OpType::Add
+              ? isFiller(change.new_lib_cell_)
+          : change.op_ == OpType::Delete
+              ? isFiller(change.orig_lib_cell_)
+              : isFiller(change.orig_lib_cell_)
+                    && isFiller(change.new_lib_cell_);
+    if (!validMasters) {
+      error = "filler transaction references a non-filler master";
+      return false;
+    }
+  }
+  return true;
+}
+
+// A command-side fingerprint keeps the pre-commit contract observable on a
+// real design without copying the database. Master registration happens
+// before this snapshot and is deliberately outside the transaction check.
+struct RuntimeFingerprint
+{
+  uint64_t network = 1469598103934665603ULL;
+  uint64_t physical = 1469598103934665603ULL;
+  uint64_t grid = 1469598103934665603ULL;
+
+  bool operator==(const RuntimeFingerprint& other) const
+  {
+    return network == other.network && physical == other.physical
+           && grid == other.grid;
+  }
+};
+
+void hashValue(uint64_t& hash, int64_t value)
+{
+  hash ^= static_cast<uint64_t>(value);
+  hash *= 1099511628211ULL;
+}
+
+void hashText(uint64_t& hash, const std::string& text)
+{
+  for (unsigned char ch : text) {
+    hashValue(hash, ch);
+  }
+  hashValue(hash, -1);
+}
+
+RuntimeFingerprint fingerprintRuntime(const Grid& grid,
+                                      Network& network,
+                                      PhysDesMgr* desMgr)
+{
+  RuntimeFingerprint fingerprint;
+  for (const auto& ownedNode : network.getNodes()) {
+    const Node* node = ownedNode.get();
+    hashValue(fingerprint.network, node != nullptr);
+    if (node == nullptr) {
+      continue;
+    }
+    hashValue(fingerprint.network, node->getId());
+    hashValue(fingerprint.network, node->getDbInst().getIndexValue());
+    hashValue(fingerprint.network, node->getLeft().v);
+    hashValue(fingerprint.network, node->getBottom().v);
+    hashValue(fingerprint.network, node->getWidth().v);
+    hashValue(fingerprint.network, node->getHeight().v);
+    hashValue(fingerprint.network, static_cast<int>(node->getType()));
+    hashValue(fingerprint.network, node->isFixed());
+    hashValue(fingerprint.network, node->isPlaced());
+    hashValue(fingerprint.network,
+              static_cast<int>(node->getOrient().getValue()));
+    hashValue(fingerprint.network,
+              node->getMaster() != nullptr ? node->getMaster()->getId() : -1);
+
+    const eUNL::PhysCell cell = desMgr->getPhysCell(node->getDbInst());
+    hashValue(fingerprint.physical, cell.isValid());
+    if (!cell.isValid()) {
+      continue;
+    }
+    hashText(fingerprint.physical, cell.getName());
+    hashValue(fingerprint.physical,
+              cell.getPhysMaster().getLibCellId().getIndexValue());
+    hashValue(fingerprint.physical,
+              cell.getOrigin().getX().getStorage());
+    hashValue(fingerprint.physical,
+              cell.getOrigin().getY().getStorage());
+    hashValue(fingerprint.physical,
+              static_cast<int>(cell.getOrient().getValue()));
+    hashValue(fingerprint.physical, static_cast<int>(cell.getStatus()));
+  }
+
+  for (int row = 0; row < grid.getRowCount().v; ++row) {
+    for (int col = 0; col < grid.getRowSiteCount().v; ++col) {
+      const Pixel* pixel = grid.gridPixel(GridX{col}, GridY{row});
+      hashValue(fingerprint.grid, pixel != nullptr);
+      if (pixel == nullptr) {
+        continue;
+      }
+      hashValue(fingerprint.grid, pixel->is_valid);
+      hashValue(fingerprint.grid, pixel->is_hopeless);
+      hashValue(fingerprint.grid, pixel->blocked_layers);
+      hashValue(fingerprint.grid,
+                pixel->cell != nullptr ? pixel->cell->getId() : -1);
+      hashValue(fingerprint.grid,
+                pixel->padding_reserved_by != nullptr
+                    ? pixel->padding_reserved_by->getId()
+                    : -1);
+    }
+  }
+  return fingerprint;
 }
 
 void printChanges(const std::vector<CellChangeRecord>& changes,
                   const std::function<std::string(LibCellID)>& nameOf,
                   const char* indent)
 {
+  int index = 0;
   for (const CellChangeRecord& record : changes) {
     const LeafCellID* leafId = std::get_if<LeafCellID>(&record.cell_data_);
-    std::cout << indent << "filler cell="
-        << (leafId != nullptr ? leafId->getIndexValue() : -1)
-        << " at (" << record.x_.getStorage() << ","
-        << record.y_.getStorage() << ") "
-        << nameOf(record.orig_lib_cell_) << " -> "
-        << nameOf(record.new_lib_cell_) << "\n";
+    const std::string* addName = std::get_if<std::string>(&record.cell_data_);
+    const char* operation = record.op_ == OpType::Add
+                                ? "ADD"
+                            : record.op_ == OpType::Delete ? "DELETE"
+                                                          : "REPLACE";
+    std::cout << indent << "change[" << index++ << "]\n";
+    std::cout << indent << "  operation   : " << operation << "\n";
+    std::cout << indent << "  filler      : ";
+    if (leafId != nullptr) {
+      std::cout << leafId->getIndexValue();
+    } else {
+      std::cout << (addName != nullptr ? *addName : "<invalid>");
+    }
+    std::cout << "\n";
+    std::cout << indent << "  origin      : (" << record.x_.getStorage()
+              << ", " << record.y_.getStorage() << ")\n";
+    std::cout << indent << "  master      : ";
+    if (record.op_ != OpType::Add) {
+      std::cout << nameOf(record.orig_lib_cell_);
+    }
+    if (record.op_ == OpType::Replace) {
+      std::cout << " -> " << nameOf(record.new_lib_cell_);
+    } else if (record.op_ == OpType::Add) {
+      std::cout << nameOf(record.new_lib_cell_);
+    }
+    std::cout << "\n";
+    std::cout << indent << "  orientation : "
+              << orientationName(record.orientation_) << "\n";
   }
 }
 
@@ -212,19 +518,87 @@ bool TestFillerRepairCmd::exec()
 
   const std::string instanceOpt = instOpt_.getValue();
   const std::string masterOpt = masterOpt_.getValue();
+  const std::string operationOpt = operationOpt_.getValue();
+  const std::string orientOpt = orientOpt_.getValue();
+  const std::string rowOpt = rowOpt_.getValue();
+  const std::string colOpt = colOpt_.getValue();
   const std::string loadOpt = loadOpt_.getValue();
   const bool haveInstance = !instanceOpt.empty();
   const bool haveMaster = !masterOpt.empty();
-  if (haveInstance != haveMaster) {
-    std::cout << "ERROR: -inst and -master must be given together "
-                 "(omit both to sweep the design)\n";
+  const bool haveOrientation = !orientOpt.empty();
+  const bool haveRow = !rowOpt.empty();
+  const bool haveCol = !colOpt.empty();
+
+  CommandOperation operation = CommandOperation::Sweep;
+  if (operationOpt.empty()) {
+    if (haveInstance && haveMaster && !haveRow && !haveCol) {
+      operation = CommandOperation::Replace;
+    } else if (haveInstance || haveMaster || haveRow || haveCol
+               || haveOrientation) {
+      std::cout << "ERROR: omit all target options to sweep, or provide "
+                   "-inst and -master for the backward-compatible Replace "
+                   "form\n";
+      return false;
+    }
+  } else {
+    const std::optional<CommandOperation> parsed
+        = parseOperation(operationOpt);
+    if (!parsed.has_value()) {
+      std::cout << "ERROR: -operation must be replace, delete, or add\n";
+      return false;
+    }
+    operation = *parsed;
+  }
+
+  if (operation == CommandOperation::Replace
+      && (!haveInstance || !haveMaster || haveRow || haveCol)) {
+    std::cout << "ERROR: Replace requires -inst and -master, and does not "
+                 "accept -row/-col\n";
     return false;
   }
-  const bool targeted = haveInstance;
+  if (operation == CommandOperation::Delete
+      && (!haveInstance || haveMaster || haveRow || haveCol
+          || haveOrientation)) {
+    std::cout << "ERROR: Delete requires only -inst; its original master, "
+                 "origin, and orientation come from the existing cell\n";
+    return false;
+  }
+  if (operation == CommandOperation::Add
+      && (haveInstance || !haveMaster || !haveRow || !haveCol)) {
+    std::cout << "ERROR: Add requires -master, -row, and -col, and does not "
+                 "accept -inst\n";
+    return false;
+  }
+  const bool targeted = operation != CommandOperation::Sweep;
+
+  std::optional<eUTL::PhysOrientation> requestedOrientation;
+  if (haveOrientation) {
+    requestedOrientation = parseOrientation(orientOpt);
+    if (!requestedOrientation.has_value()) {
+      std::cout << "ERROR: -orient must be R0, R180, MX, or MY\n";
+      return false;
+    }
+  }
+
+  int requestedRow = -1;
+  int requestedCol = -1;
+  if (operation == CommandOperation::Add
+      && (!parseNonNegativeInt(rowOpt, requestedRow)
+          || !parseNonNegativeInt(colOpt, requestedCol))) {
+    std::cout << "ERROR: -row and -col must be non-negative integers\n";
+    return false;
+  }
 
   // [FRPORT] A helper dump is self-contained: rebuild its Grid/Network/checker and
   // run the pure planner before touching Session, DePlace, or UDM.
   if (!loadOpt.empty()) {
+    if (operation == CommandOperation::Add
+        || operation == CommandOperation::Delete || haveOrientation
+        || haveRow || haveCol) {
+      std::cout << "ERROR: -load supports only sweep or numeric Replace; "
+                   "Add/Delete require a loaded UDM-backed design\n";
+      return false;
+    }
     FillerRepairDumpReplayOptions options;
     options.maxProposals = kMaxProposals;
     options.maxReportedLines = kMaxReportedLines;
@@ -280,9 +654,6 @@ bool TestFillerRepairCmd::exec()
   // the real infrastructure edge table before engine initialization.
   fillerSetting* setting = de_place->getFillerSetting();
 
-  // set all filler as candidate
-  //setting->addAllFillerCells();
-
   if (!setting || setting->getFillerPhysCells().empty()) {
     std::cout << "ERROR: no filler masters configured -- run "
                  "set_filler_option first\n";
@@ -290,14 +661,79 @@ bool TestFillerRepairCmd::exec()
   }
   std::cout << "configured filler masters: "
             << setting->getFillerPhysCells().size() << "\n";
-  if (!de_place->registerFillerRepairMasters()) {
-    std::cout << "ERROR: could not register configured filler masters in "
-                 "Network with the DePlace edge table\n";
+
+  // Resolve the target before constructing the immutable engine. A Replace
+  // or Add master not already used by the design still needs a complete
+  // Network Master built with DePlace's real edge table.
+  Node* targetedNode = nullptr;
+  const eLIB::PhysLibCell* targetedOriginal = nullptr;
+  const eLIB::PhysLibCell* targetedCandidate = nullptr;
+  std::vector<const eLIB::PhysLibCell*> targetMasters;
+  if (operation == CommandOperation::Replace
+      || operation == CommandOperation::Delete) {
+    targetedNode = findNode(network, desMgr, instanceOpt);
+    if (targetedNode == nullptr) {
+      std::cout << "ERROR: no such instance: " << instanceOpt << "\n";
+      return false;
+    }
+    if (!targetedNode->isStdCell()) {
+      std::cout << "ERROR: instance is not a standard cell\n";
+      return false;
+    }
+    if (targetedNode->isFixed()) {
+      std::cout << "ERROR: instance is fixed\n";
+      return false;
+    }
+    Master* originalMaster = targetedNode->getMaster();
+    targetedOriginal = originalMaster != nullptr
+                           ? originalMaster->getPhysLibCell()
+                           : nullptr;
+    if (targetedOriginal == nullptr) {
+      std::cout << "ERROR: instance has no physical master\n";
+      return false;
+    }
+  }
+  if (operation == CommandOperation::Replace
+      || operation == CommandOperation::Add) {
+    targetedCandidate = findMaster(design, network, masterOpt);
+    if (targetedCandidate == nullptr) {
+      std::cout << "ERROR: no such master: " << masterOpt << "\n";
+      return false;
+    }
+    if (setting->isFillerCell(targetedCandidate->getLibCellId())) {
+      std::cout << "ERROR: target master is a filler; the target of a repair "
+                   "must be a standard cell\n";
+      return false;
+    }
+    targetMasters.push_back(targetedCandidate);
+  }
+
+  if (operation == CommandOperation::Replace
+      && footprintOf(*targetedOriginal) != footprintOf(*targetedCandidate)) {
+    std::cout << "ERROR: Replace requires an unchanged footprint; use Delete "
+                 "and Add as separate opto transactions for a size change\n";
+    return false;
+  }
+  if (operation == CommandOperation::Add
+      && (requestedRow >= grid->getRowCount().v
+          || requestedCol >= grid->getRowSiteCount().v)) {
+    std::cout << "ERROR: Add location is outside the Grid: row range [0, "
+              << grid->getRowCount().v << "), column range [0, "
+              << grid->getRowSiteCount().v << ")\n";
+    return false;
+  }
+
+  if (!de_place->registerFillerRepairMasters(targetMasters)) {
+    std::cout << "ERROR: could not register configured filler/target masters "
+                 "in Network with the DePlace edge table\n";
     return false;
   }
 
   const auto nameOf = [design](LibCellID lcId) -> std::string {
     return design->getLibAcc().getPhysLibCell(lcId).getLibCell().getName();
+  };
+  const auto isFiller = [setting](LibCellID lcId) {
+    return setting->isFillerCell(lcId);
   };
 
   // [FRPORT] The command owns both objects. The checker only borrows the initialized
@@ -328,71 +764,96 @@ bool TestFillerRepairCmd::exec()
   }
   checker.setFillerRepairEngine(&repairEngine);
 
+  const RuntimeFingerprint runtimeBefore
+      = fingerprintRuntime(*grid, *network, desMgr);
+
   // =============================================================================
-  // Targeted mode: one instance, one replacement master.
+  // Targeted mode: one complete std-cell transaction.
   // =============================================================================
   if (targeted) {
-    std::cout << "\n--- targeted: " << instanceOpt << " -> " << masterOpt
-              << " ---\n";
+    CellChangeRecord targetChange;
+    if (operation == CommandOperation::Replace) {
+      const std::optional<CellChangeRecord> change = makeExistingTarget(
+          desMgr,
+          *targetedNode,
+          OpType::Replace,
+          targetedCandidate->getLibCellId(),
+          requestedOrientation);
+      if (!change.has_value()) {
+        std::cout << "ERROR: could not read the existing target cell\n";
+        return false;
+      }
+      targetChange = *change;
+    } else if (operation == CommandOperation::Delete) {
+      const std::optional<CellChangeRecord> change = makeExistingTarget(
+          desMgr,
+          *targetedNode,
+          OpType::Delete,
+          targetedOriginal->getLibCellId());
+      if (!change.has_value()) {
+        std::cout << "ERROR: could not read the existing target cell\n";
+        return false;
+      }
+      targetChange = *change;
+    } else {
+      if (!requestedOrientation.has_value()) {
+        const eLIB::TechSite* site = targetedCandidate->getTechSite();
+        if (site == nullptr) {
+          std::cout << "ERROR: Add master has no technology site; specify a "
+                       "valid standard-cell master\n";
+          return false;
+        }
+        requestedOrientation = grid->getSiteOrientation(
+            GridX{requestedCol}, GridY{requestedRow}, site->getName());
+        if (!requestedOrientation.has_value()) {
+          std::cout << "ERROR: no legal orientation for master site \""
+                    << site->getName() << "\" at row=" << requestedRow
+                    << " col=" << requestedCol << "\n";
+          return false;
+        }
+      }
+      const Rect core = grid->getCore();
+      const int64_t x = core.getXL().getStorage()
+                        + static_cast<int64_t>(requestedCol)
+                              * grid->getSiteWidth().v;
+      const int64_t y = core.getYL().getStorage()
+                        + grid->gridYToDbu(GridY{requestedRow}).v;
+      targetChange = CellChangeRecord{
+          OpType::Add,
+          CellData{"test_filler_repair_buffer_" + std::to_string(requestedRow)
+                   + "_" + std::to_string(requestedCol)},
+          UvDist{x},
+          UvDist{y},
+          LibCellID{},
+          targetedCandidate->getLibCellId(),
+          *requestedOrientation};
+    }
 
-    Node* node = findNode(network, desMgr, instanceOpt);
-    if (node == nullptr) {
-      std::cout << "ERROR: no such instance: " << instanceOpt << "\n";
-      return false;
+    std::cout << "\n--- targeted transaction ---\n";
+    std::cout << "  operation   : " << operationName(operation) << "\n";
+    if (targetedNode != nullptr) {
+      std::cout << "  instance    : " << instanceOpt << " (node "
+                << targetedNode->getId() << ")\n";
+    } else {
+      std::cout << "  instance    : "
+                << std::get<std::string>(targetChange.cell_data_) << "\n";
     }
-    if (!node->isStdCell()) {
-      std::cout << "ERROR: instance is not a standard cell\n";
-      return false;
+    std::cout << "  origin      : (" << targetChange.x_.getStorage() << ", "
+              << targetChange.y_.getStorage() << ")\n";
+    if (operation != CommandOperation::Add) {
+      std::cout << "  old master  : "
+                << nameOf(targetChange.orig_lib_cell_) << "\n";
     }
-    if (node->isFixed()) {
-      std::cout << "ERROR: instance is fixed\n";
-      return false;
+    if (operation != CommandOperation::Delete) {
+      std::cout << "  new master  : "
+                << nameOf(targetChange.new_lib_cell_) << "\n";
     }
-    Master* master = node->getMaster();
-    const eLIB::PhysLibCell* original =
-        master != nullptr ? master->getPhysLibCell() : nullptr;
-    if (original == nullptr) {
-      std::cout << "ERROR: instance has no physical master\n";
-      return false;
-    }
+    std::cout << "  orientation : "
+              << orientationName(targetChange.orientation_) << "\n";
 
-    const eLIB::PhysLibCell* candidate = findMaster(design, network, masterOpt);
-    if (candidate == nullptr) {
-      std::cout << "ERROR: no such master: " << masterOpt << "\n";
-      return false;
-    }
-    if (setting->isFillerCell(candidate->getLibCellId())) {
-      std::cout << "ERROR: replacement master is a filler; the target of a "
-                   "repair is a standard cell\n";
-      return false;
-    }
-    if (!(footprintOf(*candidate) == footprintOf(*original))) {
-      std::cout << "ERROR: replacement changes the footprint ("
-                << original->getWidth().getStorage() << "x"
-                << original->getHeight().getStorage() << " -> "
-                << candidate->getWidth().getStorage() << "x"
-                << candidate->getHeight().getStorage()
-                << "); repair supports same-size swaps only\n";
-      return false;
-    }
-    // The engine snapshot resolves the proposal through Network, so the
-    // candidate must have been registered before engine construction.
-    if (network->getMaster(candidate->getLibCellId()) == nullptr) {
-      std::cout << "ERROR: master " << masterOpt << " is not registered in "
-                   "Network (no placed instance uses it)\n";
-      return false;
-    }
-
-    std::cout << "  node=" << node->getId() << "  pos=(" << node->getLeft().v
-              << "," << node->getBottom().v << ")  row="
-              << grid->gridSnapDownY(node).v << "\n";
-    std::cout << "  master: " << nameOf(original->getLibCellId()) << " -> "
-              << nameOf(candidate->getLibCellId()) << "\n";
-
-    const ProposalResult proposal
-        = evaluateProposal(checker, desMgr, node, *original, *candidate);
+    const ProposalResult proposal = evaluateTarget(checker, targetChange);
     if (!proposal.evaluated) {
-      std::cout << "ERROR: could not build the CellChangeRecord proposal\n";
+      std::cout << "ERROR: could not evaluate the CellChangeRecord request\n";
       return false;
     }
 
@@ -401,18 +862,54 @@ bool TestFillerRepairCmd::exec()
       std::cout << "  LEGAL as-is: the VT change needs no filler repair\n";
     } else if (proposal.legal) {
       std::cout << "  REPAIRED: " << proposal.changes.size()
-                << " filler swap(s), checker-verified\n";
+                << " filler change(s), checker-verified\n";
       printChanges(proposal.changes, nameOf, "    ");
     } else {
-      std::cout << "  ILLEGAL: no filler swap set makes this VT change "
-                   "legal\n";
+      std::cout << "  ILLEGAL: no complete filler transaction was found\n";
     }
+
+    const ChangeCounts counts = countChanges(proposal.changes);
+    std::cout << "  output counts\n";
+    std::cout << "    Add     : " << counts.adds << "\n";
+    std::cout << "    Delete  : " << counts.deletes << "\n";
+    std::cout << "    Replace : " << counts.replaces << "\n";
+
+    std::string transactionError;
+    const bool transactionValid
+        = validateTransaction(operation,
+                              proposal,
+                              isFiller,
+                              transactionError);
+    if (!transactionValid) {
+      std::cout << "  ERROR: " << transactionError << "\n";
+    }
+
+    const RuntimeFingerprint runtimeAfter
+        = fingerprintRuntime(*grid, *network, desMgr);
+    const bool unchanged = runtimeAfter == runtimeBefore;
+    std::cout << "  pre-commit state\n";
+    std::cout << "    Network : "
+              << (runtimeAfter.network == runtimeBefore.network ? "unchanged"
+                                                                 : "CHANGED")
+              << "\n";
+    std::cout << "    UDM     : "
+              << (runtimeAfter.physical == runtimeBefore.physical
+                      ? "unchanged"
+                      : "CHANGED")
+              << "\n";
+    std::cout << "    Grid    : "
+              << (runtimeAfter.grid == runtimeBefore.grid ? "unchanged"
+                                                           : "CHANGED")
+              << "\n";
     std::cout << "  set FR_VERBOSE=0 to silence the [fr] decision "
                  "transcript\n";
+
+    const bool passed = proposal.legal && transactionValid && unchanged;
     std::cout << "\n========================================\n";
-    std::cout << "  test_filler_repair DONE\n";
+    std::cout << (passed ? "  test_filler_repair PASSED\n"
+                         : "  test_filler_repair FAILED\n");
     std::cout << "========================================\n";
-    return true;
+    return passed;
   }
 
   // =============================================================================
@@ -458,6 +955,7 @@ bool TestFillerRepairCmd::exec()
   int repaired = 0;
   int unrepairable = 0;
   int totalSwaps = 0;
+  int invalidTransactions = 0;
   int reported = 0;
   bool truncated = false;
 
@@ -485,12 +983,25 @@ bool TestFillerRepairCmd::exec()
         continue;
       }
       ++proposals;
-      const ProposalResult proposal = evaluateProposal(
-          checker, desMgr, node.get(), *original, *candidate);
-      if (!proposal.evaluated) {
+      const std::optional<CellChangeRecord> targetChange = makeExistingTarget(
+          desMgr,
+          *node,
+          OpType::Replace,
+          candidate->getLibCellId());
+      if (!targetChange.has_value()) {
         std::cout << "ERROR: could not build proposal for node="
                   << node->getId() << "\n";
         return false;
+      }
+      const ProposalResult proposal = evaluateTarget(checker, *targetChange);
+      std::string transactionError;
+      if (!validateTransaction(CommandOperation::Replace,
+                               proposal,
+                               isFiller,
+                               transactionError)) {
+        ++invalidTransactions;
+        std::cout << "ERROR: node=" << node->getId() << ": "
+                  << transactionError << "\n";
       }
 
       if (proposal.legal && proposal.changes.empty()) {
@@ -527,11 +1038,19 @@ bool TestFillerRepairCmd::exec()
   std::cout << "    repaired by fillers  : " << repaired << "  ("
             << totalSwaps << " filler swaps proposed)\n";
   std::cout << "    no repair found      : " << unrepairable << "\n";
+  std::cout << "    invalid transactions : " << invalidTransactions << "\n";
   std::cout << "  re-run with -inst <node id> -master <name> to drill into "
                "one case\n";
   std::cout << "  set FR_VERBOSE=0 to silence the [fr] decision transcript\n";
 
-  const bool passed = baselineIllegal == 0;
+  const RuntimeFingerprint runtimeAfter
+      = fingerprintRuntime(*grid, *network, desMgr);
+  const bool unchanged = runtimeAfter == runtimeBefore;
+  std::cout << "  pre-commit state       : "
+            << (unchanged ? "unchanged" : "CHANGED") << "\n";
+
+  const bool passed
+      = baselineIllegal == 0 && invalidTransactions == 0 && unchanged;
   std::cout << "\n========================================\n";
   std::cout << (passed ? "  test_filler_repair PASSED\n"
                        : "  test_filler_repair FAILED (dirty baseline)\n");

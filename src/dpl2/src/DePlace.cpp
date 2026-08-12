@@ -54,9 +54,11 @@ DePlace::DePlace()
 
 DePlace::~DePlace() = default;
 
-// [FRPORT] Register configured filler masters through DePlace so they receive
-// the same real edge-table data as every other Network master.
-bool DePlace::registerFillerRepairMasters()
+// [FRPORT] Register configured filler masters and the std-cell master universe
+// that opto may propose through DePlace, so all receive the same real edge-table
+// data before the immutable checker/engine pair is constructed.
+bool DePlace::registerFillerRepairMasters(
+    const std::vector<const PhysLibCell*>& target_masters)
 {
   if (filler_setting_ == nullptr || network_ == nullptr || grid_ == nullptr
       || edge_type_table_ == nullptr) {
@@ -82,6 +84,17 @@ bool DePlace::registerFillerRepairMasters()
                             *filler_setting_,
                             grid_.get(),
                             edge_type_table_.get()) == nullptr) {
+      return false;
+    }
+  }
+
+  for (const PhysLibCell* master : target_masters) {
+    if (master == nullptr
+        || filler_setting_->isFillerCell(master->getLibCellId())
+        || network_->addMaster(*master,
+                               *filler_setting_,
+                               grid_.get(),
+                               edge_type_table_.get()) == nullptr) {
       return false;
     }
   }

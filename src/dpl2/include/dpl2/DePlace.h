@@ -151,13 +151,16 @@ Rect getCoreArea();
  * Grid::gridX(DbuX) use, NOT the absolute frame of getCoreArea().
  */
 Rect getBoundingBox(const Rect& region, int rings = 3) const;
-// [FRPORT] Expose DePlace's owned setting and register configured masters with
-// its real EdgeTypeTable before constructing FillerRepairEngine.
+// [FRPORT] Expose DePlace's owned setting and register configured filler plus
+// opto target masters with its real EdgeTypeTable before constructing
+// FillerRepairEngine.
 fillerSetting* getFillerSetting() { return filler_setting_.get();};
 // Network Master construction stays with the infrastructure owner that has
-// the real edge table. Call after updating fillerSetting and before checker
-// initialization or filler-repair testing.
-bool registerFillerRepairMasters();
+// the real edge table. The optional target set is the complete std-cell master
+// universe that opto may propose during this immutable repair revision. Call
+// after updating fillerSetting and before checker/engine construction.
+bool registerFillerRepairMasters(
+    const std::vector<const PhysLibCell*>& target_masters = {});
 
 private:
 using bgPoint

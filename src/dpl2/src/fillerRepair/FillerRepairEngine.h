@@ -8,8 +8,9 @@
 // implementing its two seams: PlacementView and RepairOracle.
 //
 // repair() answers with one atomic filler edit transaction and changes
-// nothing. It may Replace existing fillers or Delete/Add fillers while
-// retiling space released by a size-changing target.
+// nothing. Replace may repair filler VT around a same-footprint std-cell
+// swap/rotation; target Delete fills its hole; target Add removes fillers for
+// a new buffer and refills only collateral area.
 // UDM, Grid and Network come out exactly as they went in; committing is the
 // caller's decision.
 
@@ -81,10 +82,10 @@ class FillerRepairEngine
   // from the exact CheckRequest built by ImplantLayerChecker::check().
   RepairOutcome repair(const ipl::CheckRequest& request);
 
-  // Opto-facing entry for one pre-commit standard-cell Replace record. The
-  // record carries the proposed master, absolute origin and orientation. The
-  // target record is validated and remains caller-owned; the outcome contains
-  // only the checker-verified filler transaction needed to legalize it.
+  // Opto-facing entry for one pre-commit standard-cell transaction. Add uses a
+  // request-local name and creates room for a new buffer; Delete fills the old
+  // cell footprint; Replace supports only a same-footprint master/orientation
+  // change at the snapshot origin. The target record remains caller-owned.
   RepairOutcome repair(const CellChangeRecord& targetChange);
 
   // [PORT-DROP] The same repair, entered with raw UDM handles instead of a

@@ -296,11 +296,13 @@ class LayoutPlacementView final : public PlacementView
   LayoutPlacementView(
       const PlacementView& base,
       TargetPlace target,
+      bool targetPresent,
       std::set<InstanceId> removed,
       std::vector<LayoutAddition> additions,
       std::unordered_map<MasterId, eLIB::LibCellID> masterLibCells)
       : base_(base),
         target_(target),
+        target_present_(targetPresent),
         removed_(std::move(removed)),
         additions_(std::move(additions)),
         master_lib_cells_(std::move(masterLibCells))
@@ -322,7 +324,9 @@ class LayoutPlacementView final : public PlacementView
         }
       }
     }
-    appendToRows(target_instance_, targetMaster);
+    if (target_present_) {
+      appendToRows(target_instance_, targetMaster);
+    }
     for (const LayoutAddition& addition : additions_) {
       synthetic_.emplace(addition.instanceId, addition.placed);
       appendToRows(addition.placed, masterInfo(addition.placed.masterId));
@@ -439,6 +443,7 @@ class LayoutPlacementView final : public PlacementView
 
   const PlacementView& base_;
   TargetPlace target_;
+  bool target_present_ = true;
   std::set<InstanceId> removed_;
   std::vector<LayoutAddition> additions_;
   std::unordered_map<MasterId, eLIB::LibCellID> master_lib_cells_;
@@ -1414,6 +1419,7 @@ ipl::CheckRequest FillerRepairEngine::Impl::toCheckRequest(const TargetPlace& pl
   request.colId = static_cast<ipl::ColId>(
       placement_.siteWidth > 0 ? place.x / placement_.siteWidth : 0);
   request.orientation = toUdmOrient(place.orientation);
+  request.targetOp = place.operation;
   return request;
 }
 
@@ -1533,6 +1539,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   for (const OracleRequest& request : requests) {
     const bool same =
         request.targetPlace.instanceId == first.targetPlace.instanceId
+        && request.targetPlace.operation == first.targetPlace.operation
         && request.targetPlace.masterId == first.targetPlace.masterId
         && request.targetPlace.rowId == first.targetPlace.rowId
         && request.targetPlace.x == first.targetPlace.x
@@ -1796,19 +1803,20 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
     return result;
   }
 
-  // Resolve the checker request against the immutable engine snapshot. Do not
-  // reread candidate placement from the live Node: DePlace may already have
-  // changed that Node while the UDM commit is still pending.
+  const OpType targetOp = request.targetOp;
+  const bool hasOldTarget = targetOp != OpType::Add;
+  const bool hasNewTarget = targetOp != OpType::Delete;
   const int targetId = request.instanceId;
   const PlacedInstance* inst =
       targetId >= 0 ? instance(static_cast<InstanceId>(targetId)) : nullptr;
-  if (inst == nullptr) {
+  if (hasOldTarget && inst == nullptr) {
     addDiagnostic(Severity::Fatal,
                   "UnknownTarget",
                   "target is not a placed node in this engine snapshot");
     return result;
   }
-  if (static_cast<InstanceId>(request.instanceId) != inst->id
+  if ((hasOldTarget
+       && static_cast<InstanceId>(request.instanceId) != inst->id)
       || request.masterId < 0 || request.rowId < 0 || request.colId < 0
       || !supportedOrientation(request.orientation)) {
     addDiagnostic(Severity::Fatal,
@@ -1816,8 +1824,11 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
                   "checker supplied an invalid target placement request");
     return result;
   }
-  const eUNL::LeafCellID targetCell
-      = placement_.instances[inst->id]->udm.cellId;
+  const std::optional<eUNL::LeafCellID> targetCell
+      = hasOldTarget
+            ? std::optional<eUNL::LeafCellID>(
+                  placement_.instances[inst->id]->udm.cellId)
+            : std::nullopt;
   const Master* requestedMaster
       = network_->getMaster(static_cast<int>(request.masterId));
   const eLIB::PhysLibCell* newMaster
@@ -1829,15 +1840,18 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
                   "target replacement master is absent from Network");
     return result;
   }
-  const MasterInfo* oldMaster = masterInfo(inst->masterId);
-  if (oldMaster == nullptr) {
+  const MasterInfo* oldMaster
+      = hasOldTarget ? masterInfo(inst->masterId) : nullptr;
+  if (hasOldTarget && oldMaster == nullptr) {
     addDiagnostic(Severity::Fatal,
                   "TargetMasterUnknown",
                   "the target's current master is absent from the snapshot");
     return result;
   }
-  const Node* targetNode = network_->getNode(targetId);
-  if (targetNode == nullptr || !targetNode->isStdCell() || inst->isFiller
+  const Node* targetNode = hasOldTarget ? network_->getNode(targetId) : nullptr;
+  if ((hasOldTarget
+       && (targetNode == nullptr || !targetNode->isStdCell()
+           || inst->isFiller))
       || filler_settings_ == nullptr
       || !isStandardCellMaster(*newMaster, *filler_settings_)) {
     addDiagnostic(Severity::Fatal,
@@ -1850,9 +1864,10 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
   if (placement_.siteWidth <= 0 || replacementWidth <= 0
       || replacementWidth % placement_.siteWidth != 0
       || replacementHeight < 1 || replacementHeight > 2
-      || oldMaster->width <= 0
-      || oldMaster->width % placement_.siteWidth != 0
-      || oldMaster->height < 1 || oldMaster->height > 2) {
+      || (hasOldTarget
+          && (oldMaster->width <= 0
+              || oldMaster->width % placement_.siteWidth != 0
+              || oldMaster->height < 1 || oldMaster->height > 2))) {
     addDiagnostic(Severity::Fatal,
                   "UnsupportedTargetFootprint",
                   "target masters must be site-aligned rectangles one or "
@@ -1860,30 +1875,46 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
     return result;
   }
 
-  const InstanceId targetInstanceId = inst->id;
-  const MasterId oldMasterId = inst->masterId;
+  const InstanceId targetInstanceId
+      = hasOldTarget ? inst->id : static_cast<InstanceId>(targetId);
+  const MasterId oldMasterId = hasOldTarget ? inst->masterId : -1;
   const BandPolarity oldBottomBandPolarity
-      = oldMaster->bottomBandPolarity;
-  const RowId targetRowId = inst->rowId;
-  const DbCoord targetX = inst->x;
-  const Orient targetOrientation = inst->orientation;
+      = hasOldTarget ? oldMaster->bottomBandPolarity : BandPolarity::N;
+  const RowId targetRowId
+      = hasOldTarget ? inst->rowId : static_cast<RowId>(request.rowId);
+  const DbCoord targetX
+      = hasOldTarget
+            ? inst->x
+            : static_cast<DbCoord>(request.colId) * placement_.siteWidth;
+  const Orient targetOrientation
+      = hasOldTarget ? inst->orientation : toPlannerOrient(request.orientation);
 
   const RowId requestedRowId = static_cast<RowId>(request.rowId);
   const DbCoord requestedX
       = static_cast<DbCoord>(request.colId) * placement_.siteWidth;
   const Orient requestedOrientation = toPlannerOrient(request.orientation);
+  if (hasOldTarget
+      && (requestedRowId != targetRowId || requestedX != targetX)) {
+    addDiagnostic(Severity::Fatal,
+                  "TargetMoveUnsupported",
+                  "filler repair supports master/orientation changes at the "
+                  "snapshot origin; moving the target is unsupported");
+    return result;
+  }
   Region initialInfluence = snapshotGuard(
       requestedRowId, requestedX, replacementWidth, replacementHeight);
-  const Region oldInfluence = snapshotGuard(
-      targetRowId, targetX, oldMaster->width, oldMaster->height);
-  initialInfluence.x.xl
-      = std::min(initialInfluence.x.xl, oldInfluence.x.xl);
-  initialInfluence.x.xh
-      = std::max(initialInfluence.x.xh, oldInfluence.x.xh);
-  initialInfluence.rowLo
-      = std::min(initialInfluence.rowLo, oldInfluence.rowLo);
-  initialInfluence.rowHi
-      = std::max(initialInfluence.rowHi, oldInfluence.rowHi);
+  if (hasOldTarget) {
+    const Region oldInfluence = snapshotGuard(
+        targetRowId, targetX, oldMaster->width, oldMaster->height);
+    initialInfluence.x.xl
+        = std::min(initialInfluence.x.xl, oldInfluence.x.xl);
+    initialInfluence.x.xh
+        = std::max(initialInfluence.x.xh, oldInfluence.x.xh);
+    initialInfluence.rowLo
+        = std::min(initialInfluence.rowLo, oldInfluence.rowLo);
+    initialInfluence.rowHi
+        = std::max(initialInfluence.rowHi, oldInfluence.rowHi);
+  }
 
   // Fail before registering an uninstantiated replacement master. The
   // rejected-request contract covers the in-memory Network registry too.
@@ -1933,6 +1964,16 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
                   "snapshot");
     return result;
   }
+  if (targetOp == OpType::Replace
+      && (replacement->width != oldMaster->width
+          || replacement->height != oldMaster->height)) {
+    addDiagnostic(Severity::Fatal,
+                  "StdCellFootprintChangeUnsupported",
+                  "Replace may swap master or orientation only when the std "
+                  "cell footprint is unchanged; use Delete/Add as separate "
+                  "opto transactions");
+    return result;
+  }
 
   TargetPlace target;
   target.instanceId = targetInstanceId;
@@ -1940,13 +1981,14 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
   target.rowId = requestedRowId;
   target.x = requestedX;
   target.orientation = requestedOrientation;
+  target.operation = targetOp;
 
   const bool samePlacement = target.rowId == targetRowId
                              && target.x == targetX
                              && target.orientation == targetOrientation;
 
-  if (log_.enabled()) {
-    const eUNL::PhysCell physical = des_mgr_->getPhysCell(targetCell);
+  if (log_.enabled() && hasOldTarget) {
+    const eUNL::PhysCell physical = des_mgr_->getPhysCell(*targetCell);
     const DbCoord coreYl = grid_->getCore().getYL().getStorage();
     const DbCoord requestYRelative
         = grid_->gridYToDbu(GridY{requestedRowId}).v;
@@ -2053,27 +2095,34 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
                matchingRows);
   }
 
-  const bool layoutChanged
-      = target.rowId != targetRowId || target.x != targetX
-        || replacement->width != oldMaster->width
-        || replacement->height != oldMaster->height;
-  if (layoutChanged) {
-    // The layout rewrite is deliberately local and immutable: identify every
-    // filler displaced by the proposed target, exact-cover the released site
-    // cells, then submit Delete/Add plus any VT swaps as one checker overlay.
+  const bool layoutTransaction
+      = targetOp == OpType::Add || targetOp == OpType::Delete;
+  if (layoutTransaction) {
+    // Delete fills exactly the removed std-cell footprint. Add deletes every
+    // filler under the new buffer, then refills only collateral filler area.
     const int newCol = static_cast<int>(target.x / placement_.siteWidth);
     const int newWidthSites
         = static_cast<int>(replacement->width / placement_.siteWidth);
     const int newHeightRows = static_cast<int>(replacement->height);
-    const int oldCol = static_cast<int>(targetX / placement_.siteWidth);
+    const int oldCol = hasOldTarget
+                           ? static_cast<int>(targetX / placement_.siteWidth)
+                           : 0;
     const int oldWidthSites
-        = static_cast<int>(oldMaster->width / placement_.siteWidth);
-    const int oldHeightRows = static_cast<int>(oldMaster->height);
+        = hasOldTarget
+              ? static_cast<int>(oldMaster->width / placement_.siteWidth)
+              : 0;
+    const int oldHeightRows
+        = hasOldTarget ? static_cast<int>(oldMaster->height) : 0;
     const int rowCount = static_cast<int>(placement_.rows.size());
     const int colCount = grid_->getRowSiteCount().v;
-    if (target.x % placement_.siteWidth != 0 || newCol < 0
-        || newCol + newWidthSites > colCount || target.rowId < 0
-        || target.rowId + newHeightRows > rowCount) {
+    const int transactionCol = hasNewTarget ? newCol : oldCol;
+    const int transactionWidth
+        = hasNewTarget ? newWidthSites : oldWidthSites;
+    const int transactionHeight
+        = hasNewTarget ? newHeightRows : oldHeightRows;
+    if (target.x % placement_.siteWidth != 0 || transactionCol < 0
+        || transactionCol + transactionWidth > colCount || target.rowId < 0
+        || target.rowId + transactionHeight > rowCount) {
       addDiagnostic(Severity::Fatal,
                     "TargetFootprintOutOfGrid",
                     "proposed target footprint is not a legal site rectangle");
@@ -2081,7 +2130,8 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
     }
 
     std::set<InstanceId> removed;
-    for (int rowOffset = 0; rowOffset < newHeightRows; ++rowOffset) {
+    for (int rowOffset = 0; hasNewTarget && rowOffset < newHeightRows;
+         ++rowOffset) {
       const RowId rowId = target.rowId + rowOffset;
       for (int colOffset = 0; colOffset < newWidthSites; ++colOffset) {
         const int colId = newCol + colOffset;
@@ -2095,7 +2145,7 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
           return result;
         }
         const Node* occupant = pixel->cell;
-        if (occupant == nullptr || occupant->getId() == target.instanceId) {
+        if (occupant == nullptr) {
           continue;
         }
         const PlacedInstance* displaced = instance(occupant->getId());
@@ -2123,7 +2173,9 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
         }
       }
     };
-    addFootprint(targetRowId, oldCol, oldWidthSites, oldHeightRows);
+    if (hasOldTarget) {
+      addFootprint(targetRowId, oldCol, oldWidthSites, oldHeightRows);
+    }
     Region rewriteInfluence = initialInfluence;
     for (const InstanceId id : removed) {
       const PlacedInstance* filler = instance(id);
@@ -2157,7 +2209,8 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
           rewriteInfluence.rowHi,
           filler->rowId + static_cast<RowId>(master->height) - 1);
     }
-    for (int rowOffset = 0; rowOffset < newHeightRows; ++rowOffset) {
+    for (int rowOffset = 0; hasNewTarget && rowOffset < newHeightRows;
+         ++rowOffset) {
       for (int colOffset = 0; colOffset < newWidthSites; ++colOffset) {
         emptySites.erase(
             internal::SiteCell{target.rowId + rowOffset, newCol + colOffset});
@@ -2386,7 +2439,12 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
         }
 
         LayoutPlacementView layoutView(
-            *this, target, removed, seededAdditions, masterLibCells);
+            *this,
+            target,
+            hasNewTarget,
+            removed,
+            seededAdditions,
+            masterLibCells);
         LayoutOracle layoutOracle(*this, layoutView, fixed);
         OracleRequest snapshotRequest;
         snapshotRequest.requestId = 0;
@@ -2406,10 +2464,12 @@ RepairOutcome FillerRepairEngine::Impl::repairRequest(
         if (snapshot.violations.empty()) {
           result.hasSolution = true;
           result.changes = fixed;
-          addDiagnostic(Severity::Info,
-                        "LayoutRetiled",
-                        cat("removed ", removed.size(), " filler(s), added ",
-                            additions.size(), " filler(s)"));
+          addDiagnostic(
+              Severity::Info,
+              targetOp == OpType::Add ? "BufferRoomCreated"
+                                      : "DeletedCellGapFilled",
+              cat("removed ", removed.size(), " filler(s), added ",
+                  additions.size(), " filler(s)"));
           return result;
         }
 
@@ -2550,42 +2610,62 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                      {{"status", status}, {"message", message}});
         };
 
-  if (targetChange.op_ != OpType::Replace) {
+  if (targetChange.op_ != OpType::Add
+      && targetChange.op_ != OpType::Delete
+      && targetChange.op_ != OpType::Replace) {
     reject("InvalidStdCellChangeOp",
-           "standard-cell repair accepts exactly one Replace record");
+           "standard-cell repair accepts Add, Delete, or Replace");
     return result;
   }
+
+  const bool isAdd = targetChange.op_ == OpType::Add;
   const eUNL::LeafCellID* targetCell
       = std::get_if<eUNL::LeafCellID>(&targetChange.cell_data_);
-  if (targetCell == nullptr) {
+  const std::string* targetName
+      = std::get_if<std::string>(&targetChange.cell_data_);
+  if ((isAdd && (targetName == nullptr || targetName->empty()))
+      || (!isAdd && targetCell == nullptr)) {
     reject("InvalidStdCellChangeTarget",
-           "standard-cell Replace must identify an existing LeafCellID");
+           isAdd ? "standard-cell Add must carry a non-empty request-local name"
+                 : "standard-cell Delete/Replace must identify an existing "
+                   "LeafCellID");
     return result;
   }
 
-  const int targetId = network_->getNodeId(*targetCell);
-  if (targetId < 0
-      || static_cast<size_t>(targetId) >= placement_.instances.size()
-      || !placement_.instances[static_cast<size_t>(targetId)].has_value()) {
-    reject("UnknownTarget",
-           "standard-cell change target is absent from the engine snapshot");
-    return result;
-  }
-  const PlacementSnapshot::UdmRef& original
-      = placement_.instances[static_cast<size_t>(targetId)]->udm;
-  if (targetChange.orig_lib_cell_ != original.libCellId) {
-    reject("StdCellOriginalMasterMismatch",
-           "standard-cell change original master does not match the engine "
-           "snapshot");
+  constexpr int kAddedTargetId = std::numeric_limits<int>::max();
+  const int targetId = isAdd ? kAddedTargetId
+                             : network_->getNodeId(*targetCell);
+  if (!isAdd) {
+    if (targetId < 0
+        || static_cast<size_t>(targetId) >= placement_.instances.size()
+        || !placement_.instances[static_cast<size_t>(targetId)].has_value()) {
+      reject("UnknownTarget",
+             "standard-cell change target is absent from the engine snapshot");
+      return result;
+    }
+    const PlacementSnapshot::UdmRef& original
+        = placement_.instances[static_cast<size_t>(targetId)]->udm;
+    if (targetChange.orig_lib_cell_ != original.libCellId) {
+      reject("StdCellOriginalMasterMismatch",
+             "standard-cell change original master does not match the engine "
+             "snapshot");
+      return result;
+    }
+  } else if (network_->getNode(kAddedTargetId) != nullptr) {
+    reject("AddedTargetIdCollision",
+           "the request-local target id collides with a Network node");
     return result;
   }
 
-  const int newMasterId = network_->getMasterId(targetChange.new_lib_cell_);
+  const eLIB::LibCellID requestedLibCell
+      = targetChange.op_ == OpType::Delete ? targetChange.orig_lib_cell_
+                                           : targetChange.new_lib_cell_;
+  const int newMasterId = network_->getMasterId(requestedLibCell);
   if (newMasterId < 0
       || masterInfo(static_cast<MasterId>(newMasterId)) == nullptr) {
     reject("StdCellNewMasterNotRegistered",
-           "standard-cell change new master was not registered before "
-           "engine construction");
+           "standard-cell target master was not registered before engine "
+           "construction");
     return result;
   }
   if (!supportedOrientation(targetChange.orientation_)) {
@@ -2624,12 +2704,25 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
+  const DbCoord x = static_cast<DbCoord>(col) * placement_.siteWidth;
+  const PlacedInstance* originalPlacement
+      = isAdd
+            ? nullptr
+            : &placement_.instances[static_cast<size_t>(targetId)]->placed;
+  if (originalPlacement != nullptr
+      && (row != originalPlacement->rowId || x != originalPlacement->x)) {
+    reject("TargetMoveUnsupported",
+           "Delete/Replace must use the target's immutable snapshot origin");
+    return result;
+  }
+
   ipl::CheckRequest request;
   request.instanceId = static_cast<ipl::InstanceId>(targetId);
   request.masterId = static_cast<ipl::MasterId>(newMasterId);
   request.rowId = row;
   request.colId = static_cast<ipl::ColId>(col);
   request.orientation = targetChange.orientation_;
+  request.targetOp = targetChange.op_;
   return repairRequest(request, "cell change");
 }
 

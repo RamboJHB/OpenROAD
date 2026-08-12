@@ -55,5 +55,12 @@ test_log="${build_dir}/dpl2-real-odb-test.log"
   cd "${repo_root}/src/dpl2/local/testdata"
   "${build_dir}/src/openroad" run_test_filler_repair.tcl
 ) | tee "${test_log}"
-grep -q "REPAIRED: 1 filler swap(s), checker-verified" "${test_log}"
+grep -q "REPAIRED: 1 filler change(s), checker-verified" "${test_log}"
+grep -q "operation   : DELETE" "${test_log}"
+grep -q "operation   : ADD" "${test_log}"
+grep -q "orientation : R180" "${test_log}"
+grep -q "Network : unchanged" "${test_log}"
+grep -q "UDM     : unchanged" "${test_log}"
+grep -q "Grid    : unchanged" "${test_log}"
+test "$(grep -c "test_filler_repair PASSED" "${test_log}")" -eq 5
 grep -q "DPL2_REAL_ODB_TEST_PASS" "${test_log}"

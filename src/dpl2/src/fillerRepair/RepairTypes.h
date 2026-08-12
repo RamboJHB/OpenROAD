@@ -164,6 +164,7 @@ struct TargetPlace
   RowId rowId = 0;
   DbCoord x = 0;
   Orient orientation = Orient::R0;
+  OpType operation = OpType::Replace;
 };
 
 enum class ViolationKind
@@ -249,8 +250,10 @@ struct FillerRepairRequest
   std::vector<Violation> violations;
 };
 
-// Out: the atomic filler edits that make it legal -- checker-verified, or
-// empty. Edits can be same-footprint Replace or layout Delete/Add records.
+// Out: the atomic filler edits that make the target transaction legal --
+// checker-verified, or empty. Existing filler VT changes are Replace records;
+// target Delete produces filler Adds and target Add produces filler Deletes
+// plus any Adds needed to refill collateral area.
 // `hasSolution` with no changes means there was nothing to fix.
 struct FillerRepairResult
 {

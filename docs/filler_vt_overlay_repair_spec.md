@@ -5,26 +5,27 @@ build, and validation instructions live only in `src/dpl2/HandOff.md`.
 
 ## 1. Purpose and scope
 
-Opto proposes one standard-cell master and placement. The proposed footprint
-may cover existing fillers or release sites previously occupied by the target.
-Filler repair removes displaced fillers, exactly refills every released legal
-site, and changes filler VT when needed. `ImplantLayerChecker` validates the
-complete target plus filler transaction before the caller commits anything.
+Opto proposes one standard-cell transaction. Deleting an existing cell releases
+sites that filler repair must exactly fill. Adding a new buffer consumes sites
+occupied by fillers, which filler repair removes and locally retiles. Replacing
+an existing cell is limited to same-footprint master/orientation changes and
+may require filler VT swaps. `ImplantLayerChecker` validates the complete target
+plus filler transaction before the caller commits anything.
 
 The current implementation supports:
 
 - one target standard cell per request;
-- site-aligned target placement with one- or two-row height;
+- one- or two-row Add/Delete targets and fixed-origin, same-footprint Replace;
 - one- or two-row configured filler masters;
 - filler `Replace`, `Delete`, and request-local `Add` operations;
-- exact gap/overlap-free retiling of sites released by a changed target;
+- exact gap/overlap-free fill after Delete and room creation before Add;
 - added-filler orientation selected from the Grid row/site authority;
 - checker-verified minimum-width and minimum-spacing repair;
 - no database, Grid, or Network mutation.
 
-It does not move unrelated standard cells, repair several target cells in one
-request, support masters taller than two rows, or commit results. The caller
-owns commit and rollback.
+It does not move the target or unrelated standard cells, repair several target
+cells in one request, support masters taller than two rows, or commit results.
+The caller owns commit and rollback.
 
 ## 2. Runtime API and ownership
 
@@ -73,18 +74,25 @@ alive until all checks finish.
 After any Grid, Network, UDM, filler-setting, instance, or master-registration
 change, stop workers and create a new pair.
 
+Before construction, the owner passes the complete std-cell master universe
+that opto may propose to `DePlace::registerFillerRepairMasters(targetMasters)`.
+DePlace registers those target masters together with the configured filler
+masters using its real edge table. A master introduced after construction is
+outside the immutable revision and is rejected.
+
 `ImplantLayerChecker::check(...)` remains the Node-facing entry. It first performs
 the ordinary target overlay check. With repair enabled and an initialized
-engine bound, it calls `engine.repair(request)` when direct DRC fails or the
-target footprint changed. On success it appends the returned records to the
+engine bound, it calls `engine.repair(request)` when a same-footprint Replace
+fails direct DRC. On success it appends the returned records to the
 caller-owned vector. The checker stores no repair result.
 
 For a pre-commit opto proposal, the preferred entry is
 `ImplantLayerChecker::repair(targetChange, fillerChanges)`. `targetChange` is
-one caller-owned standard-cell `Replace` record; the checker delegates to
-`engine.repair(targetChange)` without changing the Node, Network, Grid, or UDM.
-Success appends only the required filler records. The caller commits its
-original target record and the returned filler transaction atomically.
+one caller-owned standard-cell `Add`, `Delete`, or `Replace` record; the
+checker delegates to `engine.repair(targetChange)` without changing the Node,
+Network, Grid, or UDM. Success appends only the required filler records. The
+caller commits its original target record and the returned filler transaction
+atomically.
 
 Repair is enabled by default on an ordinary checker. Checker-only helper tests
 disable it explicitly. The overlay oracle methods never call repair, which
@@ -124,13 +132,14 @@ and a request-local sequence:
 width + "_H" + height + "_" + addIndex`, with no spaces.
 `width` and `height` are the added master's physical DBU dimensions.
 
-The std-cell input overload accepts exactly one `Replace` record with
-`LeafCellID` data. `orig_lib_cell_` must match the immutable engine snapshot;
-`new_lib_cell_` must have been registered before engine construction; x/y are
-the proposed absolute physical origin; and orientation must be R0, R180, MX,
-or MY. Keeping the same master with a different orientation represents a
-rotation. Changing `new_lib_cell_` represents a master swap; both may be
-combined. Invalid or stale input fails with diagnostics and empty changes.
+The std-cell input overload accepts one transaction. Delete/Replace carry the
+existing `LeafCellID`; Add carries a non-empty request-local name because the
+new buffer has no Network/UDM instance yet. `orig_lib_cell_` must match the
+snapshot for Delete/Replace. Every target master must be registered before
+engine construction. Delete/Replace x/y must match the snapshot; Add x/y is
+opto's selected legal site. Replace may change master and/or R0/R180/MX/MY
+orientation only when its width and row height remain unchanged. Invalid or
+stale input fails with diagnostics and empty changes.
 
 ID authorities are fixed:
 
@@ -157,9 +166,10 @@ Filler identity has two explicit authorities:
   `fillerSetting::getFillerPhysCells()`.
 
 UDM macro-type flags and master-name prefixes are not used by the engine.
-Infrastructure must register configured filler masters with the real edge
-table before engine initialization. The engine may refresh the filler flag on
-an existing Master, but it never creates an incomplete Master.
+Infrastructure must register configured filler masters and every candidate
+std-cell target master with the real edge table before engine initialization.
+The engine may refresh the filler flag on an existing Master, but it never
+creates an incomplete Master.
 
 Network must contain every placed/fixed object that can cover the core,
 including hard macros. Placement blockages remain Grid state and are not
@@ -222,27 +232,26 @@ The engine converts a valid std-cell `CellChangeRecord` to the same
 its immutable snapshot. It
 rejects an unknown/non-standard target, unsupported orientation, unregistered
 or post-init master, non-site-aligned width/x/y, target outside legal Grid
-pixels, or old/new target height outside one or two rows. The regional
-gap/overlap gate covers the union of old and proposed target influence rows.
+pixels, or target height outside one or two rows. Delete/Replace also reject
+x/y different from the snapshot; Replace rejects a footprint change. The
+regional gap/overlap gate covers the affected target footprint.
 
-### 7.2 Layout rewrite
+### 7.2 Add/Delete layout transactions
 
-When target row, x, width, or height changes, the engine:
+Target Delete starts with the old std-cell footprint as released sites. Target
+Add scans the new buffer rectangle, rejects any non-filler occupant, deletes
+every covered filler, and forms released sites from those filler footprints
+minus the new buffer. The engine then:
 
-1. scans every Grid pixel under the proposed target;
-2. rejects any unrelated non-filler occupant and records every displaced
-   `Node::isFiller()` instance for deletion;
-3. forms the released site set from the old target footprint plus all deleted
-   filler footprints, minus the proposed target footprint;
-4. verifies every released site is legal, unreserved, and occupied only by the
-   old target or an explicitly deleted filler;
-5. deterministically enumerates exact covers using configured one/two-row
+1. verifies the target rectangle and released sites against the Grid;
+2. rejects any released site occupied by an unchanged instance;
+3. deterministically enumerates exact covers using configured one/two-row
    filler footprints, largest footprint first;
-6. chooses a registered master for every tile, preferring the target VT when
+4. chooses a registered master for every tile, preferring the target VT when
    available, and obtains orientation from
    `Grid::getSiteOrientation(col, row, siteName)`;
-7. submits the target plus the complete `Delete`/`Add` transaction to the same
-   checker.
+5. submits the target plus the complete filler `Delete`/`Add` transaction to
+   the same checker.
 
 Geometry enumeration is database-free and per-call. It returns at most 16
 tilings and visits at most 100000 exact-cover states. Hitting either limit is a
@@ -255,7 +264,7 @@ the immutable retiled view; its `Replace` records are merged into the same
 checker-verified transaction. A VT replacement of a request-local Add updates
 that Add record rather than creating a second record.
 
-When target geometry is unchanged, the engine first checks the proposed target
+For Replace, the engine first checks the proposed same-footprint target
 with empty filler changes. A legal snapshot returns success with no changes;
 an illegal snapshot enters the VT planner directly.
 
@@ -349,7 +358,7 @@ statistics, windows and guards, enumeration/batch counts, baseline decisions,
 budgets, and the final outcome. Logging must not affect search behavior.
 
 The transcript is structured for direct terminal use: initialization, target
-snapshot, layout rewrite, planning, each adaptive window, baseline, candidate
+snapshot, Add/Delete retiling, planning, each adaptive window, baseline, candidate
 search, and final result have visible section boundaries. Single records use
 aligned key/value blocks; repeated masters, rows, violations, swaps, rankings,
 and subset counts use wrapped tables; diagnostics use lists or labeled blocks.
@@ -380,8 +389,8 @@ are comparison data for future changes, not a destination SLA.
 | planner adaptive-L1 search, synthetic oracle | 2000 / 0.07 s | 0.035 ms |
 | clean target overlay | 3000 / 0.22 s | 0.073 ms |
 | one checker-verified filler replacement | 2000 / 1.08 s | 0.54 ms |
-| target growth with Delete/Add retiling | 1000 / 0.07 s | 0.07 ms |
-| two-row target/filler repair | 1000 / 0.09 s | 0.09 ms |
+| target Add/Delete filler retiling | 1000 / 0.07 s | 0.07 ms |
+| two-row target/filler transaction | 1000 / 0.09 s | 0.09 ms |
 | checker E2E at 5% filler density | 1000 / 0.87 s | 0.87 ms |
 | adaptive three-swap stress case | 25 / 2.10 s | 84 ms |
 
@@ -436,11 +445,15 @@ The maintained tests must cover:
 - sparse filler density, opposite-direction adaptive growth, and empty
   compatible catalogs;
 - exact-cover retiling at 10%, 40%, and 100% released-area utility;
-- growing target removal/refill and one/two-row target/filler combinations;
+- target Add room creation, target Delete refill, and one/two-row combinations;
 - Add/Delete validation, Grid-derived orientation, and atomic checker entry;
-- exact `CellChangeRecord` mapping and append-only caller behavior;
+- exact `CellChangeRecord` mapping, fixed-origin rejection, append-only caller
+  behavior, and Add/Delete transactions through that API;
 - database, Grid, Network, and physical-record non-mutation on success and
   failure;
+- loaded-design `test_filler_repair` coverage for same-footprint master swap,
+  explicit rotation, target Delete refill, target Add room creation, returned
+  operation counts, and pre/post UDM/Network/Grid fingerprints;
 - deterministic output, normal build, ASan, and
   `-Wall -Wextra -Werror` compilation.
 
@@ -455,6 +468,8 @@ dumped placement.
 
 - Only site-aligned rectangular target and filler footprints one or two rows
   high are supported.
+- Delete/Replace movement is unsupported. Add accepts opto's site-aligned
+  selected location. Replace must keep the footprint unchanged.
 - Exact-cover enumeration is bounded and can safely miss a later tiling after
   16 solutions or 100000 visited states.
 - The search is bounded and can safely miss a solution outside its explored

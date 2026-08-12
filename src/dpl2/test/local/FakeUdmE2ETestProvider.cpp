@@ -81,6 +81,9 @@ int masterIndex(MasterRole role)
     case MasterRole::WiderTarget: return 9;
     case MasterRole::TargetOldDoubleHeight: return 12;
     case MasterRole::TargetNewDoubleHeight: return 13;
+    case MasterRole::Buffer: return 16;
+    case MasterRole::BufferDoubleHeight: return 17;
+    case MasterRole::NarrowBuffer: return 18;
   }
   return -1;
 }
@@ -193,6 +196,25 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
       oneDoubleFiller, 2, kRowHeight, 3 * kRowHeight / 2);
   fake_udm::DesignDb::addShape(
       oneDoubleFiller, 3, 3 * kRowHeight / 2, 2 * kRowHeight);
+
+  eLIB::PhysLibCell& buffer
+      = db.addMaster("BUF2", 16, 2, kRowHeight, false);
+  fake_udm::DesignDb::addShape(buffer, 0, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(buffer, 1, kRowHeight / 2, kRowHeight);
+  eLIB::PhysLibCell& doubleBuffer
+      = db.addMaster("BUF2D", 17, 2, 2 * kRowHeight, false);
+  fake_udm::DesignDb::addShape(doubleBuffer, 1, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(
+      doubleBuffer, 0, kRowHeight / 2, kRowHeight);
+  fake_udm::DesignDb::addShape(
+      doubleBuffer, 0, kRowHeight, 3 * kRowHeight / 2);
+  fake_udm::DesignDb::addShape(
+      doubleBuffer, 1, 3 * kRowHeight / 2, 2 * kRowHeight);
+  eLIB::PhysLibCell& narrowBuffer
+      = db.addMaster("BUF1", 18, 1, kRowHeight, false);
+  fake_udm::DesignDb::addShape(narrowBuffer, 2, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(
+      narrowBuffer, 3, kRowHeight / 2, kRowHeight);
 
   int rowIndexOffset = 0;
   if (setup.padRowFirst) {

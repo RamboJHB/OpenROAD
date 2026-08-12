@@ -880,30 +880,24 @@ bool ImplantLayerChecker::check(const Node* node,
     CheckRequest request;
     request.instanceId = node->getId();
     request.masterId = node->getMaster()->getId();
-    // [fillerRepair-layout] Honor the proposed y. The old implementation
-    // silently reused the Node row, which made a move/height rewrite inspect
-    // the wrong footprint.
+    // Preserve the caller's proposed row so unsupported movement is rejected
+    // against the engine snapshot instead of being silently normalized.
     request.rowId = y.v;
     request.colId = x.v;
     request.orientation = orient;
+    request.targetOp = OpType::Replace;
 
+    // Node-facing checks are same-footprint Replace/rotation only. Std-cell
+    // Add/Delete transactions use repair(CellChangeRecord) so the operation
+    // is explicit and the caller retains the target record.
+    if (enableFillerRepair_ && targetFootprintChanged(request)) {
+        return false;
+    }
     bool isLegal = checkDirect(request).isLegal;
     // [fillerRepair-fix] Helper-built checkers disable repair so their checks
     // retain DRC-only semantics; ordinary checker instances default to enabled.
-    // [fillerRepair-layout] A footprint change needs Delete/Add records even
-    // when its implant shapes are already legal, so direct DRC success alone
-    // is not sufficient.
-    const bool needsLayoutRepair = targetFootprintChanged(request);
-    // [fillerRepair-layout] A normal checker must never approve a footprint
-    // rewrite without the Delete/Add transaction needed to commit it. Helper
-    // checkers explicitly disable filler repair and retain DRC-only behavior.
-    if (needsLayoutRepair && enableFillerRepair_
-        && fillerRepairEngine_ == nullptr) {
-        return false;
-    }
     // [FRPORT] Dispatch failed checks to the initialized caller-owned engine.
-    if ((!isLegal || needsLayoutRepair) && enableFillerRepair_
-        && fillerRepairEngine_ != nullptr) {
+    if (!isLegal && enableFillerRepair_ && fillerRepairEngine_ != nullptr) {
         isLegal = repairFillers(request, fcRecord);
     }
     return isLegal;
@@ -1266,13 +1260,16 @@ CheckShapes ImplantLayerChecker::getOverlaySnapshot(
         }
     }
 
-    const CheckShapes& targetShapes = getNodeShape(request.instanceId,
-                                                   request.masterId,
-                                                   request.rowId,
-                                                   request.colId,
-                                                   request.orientation,
-                                                   true);
-    snapshot.insert(snapshot.end(), targetShapes.begin(), targetShapes.end());
+    if (request.targetOp != OpType::Delete) {
+        const CheckShapes& targetShapes = getNodeShape(request.instanceId,
+                                                       request.masterId,
+                                                       request.rowId,
+                                                       request.colId,
+                                                       request.orientation,
+                                                       true);
+        snapshot.insert(
+            snapshot.end(), targetShapes.begin(), targetShapes.end());
+    }
 
     int addIndex = 0;
     for (const CellChangeRecord& change : fillerChanges) {
@@ -1894,7 +1891,7 @@ OverlapInfo ImplantLayerChecker::checkOverlap(
     OverlapInfo info;
     const Node* node
         = network_ != nullptr ? network_->getNode(request.instanceId) : nullptr;
-    if (node == nullptr) {
+    if (node == nullptr && request.targetOp != OpType::Add) {
         info.diags = Diagnostic{"unknown_target_instance",
                                 "cannot check overlap for a null node"};
         return info;
@@ -1923,7 +1920,7 @@ OverlapInfo ImplantLayerChecker::checkOverlap(
                 } else {
                     info.diags = Diagnostic{
                         "placement_overlap_in_input",
-                        "inst " + std::to_string(node->getId()) + ", "
+                        "inst " + std::to_string(request.instanceId) + ", "
                             + std::to_string(node2->getId())};
                     return info;
                 }
@@ -2002,10 +1999,13 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
                                makeMessage("instance ", request.instanceId)});
     }
     const Node* targetNode = network_->getNode(request.instanceId);
-    if (targetNode == nullptr) {
+    if (request.targetOp == OpType::Add && targetNode != nullptr) {
+        diagnostics.push_back({"added_target_already_exists",
+                               makeMessage("instance ", request.instanceId)});
+    } else if (request.targetOp != OpType::Add && targetNode == nullptr) {
         diagnostics.push_back({"unknown_target_instance",
                                makeMessage("instance ", request.instanceId)});
-    } else if (targetNode->getMaster() == nullptr) {
+    } else if (targetNode != nullptr && targetNode->getMaster() == nullptr) {
         diagnostics.push_back({"target_instance_missing_master",
                                makeMessage("instance ", request.instanceId)});
     }
@@ -2160,7 +2160,8 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
                  makeMessage("duplicate filler change ", fillerInstId)});
             continue;
         }
-        if (fillerInstId == request.instanceId) {
+        if (request.targetOp != OpType::Add
+            && fillerInstId == request.instanceId) {
             diagnostics.push_back(
                 {"target_cannot_be_changed_filler",
                  makeMessage("target cannot be changed filler ",
@@ -2224,11 +2225,10 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
         }
     }
 
-    // [fillerRepair-layout] A size/move overlay must explicitly delete every
-    // filler under the new target. The old checker silently excluded them,
-    // which made DRC legal but gave opto no commit records.
+    // A new std-cell Add must explicitly delete every filler under its
+    // footprint. Replace is same-footprint-only and Delete has no new target.
     if (enforceLayoutTransaction && targetHasData
-        && targetFootprintChanged(request)) {
+        && request.targetOp == OpType::Add) {
         const OverlapInfo overlap = checkOverlap(request);
         if (overlap.diags.has_value()) {
             diagnostics.push_back(*overlap.diags);
@@ -2260,7 +2260,9 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
             for (int colOffset = 0; colOffset < add.widthSites; ++colOffset) {
                 const RowId row = add.rowId + rowOffset;
                 const ColId col = add.colId + colOffset;
-                if (row >= request.rowId && row < request.rowId + targetHeight
+                if (request.targetOp != OpType::Delete
+                    && row >= request.rowId
+                    && row < request.rowId + targetHeight
                     && col >= request.colId
                     && col < request.colId + targetWidth) {
                     diagnostics.push_back(
@@ -2686,9 +2688,9 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(
     }
 
     std::set<InstanceId> excludedNodes;
-    excludedNodes.insert(request.instanceId);
     Node* node = network_->getNode(request.instanceId);
-    if (node == nullptr || node->getMaster() == nullptr) {
+    if (request.targetOp != OpType::Add
+        && (node == nullptr || node->getMaster() == nullptr)) {
         result.diagnostics.push_back(
             {node == nullptr ? "unknown_target_instance"
                              : "target_instance_missing_master",
@@ -2696,17 +2698,22 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(
         result.isLegal = false;
         return result;
     }
-    // [fillerRepair-layout] The baseline intentionally hides fillers under
-    // the proposed target. A candidate must name those deletions explicitly;
-    // validateOverlayRequest() has already enforced that atomic contract.
-    const OverlapInfo& overlap = checkOverlap(request);
-    if (overlap.diags) {
-        result.diagnostics.push_back(*overlap.diags);
-        result.isLegal = false;
-        return result;
+    if (node != nullptr) {
+        excludedNodes.insert(request.instanceId);
     }
-    if (!useNewFillers) {
-        excludedNodes.insert(overlap.fillers.begin(), overlap.fillers.end());
+    if (request.targetOp == OpType::Add) {
+        // The baseline intentionally hides fillers under the proposed buffer.
+        // A concrete candidate must name those deletions explicitly.
+        const OverlapInfo& overlap = checkOverlap(request);
+        if (overlap.diags) {
+            result.diagnostics.push_back(*overlap.diags);
+            result.isLegal = false;
+            return result;
+        }
+        if (!useNewFillers) {
+            excludedNodes.insert(overlap.fillers.begin(),
+                                 overlap.fillers.end());
+        }
     }
     for (const CellChangeRecord& change : fillerChanges) {
         const LeafCellID* cellId = cellChangeLeafCellId(change);
@@ -2729,11 +2736,13 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(
         }
     }
 
-    // prepare the target intervals
-    XInterval tgtItv;
-    tgtItv.xl = request.colId * siteWidth_;
-    tgtItv.xh = tgtItv.xl + masterItems_[request.masterId].width;
-    std::vector<XInterval> itvs{tgtItv};
+    std::vector<XInterval> itvs;
+    if (request.targetOp != OpType::Delete) {
+        XInterval tgtItv;
+        tgtItv.xl = request.colId * siteWidth_;
+        tgtItv.xh = tgtItv.xl + masterItems_[request.masterId].width;
+        itvs.push_back(tgtItv);
+    }
     for (const CellChangeRecord& change : fillerChanges) {
         if (change.op_ == OpType::Add) {
             const MasterId masterId

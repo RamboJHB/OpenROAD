@@ -3,7 +3,8 @@
 
 // The runtime half of filler repair: everything that touches the database.
 // repair() is non-mutating and returns one checker-verified atomic transaction:
-// same-footprint Replace, or Delete/Add retiling for a changed target footprint.
+// same-footprint Replace, filler Add after target Delete, or filler Delete plus
+// collateral refill before a new target Add.
 
 #pragma once
 
@@ -43,6 +44,8 @@ class FillerRepairEngine
 
   // Non-mutating, pre-commit overlay repair.
   RepairOutcome repair(const ipl::CheckRequest& request);
+  // Add uses a request-local name. Delete/Replace identify an existing target;
+  // Replace must retain the immutable snapshot footprint and origin.
   RepairOutcome repair(const CellChangeRecord& targetChange);
 
  private:

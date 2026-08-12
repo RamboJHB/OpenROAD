@@ -58,7 +58,10 @@ enum class MasterRole
   MismatchedTarget,
   WiderTarget,
   TargetOldDoubleHeight,
-  TargetNewDoubleHeight
+  TargetNewDoubleHeight,
+  Buffer,
+  BufferDoubleHeight,
+  NarrowBuffer
 };
 
 struct DesignSetup

@@ -12,16 +12,16 @@ Implemented and verified in this branch:
   only the checker; concurrent checks keep all request state local;
 - atomic, pre-commit `Replace`/`Delete`/`Add` filler transactions with no UDM,
   Grid, Network, or filler-setting mutation;
-- same-footprint VT repair plus exact refill when a moved/resized one- or
-  two-row target displaces fillers or releases legal sites;
+- same-footprint VT repair, exact filler insertion after std-cell Delete, and
+  filler removal/collateral refill before a new buffer Add;
 - one- and two-row filler masters, Grid-authoritative Add orientation,
   adaptive-L1/subset search, deterministic ranking, cache and fail-closed
   budgets;
 - a complete GoogleTest source tree, a compact `fillerRepair2` migration
   payload, dump replay, and repository-local OpenROAD/ODB command wiring;
-- 317 normal and 317 ASan tests, including 15 destination checker direct-rule
-  cases, strict-warning compilation of the migration payload, and repeatable
-  local ODB smoke runs.
+- 341 filler-repair/planner/portable tests in both normal and ASan builds, 165
+  runtime-chain E2E tests, strict-warning compilation of the
+  `fillerRepair2` migration payload, and repeatable local ODB smoke runs.
 
 The remaining risks are destination sign-off and bounded-search behavior, not
 missing runtime plumbing:
@@ -84,10 +84,9 @@ matching changes when the destination does not already contain them.
   `CheckResult` per candidate in input order.
 - Ordinary checker instances default filler repair on; checker-helper-only
   instances disable it.
-- `ImplantLayerChecker` stores a non-owning engine pointer. It calls repair
-  after direct DRC fails or whenever the requested target footprint changes;
-  the latter is required even when the target alone is implant-legal because
-  displaced fillers still need explicit commit records.
+- `ImplantLayerChecker` stores a non-owning engine pointer. Node-facing
+  `check()` calls repair only for failed same-footprint Replace/rotation.
+  Explicit std-cell Add/Delete uses `checker.repair(targetChange, changes)`.
 - The checker obtains `PhysDesMgr` from the explicit Design, not global Session
   state. DePlace owns object-set consistency; checker and engine do not compare
   design identities.
@@ -95,7 +94,7 @@ matching changes when the destination does not already contain them.
   concurrent reads after initialization.
 - Overlay validation accepts one atomic mix of filler `Replace`, `Delete`, and
   request-local `Add`, validates complete one/two-row rectangles and row/site
-  orientation, and requires every target-overlapping filler to be deleted.
+  orientation, and requires every filler under a target Add to be deleted.
 - Checker master metadata may be lazily completed for a registered request
   master; shared tables must not be observed half-built.
 
@@ -141,8 +140,10 @@ src/dpl2/src/infrastructure/network.{h,cpp}
 - DePlace retains the active Design and owns Grid, Network, and
   `fillerSetting`; it binds the setting to Network.
 - Before checker/engine construction,
-  `DePlace::registerFillerRepairMasters()` registers every configured master
-  with the real edge table and refreshes matching Nodes as fillers.
+  `DePlace::registerFillerRepairMasters(targetMasters)` registers every
+  configured filler master plus the complete std-cell target-master universe
+  that opto may propose with the real edge table, and refreshes matching Nodes
+  as fillers.
 
 Relevant files:
 
@@ -153,8 +154,9 @@ src/dpl2/include/dpl2/DePlace.h
 ```
 
 The engine never calls `Network::addMaster`; it lacks the real edge table.
-Missing configured masters therefore make initialization fail instead of
-creating incomplete metadata.
+Missing configured filler masters therefore make initialization fail, and an
+unregistered/post-init target master makes its request fail, instead of either
+path creating incomplete metadata.
 
 ## 3. Build wiring
 
@@ -190,7 +192,10 @@ Initialization order is part of the contract:
 
 1. Load/synchronize UDM, Grid, and Network for one design revision.
 2. Configure `fillerSetting` and bind it to Network.
-3. Register configured filler masters through DePlace's real edge table.
+3. Collect the std-cell masters opto may propose, then register them and the
+   configured filler masters through
+   `DePlace::registerFillerRepairMasters(targetMasters)` using the real edge
+   table.
 4. Construct `ImplantLayerChecker(grid, design, network)`.
 5. Construct `FillerRepairEngine(checker)`; construction eagerly builds its
    immutable snapshot.
@@ -201,22 +206,32 @@ Initialization order is part of the contract:
 Example caller:
 
 ```cpp
-CellChangeRecord targetChange{
-    OpType::Replace, CellData{cellId}, x, y,
-    oldMasterId, newMasterId, newOrientation};
+// Opto removes an existing std cell. Repair fills its complete old footprint.
+CellChangeRecord targetDelete{OpType::Delete, CellData{cellId}, x, y,
+                              oldMasterId, oldMasterId, oldOrientation};
 std::vector<CellChangeRecord> fillerChanges;
-const bool legal = checker.repair(targetChange, fillerChanges);
-if (legal) {
-  commitAtomically(targetChange, fillerChanges);
+if (checker.repair(targetDelete, fillerChanges)) {
+  commitAtomically(targetDelete, fillerChanges);
+}
+
+// Opto inserts a new buffer at a site selected by findLeg. Repair removes all
+// covered fillers and refills only the parts of their footprints left over.
+CellChangeRecord targetAdd{OpType::Add, CellData{"opto_buffer"}, x, y,
+                           invalidLibCell, bufferMasterId, orientation};
+fillerChanges.clear();
+if (checker.repair(targetAdd, fillerChanges)) {
+  commitAtomically(targetAdd, fillerChanges);
 }
 ```
 
-The input x/y are absolute physical coordinates. Keeping the master and
-changing orientation rotates the target; changing `new_lib_cell_` swaps its
-master. The API validates the original master against the engine snapshot and
-requires the new master to be registered before construction. It never
-temporarily changes the Network Node. The caller owns both objects, the target
-record, and the result vector; repair never commits. If
+The input x/y are absolute physical coordinates. Delete/Replace must exactly
+match the engine snapshot; Add uses the site selected by opto/findLeg. Replace
+may rotate and/or swap a master only when the footprint is unchanged. Add
+deletes all covered fillers and refills any uncovered remainder of their old
+footprints; Delete fills the complete old std-cell footprint. Every target
+master must be registered before construction. Repair never temporarily
+changes the Network Node. The caller owns the target record and result vector
+and commits them atomically. If
 initialization fails, the engine prints `[fr][engine]` diagnostics by default
 and the caller must not bind it. If the design revision changes, stop workers
 and rebuild the checker/engine pair; there is no reset/context API.
@@ -229,7 +244,8 @@ Before enabling repair on a real design, confirm:
   DePlace, checker, and engine outlive all worker calls.
 - Network includes every placed/fixed physical object intersecting the core,
   including hard macros; blockages remain Grid state.
-- configured filler masters are present in Network with real edge data;
+- configured filler masters and every opto target-master candidate are present
+  in Network with real edge data before checker/engine construction;
 - configured target/filler widths are site-aligned and supported target/filler
   heights are one or two logical rows;
 - `Node::isFiller()` is correct for placed fillers and replacement masters
@@ -281,6 +297,36 @@ This adds fake-UDM engine/infrastructure cases. It validates the local boundary
 but does not replace a build and smoke test against the destination's real UDM
 and infrastructure.
 
+### Loaded-design command
+
+After loading and importing a fully filled design, the local
+`test_filler_repair` command exercises the same checker-facing call boundary
+used by opto:
+
+```text
+# bounded same-footprint Replace sweep
+test_filler_repair
+
+# master swap and/or rotation at the existing origin
+test_filler_repair -operation replace -inst <instance> -master <master> \
+                   [-orient R0|R180|MX|MY]
+
+# opto removes an existing std cell; repair returns filler Adds
+test_filler_repair -operation delete -inst <instance>
+
+# opto adds a buffer at its selected Grid location; repair returns covered
+# filler Deletes and any collateral filler Adds/Replaces
+test_filler_repair -operation add -master <master> -row <row> -col <column> \
+                   [-orient R0|R180|MX|MY]
+```
+
+Omitting `-operation` keeps the old `-inst/-master` Replace form. Add derives
+orientation from the Grid's row/site data when `-orient` is omitted. Each
+targeted invocation validates output record shape and compares pre/post
+fingerprints of Network, UDM physical cells, and Grid; any mutation, partial
+failure result, or missing required Add/Delete makes the command fail. The
+command never commits its target or returned filler records.
+
 ## 7. Dump replay
 
 `ImplantLayerCheckerHelper::dump()` writes gzip dump v6. It preserves checker
@@ -318,7 +364,7 @@ Collect separate p50/p95/p99 distributions for:
 
 - direct legal proposals returning no changes;
 - one- and multi-filler VT replacements;
-- target growth/move with Delete/Add retiling;
+- target Add room creation and target Delete refill, including collateral fill;
 - budget-truncated and definitive no-solution cases;
 - representative sparse and dense filler rows.
 
@@ -354,14 +400,15 @@ UDM import. Final sign-off requires one real-design run that confirms:
 1. engine initialization succeeds with the expected rows, site width,
    configured masters, and non-empty compatible catalog;
 2. a direct legal proposal returns no filler changes;
-3. a same-footprint repair returns checker-accepted `Replace` records;
-4. a growing/moving or one/two-row target returns one atomic, checker-accepted
-   `Delete`/`Add` plus optional `Replace` transaction with correct orientation;
-5. an unrepairable or budget-truncated proposal returns no partial changes;
-6. UDM, Grid, and Network are unchanged before caller commit;
-7. concurrent read-only checks are clean under the destination sanitizer and
+3. a same-footprint Replace returns checker-accepted filler `Replace` records;
+4. deleting a one/two-row std cell returns checker-accepted filler Adds;
+5. adding a one/two-row buffer returns all required filler Deletes plus any
+   collateral filler Adds with correct orientation;
+6. an unrepairable or budget-truncated proposal returns no partial changes;
+7. UDM, Grid, and Network are unchanged before caller commit;
+8. concurrent read-only checks are clean under the destination sanitizer and
    race-detection setup;
-8. post-commit infrastructure synchronization followed by pair reconstruction
+9. post-commit infrastructure synchronization followed by pair reconstruction
    sees the new revision.
 
 Remaining integration risks are limited to destination-specific UDM status

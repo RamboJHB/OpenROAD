@@ -304,6 +304,8 @@ struct CheckRequest
     RowId rowId = 0;
     ColId colId = 0;
     PhysOrientation orientation = PhysOrientationE::R0;
+    // The target transaction is separate from the filler overlay.
+    OpType targetOp = OpType::Replace;
 };
 
 struct CheckResult
@@ -349,8 +351,8 @@ public:
                std::vector<CellChangeRecord>& fcRecord) const override;
 
     // [FRPORT] Opto-facing, non-mutating repair entry for one standard-cell
-    // Replace record. On success only the required filler edits are appended;
-    // the caller retains and commits the target record itself.
+    // Add/Delete/Replace record. On success only the required filler edits are
+    // appended; the caller retains and commits the target record itself.
     bool repair(const CellChangeRecord& targetChange,
                 std::vector<CellChangeRecord>& fcRecord) const;
 
@@ -467,9 +469,10 @@ private:
     CheckShapes mergeGroupShapes(const CheckShapes& rawShapes,
                                  bool isCandidate) const;
 
-    // [fillerRepair-layout] Uses the requested master/pose, not the mutable
-    // Network Node footprint, so size-changing targets see every occupant.
+    // Uses the requested master/pose and supports request-local Add targets.
     OverlapInfo checkOverlap(const CheckRequest& request) const;
+    // Node-facing check() is intentionally same-footprint; Add/Delete uses
+    // the explicit CellChangeRecord repair entry.
     bool targetFootprintChanged(const CheckRequest& request) const;
     // [fillerRepair-layout] Batch setup validates target fields before a
     // candidate exists; candidate validation additionally enforces the full
