@@ -2,9 +2,6 @@
 #include <FillerRepairDumpReplay.hh>
 
 #include <dpl2/DePlace.h>
-#include <drc/ImplantLayerChecker.h>
-// [FRPORT] Optional test command constructs and binds the repair engine.
-#include <fillerRepair/FillerRepairEngine.h>
 #include <infrastructure/Grid.h>
 #include <infrastructure/Objects.h>
 #include <infrastructure/fillerSetting.h>
@@ -266,13 +263,13 @@ struct ProposalResult
   std::vector<CellChangeRecord> changes;
 };
 
-// [FRPORT] Exercise the CellChangeRecord -> checker -> engine call chain.
-ProposalResult evaluateTarget(const ipl::ImplantLayerChecker& checker,
+// [FRPORT] Exercise the public DePlace -> checker -> engine call chain.
+ProposalResult evaluateTarget(const DePlace& dePlace,
                               const CellChangeRecord& targetChange)
 {
   ProposalResult result;
   result.evaluated = true;
-  result.legal = checker.repair(targetChange, result.changes);
+  result.legal = dePlace.repairFillers(targetChange, result.changes);
   return result;
 }
 
@@ -723,9 +720,11 @@ bool TestFillerRepairCmd::exec()
     return false;
   }
 
-  if (!de_place->registerFillerRepairMasters(targetMasters)) {
-    std::cout << "ERROR: could not register configured filler/target masters "
-                 "in Network with the DePlace edge table\n";
+  // [FRPORT] DePlace owns and publishes the revision-scoped checker/engine
+  // pair after registering the complete target-master universe.
+  if (!de_place->initializeFillerRepair(targetMasters)) {
+    std::cout << "ERROR: DePlace could not initialize filler repair with the "
+                 "configured filler/target masters\n";
     return false;
   }
 
@@ -735,34 +734,6 @@ bool TestFillerRepairCmd::exec()
   const auto isFiller = [setting](LibCellID lcId) {
     return setting->isFillerCell(lcId);
   };
-
-  // [FRPORT] The command owns both objects. The checker only borrows the initialized
-  // engine; the engine borrows this checker as its DRC oracle.
-  ipl::ImplantLayerChecker checker(grid, design, network);
-  if (!checker.getDiags().empty()) {
-    std::cout << "checker init diagnostics: " << checker.getDiags().size()
-              << "\n";
-    int shown = 0;
-    for (const ipl::Diagnostic& diagnostic : checker.getDiags()) {
-      if (shown++ >= kMaxReportedLines) {
-        std::cout << "  ... (more suppressed)\n";
-        break;
-      }
-      std::cout << "  " << diagnostic.status << ": " << diagnostic.message
-                << "\n";
-    }
-  }
-  fillerRepair::FillerRepairEngine repairEngine(checker);
-  if (!repairEngine.isReady()) {
-    std::cout << "ERROR: filler repair engine initialization failed\n";
-    for (const ipl::Diagnostic& diagnostic :
-         repairEngine.getInitDiagnostics()) {
-      std::cout << "  " << diagnostic.status << ": " << diagnostic.message
-                << "\n";
-    }
-    return false;
-  }
-  checker.setFillerRepairEngine(&repairEngine);
 
   const RuntimeFingerprint runtimeBefore
       = fingerprintRuntime(*grid, *network, desMgr);
@@ -851,7 +822,28 @@ bool TestFillerRepairCmd::exec()
     std::cout << "  orientation : "
               << orientationName(targetChange.orientation_) << "\n";
 
-    const ProposalResult proposal = evaluateTarget(checker, targetChange);
+    ProposalResult proposal;
+    if (operation == CommandOperation::Replace
+        && targetedNode != nullptr
+        && targetChange.orientation_.getValue()
+               == targetedNode->getOrient().getValue()) {
+      // [FRPORT] Exercise the DePlace-owned, request-local isLegal path used by
+      // opto for an ordinary fixed-origin master swap.
+      proposal.evaluated = true;
+      proposal.legal = de_place->isLegal(targetedNode->getDbInst(),
+                                         targetChange.new_lib_cell_,
+                                         proposal.changes);
+    } else if (operation == CommandOperation::Add) {
+      // [FRPORT] Exercise DePlace::findLegal at the requested site. A zero
+      // radius keeps this command deterministic while still traversing the
+      // complete Add -> filler Delete/collateral Add repair path.
+      proposal.evaluated = true;
+      CellChangeRecord placedTarget = targetChange;
+      proposal.legal
+          = de_place->findLegal(placedTarget, 0, proposal.changes);
+    } else {
+      proposal = evaluateTarget(*de_place, targetChange);
+    }
     if (!proposal.evaluated) {
       std::cout << "ERROR: could not evaluate the CellChangeRecord request\n";
       return false;
@@ -924,11 +916,12 @@ bool TestFillerRepairCmd::exec()
       continue;
     }
     ++baselineChecked;
-    // [FRPORT] Baseline uses the same repair-aware checker entry as opto.
+    // [FRPORT] Baseline uses the same DePlace-owned, request-local entry as
+    // opto. It never reaches into the checker/engine ownership chain.
     std::vector<CellChangeRecord> fcRecord;
-    const bool legal = checker.check(node.get(), grid->gridX(node.get()),
-                                     grid->gridSnapDownY(node.get()),
-                                     node->getOrient(), fcRecord);
+    const bool legal = de_place->isLegal(node->getDbInst(),
+                                         node->getMaster()->getDbMaster(),
+                                         fcRecord);
     if (legal && fcRecord.empty()) {
       continue;
     }
@@ -993,7 +986,8 @@ bool TestFillerRepairCmd::exec()
                   << node->getId() << "\n";
         return false;
       }
-      const ProposalResult proposal = evaluateTarget(checker, *targetChange);
+      const ProposalResult proposal
+          = evaluateTarget(*de_place, *targetChange);
       std::string transactionError;
       if (!validateTransaction(CommandOperation::Replace,
                                proposal,

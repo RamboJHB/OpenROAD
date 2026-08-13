@@ -44,41 +44,54 @@ class FillerRepairEngine
  public:
   explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
   bool isReady() const;
-  const std::vector<ipl::Diagnostic>& getInitDiagnostics() const;
-  RepairOutcome repair(const ipl::CheckRequest& request);
-  RepairOutcome repair(const CellChangeRecord& targetChange);
+  std::vector<ipl::Diagnostic> getInitDiagnostics() const;
+  RepairOutcome repair(const ipl::CheckRequest& request) const;
+  RepairOutcome repair(const CellChangeRecord& targetChange) const;
 };
 
 }  // namespace dpl2::fillerRepair
 ```
 
-The lifecycle owner constructs one checker and one engine for one immutable
-placement revision:
+The opto-facing boundary is only `DePlace`:
 
 ```cpp
-ipl::ImplantLayerChecker checker(grid, design, network);
-fillerRepair::FillerRepairEngine engine(checker);
-if (!engine.isReady()) {
-  report(engine.getInitDiagnostics());
+bool initializeFillerRepair(
+    const std::vector<const PhysLibCell*>& targetMasters);
+bool isLegal(LeafCellID cellId,
+             LibCellID newMaster,
+             std::vector<CellChangeRecord>& fillerChanges) const;
+bool findLegal(CellChangeRecord& targetAdd,
+               int diameter,
+               std::vector<CellChangeRecord>& fillerChanges) const;
+bool repairFillers(const CellChangeRecord& targetChange,
+                   std::vector<CellChangeRecord>& fillerChanges) const;
+```
+
+DePlace constructs and owns one checker/engine chain for one immutable
+placement revision after filler and target masters are known:
+
+```cpp
+if (!deplace.initializeFillerRepair(targetMasters)) {
   return false;
 }
-checker.setFillerRepairEngine(&engine);
 ```
 
 DePlace is the only infrastructure owner and initializes Design, Grid, Network,
-and `fillerSetting`. The checker borrows that object set. The engine borrows
-only the checker and obtains the exact same objects through it. Construction
-eagerly builds the engine snapshot. The checker in turn borrows the ready engine;
-neither owns the other. Bind them before starting worker threads and keep both
-alive until all checks finish.
+`fillerSetting`, `PlacementDRC`, and the engine. `PlacementDRC` owns the checker;
+DePlace retains a stable non-owning pointer to that checker. The checker borrows
+the DePlace object set, and the engine borrows only the checker. Construction
+eagerly builds the engine snapshot. DePlace binds the ready engine by the
+checker's readiness-checked release/acquire publication before exposing either
+object to workers. Repeated initialization is accepted only for the same frozen
+master/configuration revision.
 After any Grid, Network, UDM, filler-setting, instance, or master-registration
-change, stop workers and create a new pair.
+change, stop workers and create a new DePlace revision.
 
-Before construction, the owner passes the complete std-cell master universe
-that opto may propose to `DePlace::registerFillerRepairMasters(targetMasters)`.
-DePlace registers those target masters together with the configured filler
-masters using its real edge table. A master introduced after construction is
-outside the immutable revision and is rejected.
+The complete std-cell master universe opto may propose is passed to
+`DePlace::initializeFillerRepair(targetMasters)`. DePlace registers it together
+with configured filler masters using its real edge table before construction.
+A master or filler-setting change after publication is outside the immutable
+revision and is rejected.
 
 `ImplantLayerChecker::check(...)` remains the Node-facing entry. It first performs
 the ordinary target overlay check. With repair enabled and an initialized
@@ -86,9 +99,18 @@ engine bound, it calls `engine.repair(request)` when a same-footprint Replace
 fails direct DRC. On success it appends the returned records to the
 caller-owned vector. The checker stores no repair result.
 
-For a pre-commit opto proposal, the preferred entry is
-`ImplantLayerChecker::repair(targetChange, fillerChanges)`. `targetChange` is
-one caller-owned standard-cell `Add`, `Delete`, or `Replace` record; the
+For a fixed-origin master swap, opto calls
+`DePlace::isLegal(cellId, newMaster, fillerChanges)`. It builds a request-local
+candidate Node and never temporarily edits Network, Grid, or UDM. For a new
+buffer, opto passes its Add record to
+`DePlace::findLegal(targetAdd, diameter, fillerChanges)`; the method derives row
+orientation, searches deterministically around the preferred origin, updates
+the target Add pose on success, and returns the filler transaction. It examines
+at most 65536 in-range sites and submits at most 4096 legal-orientation sites
+to the checker, then fails safely with no changes. Explicit
+Delete or already-positioned Add/Replace records use
+`DePlace::repairFillers(targetChange, fillerChanges)`. `targetChange` is one
+caller-owned standard-cell `Add`, `Delete`, or `Replace` record; the
 checker delegates to `engine.repair(targetChange)` without changing the Node,
 Network, Grid, or UDM. Success appends only the required filler records. The
 caller commits its original target record and the returned filler transaction
@@ -151,9 +173,10 @@ ID authorities are fixed:
 
 ## 4. Infrastructure authorities
 
-DePlace initializes and retains the non-owning `Design*`, Grid, Network, and
-`fillerSetting`. The checker borrows those objects, and the engine obtains them
-only from the checker. `Grid` supplies legal placement pixels. `Network`
+DePlace initializes and retains the non-owning `Design*`, Grid, Network,
+`fillerSetting`, PlacementDRC, and the repair engine; PlacementDRC owns the
+checker. The checker borrows the infrastructure objects, and the engine obtains
+them only from the checker. `Grid` supplies legal placement pixels. `Network`
 supplies the placed Nodes, registered Masters, and a non-owning pointer to
 DePlace's active `fillerSetting`. The engine performs no cross-object design
 identity checks; that consistency is guaranteed by DePlace ownership. Global
@@ -341,9 +364,13 @@ only for the last window actually searched.
 Ordering is pinned at every stage, so an immutable input produces the same
 checker request sequence, result, and diagnostics. Each `repair()` creates its
 own exact-cover search, retiled placement view, planner, cache, synthetic IDs,
-and output. Concurrent calls may share an initialized checker/engine pair only
-while Grid, Network, UDM, and `fillerSetting` remain read-only. Initialization,
-binding, teardown, and database commit must not overlap worker calls.
+and output. The checker loads its atomic enable state and published engine
+pointer once per request. Engine repairs take shared state access, so worker
+calls run concurrently; repository-local snapshot refresh and debug
+reconfiguration take exclusive access. Concurrent calls may share an
+initialized checker/engine pair only while Grid, Network, UDM, and
+`fillerSetting` remain read-only. Initialization, first binding, teardown, and
+database commit must not overlap worker calls.
 
 ## 9. Diagnostics and logging
 
@@ -454,8 +481,8 @@ The maintained tests must cover:
 - loaded-design `test_filler_repair` coverage for same-footprint master swap,
   explicit rotation, target Delete refill, target Add room creation, returned
   operation counts, and pre/post UDM/Network/Grid fingerprints;
-- deterministic output, normal build, ASan, and
-  `-Wall -Wextra -Werror` compilation.
+- deterministic output, normal build, ASan, focused ThreadSanitizer coverage
+  for shared checker/engine calls, and `-Wall -Wextra -Werror` compilation.
 
 Helper dump replay is a test/debug path, not a runtime dependency. Dump v6
 stores row base polarity, the serializable filler-setting projection, and
@@ -472,6 +499,8 @@ dumped placement.
   selected location. Replace must keep the footprint unchanged.
 - Exact-cover enumeration is bounded and can safely miss a later tiling after
   16 solutions or 100000 visited states.
+- New-buffer placement search can safely miss a farther site after 65536
+  examined Grid sites or 4096 checker candidates.
 - The search is bounded and can safely miss a solution outside its explored
   window or subset space.
 - Runtime initialization still requires real UDM-backed physical handles and

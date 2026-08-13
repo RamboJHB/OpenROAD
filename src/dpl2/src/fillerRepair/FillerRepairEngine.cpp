@@ -6,8 +6,10 @@
 #include <algorithm>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <set>
+#include <shared_mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -529,6 +531,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
       : checker_(checker),
         grid_(checker.getGrid()),
         network_(checker.getNetwork()),
+        checker_diagnostics_(checker.getDiags()),
         log_(debugLogging)
   {
     log_.section("engine", "ENGINE INITIALIZATION");
@@ -620,6 +623,9 @@ class FillerRepairEngine::Impl final : private PlacementView,
   eUNL::PhysDesMgr* des_mgr_ = nullptr;
   const fillerSetting* filler_settings_ = nullptr;
   std::vector<const eLIB::PhysLibCell*> filler_masters_;
+  // Frozen with the checker/engine revision. Worker calls never read the
+  // checker's mutable initialization vector outside its master-table lock.
+  std::vector<ipl::Diagnostic> checker_diagnostics_;
   PlacementSnapshot placement_;
   FillerCandidateCatalog candidate_catalog_;
   RepairConfig repair_config_;
@@ -1693,7 +1699,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   // candidate only on what this request produced. Without it one benign
   // start-up note would make every candidate illegal forever. Anything
   // structural never gets this far: rebuildOracle() already failed closed.
-  const auto& initDiags = checker_.getDiags();
+  const auto& initDiags = checker_diagnostics_;
   const auto requestDiagOffset =
       [&initDiags](const std::vector<ipl::Diagnostic>& diagnostics) {
         size_t offset = 0;
@@ -3044,7 +3050,7 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   buildPlannerData();
   buildLegalSpans();
   bool checkerReady = true;
-  for (const ipl::Diagnostic& diagnostic : checker_.getDiags()) {
+  for (const ipl::Diagnostic& diagnostic : checker_diagnostics_) {
     if (isNonBlockingCheckerInitDiagnostic(diagnostic)) {
       log_.block("engine",
                  "Non-blocking checker initialization diagnostic",
@@ -3088,23 +3094,27 @@ FillerRepairEngine::~FillerRepairEngine() = default;
 
 void FillerRepairEngine::setDebugLogging(bool enabled)
 {
+  std::unique_lock<std::shared_mutex> lock(state_mutex_);
   debug_logging_ = enabled;
   impl_->setDebugLogging(enabled);
 }
 
 bool FillerRepairEngine::isReady() const
 {
+  std::shared_lock<std::shared_mutex> lock(state_mutex_);
   return impl_->ready();
 }
 
-const std::vector<ipl::Diagnostic>&
+std::vector<ipl::Diagnostic>
 FillerRepairEngine::getInitDiagnostics() const
 {
+  std::shared_lock<std::shared_mutex> lock(state_mutex_);
   return impl_->initDiagnostics();
 }
 
 bool FillerRepairEngine::update()
 {
+  std::unique_lock<std::shared_mutex> lock(state_mutex_);
   auto replacement = std::make_unique<Impl>(checker_, debug_logging_);
   const bool initialized = replacement->ready();
   impl_ = std::move(replacement);
@@ -3112,18 +3122,23 @@ bool FillerRepairEngine::update()
 }
 
 RepairOutcome FillerRepairEngine::repair(eUNL::LeafCellID targetCell,
-                                         const eLIB::PhysLibCell& newMaster)
+                                         const eLIB::PhysLibCell& newMaster) const
 {
+  std::shared_lock<std::shared_mutex> lock(state_mutex_);
   return impl_->repair(targetCell, newMaster);
 }
 
-RepairOutcome FillerRepairEngine::repair(const ipl::CheckRequest& request)
+RepairOutcome FillerRepairEngine::repair(
+    const ipl::CheckRequest& request) const
 {
+  std::shared_lock<std::shared_mutex> lock(state_mutex_);
   return impl_->repair(request);
 }
 
-RepairOutcome FillerRepairEngine::repair(const CellChangeRecord& targetChange)
+RepairOutcome FillerRepairEngine::repair(
+    const CellChangeRecord& targetChange) const
 {
+  std::shared_lock<std::shared_mutex> lock(state_mutex_);
   return impl_->repair(targetChange);
 }
 

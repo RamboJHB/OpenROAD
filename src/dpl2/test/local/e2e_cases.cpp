@@ -322,6 +322,7 @@ class EngineHarness
 
   bool engineReady() const { return engine_ready_; }
   frt::E2ETestDesign& design() { return objects_.design(); }
+  dpl2::ipl::ImplantLayerChecker& checker() { return *checker_; }
   dpl2::fillerRepair::FillerRepairEngine& engine() { return *engine_; }
   dpl2::Network& network() { return *objects_.infrastructure().network(); }
   bool syncInfrastructureCell(frt::CellRole role)
@@ -381,8 +382,9 @@ class CheckerHarness
         objects_.infrastructure().network());
     engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>(
         *checker_);
-    if (engine_->isReady()) {
-      checker_->setFillerRepairEngine(engine_.get());
+    if (engine_->isReady()
+        && !checker_->setFillerRepairEngine(engine_.get())) {
+      return;
     }
     checker_ready_ = true;
   }
@@ -418,11 +420,8 @@ class CheckerHarness
         objects_.infrastructure().network());
     engine_ = std::make_unique<dpl2::fillerRepair::FillerRepairEngine>(
         *checker_);
-    const bool ready = engine_->isReady();
-    if (ready) {
-      checker_->setFillerRepairEngine(engine_.get());
-    }
-    return ready;
+    return engine_->isReady()
+           && checker_->setFillerRepairEngine(engine_.get());
   }
 
   bool bindSetting()
@@ -1554,6 +1553,23 @@ TEST_P(FillerRepairEngineE2E,
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 
+TEST_P(FillerRepairEngineE2E,
+       CheckerPublishesOneReadyEngineBeforeConcurrentUse)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+
+  EXPECT_TRUE(harness.checker().setFillerRepairEngine(&harness.engine()));
+  // Publishing the same immutable object is idempotent.
+  EXPECT_TRUE(harness.checker().setFillerRepairEngine(&harness.engine()));
+
+  dpl2::fillerRepair::FillerRepairEngine replacement(harness.checker());
+  ASSERT_TRUE(replacement.isReady());
+  // One checker/revision cannot be switched to a different engine while
+  // workers may still hold the already published pointer.
+  EXPECT_FALSE(harness.checker().setFillerRepairEngine(&replacement));
+}
+
 TEST_P(FillerRepairEngineE2E, CheckerEntryCleanCandidateHasNoChanges)
 {
   CheckerHarness harness(GetParam().setup);
@@ -1735,6 +1751,7 @@ TEST_P(FillerRepairEngineE2E, EmptyFillerAllowListErrorsOut)
       objects.infrastructure().network());
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
   EXPECT_FALSE(engine.isReady());
+  EXPECT_FALSE(checker.setFillerRepairEngine(&engine));
   const auto repair = engine.repair(
       objects.design().cell(frt::CellRole::Target),
       objects.design().master(frt::MasterRole::TargetNew));

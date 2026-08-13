@@ -8,6 +8,9 @@
 #include <boost/geometry/geometry.hpp>
 #include <boost/geometry/index/rtree.hpp>
 
+#include <cstddef>
+#include <mutex>
+
 // UDM
 #include <phys/fpManager.hh>
 #include <phys/physDesMgr.hh>
@@ -58,6 +61,12 @@ namespace dpl2{
 namespace dpl2 {
 class Grid;
 class Node;
+namespace ipl {
+class ImplantLayerChecker;
+}
+namespace fillerRepair {
+class FillerRepairEngine;
+}
 // [fillerRepair-fix] Match the infrastructure definitions so strict Clang
 // builds do not reject the declarations as mismatched tags.
 struct Pixel;
@@ -126,8 +135,27 @@ void setPadding(LeafCellID cellId, int left, int right);
 std::pair<int, int> findLeg(LeafCellID cellId, int diameter,
     std::string moduleName);
 std::pair<int, int> findLeg(LeafCellID cellId, std::string moduleName);
+// [FRPORT] Repair-aware forms. Existing cells are evaluated as a fixed-origin
+// Replace; a cell not present in the immutable Network snapshot is evaluated
+// as a new-buffer Add and returns the filler transaction needed at the chosen
+// site. The legacy overloads fail if committing filler changes would be
+// required, because they have nowhere to return those records.
+std::pair<int, int> findLeg(LeafCellID cellId,
+                            int diameter,
+                            std::string moduleName,
+                            std::vector<CellChangeRecord>& fcRecord);
+std::pair<int, int> findLeg(LeafCellID cellId,
+                            std::string moduleName,
+                            std::vector<CellChangeRecord>& fcRecord);
+// Preferred opto entry for a new buffer. `target_add` must be an Add record;
+// x/y are the preferred absolute origin. On success they and orientation are
+// updated to the selected site, while filler changes are appended atomically.
+// A negative diameter searches the whole core; otherwise it is a DBU radius.
+bool findLegal(CellChangeRecord& target_add,
+               int diameter,
+               std::vector<CellChangeRecord>& fcRecord) const;
 bool isLegal(LeafCellID cellId, LibCellID lcId,
-    std::vector<CellChangeRecord>& fcRecord);
+    std::vector<CellChangeRecord>& fcRecord) const;
 PhysDesMgr* getDesMgr() {return desMgr_;};
 eUNL::Design* getDesign() { return design_; }
 const eUNL::Design* getDesign() const { return design_; }
@@ -151,16 +179,20 @@ Rect getCoreArea();
  * Grid::gridX(DbuX) use, NOT the absolute frame of getCoreArea().
  */
 Rect getBoundingBox(const Rect& region, int rings = 3) const;
-// [FRPORT] Expose DePlace's owned setting and register configured filler plus
-// opto target masters with its real EdgeTypeTable before constructing
-// FillerRepairEngine.
+// [FRPORT] Expose DePlace's owned setting for setup; initialization registers
+// configured filler and opto target masters with the real EdgeTypeTable.
 fillerSetting* getFillerSetting() { return filler_setting_.get();};
-// Network Master construction stays with the infrastructure owner that has
-// the real edge table. The optional target set is the complete std-cell master
-// universe that opto may propose during this immutable repair revision. Call
-// after updating fillerSetting and before checker/engine construction.
-bool registerFillerRepairMasters(
+// [FRPORT] One setup-time call after fillerSetting and the complete opto target
+// master universe are known. DePlace creates the checker, eagerly constructs
+// its immutable engine, binds them, and registers the checker in PlacementDRC.
+// Calls after publication are idempotent only while that revision is unchanged.
+bool initializeFillerRepair(
     const std::vector<const PhysLibCell*>& target_masters = {});
+bool isFillerRepairReady() const;
+// Explicit Add/Delete/Replace entry for opto transactions that do not go
+// through the Node-facing PlacementDRC interface.
+bool repairFillers(const CellChangeRecord& target_change,
+                   std::vector<CellChangeRecord>& fcRecord) const;
 
 private:
 using bgPoint
@@ -182,6 +214,10 @@ void importDb();
 void importClear();
 void initEdgeTypeTable();
 void createNetwork();
+// Network Master construction stays with the infrastructure owner that has
+// the real edge table. initializeFillerRepair() is its only caller.
+bool registerFillerRepairMasters(
+    const std::vector<const PhysLibCell*>& target_masters);
 void deleteGrid();
 bool hasOneSiteMaster(PhysDesMgr* desMgr);
 void setUpPlacementGroups();
@@ -229,6 +265,21 @@ bool ripUpAndReplaceInRect(Node* target_cell,
                            const GridRect& target_grid_rect,
                            const GridPt& start_pt);
 bool legalCellInRect(const Rect& rect, Node* cell);
+std::pair<int, int> findLegImpl(
+    LeafCellID cellId,
+    int diameter,
+    const std::string& moduleName,
+    std::vector<CellChangeRecord>& fcRecord);
+std::pair<int, int> findLegalAdd(
+    const std::string& target_name,
+    const PhysLibCell& master,
+    GridX preferred_x,
+    GridY preferred_y,
+    GridX x_min,
+    GridX x_max,
+    GridY y_min,
+    GridY y_max,
+    std::vector<CellChangeRecord>& fcRecord) const;
 
 // Grid initialization
 void initGrid();
@@ -256,6 +307,15 @@ RtreeBox regions_rtree_;
 // [FRPORT] DePlace uniquely owns the setting borrowed by Network and the engine.
 // filler cell config
 std::unique_ptr<fillerSetting> filler_setting_;
+
+// [FRPORT] DePlace owns the complete revision-scoped repair chain. The checker
+// itself is owned by drc_engine_; this raw pointer is a stable non-owning index
+// into that registry. Member order destroys the engine before the checker.
+ipl::ImplantLayerChecker* implant_layer_checker_{nullptr};
+std::unique_ptr<fillerRepair::FillerRepairEngine> filler_repair_engine_;
+std::vector<LibCellID> filler_repair_filler_ids_;
+std::size_t filler_repair_master_count_{0};
+mutable std::mutex filler_repair_init_mutex_;
 
 // Placement tracking
 std::vector<Node*> placement_failures_;

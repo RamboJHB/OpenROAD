@@ -17,6 +17,7 @@
 #pragma once
 
 #include <memory>
+#include <shared_mutex>
 #include <vector>
 
 #include <drc/ImplantLayerChecker.h>
@@ -61,7 +62,7 @@ class FillerRepairEngine
   // are retained for callers and also printed by the constructor when eager
   // initialization fails (unless FR_VERBOSE=0).
   bool isReady() const;
-  const std::vector<ipl::Diagnostic>& getInitDiagnostics() const;
+  std::vector<ipl::Diagnostic> getInitDiagnostics() const;
 
   // [PORT-DROP] Rebuilds the private snapshot in place. No normal call path
   // reaches it: an infrastructure revision requires its owner to construct
@@ -80,13 +81,13 @@ class FillerRepairEngine
   // it can edit. Whole-design placement legality stays with infrastructure.
   // This is the checker-facing entry: the candidate pose/master are consumed
   // from the exact CheckRequest built by ImplantLayerChecker::check().
-  RepairOutcome repair(const ipl::CheckRequest& request);
+  RepairOutcome repair(const ipl::CheckRequest& request) const;
 
   // Opto-facing entry for one pre-commit standard-cell transaction. Add uses a
   // request-local name and creates room for a new buffer; Delete fills the old
   // cell footprint; Replace supports only a same-footprint master/orientation
   // change at the snapshot origin. The target record remains caller-owned.
-  RepairOutcome repair(const CellChangeRecord& targetChange);
+  RepairOutcome repair(const CellChangeRecord& targetChange) const;
 
   // [PORT-DROP] The same repair, entered with raw UDM handles instead of a
   // CheckRequest. The normal checker path already has this request;
@@ -95,11 +96,15 @@ class FillerRepairEngine
   // engine without a checker, and that does not travel. DELETE it (~25 lines)
   // unless you have a caller holding UDM handles and no CheckRequest.
   RepairOutcome repair(eUNL::LeafCellID targetCell,
-                       const eLIB::PhysLibCell& newMaster);
+                       const eLIB::PhysLibCell& newMaster) const;
 
  private:
   class Impl;
   const ipl::ImplantLayerChecker& checker_;
+  // Multiple checker workers hold shared access and execute independently.
+  // Repository-local snapshot/debug reconfiguration takes exclusive access;
+  // it never serializes ordinary repair calls against one another.
+  mutable std::shared_mutex state_mutex_;
   bool debug_logging_ = debugLoggingDefault();
   std::unique_ptr<Impl> impl_;
 };

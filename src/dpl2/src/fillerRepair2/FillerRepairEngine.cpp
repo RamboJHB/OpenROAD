@@ -529,6 +529,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
       : checker_(checker),
         grid_(checker.getGrid()),
         network_(checker.getNetwork()),
+        checker_diagnostics_(checker.getDiags()),
         log_(debugLoggingDefault())
   {
     log_.section("engine", "ENGINE INITIALIZATION");
@@ -613,6 +614,7 @@ class FillerRepairEngine::Impl final : private PlacementView,
   eUNL::PhysDesMgr* des_mgr_ = nullptr;
   const fillerSetting* filler_settings_ = nullptr;
   std::vector<const eLIB::PhysLibCell*> filler_masters_;
+  std::vector<ipl::Diagnostic> checker_diagnostics_;
   PlacementSnapshot placement_;
   FillerCandidateCatalog candidate_catalog_;
   RepairConfig repair_config_;
@@ -1686,7 +1688,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   // candidate only on what this request produced. Without it one benign
   // start-up note would make every candidate illegal forever. Anything
   // structural never gets this far: rebuildOracle() already failed closed.
-  const auto& initDiags = checker_.getDiags();
+  const auto& initDiags = checker_diagnostics_;
   const auto requestDiagOffset =
       [&initDiags](const std::vector<ipl::Diagnostic>& diagnostics) {
         size_t offset = 0;
@@ -2998,7 +3000,7 @@ bool FillerRepairEngine::Impl::rebuildOracle()
   buildPlannerData();
   buildLegalSpans();
   bool checkerReady = true;
-  for (const ipl::Diagnostic& diagnostic : checker_.getDiags()) {
+  for (const ipl::Diagnostic& diagnostic : checker_diagnostics_) {
     if (isNonBlockingCheckerInitDiagnostic(diagnostic)) {
       log_.block("engine",
                  "Non-blocking checker initialization diagnostic",
@@ -3044,18 +3046,20 @@ bool FillerRepairEngine::isReady() const
   return impl_->ready();
 }
 
-const std::vector<ipl::Diagnostic>&
+std::vector<ipl::Diagnostic>
 FillerRepairEngine::getInitDiagnostics() const
 {
   return impl_->initDiagnostics();
 }
 
-RepairOutcome FillerRepairEngine::repair(const ipl::CheckRequest& request)
+RepairOutcome FillerRepairEngine::repair(
+    const ipl::CheckRequest& request) const
 {
   return impl_->repair(request);
 }
 
-RepairOutcome FillerRepairEngine::repair(const CellChangeRecord& targetChange)
+RepairOutcome FillerRepairEngine::repair(
+    const CellChangeRecord& targetChange) const
 {
   return impl_->repair(targetChange);
 }

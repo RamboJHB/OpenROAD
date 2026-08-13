@@ -162,8 +162,8 @@ dpl2_configure_chain_target(dpl2_filler_repair2_compile_check strict)
 # include dirs / libraries behind dpl2_test_udm differ.
 #
 # Keeping two divergent branches is how this rotted before: the real-UDM branch
-# linked a planner-only source list, so when the checker took ownership of
-# FillerRepairEngine and ImplantLayerChecker.cpp began referencing its
+# linked a planner-only source list, so when ImplantLayerChecker began calling
+# the externally owned FillerRepairEngine, its
 # ctor/dtor/init/update/precheck/repair, that branch stopped linking
 # (undefined FillerRepairEngine symbols) and nobody could see it without a
 # real UDM. Note a STATIC compile-check library would NOT have caught it --

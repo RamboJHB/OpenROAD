@@ -1,6 +1,7 @@
 #pragma once
 #include <infrastructure/network.h>
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -24,7 +25,7 @@ using eUTL::Rect;
 
 namespace dpl2 {
 namespace fillerRepair {
-// [FRPORT] Checker only borrows the caller-owned engine.
+// [FRPORT] Checker only borrows the DePlace-owned engine.
 class FillerRepairEngine;
 }
 
@@ -356,18 +357,25 @@ public:
     bool repair(const CellChangeRecord& targetChange,
                 std::vector<CellChangeRecord>& fcRecord) const;
 
-    // [FRPORT] [fillerRepair-fix] Repair is enabled for the normal checker path.
-    // ImplantLayerCheckerHelper disables it for checker-only tests.
-    void setFillerRepairEnabled(bool enabled) { enableFillerRepair_ = enabled; }
-    bool isFillerRepairEnabled() const { return enableFillerRepair_; }
-
-    // [FRPORT] [fillerRepair-fix] Non-owning, initialization-time binding. The caller
-    // owns both objects and must keep the engine alive while this checker can
-    // be called. Bind before starting checker worker threads.
-    void setFillerRepairEngine(fillerRepair::FillerRepairEngine* engine)
+    // [FRPORT] Repair is enabled for normal checker instances. Atomic access
+    // makes a helper disable visible without racing a worker already entering
+    // check(); one request uses the value it observed at entry.
+    void setFillerRepairEnabled(bool enabled)
     {
-        fillerRepairEngine_ = engine;
+        enableFillerRepair_.store(enabled, std::memory_order_release);
     }
+    bool isFillerRepairEnabled() const
+    {
+        return enableFillerRepair_.load(std::memory_order_acquire);
+    }
+
+    // [FRPORT] Publish one ready, DePlace-owned engine. Binding is idempotent
+    // for the same object and rejects null, unready, or replacement engines.
+    // The release/acquire pair makes the eagerly built immutable snapshot
+    // visible to checker workers without a per-check mutex. The owner keeps
+    // both objects alive and stops workers before teardown.
+    bool setFillerRepairEngine(
+        const fillerRepair::FillerRepairEngine* engine);
 
     CheckResult checkDirect(const CheckRequest& request) const;
     std::vector<CheckResult> checkPlaceWithOverlays(
@@ -402,10 +410,11 @@ private:
     bool init(PhysDesMgr* desMgr);
     void ensureMasterData(MasterId masterId) const;
 
-    // [FRPORT] The caller-owned engine is initialized and bound before checking. On a
+    // [FRPORT] The DePlace-owned engine is initialized and bound before checking. On a
     // repairable failure the records are APPENDED to the caller's fcRecord;
     // the checker keeps no filler-change member state.
-    bool repairFillers(const CheckRequest& request,
+    bool repairFillers(const fillerRepair::FillerRepairEngine& engine,
+                       const CheckRequest& request,
                        std::vector<CellChangeRecord>& fcRecord) const;
     void buildLayers(PhysDesMgr* desMgr);
     static void parseLayerName(const std::string& name,
@@ -516,10 +525,12 @@ private:
     // a candidate master registered by infrastructure before check().
     mutable std::shared_mutex masterItemsMutex_;
 
-    // [FRPORT] Filler repair is enabled by default, but the checker only borrows the
-    // engine supplied by its owner. ImplantLayerCheckerHelper disables repair.
-    bool enableFillerRepair_ = true;
-    fillerRepair::FillerRepairEngine* fillerRepairEngine_ = nullptr;
+    // [FRPORT] The checker never owns or replaces the engine. Both values are
+    // atomically published configuration; all repair search state is local to
+    // the worker call.
+    std::atomic<bool> enableFillerRepair_{true};
+    std::atomic<const fillerRepair::FillerRepairEngine*>
+        fillerRepairEngine_{nullptr};
 
     std::map<eLIB::TechLayerRelativeID, LayerId> techLayerToIdx_;
     std::map<std::string, LayerId> layerNameToIdx_;

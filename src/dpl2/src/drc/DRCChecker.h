@@ -9,13 +9,21 @@ namespace dpl2 {
 class Grid;
 class Node;
 
-enum class DRCCheckerType { EdgeSpacing, BlockedLayers, Padding, OneSiteGap, Count };
+enum class DRCCheckerType {
+  EdgeSpacing,
+  BlockedLayers,
+  Padding,
+  OneSiteGap,
+  ImplantLayer,
+  Count
+};
 
 constexpr std::array<const char*, static_cast<size_t>(DRCCheckerType::Count)> drc_checker_type_name{
     "edge_spacing",
     "blocked_layers",
     "padding",
     "one_site_gap",
+    "implant_layer",
 };
 
 inline std::string toString(DRCCheckerType type)

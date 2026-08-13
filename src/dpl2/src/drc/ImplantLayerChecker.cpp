@@ -886,19 +886,30 @@ bool ImplantLayerChecker::check(const Node* node,
     request.colId = x.v;
     request.orientation = orient;
     request.targetOp = OpType::Replace;
+    ensureMasterData(request.masterId);
+
+    // Load the published configuration once. A concurrent helper disable can
+    // affect the next call, but cannot split this request between DRC-only and
+    // repair-aware semantics.
+    const bool repairEnabled
+        = enableFillerRepair_.load(std::memory_order_acquire);
+    const fillerRepair::FillerRepairEngine* const repairEngine
+        = repairEnabled
+              ? fillerRepairEngine_.load(std::memory_order_acquire)
+              : nullptr;
 
     // Node-facing checks are same-footprint Replace/rotation only. Std-cell
     // Add/Delete transactions use repair(CellChangeRecord) so the operation
     // is explicit and the caller retains the target record.
-    if (enableFillerRepair_ && targetFootprintChanged(request)) {
+    if (repairEngine != nullptr && targetFootprintChanged(request)) {
         return false;
     }
     bool isLegal = checkDirect(request).isLegal;
     // [fillerRepair-fix] Helper-built checkers disable repair so their checks
     // retain DRC-only semantics; ordinary checker instances default to enabled.
-    // [FRPORT] Dispatch failed checks to the initialized caller-owned engine.
-    if (!isLegal && enableFillerRepair_ && fillerRepairEngine_ != nullptr) {
-        isLegal = repairFillers(request, fcRecord);
+    // [FRPORT] Dispatch failed checks to the initialized DePlace-owned engine.
+    if (!isLegal && repairEngine != nullptr) {
+        isLegal = repairFillers(*repairEngine, request, fcRecord);
     }
     return isLegal;
 }
@@ -906,11 +917,16 @@ bool ImplantLayerChecker::check(const Node* node,
 bool ImplantLayerChecker::repair(const CellChangeRecord& targetChange,
                                  std::vector<CellChangeRecord>& fcRecord) const
 {
-    if (!enableFillerRepair_ || fillerRepairEngine_ == nullptr) {
+    if (!enableFillerRepair_.load(std::memory_order_acquire)) {
+        return false;
+    }
+    const fillerRepair::FillerRepairEngine* const engine
+        = fillerRepairEngine_.load(std::memory_order_acquire);
+    if (engine == nullptr) {
         return false;
     }
     fillerRepair::RepairOutcome outcome
-        = fillerRepairEngine_->repair(targetChange);
+        = engine->repair(targetChange);
     if (!outcome.hasSolution) {
         return false;
     }
@@ -922,13 +938,11 @@ bool ImplantLayerChecker::repair(const CellChangeRecord& targetChange,
 
 // [FRPORT] Translate the checker request into engine output appended for opto.
 bool ImplantLayerChecker::repairFillers(
+    const fillerRepair::FillerRepairEngine& engine,
     const CheckRequest& request,
     std::vector<CellChangeRecord>& fcRecord) const
 {
-    if (fillerRepairEngine_ == nullptr) {
-        return false;
-    }
-    fillerRepair::RepairOutcome outcome = fillerRepairEngine_->repair(request);
+    fillerRepair::RepairOutcome outcome = engine.repair(request);
     if (!outcome.hasSolution) {
         return false;
     }
@@ -937,6 +951,23 @@ bool ImplantLayerChecker::repairFillers(
                     std::make_move_iterator(outcome.changes.begin()),
                     std::make_move_iterator(outcome.changes.end()));
     return true;
+}
+
+bool ImplantLayerChecker::setFillerRepairEngine(
+    const fillerRepair::FillerRepairEngine* engine)
+{
+    if (engine == nullptr || !engine->isReady()) {
+        return false;
+    }
+    const fillerRepair::FillerRepairEngine* expected = nullptr;
+    if (fillerRepairEngine_.compare_exchange_strong(
+            expected,
+            engine,
+            std::memory_order_release,
+            std::memory_order_acquire)) {
+        return true;
+    }
+    return expected == engine;
 }
 
 void ImplantLayerChecker::ensureMasterData(MasterId masterId) const
@@ -1935,6 +1966,7 @@ bool ImplantLayerChecker::targetFootprintChanged(
 {
     // [fillerRepair-layout] This query is read-only and O(1). It is used only
     // to decide whether a direct-legal target still needs filler Delete/Add.
+    std::shared_lock<std::shared_mutex> masterLock(masterItemsMutex_);
     if (grid_ == nullptr || grid_->getDesMgr() == nullptr || network_ == nullptr
         || siteWidth_ <= 0 || rowHeight_ <= 0 || request.masterId < 0
         || request.masterId >= static_cast<MasterId>(masterItems_.size())) {
@@ -2589,6 +2621,11 @@ std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
         }
         return results;
     }
+    // Complete setup-time target registration before taking the shared lock
+    // used by this whole batch. Filler masters come from the engine's frozen
+    // catalog and were necessarily registered before it was published; avoid
+    // rescanning every change in this hot path.
+    ensureMasterData(request.masterId);
     std::shared_lock<std::shared_mutex> masterLock(masterItemsMutex_);
     // [fillerRepair-layout] This is target-only batch setup. Each concrete
     // candidate below still receives full transaction validation.

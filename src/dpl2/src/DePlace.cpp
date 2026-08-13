@@ -6,17 +6,47 @@
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
 #include <PlacementDRC.h>
+#include <drc/ImplantLayerChecker.h>
+#include <fillerRepair/FillerRepairEngine.h>
 
 #include <algorithm>
+#include <array>
+#include <climits>
+#include <cstdlib>
+#include <iostream>
+#include <iterator>
+#include <limits>
+#include <optional>
+#include <string_view>
 
 namespace dpl2 {
 
+namespace {
+
+bool fillerRepairVerbose()
+{
+  const char* const value = std::getenv("FR_VERBOSE");
+  return value == nullptr || std::string_view(value) != "0";
+}
+
+bool fillerRepairInitFailure(std::string_view stage, std::string_view reason)
+{
+  if (fillerRepairVerbose()) {
+    std::cerr << "\n[fr][deplace] Filler repair initialization failed\n"
+              << "  stage  : " << stage << "\n"
+              << "  reason : " << reason << "\n";
+  }
+  return false;
+}
+
+}  // namespace
+
 DePlace::DePlace(PhysDesMgr* desMgr)
     : desMgr_(desMgr),
+      arch_(std::make_unique<Architecture>()),
       network_(std::make_unique<Network>()),
       padding_(std::make_shared<Padding>()),
-      grid_(std::make_unique<Grid>()),
-      arch_(std::make_unique<Architecture>())
+      grid_(std::make_unique<Grid>())
 {
   design_ = eUNL::Session::getSession().getCurrentDesign();
   padding_->setDesginManager(desMgr);
@@ -27,10 +57,10 @@ DePlace::DePlace(PhysDesMgr* desMgr)
 }
 
 DePlace::DePlace()
-    : network_(std::make_unique<Network>()),
+    : arch_(std::make_unique<Architecture>()),
+      network_(std::make_unique<Network>()),
       padding_(std::make_shared<Padding>()),
-      grid_(std::make_unique<Grid>()),
-      arch_(std::make_unique<Architecture>())
+      grid_(std::make_unique<Grid>())
 {
   eUNL::Session& sess = eUNL::Session::getSession();
   eUNL::Design* design = sess.getCurrentDesign();
@@ -62,7 +92,30 @@ bool DePlace::registerFillerRepairMasters(
 {
   if (filler_setting_ == nullptr || network_ == nullptr || grid_ == nullptr
       || edge_type_table_ == nullptr) {
-    return false;
+    return fillerRepairInitFailure(
+        "master registration",
+        "DePlace requires fillerSetting, Network, Grid, and EdgeTypeTable");
+  }
+
+  // Once published, the engine's catalog and placement snapshot are
+  // immutable. Never mutate Network behind active checker workers.
+  if (filler_repair_engine_ != nullptr) {
+    if (network_->getMasters().size() != filler_repair_master_count_
+        || filler_setting_->getFillerCells() != filler_repair_filler_ids_) {
+      return fillerRepairInitFailure(
+          "revision validation",
+          "Network masters or configured filler IDs changed after publication");
+    }
+    for (const PhysLibCell* master : target_masters) {
+      if (master == nullptr
+          || network_->getMaster(master->getLibCellId()) == nullptr) {
+        return fillerRepairInitFailure(
+            "revision validation",
+            "a requested target master is null or was not registered before "
+            "engine construction");
+      }
+    }
+    return true;
   }
 
   // [fillerRepair-fix] Keep the binding current if the owner replaced its
@@ -76,7 +129,9 @@ bool DePlace::registerFillerRepairMasters(
                      [](const PhysLibCell* master) {
                        return master == nullptr;
                      })) {
-    return false;
+    return fillerRepairInitFailure(
+        "filler registration",
+        "the configured filler-master list is empty or contains null");
   }
 
   for (const PhysLibCell* master : masters) {
@@ -84,18 +139,33 @@ bool DePlace::registerFillerRepairMasters(
                             *filler_setting_,
                             grid_.get(),
                             edge_type_table_.get()) == nullptr) {
-      return false;
+      return fillerRepairInitFailure(
+          "filler registration",
+          std::string("Network::addMaster rejected configured filler master \"")
+              + master->getLibCell().getName() + "\"");
     }
   }
 
   for (const PhysLibCell* master : target_masters) {
-    if (master == nullptr
-        || filler_setting_->isFillerCell(master->getLibCellId())
-        || network_->addMaster(*master,
-                               *filler_setting_,
-                               grid_.get(),
-                               edge_type_table_.get()) == nullptr) {
-      return false;
+    if (master == nullptr) {
+      return fillerRepairInitFailure("target registration",
+                                     "the target-master list contains null");
+    }
+    if (filler_setting_->isFillerCell(master->getLibCellId())) {
+      return fillerRepairInitFailure(
+          "target registration",
+          std::string("target master \"")
+              + master->getLibCell().getName()
+              + "\" is configured as a filler");
+    }
+    if (network_->addMaster(*master,
+                            *filler_setting_,
+                            grid_.get(),
+                            edge_type_table_.get()) == nullptr) {
+      return fillerRepairInitFailure(
+          "target registration",
+          std::string("Network::addMaster rejected target master \"")
+              + master->getLibCell().getName() + "\"");
     }
   }
 
@@ -107,6 +177,76 @@ bool DePlace::registerFillerRepairMasters(
     }
   }
   return true;
+}
+
+// [FRPORT] Build the one revision-scoped checker/engine chain owned by
+// DePlace. Publication is complete before any pointer becomes visible to
+// isLegal/findLeg workers.
+bool DePlace::initializeFillerRepair(
+    const std::vector<const PhysLibCell*>& target_masters)
+{
+  std::lock_guard<std::mutex> lock(filler_repair_init_mutex_);
+  if (filler_repair_engine_ != nullptr) {
+    return registerFillerRepairMasters(target_masters)
+           && filler_repair_engine_->isReady();
+  }
+  if (!registerFillerRepairMasters(target_masters)) {
+    return false;
+  }
+  if (drc_engine_ == nullptr) {
+    initPlacementDRC();
+  }
+  if (drc_engine_ == nullptr) {
+    return fillerRepairInitFailure(
+        "PlacementDRC construction",
+        "DePlace::initPlacementDRC did not create PlacementDRC");
+  }
+
+  auto checker = std::make_unique<ipl::ImplantLayerChecker>(
+      grid_.get(), design_, network_.get());
+  auto engine
+      = std::make_unique<fillerRepair::FillerRepairEngine>(*checker);
+  if (!engine->isReady()) {
+    fillerRepairInitFailure(
+        "FillerRepairEngine construction",
+        "the immutable placement/checker snapshot is not ready");
+    if (fillerRepairVerbose()) {
+      for (const ipl::Diagnostic& diagnostic : engine->getInitDiagnostics()) {
+        std::cerr << "  diagnostic\n"
+                  << "    status  : " << diagnostic.status << "\n"
+                  << "    message : " << diagnostic.message << "\n";
+      }
+    }
+    return false;
+  }
+  if (!checker->setFillerRepairEngine(engine.get())) {
+    return fillerRepairInitFailure(
+        "checker binding",
+        "ImplantLayerChecker rejected the ready engine");
+  }
+
+  ipl::ImplantLayerChecker* const published_checker = checker.get();
+  filler_repair_engine_ = std::move(engine);
+  drc_engine_->addChecker(DRCCheckerType::ImplantLayer, std::move(checker));
+  implant_layer_checker_ = published_checker;
+  filler_repair_filler_ids_ = filler_setting_->getFillerCells();
+  filler_repair_master_count_ = network_->getMasters().size();
+  return true;
+}
+
+bool DePlace::isFillerRepairReady() const
+{
+  return implant_layer_checker_ != nullptr
+         && filler_repair_engine_ != nullptr
+         && filler_repair_engine_->isReady();
+}
+
+bool DePlace::repairFillers(
+    const CellChangeRecord& target_change,
+    std::vector<CellChangeRecord>& fcRecord) const
+{
+  return isFillerRepairReady()
+         && implant_layer_checker_->repair(target_change, fcRecord);
 }
 
 void DePlace::setPaddingGlobal(const int left, const int right)
@@ -124,22 +264,16 @@ void DePlace::setPadding(PhysLibCell* master, const int left, const int right)
   padding_->setPadding(master, GridX{left}, GridX{right});
 }
 /**
- * @brief Attempts to find a legal placement for a leaf cell after remapping
- * its master in dpl2's internal cache.
+ * @brief Finds a repairable placement without changing shared placement data.
  *
  * Given a leaf cell and a target module name, this overload:
  *    1. Resolves @p moduleName to a PhysLibCell via LibObjAccessor,
- *    2. Registers the new master via addMaster() and updates the Node via
- *       updateNode(),
- *    3. Searches within a @p diameter-extended bounding box around
- *    the cell's original position
- *    for a DRC-legal placement via legalCellInRect().
+ *    2. Requires the master in the immutable repair revision,
+ *    3. Evaluates a fixed-origin Replace for an existing cell, or searches a
+ *       diameter-limited Add for a new buffer not present in Network.
  *
- * Note: This remaps the master only in dpl2's own Master/Node cache;
- * it does not modify
- *       UDM (no changeLeafCellsMaster call).
- *       The caller is responsible for any UDM-side remap
- *       if required.
+ * No Network, Grid, or UDM state is changed. Use the repair-aware overload to
+ * receive changes; the legacy overload fails when changes would be required.
  *
  * @param cellId     The leaf cell to remap and place.
  * @param diameter   Search region extension (in uv units)
@@ -152,39 +286,19 @@ void DePlace::setPadding(PhysLibCell* master, const int left, const int right)
 std::pair<int, int> DePlace::findLeg(LeafCellID cellId, int diameter,
     std::string moduleName)
 {
-  eFNL::ModuleID moduleId = design_->getLibAcc().findModule(moduleName);
-  auto* libCell = design_->getLibAcc().getLibCell(moduleId);
-  if (!libCell) {
-    return {-1, -1};
-  }
-
-  const PhysLibCell& physLibCell =
-    design_->getLibAcc().getPhysLibCell(libCell->getId());
-
-  Node* cell = this->network_->getNode(cellId);
-  unplaceCell(cell);
-  this->network_->addMaster(physLibCell, *filler_setting_, this->grid_.get(),
-      this->edge_type_table_.get());
-  this->network_->updateNode(cell, desMgr_, physLibCell);
-
-  eUTL::Rect rect(eUTL::UvDist(cell->getLeft().v - diameter), \
-      eUTL::UvDist(cell->getBottom().v - diameter), \
-      eUTL::UvDist(cell->getLeft().v + cell->getWidth().v + diameter), \
-      eUTL::UvDist(cell->getBottom().v + cell->getHeight().v + diameter));
-
-  legalCellInRect(rect, cell);
-
-  return {cell->getLeft().v, cell->getBottom().v};
+  std::vector<CellChangeRecord> ignored;
+  const std::pair<int, int> result
+      = findLeg(cellId, diameter, std::move(moduleName), ignored);
+  return ignored.empty() ? result : std::pair<int, int>{-1, -1};
 }
 /**
- * @brief Attempts to find a legal placement for a leaf cell after
- * remapping its master in dpl2's internal cache.
+ * @brief Whole-core form of the non-mutating repair-aware search.
  *
  * This is the core-area overload: it searches the entire core area
  * (this->core_) for a DRC-legal position.
  *
- * Same remap semantics as the diameter overload — only dpl2 Node/Master
- * cache is changed, not UDM.
+ * Same transaction semantics as the diameter overload; it never writes the
+ * dpl2 cache or UDM.
  *
  * @param cellId     The leaf cell to remap and place.
  * @param moduleName Target module name whose PhysLibCell
@@ -192,26 +306,179 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId, int diameter,
  * @return The (left, bottom) UV coordinates of the
  * placed cell, or (-1, -1) on failure.
  */
-std::pair<int, int> DePlace::findLeg(LeafCellID cellId, std::string moduleName)
+std::pair<int, int> DePlace::·(LeafCellID cellId, std::string moduleName)
 {
-  Rect rect = this->core_;
-  eFNL::ModuleID moduleId = design_->getLibAcc().findModule(moduleName);
-  auto* libCell = design_->getLibAcc().getLibCell(moduleId);
-  if (!libCell) {
+  std::vector<CellChangeRecord> ignored;
+  const std::pair<int, int> result
+      = findLeg(cellId, std::move(moduleName), ignored);
+  return ignored.empty() ? result : std::pair<int, int>{-1, -1};
+}
+
+std::pair<int, int> DePlace::findLeg(
+    LeafCellID cellId,
+    int diameter,
+    std::string moduleName,
+    std::vector<CellChangeRecord>& fcRecord)
+{
+  return findLegImpl(cellId, diameter, moduleName, fcRecord);
+}
+
+std::pair<int, int> DePlace::findLeg(
+    LeafCellID cellId,
+    std::string moduleName,
+    std::vector<CellChangeRecord>& fcRecord)
+{
+  return findLegImpl(cellId, -1, moduleName, fcRecord);
+}
+
+std::pair<int, int> DePlace::findLegImpl(
+    LeafCellID cellId,
+    int diameter,
+    const std::string& moduleName,
+    std::vector<CellChangeRecord>& fcRecord)
+{
+  if (!isFillerRepairReady() || design_ == nullptr || desMgr_ == nullptr
+      || grid_ == nullptr || network_ == nullptr || diameter < -1) {
     return {-1, -1};
   }
-  const PhysLibCell& physLibCell =
-    design_->getLibAcc().getPhysLibCell(libCell->getId());
+  const eFNL::ModuleID moduleId = design_->getLibAcc().findModule(moduleName);
+  const auto* libCell = design_->getLibAcc().getLibCell(moduleId);
+  if (libCell == nullptr) {
+    return {-1, -1};
+  }
+  const PhysLibCell& master
+      = design_->getLibAcc().getPhysLibCell(libCell->getId());
+  if (network_->getMaster(master.getLibCellId()) == nullptr) {
+    return {-1, -1};
+  }
 
-  Node* cell = this->network_->getNode(cellId);
-  unplaceCell(cell);
-  this->network_->addMaster(physLibCell,
-      *filler_setting_, this->grid_.get(), this->edge_type_table_.get());
-  this->network_->updateNode(cell, desMgr_, physLibCell);
+  // Existing std cells retain their immutable origin. Filler Delete/Add is
+  // not used to hide a std-cell move or footprint change.
+  if (const Node* cell = network_->getNode(cellId); cell != nullptr) {
+    std::vector<CellChangeRecord> trial;
+    if (!isLegal(cellId, master.getLibCellId(), trial)) {
+      return {-1, -1};
+    }
+    fcRecord.insert(fcRecord.end(),
+                    std::make_move_iterator(trial.begin()),
+                    std::make_move_iterator(trial.end()));
+    return {cell->getLeft().v, cell->getBottom().v};
+  }
 
-  legalCellInRect(rect, cell);
+  const eUNL::PhysCell physical = desMgr_->getPhysCell(cellId);
+  if (!physical.isValid()) {
+    return {-1, -1};
+  }
+  const Rect core = grid_->getCore();
+  CellChangeRecord target_add{
+      OpType::Add,
+      CellData{"findLeg_buffer"},
+      physical.getOrigin().getX(),
+      physical.getOrigin().getY(),
+      LibCellID{},
+      master.getLibCellId(),
+      physical.getOrient()};
+  std::vector<CellChangeRecord> trial;
+  if (!findLegal(target_add, diameter, trial)) {
+    return {-1, -1};
+  }
+  fcRecord.insert(fcRecord.end(),
+                  std::make_move_iterator(trial.begin()),
+                  std::make_move_iterator(trial.end()));
+  return {static_cast<int>(target_add.x_.getStorage()
+                           - core.getXL().getStorage()),
+          static_cast<int>(target_add.y_.getStorage()
+                           - core.getYL().getStorage())};
+}
 
-  return {cell->getLeft().v, cell->getBottom().v};
+bool DePlace::findLegal(CellChangeRecord& target_add,
+                        int diameter,
+                        std::vector<CellChangeRecord>& fcRecord) const
+{
+  const std::string* const target_name
+      = std::get_if<std::string>(&target_add.cell_data_);
+  if (!isFillerRepairReady() || target_add.op_ != OpType::Add
+      || target_name == nullptr || target_name->empty()
+      || !target_add.new_lib_cell_.isValid() || grid_ == nullptr
+      || network_ == nullptr || target_add.orig_lib_cell_.isValid()) {
+    return false;
+  }
+  const int master_id = network_->getMasterId(target_add.new_lib_cell_);
+  const Master* const registered = network_->getMaster(master_id);
+  if (registered == nullptr || registered->getPhysLibCell() == nullptr
+      || registered->isFiller()) {
+    return false;
+  }
+
+  const Rect core = grid_->getCore();
+  const int64_t x_relative
+      = target_add.x_.getStorage() - core.getXL().getStorage();
+  const int64_t y_relative
+      = target_add.y_.getStorage() - core.getYL().getStorage();
+  if (x_relative < std::numeric_limits<int>::min()
+      || x_relative > std::numeric_limits<int>::max()
+      || y_relative < std::numeric_limits<int>::min()
+      || y_relative > std::numeric_limits<int>::max()) {
+    return false;
+  }
+  const GridX preferred_x
+      = grid_->gridX(DbuX{static_cast<int>(x_relative)});
+  const GridY preferred_y
+      = grid_->gridSnapDownY(DbuY{static_cast<int>(y_relative)});
+  GridX x_min{0};
+  GridX x_max = grid_->getRowSiteCount() - GridX{1};
+  GridY y_min{0};
+  GridY y_max = grid_->getRowCount() - GridY{1};
+  if (diameter >= 0) {
+    const int64_t search_radius = diameter;
+    const int64_t x_limit = static_cast<int64_t>(
+                                grid_->getRowSiteCount().v)
+                            * grid_->getSiteWidth().v;
+    const int64_t y_limit
+        = grid_->gridYToDbu(grid_->getRowCount()).v;
+    const int x_lo = static_cast<int>(
+        std::clamp<int64_t>(x_relative - search_radius, 0, INT_MAX));
+    const int x_hi = static_cast<int>(std::clamp<int64_t>(
+        x_relative + search_radius, 0, std::min<int64_t>(x_limit, INT_MAX)));
+    const int y_lo = static_cast<int>(
+        std::clamp<int64_t>(y_relative - search_radius, 0, INT_MAX));
+    const int y_hi = static_cast<int>(std::clamp<int64_t>(
+        y_relative + search_radius, 0, std::min<int64_t>(y_limit, INT_MAX)));
+    x_min = grid_->gridX(DbuX{x_lo});
+    x_max = grid_->gridX(DbuX{x_hi});
+    y_min = grid_->gridSnapDownY(DbuY{y_lo});
+    y_max = grid_->gridSnapDownY(DbuY{y_hi});
+  }
+
+  std::vector<CellChangeRecord> trial;
+  const std::pair<int, int> location
+      = findLegalAdd(*target_name,
+                     *registered->getPhysLibCell(),
+                     preferred_x,
+                     preferred_y,
+                     x_min,
+                     x_max,
+                     y_min,
+                     y_max,
+                     trial);
+  if (location.first < 0 || location.second < 0) {
+    return false;
+  }
+  const GridX col = grid_->gridX(DbuX{location.first});
+  const GridY row = grid_->gridSnapDownY(DbuY{location.second});
+  const std::optional<PhysOrientation> orientation
+      = grid_->getSiteOrientation(
+          col, row, registered->getPhysLibCell()->getTechSite()->getName());
+  if (!orientation.has_value()) {
+    return false;
+  }
+  target_add.x_ = UvDist{core.getXL().getStorage() + location.first};
+  target_add.y_ = UvDist{core.getYL().getStorage() + location.second};
+  target_add.orientation_ = *orientation;
+  fcRecord.insert(fcRecord.end(),
+                  std::make_move_iterator(trial.begin()),
+                  std::make_move_iterator(trial.end()));
+  return true;
 }
 
 /**
@@ -232,27 +499,140 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId, std::string moduleName)
  * (likely insufficient space or incompatible master footprint).
  */
 bool DePlace::isLegal(LeafCellID cellId, LibCellID lcId,
-    std::vector<CellChangeRecord>& fcRecord)
+    std::vector<CellChangeRecord>& fcRecord) const
 {
-  Rect rect = this->core_;
-  const PhysLibCell& physLibCell = design_->getLibAcc().getPhysLibCell(lcId);
+  if (!isFillerRepairReady() || drc_engine_ == nullptr || network_ == nullptr
+      || grid_ == nullptr) {
+    return false;
+  }
+  const Node* const cell = network_->getNode(cellId);
+  Master* const master = network_->getMaster(lcId);
+  if (cell == nullptr || !cell->isStdCell() || master == nullptr
+      || master->getPhysLibCell() == nullptr || master->isFiller()) {
+    return false;
+  }
 
-  Node* cell = this->network_->getNode(cellId);
-  LibCellID oriLcId = cell->getMaster()->getDbMaster();
-  const PhysLibCell& oriLc = design_->getLibAcc().getPhysLibCell(oriLcId);
+  // Request-local overlay only: no unplace, Network master swap, Grid paint,
+  // UDM edit, or restore window. This makes parallel opto queries share one
+  // immutable DePlace/checker/engine revision safely.
+  Node candidate = *cell;
+  candidate.setMaster(master);
+  candidate.setType(Node::CELL);
+  candidate.setWidth(
+      DbuX{master->getPhysLibCell()->getWidth().getStorage()});
+  candidate.setHeight(
+      DbuY{master->getPhysLibCell()->getHeight().getStorage()});
+  candidate.setBottomPower(master->getBottomPowerType());
+  candidate.setTopPower(master->getTopPowerType());
 
-  // todo: not modify db for the legality check
-  unplaceCell(cell);
-  this->network_->addMaster(physLibCell, *filler_setting_, this->grid_.get(),
-      this->edge_type_table_.get());
-  this->network_->updateNode(cell, desMgr_, physLibCell);
+  std::vector<CellChangeRecord> trial;
+  if (!drc_engine_->checkDRC(&candidate,
+                             grid_->gridX(cell),
+                             grid_->gridRoundY(cell),
+                             cell->getOrient(),
+                             trial)) {
+    return false;
+  }
+  fcRecord.insert(fcRecord.end(),
+                  std::make_move_iterator(trial.begin()),
+                  std::make_move_iterator(trial.end()));
+  return true;
+}
 
-  bool is_valid = drc_engine_->checkDRC(cell, fcRecord);
+std::pair<int, int> DePlace::findLegalAdd(
+    const std::string& target_name,
+    const PhysLibCell& master,
+    GridX preferred_x,
+    GridY preferred_y,
+    GridX x_min,
+    GridX x_max,
+    GridY y_min,
+    GridY y_max,
+    std::vector<CellChangeRecord>& fcRecord) const
+{
+  if (!isFillerRepairReady() || grid_ == nullptr
+      || master.getTechSite() == nullptr || grid_->getSiteWidth().v <= 0) {
+    return {-1, -1};
+  }
+  const int width_sites = std::max(
+      1,
+      (master.getWidth().getStorage() + grid_->getSiteWidth().v - 1)
+          / grid_->getSiteWidth().v);
+  const int height_rows = std::max(1, grid_->gridHeight(master).v);
+  x_min.v = std::max(0, x_min.v);
+  y_min.v = std::max(0, y_min.v);
+  x_max.v = std::min(x_max.v, grid_->getRowSiteCount().v - width_sites);
+  y_max.v = std::min(y_max.v, grid_->getRowCount().v - height_rows);
+  if (x_min > x_max || y_min > y_max) {
+    return {-1, -1};
+  }
+  preferred_x.v = std::clamp(preferred_x.v, x_min.v, x_max.v);
+  preferred_y.v = std::clamp(preferred_y.v, y_min.v, y_max.v);
 
-  this->network_->updateNode(cell, desMgr_, oriLc);
-  placeCell(cell, grid_->gridX(cell), grid_->gridSnapDownY(cell));
-
-  return is_valid;
+  const Rect core = grid_->getCore();
+  const std::string& site_name = master.getTechSite()->getName();
+  const int64_t max_radius
+      = static_cast<int64_t>(x_max.v) - x_min.v
+        + static_cast<int64_t>(y_max.v) - y_min.v;
+  static constexpr int kMaxCheckerCandidates = 4096;
+  static constexpr int kMaxExaminedSites = 65536;
+  int checked_candidates = 0;
+  int examined_sites = 0;
+  for (int64_t radius = 0; radius <= max_radius; ++radius) {
+    for (int64_t dy = -radius; dy <= radius; ++dy) {
+      const int64_t dx = radius - std::abs(dy);
+      const int64_t row = static_cast<int64_t>(preferred_y.v) + dy;
+      const std::array<int64_t, 2> columns{
+          static_cast<int64_t>(preferred_x.v) - dx,
+          static_cast<int64_t>(preferred_x.v) + dx};
+      for (int side = 0; side < (dx == 0 ? 1 : 2); ++side) {
+        const int64_t col = columns[side];
+        if (row < y_min.v || row > y_max.v || col < x_min.v
+            || col > x_max.v) {
+          continue;
+        }
+        if (examined_sites++ >= kMaxExaminedSites) {
+          return {-1, -1};
+        }
+        const std::optional<PhysOrientation> orientation
+            = grid_->getSiteOrientation(
+                GridX{static_cast<int>(col)},
+                GridY{static_cast<int>(row)},
+                site_name);
+        if (!orientation.has_value()) {
+          continue;
+        }
+        if (checked_candidates++ >= kMaxCheckerCandidates) {
+          return {-1, -1};
+        }
+        const int64_t x = core.getXL().getStorage()
+                          + static_cast<int64_t>(col)
+                                * grid_->getSiteWidth().v;
+        const int64_t y = core.getYL().getStorage()
+                          + grid_->gridYToDbu(
+                                     GridY{static_cast<int>(row)})
+                                .v;
+        const CellChangeRecord target{
+            OpType::Add,
+            CellData{target_name},
+            UvDist{x},
+            UvDist{y},
+            LibCellID{},
+            master.getLibCellId(),
+            *orientation};
+        std::vector<CellChangeRecord> trial;
+        if (!repairFillers(target, trial)) {
+          continue;
+        }
+        fcRecord.insert(fcRecord.end(),
+                        std::make_move_iterator(trial.begin()),
+                        std::make_move_iterator(trial.end()));
+        return {static_cast<int>(col) * grid_->getSiteWidth().v,
+                grid_->gridYToDbu(GridY{static_cast<int>(row)}).v};
+      }
+    }
+  }
+  return {-1, -1};
 }
 
 Rect DePlace::getBoundingBox(const Rect& region, int rings) const

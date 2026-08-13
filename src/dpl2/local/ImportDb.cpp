@@ -315,10 +315,6 @@ bool importOpenRoadDb(odb::dbDatabase* database,
     out << "ERROR: filler configuration failed: " << error.what() << '\n';
     return false;
   }
-  if (!deplace->registerFillerRepairMasters()) {
-    out << "ERROR: DePlace could not register filler masters\n";
-    return false;
-  }
   out << "dpl2 grid: " << deplace->getGrid()->getRowCount().v << " x "
       << deplace->getGrid()->getRowSiteCount().v
       << ", fullUtil=" << deplace->getGrid()->isFullUtil() << '\n';

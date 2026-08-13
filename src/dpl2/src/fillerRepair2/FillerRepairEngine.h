@@ -40,13 +40,13 @@ class FillerRepairEngine
   // Construction eagerly builds the immutable snapshot from the checker.
   // Bind this engine only when it is ready.
   bool isReady() const;
-  const std::vector<ipl::Diagnostic>& getInitDiagnostics() const;
+  std::vector<ipl::Diagnostic> getInitDiagnostics() const;
 
   // Non-mutating, pre-commit overlay repair.
-  RepairOutcome repair(const ipl::CheckRequest& request);
+  RepairOutcome repair(const ipl::CheckRequest& request) const;
   // Add uses a request-local name. Delete/Replace identify an existing target;
   // Replace must retain the immutable snapshot footprint and origin.
-  RepairOutcome repair(const CellChangeRecord& targetChange);
+  RepairOutcome repair(const CellChangeRecord& targetChange) const;
 
  private:
   class Impl;
