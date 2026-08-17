@@ -1,31 +1,27 @@
 #pragma once
+#include <dpl2/DRCChecker.h>
 #include <infrastructure/network.h>
+#include <techRuleCheck.hh>
+#include <techObjTypes.hh>
+#include <unl/unlObjTypes.hh>
 
-#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
 #include <optional>
 #include <set>
-#include <shared_mutex>
 #include <string>
-#include <techObjTypes.hh>
-#include <techRuleCheck.hh>
-#include <unl/unlObjTypes.hh>
 #include <unordered_map>
 #include <vector>
 
-#include "drc/DRCChecker.h"
-
-using eUNL::PhysDesMgr;
 using eUNL::PhysRow;
-using eUTL::PhysOrientation;
-using eUTL::PhysOrientationE;
+using eUNL::PhysDesMgr;
 using eUTL::Rect;
+using eUTL::PhysOrientationE;
+using eUTL::PhysOrientation;
 
 namespace dpl2 {
 namespace fillerRepair {
-// [FRPORT] Checker only borrows the DePlace-owned engine.
 class FillerRepairEngine;
 }
 
@@ -44,60 +40,21 @@ using ColId = int32_t;
 using GroupId = int32_t;
 using FillerChanges = std::vector<CellChangeRecord>;
 
-enum class BandSlot
-{
-    Bottom,
-    Top
-};
-enum class RuleSource
-{
-    Width,
-    Spacing,
-    Lef58Width,
-    Lef58Spacing,
-    Count
-};
-enum class RuleDirection
-{
-    Any,
-    Horizontal,
-    Vertical
-};
-enum class Relationship
-{
-    IntraRow,
-    InterRow,
-    Count
-};
-enum class OutcomeStatus
-{
-    Satisfied,
-    Violated,
-    NotApplicable,
-    Skipped
-};
-enum class ViolationType
-{
-    AllStdCell,
-    AllFiller,
-    Mixed
-};
+enum class BandSlot {Bottom, Top};
+enum class RuleSource {Width, Spacing, Lef58Width, Lef58Spacing, Count};
+enum class RuleDirection {Any, Horizontal, Vertical};
+enum class Relationship {IntraRow, InterRow, Count};
+enum class OutcomeStatus {Satisfied, Violated, NotApplicable, Skipped};
+enum class ViolationType {AllStdCell, AllFiller, Mixed};
 
-// [fillerRepair-fix] String literals are const char[N]; binding them to
-// char* is ill-formed (-Werror=write-strings). Matches kRuleSourceNames.
-constexpr std::array<const char*, (unsigned) Relationship::Count>
-    kRelationshipNames{"intra_row", "inter_row"};
+constexpr std::array<const char*, (unsigned) Relationship::Count>kRelationshipNames{"intra_row", "inter_row"};
 inline std::string toString(Relationship rel)
-{
-    return std::string(kRelationshipNames[(unsigned) rel]);
-}
+{return std::string(kRelationshipNames[(unsigned)rel]);}
 
 constexpr std::array<const char*, (unsigned) RuleSource::Count>
-    kRuleSourceNames{"WIDTH", "SPACING", "LEF58_WIDTH", "LEF58_SPACING"};
+kRuleSourceNames{"WIDTH", "SPACING", "LEF58_WIDTH", "LEF58_SPACING"};
 inline std::string toString(RuleSource source)
-{
-    return std::string(kRuleSourceNames[(unsigned) source]);
-}
+{return std::string(kRuleSourceNames[(unsigned)source]);}
 
 struct XInterval
 {
@@ -108,25 +65,12 @@ struct XInterval
 class Layer
 {
 public:
-    enum class Vt
-    {
-        S,
-        L,
-        H,
-        UL,
-        Unknown
-    };
-    enum class Polar
-    {
-        N,
-        P
-    };
+    enum class Vt {S, L, H, UL, Unknown};
+    enum class Polar {N, P};
 
     Layer() = default;
-    Layer(LayerId id, const std::string& name, Vt vt, Polar polar)
-        : id_(id), name_(name), vt_(vt), polar_(polar)
-    {
-    }
+    Layer(LayerId id, const std::string& name, Vt vt, Polar polar) :
+      id_(id), name_(name), vt_(vt), polar_(polar) {}
 
     ADD_SETTER_GETTER_PP(int, Id, id_);
     ADD_SETTER_GETTER_PP(eLIB::TechLayerRelativeID, TechLayerId, tlId_);
@@ -136,7 +80,7 @@ public:
 
 private:
     LayerId id_ = 0;
-    eLIB::TechLayerRelativeID tlId_;  // desMgr->getTopTech().getTechLayer()
+    eLIB::TechLayerRelativeID tlId_; // desMgr->getTopTech().getTechLayer()
     std::string name_;
     Vt vt_ = Vt::Unknown;
     Polar polar_ = Polar::N;
@@ -147,16 +91,12 @@ class Rule
 public:
     Rule() = default;
     Rule(int id, RuleSource rs, LayerId l1, Dbu v)
-        : ruleId_(id), source_(rs), primaryLayer_(l1), minValue_(v)
-    {
-    }
+        : ruleId_(id), source_(rs), primaryLayer_(l1), minValue_(v) {}
 
     ADD_SETTER_GETTER_PP(int, RuleId, ruleId_);
     ADD_SETTER_GETTER_PP(RuleSource, Source, source_);
     ADD_SETTER_GETTER_PP(LayerId, PrimaryLayer, primaryLayer_);
-    ADD_SETTER_GETTER_PP(std::optional<LayerId>,
-                         SecondaryLayer,
-                         secondaryLayer_);
+    ADD_SETTER_GETTER_PP(std::optional<LayerId>, SecondaryLayer, secondaryLayer_);
     ADD_SETTER_GETTER_PP(Dbu, MinValue, minValue_);
     ADD_SETTER_GETTER_PP(RuleDirection, Direction, direction_);
     ADD_SETTER_GETTER_PP(std::optional<Dbu>, Prl, prl_);
@@ -165,18 +105,11 @@ public:
     ADD_SETTER_GETTER_PP(bool, ExceptCornerTouch, exceptCornerTouch_);
     ADD_SETTER_GETTER_PP(std::optional<Dbu>, Length, length_);
     ADD_SETTER_GETTER_PP(std::optional<std::string>, CheckGroup, checkGroup_);
-    ADD_SETTER_GETTER_PP(std::vector<LayerId>,
-                         IntersectLayers,
-                         intersectLayers_);
+    ADD_SETTER_GETTER_PP(std::vector<LayerId>, IntersectLayers, intersectLayers_);
     ADD_SETTER_GETTER_PP(std::vector<std::string>,
-                         UnsupportedClauses,
-                         unsupportedClauses_);
-    ADD_SETTER_GETTER_PP(std::optional<int>,
-                         ContainmentGroup,
-                         containmentGroup_);
-    ADD_SETTER_GETTER_PP(std::vector<int>,
-                         ContainedByRuleIds,
-                         containedByRuleIds_);
+        UnsupportedClauses, unsupportedClauses_);
+    ADD_SETTER_GETTER_PP(std::optional<int>, ContainmentGroup, containmentGroup_);
+    ADD_SETTER_GETTER_PP(std::vector<int>, ContainedByRuleIds, containedByRuleIds_);
     ADD_SETTER_GETTER_PP(int, SpecificityRank, specificityRank_);
 
     bool isWidth() const;
@@ -202,7 +135,6 @@ private:
     std::vector<int> containedByRuleIds_;
     int specificityRank_ = 0;
 };
-
 struct MasterShape
 {
     MasterId masterId = 0;
@@ -228,16 +160,9 @@ struct MasterItem
     MasterId masterId = 0;  // Legacy field for test compatibility
     Dbu width = 0;
     Dbu height = 0;
-    std::vector<MasterShape> shapes;  // rebuilt band shapes
-    //(output of rebuildMasterShapes)
-    std::vector<MasterShape>
-        rawShapes;       // original raw shapes (preserved input)
-    Dbu siteHeight = 0;  // site height from the master's site type
-    // [fillerRepair-layout] Needed to validate the row orientation of an
-    // overlay Add without constructing a Network Node.
-    std::string siteName;
-    // Serialized portable-input metadata. Runtime overlay validation reads
-    // the authoritative Network Master classification.
+    std::vector<MasterShape> shapes;      // rebuilt band shapes
+    std::vector<MasterShape> rawShapes;   // original raw shapes (preserved input)
+    Dbu siteHeight = 0;                   // site height from the master's site type
     bool isFiller = false;
     std::vector<MasterInterval> intervals;
 };
@@ -285,7 +210,6 @@ struct Violation
     uint64_t hash = 0;
     std::string toString(Dbu siteWidth = 1) const;
 };
-
 struct Diagnostic
 {
     std::string status;
@@ -298,6 +222,7 @@ struct OverlapInfo
     std::optional<Diagnostic> diags;
 };
 
+//deprecated
 struct CheckRequest
 {
     InstanceId instanceId = 0;
@@ -305,8 +230,14 @@ struct CheckRequest
     RowId rowId = 0;
     ColId colId = 0;
     PhysOrientation orientation = PhysOrientationE::R0;
-    // The target transaction is separate from the filler overlay.
-    OpType targetOp = OpType::Replace;
+    Node* cell = nullptr;                   // newly created node
+    std::vector<CellChangeRecord> overlayChanges; // old cells need be changed
+};
+
+struct CheckRequestOverlay
+{
+    Node* cell; // newly created node
+    std::vector<CellChangeRecord> overlayChanges; // old cells need be changed
 };
 
 struct CheckResult
@@ -335,71 +266,46 @@ using CheckShapes = std::vector<CheckShape>;
 class ImplantLayerChecker final : public DRCChecker
 {
 public:
-    ImplantLayerChecker(Grid* grid,
-                        eUNL::Design* design,
-                        Network* network);
+    ImplantLayerChecker(Grid* grid, eUNL::Design* design, Network* network);
     ~ImplantLayerChecker();
 
-    bool check(const Node* cell,
-               GridX x,
-               GridY y,
-               const eUTL::PhysOrientation& orient) const override;
-    // [FRPORT] Repair-aware checker entry appends engine output for opto commit.
-    bool check(const Node* cell,
-               GridX x,
-               GridY y,
-               const eUTL::PhysOrientation& orient,
-               std::vector<CellChangeRecord>& fcRecord) const override;
+    bool check(const Node* cell, GridX x, GridY y,
+        const eUTL::PhysOrientation& orient) const override;
+    bool check(const Node* cell, GridX x, GridY y,
+        const eUTL::PhysOrientation& orient,
+        std::vector<CellChangeRecord>& cellChanges,
+        std::vector<CellChangeRecord>& overlayChanges) const override;
+    bool check(const Node* cell, std::vector<CellChangeRecord>& cellChanges,
+        std::vector<CellChangeRecord>& overlayChanges) const;
 
-    // [FRPORT] Opto-facing, non-mutating repair entry for one standard-cell
-    // Add/Delete/Replace record. On success only the required filler edits are
-    // appended; the caller retains and commits the target record itself.
-    bool repair(const CellChangeRecord& targetChange,
-                std::vector<CellChangeRecord>& fcRecord) const;
+    // Repair is enabled for the normal checker path.
+    // ImplantLayerCheckerHelper disables it for checker-only tests.
+    void setFillerRepairEnabled(bool enabled) { enableFillerRepair_ = enabled; }
+    bool isFillerRepairEnabled() const { return enableFillerRepair_; }
 
-    // [FRPORT] Repair is enabled for normal checker instances. Atomic access
-    // makes a helper disable visible without racing a worker already entering
-    // check(); one request uses the value it observed at entry.
-    void setFillerRepairEnabled(bool enabled)
-    {
-        enableFillerRepair_.store(enabled, std::memory_order_release);
-    }
-    bool isFillerRepairEnabled() const
-    {
-        return enableFillerRepair_.load(std::memory_order_acquire);
-    }
-
-    // [FRPORT] Publish one ready, DePlace-owned engine. Binding is idempotent
-    // for the same object and rejects null, unready, or replacement engines.
-    // The release/acquire pair makes the eagerly built immutable snapshot
-    // visible to checker workers without a per-check mutex. The owner keeps
-    // both objects alive and stops workers before teardown.
-    bool setFillerRepairEngine(
-        const fillerRepair::FillerRepairEngine* engine);
-
-    CheckResult checkDirect(const CheckRequest& request) const;
+    CheckResult checkDirect(const CheckRequestOverlay& request) const;
     std::vector<CheckResult> checkPlaceWithOverlays(
-        const CheckRequest& request,
-        const Rect& guardRegion,
+        const CheckRequestOverlay& request, const Rect& guardRegion,
         const std::vector<FillerChanges>& fillerChanges) const;
 
     std::vector<CheckResult> checkAllNodesDirect() const;
+    std::vector<Violation> getUniqueViolations(
+        const std::vector<Violation>& violations);
 
     void printStats(std::ostream& os, bool isShort) const;
-    Dbu siteWidth() const { return siteWidth_; }
-    int getMaxRuleValue() const { return maxRuleValue_; }
+    Dbu siteWidth() const {return siteWidth_;}
+    int getMaxRuleValue() const {return maxRuleValue_;}
     void setMaxRuleValue();
-    // [FRPORT] FillerRepairEngine construction borrows this same object set.
-    Grid* getGrid() const { return grid_; }
-    eUNL::Design* getDesign() const { return design_; }
-    Network* getNetwork() const { return network_; }
-    const std::vector<std::unique_ptr<Node>>& getNodes() const
+    const std::map<int, std::unique_ptr<Node>>& getNodes() const
     {
-        static const std::vector<std::unique_ptr<Node>> empty;
+        static const std::map<int, std::unique_ptr<Node>> empty;
         return network_ != nullptr ? network_->getNodes() : empty;
     }
-    const std::vector<Layer>& getLayers() const { return layers_; }
-    const std::vector<Diagnostic>& getDiags() const { return diagnostics_; }
+    const std::map<MasterId, MasterItem>& getMasterItems() const
+    {return masterItems_;}
+    const std::vector<Layer>& getLayers() const {return layers_;}
+
+    const std::vector<Diagnostic>& getDiags() const {return diagnostics_;}
     size_t mergedShapeCount() const;
 
     friend class TestImplantCmd;
@@ -408,18 +314,16 @@ public:
 private:
     // init functions
     bool init(PhysDesMgr* desMgr);
-    void ensureMasterData(MasterId masterId) const;
 
-    // [FRPORT] The DePlace-owned engine is initialized and bound before checking. On a
-    // repairable failure the records are APPENDED to the caller's fcRecord;
-    // the checker keeps no filler-change member state.
-    bool repairFillers(const fillerRepair::FillerRepairEngine& engine,
-                       const CheckRequest& request,
-                       std::vector<CellChangeRecord>& fcRecord) const;
+    // Filler repair is lazy (most checks pass and never need it): the engine
+    // is created and initialized on the first enabled failing check. On a
+    // repairable failure the repair records are APPENDED to the caller's
+    // fcRecord; the checker keeps no filler-change member state.
+    bool repairFillers(const CheckRequestOverlay& request,
+        std::vector<CellChangeRecord>& fcRecord) const;
     void buildLayers(PhysDesMgr* desMgr);
     static void parseLayerName(const std::string& name,
-                               Layer::Vt& vt,
-                               Layer::Polar& polar);
+        Layer::Vt& vt, Layer::Polar& polar);
     bool buildRules();
     void buildMasters();
     void rebuildMasterShapes();
@@ -432,111 +336,70 @@ private:
     Layer::Polar getPolar(RowId rowA, RowId rowB) const;
 
     bool slotPolarityOk(const CheckShape& shape) const;
-    bool contained(const CheckOutcome& specific,
-                   const CheckOutcome& broad) const;
-    bool isIntersectCoverage(const Rule& rule,
-                             const CheckShape& target,
-                             const CheckShape& neighbor,
-                             const CheckShapes& shapes) const;
+    bool contained(const CheckOutcome& specific, const CheckOutcome& broad) const;
+    bool isIntersectCoverage(const Rule& rule, const CheckShape& target,
+        const CheckShape& neighbor, const CheckShapes& shapes) const;
 
-    CheckShapes getSnapshot(const CheckRequest& request,
-                            const std::set<InstanceId>& excludedNodes) const;
-    CheckShapes getOverlaySnapshot(
-        const CheckRequest& request,
-        const Rect& guardRegion,
-        const FillerChanges& fillerChanges,
-        bool useNewFillers,
+    CheckShapes getSnapshot(const CheckRequestOverlay& request,
         const std::set<InstanceId>& excludedNodes) const;
-    CheckShapes getNodeShape(InstanceId instanceId,
-                             MasterId masterId,
-                             RowId rowId,
-                             ColId colId,
-                             PhysOrientation orientation,
-                             bool isCandidate) const;
+    CheckShapes getOverlaySnapshot(const CheckRequestOverlay& request,
+        const Rect& guardRegion, const FillerChanges& fillerChanges,
+        bool useNewFillers, const std::set<InstanceId>& excludedNodes) const;
+    CheckShapes getNodeShape(InstanceId instanceId, MasterId masterId,
+        RowId rowId, ColId colId, PhysOrientation orientation,
+        bool isCandidate) const;
     CheckShapes mergeShapes(const CheckShapes& rects) const;
-    CheckShapes findNeighbors(const CheckShape& target,
-                              const Rule& rule,
-                              Relationship relationship,
-                              const CheckShapes& shapes) const;
-    std::vector<CheckOutcome> evalRule(
-        const Rule& rule,
-        const CheckShapes& shapes,
-        const std::vector<XInterval>& tgtItvs) const;
-    std::vector<Violation> makeViolations(
-        const std::vector<CheckOutcome>& outcomes,
+    CheckShapes findNeighbors(const CheckShape& target, const Rule& rule,
+        Relationship relationship, const CheckShapes& shapes) const;
+    std::vector<CheckOutcome> evalRule(const Rule& rule,
+        const CheckShapes& shapes, const std::vector<XInterval>& tgtItvs) const;
+    std::vector<Violation> makeViolations(const std::vector<CheckOutcome>& outcomes,
         const CheckShapes& shapes) const;
-    CheckResult checkPlaceWithOverlay(
-        const CheckRequest& request,
-        const Rect& guardRegion,
-        const FillerChanges& fillerChanges,
+
+    CheckResult checkPlaceWithOverlay(const CheckRequestOverlay& request,
+        const Rect& guardRegion, const FillerChanges& fillerChanges,
         const std::vector<Violation>& oldViolations) const;
-    CheckResult checkOverlayRegion(const CheckRequest& request,
-                                   const Rect& guardRegion,
-                                   const FillerChanges& fillerChanges,
-                                   bool useNewFillers) const;
+    CheckResult checkOverlayRegion(const CheckRequestOverlay& request,
+        const Rect& guardRegion, const FillerChanges& fillerChanges,
+        bool useNewFillers) const;
 
     CheckShapes mergeGroupShapes(const CheckShapes& rawShapes,
-                                 bool isCandidate) const;
+        bool isCandidate) const;
 
-    // Uses the requested master/pose and supports request-local Add targets.
-    OverlapInfo checkOverlap(const CheckRequest& request) const;
-    // Node-facing check() is intentionally same-footprint; Add/Delete uses
-    // the explicit CellChangeRecord repair entry.
-    bool targetFootprintChanged(const CheckRequest& request) const;
-    // [fillerRepair-layout] Batch setup validates target fields before a
-    // candidate exists; candidate validation additionally enforces the full
-    // Delete/Add transaction for a changed footprint.
-    DiagVec validateOverlayRequest(const CheckRequest& request,
-                                   const FillerChanges& fillerChanges,
-                                   bool enforceLayoutTransaction = true) const;
-    bool touchesInstance(const Violation& violation,
-                         InstanceId instanceId) const;
+    OverlapInfo checkOverlap(const Node* node) const;
+    DiagVec validateOverlayRequest(const CheckRequestOverlay& request,
+        const FillerChanges& fillerChanges) const;
+    bool touchesInstance(const Violation& violation, InstanceId instanceId) const;
     bool containsViolation(const Violation& oldViolation,
-                           const Violation& newViolation) const;
-    bool isInGuard(const XInterval& xWindow,
-                   const RowIdVec& rowIds,
-                   const Rect& guard) const;
+        const Violation& newViolation) const;
+    bool isInGuard(const XInterval& xWindow, const RowIdVec& rowIds,
+        const Rect& guard) const;
     void finishViolation(Violation& violation) const;
-    bool groupFails(const Rule& rule,
-                    const CheckShape& target,
-                    const CheckShape& neighbor,
-                    Relationship relationship,
-                    const XInterval& xWindow,
-                    const CheckShapes& shapes) const;
+    bool groupFails(const Rule& rule, const CheckShape& target,
+        const CheckShape& neighbor, Relationship relationship,
+        const XInterval& xWindow, const CheckShapes& shapes) const;
     Dbu queryRadius(const Rule& rule) const;
-    bool hasUsableInfrastructure() const;
 
     Network* network_ = nullptr;
-    // Non-owning infrastructure initialized and owned by DePlace.
-    eUNL::Design* design_ = nullptr;
     std::vector<Layer> layers_;
     std::unordered_map<std::string, std::vector<LayerId>> layerGroups_;
     std::vector<Rule> rules_;
     std::vector<Rule*> sortedRules_;
-    std::vector<MasterItem> masterItems_;
+    std::map<MasterId, MasterItem> masterItems_;
 
-    std::vector<Diagnostic> diagnostics_;  // Initialization diagnostics.
-    Layer::Polar basePolar_ = Layer::Polar::P;  // polarity at
-    // bottom band of row 0; polarity alternates per row.
+    std::vector<Diagnostic> diagnostics_; // Initialization diagnostics.
+    Layer::Polar basePolar_ = Layer::Polar::P; // polarity at bottom band of row 0;
     Dbu rowHeight_ = 0;
     Dbu siteWidth_ = 1;
-    int maxRuleValue_ = 1;  // the maxValue for all rules' minValue
-    // Protects the only checker data that may be extended after construction:
-    // a candidate master registered by infrastructure before check().
-    mutable std::shared_mutex masterItemsMutex_;
-
-    // [FRPORT] The checker never owns or replaces the engine. Both values are
-    // atomically published configuration; all repair search state is local to
-    // the worker call.
-    std::atomic<bool> enableFillerRepair_{true};
-    std::atomic<const fillerRepair::FillerRepairEngine*>
-        fillerRepairEngine_{nullptr};
+    int maxRuleValue_ = 1; // the maxValue for all rules' minValue
+    mutable int nextCandShapeId_ = -1; // Temporary candidate shape ids.
+    bool enableFillerRepair_ = true;
 
     std::map<eLIB::TechLayerRelativeID, LayerId> techLayerToIdx_;
     std::map<std::string, LayerId> layerNameToIdx_;
-    const std::array<Relationship, 2> relations_
-        = {Relationship::IntraRow, Relationship::InterRow};
+    const std::array<Relationship, 2> relations_ = {Relationship::IntraRow,
+      Relationship::InterRow};
 };
 
-}  // namespace ipl
-}  // namespace dpl2
+} // namespace ipl
+} // namespace dpl2

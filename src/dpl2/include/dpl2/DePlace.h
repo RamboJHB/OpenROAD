@@ -8,9 +8,6 @@
 #include <boost/geometry/geometry.hpp>
 #include <boost/geometry/index/rtree.hpp>
 
-#include <cstddef>
-#include <mutex>
-
 // UDM
 #include <phys/fpManager.hh>
 #include <phys/physDesMgr.hh>
@@ -23,6 +20,9 @@
 #include <libObjAccessor.hh>
 #include <timlib/libCell.hh>
 #include <unl/unlObjTypes.hh>
+#include <unl/nlChange.hh>
+#include <unl/nlEditor.hh>
+#include <mv/mvObj.hh>
 
 using eUNL::PhysBlockage;
 using eUNL::PhysRow;
@@ -56,25 +56,20 @@ namespace dpl2{
   class TestPlacementDRCCmd;
   class TestImplantCmd;
   class TestEcoFlowCmd;
+  class TestFillerRepairCmd;
 }
 
 namespace dpl2 {
+
 class Grid;
 class Node;
-namespace ipl {
-class ImplantLayerChecker;
-}
-namespace fillerRepair {
-class FillerRepairEngine;
-}
-// [fillerRepair-fix] Match the infrastructure definitions so strict Clang
-// builds do not reject the declarations as mismatched tags.
-struct Pixel;
+class Master;
+class Pixel;
 class PixelPt;
-struct GridPt;
-struct GridRect;
-struct DbuPt;
-struct DbuRect;
+class GridPt;
+class GridRect;
+class DbuPt;
+class DbuRect;
 class Padding;
 class EdgeTypeTable;
 class Network;
@@ -87,6 +82,7 @@ struct CellChangeRecord;
 
 template <typename T>
 struct TypedCoordinate;
+
 // These have to be defined here even though they are only used
 // in the implementation section.  C++ doesn't allow you to forward
 // declare types of this sort.
@@ -102,225 +98,174 @@ using DbuX = TypedCoordinate<DbuXType>;
 struct DbuYType;
 using DbuY = TypedCoordinate<DbuYType>;
 
+struct CellChangeRecord;
+
 inline constexpr unsigned Symmetry_UNKNOWN = 0x00000000;
 inline constexpr unsigned Symmetry_X = 0x00000001;
 inline constexpr unsigned Symmetry_Y = 0x00000002;
 inline constexpr unsigned Symmetry_ROT90 = 0x00000004;
 
 class DePlace {
-public:
+ public:
 
-static DePlace* get() {
-  static std::unique_ptr<DePlace> de_place_ = std::make_unique<DePlace>();
-  return de_place_.get();
-}
+  static DePlace* get() {
+    static std::unique_ptr<DePlace> de_place_ = std::make_unique<DePlace>();
+    return de_place_.get();
+  }
 
-DePlace();
-DePlace(PhysDesMgr* desMgr);
-~DePlace();
+  DePlace();
+  DePlace(PhysDesMgr* desMgr);
+  ~DePlace();
 
-DePlace(const DePlace&) = delete;
-DePlace& operator=(const DePlace&) = delete;
-void setFixedGridCells();
-void setPlacedGridCells();
-// [FRPORT] [fillerRepair-fix] Paint filler occupancy into the shared Grid used
-// by precheck and repair.
-// This is the shared body of the two above: paints one node's
-// footprint (and its padding reservation) into the grid.
-void paintGridCell(Node* cell);
-void setGridCell(Node* cell, Pixel* pixel);
-void setPaddingGlobal(int left, int right);
-void setPadding(PhysLibCell* master, int left, int right);
-void setPadding(LeafCellID cellId, int left, int right);
-std::pair<int, int> findLeg(LeafCellID cellId, int diameter,
-    std::string moduleName);
-std::pair<int, int> findLeg(LeafCellID cellId, std::string moduleName);
-// [FRPORT] Repair-aware forms. Existing cells are evaluated as a fixed-origin
-// Replace; a cell not present in the immutable Network snapshot is evaluated
-// as a new-buffer Add and returns the filler transaction needed at the chosen
-// site. The legacy overloads fail if committing filler changes would be
-// required, because they have nowhere to return those records.
-std::pair<int, int> findLeg(LeafCellID cellId,
-                            int diameter,
-                            std::string moduleName,
-                            std::vector<CellChangeRecord>& fcRecord);
-std::pair<int, int> findLeg(LeafCellID cellId,
-                            std::string moduleName,
-                            std::vector<CellChangeRecord>& fcRecord);
-// Preferred opto entry for a new buffer. `target_add` must be an Add record;
-// x/y are the preferred absolute origin. On success they and orientation are
-// updated to the selected site, while filler changes are appended atomically.
-// A negative diameter searches the whole core; otherwise it is a DBU radius.
-bool findLegal(CellChangeRecord& target_add,
-               int diameter,
-               std::vector<CellChangeRecord>& fcRecord) const;
-bool isLegal(LeafCellID cellId, LibCellID lcId,
-    std::vector<CellChangeRecord>& fcRecord) const;
-PhysDesMgr* getDesMgr() {return desMgr_;};
-eUNL::Design* getDesign() { return design_; }
-const eUNL::Design* getDesign() const { return design_; }
-Grid* getGrid() {return grid_.get();};
-const Grid* getGrid() const {return grid_.get();};
-Network* getNetwork() {return network_.get();};
-const Network* getNetwork() const {return network_.get();};
-Rect getCoreArea();
+  DePlace(const DePlace&) = delete;
+  DePlace& operator=(const DePlace&) = delete;
+  // shared body of the two function below: paints one node's
+  // footprint (and its padding reservation) into the grid.
+  void paintGridCell(Node* cell);
+  void setFixedGridCells();
+  void setPlacedGridCells();
+  void setGridCell(Node* cell, Pixel* pixel);
+  void setPaddingGlobal(int left, int right);
+  void setPadding(PhysLibCell* master, int left, int right);
+  void setPadding(LeafCellID cellId, int left, int right);
+  std::pair<int, int> findLeg(eUNL::PinID startLoc, \
+                              eUNL::VoltageArea* va,
+                              int diameter, \
+                              LibCellID masterId, \
+                              std::vector<CellChangeRecord>& ccRecords);
+  bool isLegal(LeafCellID instId, LibCellID masterId,
+      std::vector<CellChangeRecord>& ccRecords);
+  bool commit(const std::vector<CellChangeRecord>& ccRecords);
+  Rect getBoundingBox(const Rect& operableRect);
+  PhysDesMgr* getDesMgr() {return desMgr_;};
+  Grid* getGrid() {return grid_.get();};
+  const Grid* getGrid() const {return grid_.get();};
+  Network* getNetwork() {return network_.get();};
+  const Network* getNetwork() const {return network_.get();};
+  PlacementDRC* getPlacementDRC() {return drc_engine_.get();};
+  Rect getCoreArea();
+  fillerSetting* getFillerSetting() { return filler_setting_.get();};
+// Network Master construction stays with the infrastructure
+// owner that has the real edge table. It also refreshes existing Node filler
+// types. Call after updating fillerSetting and before a checker may lazily
+// initialize filler repair.
+  bool registerFillerRepairMasters();
+ private:
+  using bgPoint
+      = boost::geometry::model::d2::point_xy<int,
+                                             boost::geometry::cs::cartesian>;
+  using bgBox = boost::geometry::model::box<bgPoint>;
 
-/**
- * Bounding box of @p region grown by @p rings whole placed CELLS left/right
- * and @p rings rows up/down.
- *
- * Rings count cells, not sites or DBU: the walk steps over each placed
- * instance regardless of kind, so a std cell is a ring member like any other
- * and never stops it. Cells overlapping @p region are snapped in whole, empty
- * sites are skipped without consuming a ring, and the result clamps at the
- * core so it never leaves the placeable area.
- *
- * Coordinates are core-relative DBU -- the frame Node::getBBox() and
- * Grid::gridX(DbuX) use, NOT the absolute frame of getCoreArea().
- */
-Rect getBoundingBox(const Rect& region, int rings = 3) const;
-// [FRPORT] Expose DePlace's owned setting for setup; initialization registers
-// configured filler and opto target masters with the real EdgeTypeTable.
-fillerSetting* getFillerSetting() { return filler_setting_.get();};
-// [FRPORT] One setup-time call after fillerSetting and the complete opto target
-// master universe are known. DePlace creates the checker, eagerly constructs
-// its immutable engine, binds them, and registers the checker in PlacementDRC.
-// Calls after publication are idempotent only while that revision is unchanged.
-bool initializeFillerRepair(
-    const std::vector<const PhysLibCell*>& target_masters = {});
-bool isFillerRepairReady() const;
-// Explicit Add/Delete/Replace entry for opto transactions that do not go
-// through the Node-facing PlacementDRC interface.
-bool repairFillers(const CellChangeRecord& target_change,
-                   std::vector<CellChangeRecord>& fcRecord) const;
+  using RtreeBox
+      = boost::geometry::index::rtree<bgBox,
+                                      boost::geometry::index::quadratic<16>>;
 
-private:
-using bgPoint
-    = boost::geometry::model::d2::point_xy<int,
-                                     boost::geometry::cs::cartesian>;
-using bgBox = boost::geometry::model::box<bgPoint>;
+  friend class TestDePlaceCmd;
+  friend class TestObjectsCmd;
+  friend class TestPlacementDRCCmd;
+  friend class TestIsLegalCmd;
+  friend class TestFindLegCmd;
+  friend class TestImplantCmd;
+  friend class TestEcoFlowCmd;
+  void importDb();
+  void importClear();
+  void initEdgeTypeTable();
+  void createNetwork();
+  void deleteGrid();
+  bool hasOneSiteMaster(PhysDesMgr* desMgr);
+  void setUpPlacementGroups();
+  void groupInitPixels();
 
-using RtreeBox
-    = boost::geometry::index::rtree<bgBox,
-                                    boost::geometry::index::quadratic<16>>;
+  // Legalization methods
+  DbuPt initialLocation(const Node* cell, bool padded) const;
+  DbuPt legalPt(const Node* cell, const DbuPt& pt) const;
+  DbuPt legalPt(const Node* cell, bool padded) const;
+  GridPt legalGridPt(const Node* cell, const DbuPt& pt) const;
+  GridPt legalGridPt(const Node* cell, bool padded) const;
+  DbuPt nearestPt(const Node* cell, const DbuRect& rect) const;
+  DbuPt nearestBlockEdge(const Node* cell, const DbuPt& pt,
+      const Rect& block_bbox) const;
 
-friend class TestDePlaceCmd;
-friend class TestObjectsCmd;
-friend class TestPlacementDRCCmd;
-friend class TestFindLegCmd;
-friend class TestImplantCmd;
-friend class TestEcoFlowCmd;
-void importDb();
-void importClear();
-void initEdgeTypeTable();
-void createNetwork();
-// Network Master construction stays with the infrastructure owner that has
-// the real edge table. initializeFillerRepair() is its only caller.
-bool registerFillerRepairMasters(
-    const std::vector<const PhysLibCell*>& target_masters);
-void deleteGrid();
-bool hasOneSiteMaster(PhysDesMgr* desMgr);
-void setUpPlacementGroups();
-void groupInitPixels();
+  // Placement methods
+  bool canBePlaced(const Node* cell, GridX x, GridY y,
+                   std::vector<CellChangeRecord>* fillerChanges = nullptr) const;
+  bool moveHopeless(const Node* cell, GridX& grid_x, GridY& grid_y) const;
+  bool diamondMove(Node* cell);
+  bool diamondMove(Node* cell, const GridPt& grid_pt);
+  void placeCell(Node* cell, const GridX x, const GridY y);
+  void unplaceCell(Node* cell);
+  void setGridLoc(Node* cell, const GridX x, const GridY y) const;
+  bool checkPixels(const Node* cell,
+                   GridX x,
+                   GridY y,
+                   GridX x_end,
+                   GridY y_end,
+                   std::vector<CellChangeRecord>* fillerChanges = nullptr) const;
+  unsigned getMasterSymmetry(int symmetry) const;
+  bool checkMasterSym(unsigned masterSym, eUTL::PhysOrientation cellOri) const;
 
-// Legalization methods
-DbuPt initialLocation(const Node* cell, bool padded) const;
-DbuPt legalPt(const Node* cell, const DbuPt& pt) const;
-DbuPt legalPt(const Node* cell, bool padded) const;
-GridPt legalGridPt(const Node* cell, const DbuPt& pt) const;
-GridPt legalGridPt(const Node* cell, bool padded) const;
-DbuPt nearestPt(const Node* cell, const DbuRect& rect) const;
-DbuPt nearestBlockEdge(const Node* cell, const DbuPt& pt,
-    const Rect& block_bbox) const;
+  PixelPt diamondSearch(const Node* cell, GridX x, GridY y,
+                        std::vector<CellChangeRecord>* fillerChanges = nullptr) const;
+  // Search methods
+  PixelPt diamondSearch(const Node* cell,
+                        GridX x,
+                        GridY y,
+                        GridX x_min,
+                        GridX x_max,
+                        GridY y_min,
+                        GridY y_max,
+                        std::vector<CellChangeRecord>* fillerChanges = nullptr) const;
+  int calcDist(const GridPt& p1, const GridPt& p2) const;
 
-// Placement methods
-bool canBePlaced(const Node* cell, GridX x, GridY y) const;
-bool moveHopeless(const Node* cell, GridX& grid_x, GridY& grid_y) const;
-bool diamondMove(Node* cell);
-bool diamondMove(Node* cell, const GridPt& grid_pt);
-void placeCell(Node* cell, const GridX x, const GridY y);
-void unplaceCell(Node* cell);
-void setGridLoc(Node* cell, const GridX x, const GridY y);
-bool checkPixels(const Node* cell,
-                 GridX x,
-                 GridY y,
-                 GridX x_end,
-                 GridY y_end) const;
-unsigned getMasterSymmetry(int symmetry) const;
-bool checkMasterSym(unsigned masterSym, eUTL::PhysOrientation cellOri) const;
+  // Rip-up and replace
+  std::pair<int, int> ripUpAndReplaceInRect(Node* target_cell,
+                                    const GridRect& target_grid_rect,
+                                    const GridPt& start_pt);
+  std::pair<int, int> legalCellInRect(const Rect& rect, Node* cell,
+                    std::vector<CellChangeRecord>* fillerChanges = nullptr);
 
-PixelPt diamondSearch(const Node* cell, GridX x, GridY y) const;
-// Search methods
-PixelPt diamondSearch(const Node* cell,
-                      GridX x,
-                      GridY y,
-                      GridX x_min,
-                      GridX x_max,
-                      GridY y_min,
-                      GridY y_max) const;
-int calcDist(const GridPt& p1, const GridPt& p2) const;
+  // Read-only probe helpers (no in-memory placement mutation):
+  // Initialize a throw-away stack Node for @p master at @p origin, binding a
+  // valid db instance id from the occupied origin site if any.
+  void initTempNode(Node& cell, Master* master, const PhysLibCell& pcell,
+                    const Point2D& origin) const;
 
-// Rip-up and replace
-bool ripUpAndReplaceInRect(Node* target_cell,
-                           const GridRect& target_grid_rect,
-                           const GridPt& start_pt);
-bool legalCellInRect(const Rect& rect, Node* cell);
-std::pair<int, int> findLegImpl(
-    LeafCellID cellId,
-    int diameter,
-    const std::string& moduleName,
-    std::vector<CellChangeRecord>& fcRecord);
-std::pair<int, int> findLegalAdd(
-    const std::string& target_name,
-    const PhysLibCell& master,
-    GridX preferred_x,
-    GridY preferred_y,
-    GridX x_min,
-    GridX x_max,
-    GridY y_min,
-    GridY y_max,
-    std::vector<CellChangeRecord>& fcRecord) const;
+  // Read-only overlay DRC of swapping @p target to master @p masterId at its
+  // current location, without touching in-memory placement state (the target
+  // cell and any fillers its new footprint covers are fed to the checkers as
+  // a removed/replaced overlay).
+  bool isLegalProbe(LibCellID masterId, const Node* target,
+                    std::vector<CellChangeRecord>& cellChanges);
 
-// Grid initialization
-void initGrid();
-void initPlacementDRC();
+  // Grid initialization
+  void initGrid();
+  void initPlacementDRC();
 
-// Member variables
-eUNL::Design* design_;
-eUNL::PhysDesMgr* desMgr_;
+  // Member variables
+  eUNL::Design* design_;
+  eUNL::PhysDesMgr* desMgr_;
 
-std::unique_ptr<Architecture> arch_;
-std::unique_ptr<Network> network_;    // The netlist, cells, etc.
-std::shared_ptr<Padding> padding_;
-std::unique_ptr<PlacementDRC> drc_engine_;
-std::unique_ptr<EdgeTypeTable> edge_type_table_;
-Rect core_;
-bool disallow_one_site_gaps_ = false;
-int max_displacement_x_ = 0;  // sites
-int max_displacement_y_ = 0;  // sites
-bool data_loaded_  = false;
+  std::unique_ptr<Architecture> arch_;
+  std::unique_ptr<Network> network_;     // The netlist, cells, etc.
+  std::shared_ptr<Padding> padding_;
+  std::unique_ptr<PlacementDRC> drc_engine_;
+  std::unique_ptr<EdgeTypeTable> edge_type_table_;
+  Rect core_;
 
-// 2D pixel grid
-std::unique_ptr<Grid> grid_;
-RtreeBox regions_rtree_;
+  bool disallow_one_site_gaps_ = false;
+  int max_displacement_x_ = 0;  // sites
+  int max_displacement_y_ = 0;  // sites
+  bool data_loaded_  = false;
 
-// [FRPORT] DePlace uniquely owns the setting borrowed by Network and the engine.
-// filler cell config
-std::unique_ptr<fillerSetting> filler_setting_;
+  // 2D pixel grid
+  std::unique_ptr<Grid> grid_;
+  RtreeBox regions_rtree_;
 
-// [FRPORT] DePlace owns the complete revision-scoped repair chain. The checker
-// itself is owned by drc_engine_; this raw pointer is a stable non-owning index
-// into that registry. Member order destroys the engine before the checker.
-ipl::ImplantLayerChecker* implant_layer_checker_{nullptr};
-std::unique_ptr<fillerRepair::FillerRepairEngine> filler_repair_engine_;
-std::vector<LibCellID> filler_repair_filler_ids_;
-std::size_t filler_repair_master_count_{0};
-mutable std::mutex filler_repair_init_mutex_;
+  // filler cell config
+  std::unique_ptr<fillerSetting> filler_setting_;
 
-// Placement tracking
-std::vector<Node*> placement_failures_;
+  // Placement tracking
+  std::vector<Node*> placement_failures_;
 };
-
-
 
 } // namespace dpl2

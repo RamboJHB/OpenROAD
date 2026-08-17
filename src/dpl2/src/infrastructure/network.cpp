@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2021-2025, The OpenROAD Authors
+
 #include <network.h>
 
 #include <infrastructure/Grid.h>
@@ -38,18 +39,17 @@ std::vector<Rect> difference(const Rect& parent_segment,
     }
   }
   // Get the difference
-  const int start
-      = is_horizontal ? parent_segment.getXL().getStorage()
-      : parent_segment.getYL().getStorage();
-  const int end = is_horizontal ? parent_segment.getXH().getStorage()
-    : parent_segment.getYH().getStorage();
+  const int start = is_horizontal ? parent_segment.getXL().getStorage() :
+    parent_segment.getYL().getStorage();
+  const int end = is_horizontal ? parent_segment.getXH().getStorage() :
+    parent_segment.getYH().getStorage();
   int current_pos = start;
   std::vector<Rect> result;
   for (const Rect& seg : sorted_segs) {
-    int seg_start = is_horizontal ? seg.getXL().getStorage()
-      : seg.getYL().getStorage();
-    int seg_end = is_horizontal ? seg.getXH().getStorage()
-      : seg.getYH().getStorage();
+    int seg_start = is_horizontal ? seg.getXL().getStorage() :
+      seg.getYL().getStorage();
+    int seg_end = is_horizontal ? seg.getXH().getStorage() :
+      seg.getYH().getStorage();
     if (seg_start > current_pos) {
       if (is_horizontal) {
         result.emplace_back(UvDist(current_pos),
@@ -69,12 +69,12 @@ std::vector<Rect> difference(const Rect& parent_segment,
   if (current_pos < end) {
     if (is_horizontal) {
       result.emplace_back(
-          UvDist(current_pos), parent_segment.getYL(),
-          UvDist(end), parent_segment.getYH());
+          UvDist(current_pos), parent_segment.getYL(), UvDist(end),
+          parent_segment.getYH());
     } else {
       result.emplace_back(
-          parent_segment.getXL(), UvDist(current_pos),
-          parent_segment.getXH(), UvDist(end));
+          parent_segment.getXL(), UvDist(current_pos), parent_segment.getXH(),
+          UvDist(end));
     }
   }
 
@@ -98,6 +98,8 @@ Rect getBoundarySegment(const Rect& bbox,
     case eLIB::MacroEdgeDir::BOTTOM:
       segment.setYH(bbox.getYL());
       break;
+    case eLIB::MacroEdgeDir::INVALID:
+      break;
   }
   return segment;
 }
@@ -113,15 +115,18 @@ std::pair<int, int> getMasterPwrs(const eLIB::PhysLibCell& master)
   bool isGnd = false;
 
   for (const eLIB::PhysLibPort* port : master.getPorts()) {
-    if (port == nullptr) {
-      continue;
-    }
     if (port->getUse() == eLIB::SignalTypeE::POWER) {
       isVdd = true;
       for (const eLIB::PhysLibTerm& pin : port->getLibTermIter()) {
         for (const auto& [layerId, shapes] : pin.getShapes()) {
           for (const eLIB::TechShape& shape : shapes) {
-            const int y = shape.getRect().center().getY().getStorage();
+            Rect rect;
+            if (shape.isRect()) {
+              rect = shape.getRect();
+            } else if (shape.isPolygon()) {
+              rect = shape.getPolygon().getBbox();
+            }
+            const int y = rect.center().getY().getStorage();
             minPwr = std::min(minPwr, y);
             maxPwr = std::max(maxPwr, y);
           }
@@ -132,7 +137,13 @@ std::pair<int, int> getMasterPwrs(const eLIB::PhysLibCell& master)
       for (const eLIB::PhysLibTerm& pin : port->getLibTermIter()) {
         for (const auto& [layerId, shapes] : pin.getShapes()) {
           for (const eLIB::TechShape& shape : shapes) {
-            const int y = shape.getRect().center().getY().getStorage();
+            Rect rect;
+            if (shape.isRect()) {
+              rect = shape.getRect();
+            } else if (shape.isPolygon()) {
+              rect = shape.getPolygon().getBbox();
+            }
+            const int y = rect.center().getY().getStorage();
             minGnd = std::min(minGnd, y);
             maxGnd = std::max(maxGnd, y);
           }
@@ -152,42 +163,81 @@ std::pair<int, int> getMasterPwrs(const eLIB::PhysLibCell& master)
 }
 
 } // namespace
+//////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+/// @brief Create a dpl2 Pin from an PhysPin.
+///
+/// Extracts the pin's bounding box, offset (relative to cell center), width,
+/// height, layer, and mask number from the PhysLibPort's geometry shapes.
+/// The mask is taken from each dbBox's getMask() (the MASK attribute from
+/// LEF/DEF).  If the shape has no mask (mask == 0), PinMask stays at its
+/// default of 0 (no mask coloring).
+///
+/// The pin is also connected to its owning Node via the dbITerm's getInst().
+///
+/// @param  term  The odb-level pin (dbITerm) to wrap.
+/// @return       Pointer to the newly created dpl2::Pin.
+void Network::addPin(const eLIB::PhysLibPort* libport, Master* master)
+{
+  for (const eLIB::PhysLibTerm* libterm : libport->getLibTerms()) {
+    for (auto [layerId, shapes] : libterm->getShapes()) {  //ref
+      for (const TechShape& shape : shapes) {
+        auto upin = std::make_unique<Pin>();
+        Pin* ptr = upin.get();
 
-////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////
+        if (shape.isRect()) {
+          upin->setBbox(shape.getRect());
+        } else if (shape.isPolygon()) {
+          upin->setBbox(shape.getPolygon().getBbox());
+        }
+
+        int foundMask = 0;
+
+        TechLayerID layerId = shape.getLayer();
+
+        eLIB::ShapeMaskID maskId = shape.getMaskId();
+        foundMask  = static_cast<int>(maskId);
+        upin->setPinMask(foundMask);
+        upin->setPinLayer(layerId);
+        pins_.emplace_back(std::move(upin));
+        connect(ptr, master);
+      }
+    }
+  }
+}
+void Network::connect(Pin* pin, Master* master)
+{
+  master->addPin(pin);
+}
+//////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
 Master* Network::getMaster(LibCellID db_master)
 {
   auto it = master_to_idx_.find(db_master);
-  if (it == master_to_idx_.end() || it->second < 0
-      || static_cast<size_t>(it->second) >= masters_.size()) {
+  if (it == master_to_idx_.end()) {
     return nullptr;
   }
-  return masters_[it->second].get();
+  return getMaster(it->second);
 }
 
-// [FRPORT] Refresh filler classification for existing masters and use the real
-// Grid/EdgeTypeTable when a configured candidate must be registered.
 Master* Network::addMaster(const PhysLibCell& db_master,
                            const fillerSetting& filler_setting,
                            const Grid* grid,
                            const EdgeTypeTable* edge_types)
 {
-  if (grid == nullptr || edge_types == nullptr) {
-    return nullptr;
-  }
   LibCellID masterId = db_master.getLibCellId();
   const auto it = master_to_idx_.find(masterId);
   if (it != master_to_idx_.end()) {
-    Master* master = masters_[it->second].get();
+    Master* master = getMaster(it->second);
     master->setFiller(filler_setting.isFillerCell(masterId));
     return master;
   }
   std::unique_ptr<Master> umaster = std::make_unique<Master>();
   Master* master = umaster.get();
-  const int id = masters_.size();
-  masters_.emplace_back(std::move(umaster));
+  const int id = next_master_id_++;
   master_to_idx_[masterId] = id;
   master->setId(id);
+  masters_.emplace(id, std::move(umaster));
   master->setDbMaster(masterId);
   master->setPhysLibCell(&db_master);
   master->setFiller(filler_setting.isFillerCell(masterId));
@@ -197,13 +247,19 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   master->setBBox(bbox);
   master->setMultiRow(grid->isMultiHeight(db_master));
   auto master_pwrs = getMasterPwrs(db_master);
+  for (auto libport : db_master.getPorts()) {
+    if (libport->isPgPort()) {
+      continue;
+    }
+    addPin(libport, master);
+  }
   master->setTopPowerType(master_pwrs.first);
   master->setBottomPowerType(master_pwrs.second);
   master->clearEdges();
   if (!edge_types->hasTable()) {
     return master;
   }
-  if (master->isFiller()) {
+  if (master->isFiller()) {  // Skip fillcells
     return master;
   }
 
@@ -227,14 +283,14 @@ Master* Network::addMaster(const PhysLibCell& db_master,
         edge_rect.setYL(UvDist(edge_rect.getYL().getStorage()
                                + (edge.cellRow - 1) * (row_height)));
         edge_rect.setYH(UvDist(
-            std::min(edge_rect.getYH().getStorage(),
-                     edge_rect.getYL().getStorage() + (row_height))));
+            std::min(edge_rect.getYH().getStorage(), edge_rect.getYL().getStorage()
+            + (row_height))));
       } else if (edge.hasHalfRow()) {
         edge_rect.setYL(UvDist(edge_rect.getYL().getStorage()
                                + (edge.halfRow - 1) * (half_row_height)));
         edge_rect.setYH(UvDist(
-            std::min(edge_rect.getYH().getStorage(),
-                     edge_rect.getYL().getStorage() + (half_row_height))));
+            std::min(edge_rect.getYH().getStorage(), edge_rect.getYL().getStorage()
+            + (half_row_height))));
       }
     }
     typed_segs[dir].push_back(edge_rect);
@@ -249,7 +305,7 @@ Master* Network::addMaster(const PhysLibCell& db_master,
     return master;
   }
   // Add the remaining DEFAULT un-typed segments
-  for (size_t dir_idx = 0; dir_idx <= 3; dir_idx++) {
+  for (size_t dir_idx = 1; dir_idx <= 4; dir_idx++) {
     const auto dir = (eLIB::MacroEdgeDir) dir_idx;
     const auto parent_seg = getBoundarySegment(bbox, dir);
     const auto default_segs = difference(parent_seg, typed_segs[dir]);
@@ -259,100 +315,143 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   }
   return master;
 }
-////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
+//////////////////////////////////////////////////////////////////////////////////////////
 Node* Network::getNode(LeafCellID cellId)
 {
   auto it = inst_to_node_idx_.find(cellId);
-  if (it == inst_to_node_idx_.end() || it->second < 0
-      || static_cast<size_t>(it->second) >= nodes_.size()) {
+  if (it == inst_to_node_idx_.end()) {
     return nullptr;
   }
-  return nodes_[it->second].get();
+  return getNode(it->second);
 }
 
-// [FRPORT] Node classification follows the registered Master filler authority.
-bool Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
+void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
 {
-  if (desMgr == nullptr) {
-    return false;
-  }
-  const PhysCell& inst = desMgr->getPhysCell(cellId);
-  if (!inst.isValid()) {
-    return false;
-  }
-  Master* master = getMaster(inst.getPhysMaster().getLibCellId());
-  if (master == nullptr) {
-    return false;
-  }
-
   Node ndi;
-  const int id = nodes_.size();
+  const int id = next_node_id_++;
+  const PhysCell& inst = desMgr->getPhysCell(cellId);
   ndi.setId(id);
   ndi.setDbInst(cellId);
-  ndi.setType(master->isFiller() ? Node::FILLER : Node::CELL);
+  auto master = getMaster(inst.getPhysMaster().getLibCellId());
   ndi.setMaster(master);
+  ndi.setType(master->isFiller() ? Node::FILLER : Node::CELL);
   ndi.setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi.setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
 
   ndi.setOrient(inst.getOrient());
   ndi.setHeight(DbuY{inst.getPhysMaster().getHeight().getStorage()});
   ndi.setWidth(DbuX{inst.getPhysMaster().getWidth().getStorage()});
-  ndi.setOrigLeft(DbuX{(inst.getOrigin().getX().getStorage()
-        - core_.getXL().getStorage())});
-  ndi.setOrigBottom(DbuY{(inst.getOrigin().getY().getStorage()
-        - core_.getYL().getStorage())});
+  ndi.setOrigLeft(DbuX{(inst.getOrigin().getX().getStorage() -
+      core_.getXL().getStorage())});
+  ndi.setOrigBottom(DbuY{(inst.getOrigin().getY().getStorage() -
+      core_.getYL().getStorage())});
 
   ndi.setLeft(ndi.getOrigLeft());
   ndi.setBottom(ndi.getOrigBottom());
   ndi.setBottomPower(master->getBottomPowerType());
   ndi.setTopPower(master->getTopPowerType());
-  nodes_.emplace_back(std::make_unique<Node>(ndi));
+  nodes_.emplace(id, std::make_unique<Node>(ndi));
   inst_to_node_idx_[cellId] = id;
-  ++cells_cnt_;
-  return true;
 }
 
-// [FRPORT] Repair test proposals require an atomic, classification-preserving
-// refresh and a clean failure for an unregistered master.
+void Network::addFillerNode(LeafCellID cellId, const PhysDesMgr* desMgr)
+{
+  Node ndi;
+  const int id = next_node_id_++;
+  const PhysCell& inst = desMgr->getPhysCell(cellId);
+  ndi.setId(id);
+  ndi.setDbInst(cellId);
+  ndi.setType(Node::FILLER);
+  auto master = getMaster(inst.getPhysMaster().getLibCellId());
+  ndi.setMaster(master);
+  ndi.setType(master->isFiller() ? Node::FILLER : Node::CELL);
+  ndi.setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
+  ndi.setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
+
+  ndi.setOrient(inst.getOrient());
+  ndi.setHeight(DbuY{inst.getPhysMaster().getHeight().getStorage()});
+  ndi.setWidth(DbuX{inst.getPhysMaster().getWidth().getStorage()});
+  ndi.setOrigLeft(DbuX{(inst.getOrigin().getX().getStorage() -
+      core_.getXL().getStorage())});
+  ndi.setOrigBottom(DbuY{(inst.getOrigin().getY().getStorage() -
+      core_.getYL().getStorage())});
+
+  ndi.setLeft(ndi.getOrigLeft());
+  ndi.setBottom(ndi.getOrigBottom());
+  ndi.setBottomPower(master->getBottomPowerType());
+  ndi.setTopPower(master->getTopPowerType());
+  nodes_.emplace(id, std::make_unique<Node>(ndi));
+  inst_to_node_idx_[cellId] = id;
+}
+
+Node* Network::addNode(LibCellID lcId, DbuX x, DbuY y, const eUNL::Design* design)
+{
+  Node ndi;
+  const int id = next_node_id_++;
+  const PhysLibCell& pcell = design->getLibAcc().getPhysLibCell(lcId);
+  ndi.setId(id);
+  // ndi.setDbInst(cellId);
+  auto master = getMaster(lcId);
+  ndi.setMaster(master);
+  ndi.setType(master->isFiller() ? Node::FILLER : Node::CELL);
+  ndi.setFixed(false);
+  ndi.setPlaced(false);
+
+  ndi.setOrient(PhysOrientationE::R0);
+  ndi.setHeight(DbuY{pcell.getHeight().getStorage()});
+  ndi.setWidth(DbuX{pcell.getWidth().getStorage()});
+  ndi.setOrigLeft(x);
+  ndi.setOrigBottom(y);
+
+  ndi.setLeft(ndi.getOrigLeft());
+  ndi.setBottom(ndi.getOrigBottom());
+  ndi.setBottomPower(master->getBottomPowerType());
+  ndi.setTopPower(master->getTopPowerType());
+  std::unique_ptr<Node> nodePtr = std::make_unique<Node>(ndi);
+  nodes_.emplace(id, std::move(nodePtr));
+  Node* placed = nodes_.find(id)->second.get();
+  // inst_to_node_idx_[cellId] = id;
+  return placed;
+}
+
+void Network::deleteNode(Node* cell)
+{
+  if (cell == nullptr) {
+    return;
+  }
+  // ids are stable (independent of container order), so removing a node only
+  // needs to drop it from the lookup containers -- no index remapping of the
+  // survivors, no getNodeId()/getId() drift.
+  const LeafCellID instId = cell->getDbInst();
+  if (instId.isValid()) {
+    inst_to_node_idx_.erase(instId);
+  }
+  auto it = nodes_.find(cell->getId());
+  if (it != nodes_.end() && it->second.get() == cell) {
+    nodes_.erase(it);
+  }
+}
+
 bool Network::updateNode(Node* ndi,
                          const PhysDesMgr* desMgr,
                          const PhysLibCell& physLibCell)
 {
-  if (ndi == nullptr || desMgr == nullptr) {
-    return false;
-  }
   LeafCellID cellId = ndi->getDbInst();
   const PhysCell& inst = desMgr->getPhysCell(cellId);
-  if (!inst.isValid()) {
-    return false;
-  }
   auto master = getMaster(physLibCell.getLibCellId());
-  // [fillerRepair-fix] this is what the bool return was for. An unregistered
-  // master used to be stored and then dereferenced a few lines down
-  // (getBottomPowerType), so the node was left half-updated and the process
-  // died. Refuse instead, and leave the node exactly as it was.
-  if (master == nullptr) {
-    return false;
-  }
   ndi->setMaster(master);
   ndi->setType(master->isFiller() ? Node::FILLER : Node::CELL);
   ndi->setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
   ndi->setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
 
-  // [fillerRepair-fix] was hard-coded PhysOrientationE::R0. DePlace::isLegal
-  // calls updateNode immediately before checkDRC, so forcing R0 makes every
-  // implant check on an MX-placed row (odd rows, by the band-polarity model)
-  // evaluate the wrong band track. It also outlives the check: isLegal
-  // restores the master afterwards but not the orientation, so the Node keeps
-  // a wrong orientation in shared Network state.
   ndi->setOrient(inst.getOrient());
   ndi->setHeight(DbuY{physLibCell.getHeight().getStorage()});
   ndi->setWidth(DbuX{physLibCell.getWidth().getStorage()});
-  ndi->setOrigLeft(DbuX{(inst.getOrigin().getX().getStorage()
-        - core_.getXL().getStorage())});
-  ndi->setOrigBottom(DbuY{(inst.getOrigin().getY().getStorage()
-        - core_.getYL().getStorage())});
+  ndi->setOrigLeft(DbuX{(inst.getOrigin().getX().getStorage() -
+      core_.getXL().getStorage())});
+  ndi->setOrigBottom(DbuY{(inst.getOrigin().getY().getStorage() -
+      core_.getYL().getStorage())});
 
   ndi->setLeft(ndi->getOrigLeft());
   ndi->setBottom(ndi->getOrigBottom());

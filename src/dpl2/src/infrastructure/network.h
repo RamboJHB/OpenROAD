@@ -1,16 +1,17 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2021-2025, The OpenROAD Authors
+
 #pragma once
-#include <memory>
 #include <string>
+#include <map>
+#include <memory>
 #include <unordered_map>
+#include <utility>
 
 #include <Coordinates.h>
 #include <Objects.h>
 #include <architecture.h>
 #include <dpl2/DePlace.h>
-
-#include <vector>
 
 namespace dpl2 {
 
@@ -18,25 +19,25 @@ class fillerSetting;
 
 class Network
 {
-public:
-  // [FRPORT] [fillerRepair-fix] Non-owning binding to DePlace's active setting.
-  // DePlace owns both objects and guarantees the setting outlives Network.
-  void setFillerSetting(const fillerSetting* setting) { filler_setting_ = setting; }
-  const fillerSetting* getFillerSetting() const { return filler_setting_; }
-
-  std::vector<std::unique_ptr<Node>>& getNodes() { return nodes_; }
-  std::vector<std::unique_ptr<Master>>& getMasters() {return masters_;}
-  // [FRPORT] Imported Nodes inherit the authoritative Master filler flag.
+ public:
+  std::map<int, std::unique_ptr<Node>>& getNodes() { return nodes_; }
+  const std::map<int, std::unique_ptr<Node>>& getNodes() const { return nodes_; }
+  std::map<int, std::unique_ptr<Master>>& getMasters() { return masters_; }
+  const std::map<int, std::unique_ptr<Master>>& getMasters() const
+  { return masters_; }
   // For creating and adding cells.
-  bool addNode(LeafCellID cellId, const PhysDesMgr* desMgr);
+  void addNode(LeafCellID cellId, const PhysDesMgr* desMgr);
+  void addFillerNode(LeafCellID cellId, const PhysDesMgr* desMgr);
+  Node* addNode(LibCellID lcId, DbuX x, DbuY y, const eUNL::Design* design);
+  void deleteNode(Node* cell);
   Node* getNode(LeafCellID cellId);
   Node* getNode(int id) const {
-    return (id >= 0 && id < static_cast<int>(nodes_.size())) ?
-      nodes_[id].get() : nullptr;
+    auto it = nodes_ .find(id);
+    return it != nodes_.end() ? it->second.get() : nullptr;
   }
   Master* getMaster(int id) const {
-    return (id >= 0 && id < static_cast<int>(masters_.size())) ?
-      masters_[id].get() : nullptr;
+    auto it = masters_ .find(id);
+    return it != masters_.end() ? it->second.get() : nullptr;
   }
   int getMasterId(LibCellID id) const {
     int ret = -1;
@@ -55,7 +56,6 @@ public:
     return ret;
   }
 
-  // [FRPORT] Test/opto proposals refresh the Node from a registered Master.
   bool updateNode(Node* ndi,
                   const PhysDesMgr* desMgr,
                   const PhysLibCell& physLibCell);
@@ -63,38 +63,51 @@ public:
   void setCore(const Rect& core) { core_ = core; }
   const Rect& getCore() const { return core_; }
   Master* getMaster(LibCellID db_master);
-  // [FRPORT] Configured fillers must be registered through this edge-aware path.
   // For creating masters.
   Master* addMaster(const PhysLibCell& db_master,
                     const fillerSetting& filler_setting,
                     const Grid* grid,
                     const EdgeTypeTable* edge_types);
 
-  bool addNode(std::unique_ptr<Node> n) {
-    if (n == nullptr) {
-      return false;
-    }
-    inst_to_node_idx_[n->getDbInst()] = nodes_.size();
-    nodes_.emplace_back(std::move(n));
-    cells_cnt_++;
-    return true;
-  }
-  bool addMaster(std::unique_ptr<Master> m) {
-    if (m == nullptr) {
-      return false;
-    }
-    master_to_idx_[m->getDbMaster()] = masters_.size();
-    masters_.emplace_back(std::move(m));
-    return true;
-  }
-private:
-  // [FRPORT] Borrowed configuration used by FillerRepairEngine construction.
-  const fillerSetting* filler_setting_ = nullptr;
-  int cells_cnt_ = 0;
-  Rect core_; // Core area of the design.
-  std::vector<std::unique_ptr<Master>> masters_;
-  std::vector<std::unique_ptr<Node>> nodes_;  // The nodes in the netlist..
+  void addPin(const eLIB::PhysLibPort* libport, Master* master);
 
+  void addNode(std::unique_ptr<Node> n) {
+    // Respect an id already assigned by the caller (used by tests); otherwise
+    // fall back to a fresh id from the monotonic counter.
+    const int id = n->getId() >= 0 ? n->getId() : next_node_id_++;
+    const LeafCellID instId = n->getDbInst();
+    if (instId.isValid()) {
+      inst_to_node_idx_[instId] = id;
+    }
+    nodes_.emplace(id, std::move(n));
+  }
+  void addMaster(std::unique_ptr<Master> m) {
+    const int id = m->getId() >= 0 ? m->getId() : next_master_id_++;
+    master_to_idx_[m->getDbMaster()] = id;
+    masters_.emplace(id, std::move(m));
+  }
+  void setFillerSetting(const fillerSetting* setting) {
+    filler_setting_ = setting;
+  }
+  const fillerSetting* getFillerSetting() const { return filler_setting_;}
+ private:
+
+  const fillerSetting* filler_setting_ = nullptr;
+  void connect(Pin* pin, Master* master);
+  Rect core_;  // Core area of the design;
+  // Masters/nodes are keyed by their stable id (ascending allocation order), so
+  // iteration preserves insertion order and lookup/removal by id is O(log n).
+  std::map<int, std::unique_ptr<Master>> masters_;
+  std::map<int, std::unique_ptr<Node>> nodes_;  // The nodes in the netlist...
+  std::vector<std::unique_ptr<Pin>> pins_;     // The pins in the network...
+
+  // Ids are allocated from a monotonic counter and never reused or renumbered,
+  // so an id is a stable identifier independent of container order, even after
+  // Network::deleteNode().
+  int next_node_id_ = 0;
+  int next_master_id_ = 0;
+
+  // Maps the db identifier (LeafCellID/LibCellID) to the stable id.
   std::unordered_map<LeafCellID, int> inst_to_node_idx_;
   std::unordered_map<LibCellID, int> master_to_idx_;
 };
