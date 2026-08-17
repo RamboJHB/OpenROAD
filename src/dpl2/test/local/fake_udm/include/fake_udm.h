@@ -120,6 +120,16 @@ class Rect
            && lt(_yl.getStorage(), other._yh.getStorage())
            && lt(other._yl.getStorage(), _yh.getStorage());
   }
+  Rect overlap(const Rect& other, bool strict = true) const
+  {
+    if (!intersect(other, strict)) {
+      return Rect{};
+    }
+    return Rect(UvDist(std::max(_xl.getStorage(), other._xl.getStorage())),
+                UvDist(std::max(_yl.getStorage(), other._yl.getStorage())),
+                UvDist(std::min(_xh.getStorage(), other._xh.getStorage())),
+                UvDist(std::min(_yh.getStorage(), other._yh.getStorage())));
+  }
   // Mutating point-expansion (Object.cpp hpwl) alongside the pure form.
   void expand(const Point2D& point)
   {
@@ -177,6 +187,10 @@ class PhysOrientation
   explicit operator int() const { return static_cast<int>(value_); }
   PhysOrientationE getValue() const { return value_; }
   operator PhysOrientationE() const { return value_; }
+  explicit operator unsigned() const
+  {
+    return static_cast<unsigned>(value_);
+  }
 
  private:
   PhysOrientationE value_ = PhysOrientationE::R0;
@@ -217,6 +231,7 @@ struct IdBase
   IdBase(int b, int i) : block(b), index(i) {}
 
   int getIndexValue() const { return index; }
+  int getValue() const { return index; }
   bool isValid() const { return index >= 0; }
   friend bool operator==(const IdBase& a, const IdBase& b)
   {
@@ -240,7 +255,21 @@ struct LibCellID : fake_udm::IdBase
 {
   using fake_udm::IdBase::IdBase;
 };
+struct PinID : fake_udm::IdBase
+{
+  using fake_udm::IdBase::IdBase;
+  PinID asFlatPin() const { return *this; }
+};
+struct PhysPinID : fake_udm::IdBase
+{
+  using fake_udm::IdBase::IdBase;
+  PhysPinID(PinID id) : fake_udm::IdBase(id.block, id.index) {}
+};
 }  // namespace eUNL
+
+namespace eFNL {
+struct ModuleID;
+}
 
 // ---------------------------------------------------------------------------
 // eLIB: tech + library
@@ -268,6 +297,7 @@ struct TechLayerID
 {
   TechLayerRelativeID local;
   TechLayerRelativeID getLocalId() const { return local; }
+  operator int() const { return local.v; }
 };
 
 class TechShape
@@ -281,12 +311,30 @@ class TechShape
   TechShape() = default;
   TechShape(Type type, const eUTL::Rect& rect) : type_(type), rect_(rect) {}
   Type getType() const { return type_; }
+  bool isRect() const { return type_ == RECT; }
+  bool isPolygon() const { return type_ == POLYGON; }
   const eUTL::Rect& getRect() const { return rect_; }
+  class Polygon
+  {
+   public:
+    explicit Polygon(const eUTL::Rect& bbox) : bbox_(bbox) {}
+    const eUTL::Rect& getBbox() const { return bbox_; }
+
+   private:
+    eUTL::Rect bbox_;
+  };
+  Polygon getPolygon() const { return Polygon(rect_); }
   eUTL::Rect getBbox(bool) const { return rect_; }
+  TechLayerID getLayer() const { return layer_; }
+  int getMaskId() const { return mask_id_; }
 
   Type type_ = RECT;
   eUTL::Rect rect_;
+  TechLayerID layer_;
+  int mask_id_ = 0;
 };
+
+using ShapeMaskID = int;
 
 // Per-orientation obstruction shape map keyed by layer; the alias the real
 // library exports and PhysLibObs::getShapes returns.
@@ -473,7 +521,8 @@ enum class MacroEdgeDir
   RIGHT = 0,
   LEFT = 1,
   TOP = 2,
-  BOTTOM = 3
+  BOTTOM = 3,
+  INVALID = 4
 };
 
 struct MacroEdge
@@ -503,7 +552,20 @@ class PhysLibPort
 {
  public:
   SignalTypeE getUse() const { return use_; }
+  bool isPgPort() const
+  {
+    return use_ == SignalTypeE::POWER || use_ == SignalTypeE::GROUND;
+  }
   const std::deque<PhysLibTerm>& getLibTermIter() const { return terms_; }
+  std::vector<const PhysLibTerm*> getLibTerms() const
+  {
+    std::vector<const PhysLibTerm*> result;
+    result.reserve(terms_.size());
+    for (const PhysLibTerm& term : terms_) {
+      result.push_back(&term);
+    }
+    return result;
+  }
 
   SignalTypeE use_ = SignalTypeE::SIGNAL;
   std::deque<PhysLibTerm> terms_;
@@ -608,6 +670,7 @@ class PhysLibCell
   const TechSite* getTechSite() const { return site_; }
   const std::vector<PhysLibPort*>& getPorts() const { return ports_; }
   const std::vector<MacroEdge>& getEdgeTypeVec() const { return edges_; }
+  int getSymmetry() const { return symmetry_; }
   bool hasSitePattern() const { return !site_patterns_.empty(); }
   const std::vector<int>& getSitePatterns() const { return site_patterns_; }
 
@@ -619,6 +682,7 @@ class PhysLibCell
   const TechSite* site_ = nullptr;
   std::vector<PhysLibPort*> ports_;
   std::vector<MacroEdge> edges_;
+  int symmetry_ = 0;
   std::vector<int> site_patterns_;
   // Owned by value so getLibCell() can hand back a reference.
   std::shared_ptr<LibCell> lib_cell_;
@@ -636,6 +700,7 @@ class LibCell
  public:
   int getId() const { return id_; }
   const std::string& getName() const { return name_; }
+  eFNL::ModuleID getMaster() const;
   int id_ = -1;
   std::string name_;
 };
@@ -669,6 +734,11 @@ struct ModuleID : fake_udm::IdBase
   using fake_udm::IdBase::IdBase;
 };
 }  // namespace eFNL
+
+inline eFNL::ModuleID eLIB::LibCell::getMaster() const
+{
+  return eFNL::ModuleID(0, id_);
+}
 
 // ---------------------------------------------------------------------------
 // eUNL: design / placement
@@ -710,6 +780,20 @@ class PhysCell
   const PhysCellData* data_ = nullptr;
 };
 
+class PhysTerm
+{
+ public:
+  eUTL::Point2D getOrigin() const { return origin_; }
+  eUTL::Point2D origin_;
+};
+
+class PhysPin
+{
+ public:
+  const std::vector<PhysTerm>& getTermIter() const { return terms_; }
+  std::vector<PhysTerm> terms_;
+};
+
 class PhysRow
 {
  public:
@@ -745,6 +829,11 @@ class PhysDesMgr
   {
     const auto it = cells_.find(cellId);
     return it != cells_.end() ? PhysCell(&it->second) : PhysCell();
+  }
+  PhysPin getPhysPin(PhysPinID pinId) const
+  {
+    const auto it = pins_.find(pinId);
+    return it != pins_.end() ? it->second : PhysPin{};
   }
   const std::deque<PhysBlockage>& getPhysBlockageIter() const;
 
@@ -808,17 +897,22 @@ class PhysDesMgr
     blockages_.push_back(std::move(blockage));
     return blockages_.back();
   }
+  PhysPin& addPin(PhysPinID id, int64_t x, int64_t y)
+  {
+    PhysPin pin;
+    pin.terms_.push_back(
+        PhysTerm{eUTL::Point2D(eUTL::UvDist(x), eUTL::UvDist(y))});
+    return pins_[id] = std::move(pin);
+  }
 
   const eLIB::TechLib* tech_ = nullptr;
   std::deque<PhysRow> rows_;
   std::map<LeafCellID, PhysCellData> cells_;
+  std::map<PhysPinID, PhysPin> pins_;
   std::deque<PhysBlockage> blockages_;
 };
 
 class PhysCellImpl
-{
-};
-class PhysPin
 {
 };
 class PhysWire
@@ -887,6 +981,16 @@ inline const std::deque<PhysBlockage>& PhysDesMgr::getPhysBlockageIter() const
 }
 class HierManager
 {
+ public:
+  HierManager() = default;
+  explicit HierManager(const PhysDesMgr* desMgr) : des_mgr_(desMgr) {}
+  PhysCell getLeafCell(LeafCellID id) const
+  {
+    return des_mgr_ != nullptr ? des_mgr_->getPhysCell(id) : PhysCell{};
+  }
+
+ private:
+  const PhysDesMgr* des_mgr_ = nullptr;
 };
 
 class Design;
@@ -940,6 +1044,10 @@ class LibAcc
     const auto it = lib_cells_.find(id.getIndexValue());
     return it != lib_cells_.end() ? &it->second : nullptr;
   }
+  const eLIB::LibCell& getLibCell(eLIB::LibCellID id) const
+  {
+    return lib_cells_.at(id.getIndexValue());
+  }
   const eLIB::PhysLibCell& getPhysLibCell(int libCellId) const
   {
     return *phys_cells_.at(libCellId);
@@ -973,11 +1081,98 @@ namespace eUNL {
 class Design
 {
  public:
+  Design() : hier_mgr_(&des_mgr_) {}
   PhysDesMgr* getPhysDesMgr() { return &des_mgr_; }
+  const PhysDesMgr* getPhysDesMgr() const { return &des_mgr_; }
   fake_udm::LibAcc& getLibAcc() { return lib_acc_; }
+  const fake_udm::LibAcc& getLibAcc() const { return lib_acc_; }
+  HierManager* getHierMgr() { return &hier_mgr_; }
+  const HierManager* getHierMgr() const { return &hier_mgr_; }
 
   PhysDesMgr des_mgr_;
   fake_udm::LibAcc lib_acc_;
+  HierManager hier_mgr_;
+};
+
+enum class UnlChangePhaseE
+{
+  PRE_CHANGE,
+  POST_CHANGE
+};
+
+class NlEditor
+{
+ public:
+  explicit NlEditor(Design* design) : design_(design) {}
+  Design* getDesign() const { return design_; }
+
+ private:
+  Design* design_ = nullptr;
+};
+
+class UnlChange_sizeCell
+{
+ public:
+  UnlChange_sizeCell(NlEditor*,
+                     Design& design,
+                     UnlChangePhaseE,
+                     LeafCellID cellId,
+                     eFNL::ModuleID,
+                     eFNL::ModuleID newMaster)
+      : design_(design), cell_id_(cellId), new_master_(newMaster)
+  {
+  }
+
+  bool feasible() const
+  {
+    return cell_id_.isValid() && new_master_.isValid()
+           && design_.getPhysDesMgr()->getPhysCell(cell_id_).isValid()
+           && design_.getLibAcc().getLibCell(new_master_) != nullptr;
+  }
+
+  void commit()
+  {
+    if (!feasible()) {
+      return;
+    }
+    design_.getPhysDesMgr()->cells_[cell_id_].master
+        = &design_.getLibAcc().getPhysLibCell(
+            eLIB::LibCellID(new_master_.block, new_master_.index));
+  }
+
+ private:
+  Design& design_;
+  LeafCellID cell_id_;
+  eFNL::ModuleID new_master_;
+};
+
+class UnlChange_removeCell
+{
+ public:
+  UnlChange_removeCell(NlEditor*,
+                       Design& design,
+                       UnlChangePhaseE,
+                       LeafCellID cellId)
+      : design_(design), cell_id_(cellId)
+  {
+  }
+
+  bool feasible() const
+  {
+    return cell_id_.isValid()
+           && design_.getPhysDesMgr()->getPhysCell(cell_id_).isValid();
+  }
+
+  void commit()
+  {
+    if (feasible()) {
+      design_.getPhysDesMgr()->cells_[cell_id_].valid = false;
+    }
+  }
+
+ private:
+  Design& design_;
+  LeafCellID cell_id_;
 };
 
 }  // namespace eUNL

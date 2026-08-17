@@ -301,7 +301,10 @@ class DumpCheckerOracle final : public fr::RepairOracle
         first.targetPlace.masterId,
         first.targetPlace.rowId,
         static_cast<ipl::ColId>(first.targetPlace.x / view_.siteWidth()),
-        toCheckerOrient(first.targetPlace.orientation)};
+        toCheckerOrient(first.targetPlace.orientation),
+        OpType::Replace,
+        nullptr,
+        {}};
     const fr::DbCoord yl
         = static_cast<fr::DbCoord>(first.guardRegion.rowLo) * view_.rowHeight();
     const fr::DbCoord yh
@@ -587,7 +590,8 @@ FillerRepairDumpReplayResult replayFillerRepairDump(
   }
 
   out << "--- dump baseline ---\n";
-  for (const std::unique_ptr<Node>& node : network->getNodes()) {
+  for (const auto& [nodeId, node] : network->getNodes()) {
+    (void) nodeId;
     if (node == nullptr || !node->isStdCell() || node->getMaster() == nullptr) {
       continue;
     }
@@ -615,7 +619,8 @@ FillerRepairDumpReplayResult replayFillerRepairDump(
 
   int reported = 0;
   out << "--- dump same-size proposals ---\n";
-  for (const std::unique_ptr<Node>& node : network->getNodes()) {
+  for (const auto& [nodeId, node] : network->getNodes()) {
+    (void) nodeId;
     if (result.proposals >= options.maxProposals) {
       break;
     }

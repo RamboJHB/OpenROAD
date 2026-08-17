@@ -166,7 +166,8 @@ std::map<Footprint, std::vector<const eLIB::PhysLibCell*>> buildCandidateIndex(
     Network* network)
 {
   std::map<Footprint, std::vector<const eLIB::PhysLibCell*>> index;
-  for (const auto& master : network->getMasters()) {
+  for (const auto& [masterId, master] : network->getMasters()) {
+    (void) masterId;
     if (!master) {
       continue;
     }
@@ -215,7 +216,8 @@ Node* findNode(Network* network,
     return parseNonNegativeInt(instance, nodeId) ? network->getNode(nodeId)
                                                   : nullptr;
   }
-  for (auto& node : network->getNodes()) {
+  for (auto& [nodeId, node] : network->getNodes()) {
+    (void) nodeId;
     if (!node) {
       continue;
     }
@@ -409,7 +411,8 @@ RuntimeFingerprint fingerprintRuntime(const Grid& grid,
                                       PhysDesMgr* desMgr)
 {
   RuntimeFingerprint fingerprint;
-  for (const auto& ownedNode : network.getNodes()) {
+  for (const auto& [nodeId, ownedNode] : network.getNodes()) {
+    (void) nodeId;
     const Node* node = ownedNode.get();
     hashValue(fingerprint.network, node != nullptr);
     if (node == nullptr) {
@@ -911,7 +914,8 @@ bool TestFillerRepairCmd::exec()
   int baselineChecked = 0;
   int baselineIllegal = 0;
   int baselineReported = 0;
-  for (auto& node : network->getNodes()) {
+  for (auto& [nodeId, node] : network->getNodes()) {
+    (void) nodeId;
     if (!node || node->isFixed() || !node->isStdCell()) {
       continue;
     }
@@ -952,7 +956,8 @@ bool TestFillerRepairCmd::exec()
   int reported = 0;
   bool truncated = false;
 
-  for (auto& node : network->getNodes()) {
+  for (auto& [nodeId, node] : network->getNodes()) {
+    (void) nodeId;
     if (proposals >= kMaxProposals) {
       truncated = true;
       break;

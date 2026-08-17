@@ -923,11 +923,10 @@ void FillerRepairEngine::Impl::buildPlannerData()
     return nullptr;
   };
 
-  placement_.masters.resize(network->getMasters().size());
-  for (size_t networkMasterIndex = 0;
-       networkMasterIndex < network->getMasters().size();
-       ++networkMasterIndex) {
-    const auto& masterPtr = network->getMasters()[networkMasterIndex];
+  // Network uses stable, potentially sparse IDs. Reserve for the common
+  // dense case, then grow only to IDs that actually exist.
+  placement_.masters.reserve(network->getMasters().size());
+  for (const auto& [networkMasterIndex, masterPtr] : network->getMasters()) {
     const Master* nm = masterPtr.get();
     if (nm == nullptr) {
       addProblem(Severity::Fatal, "NullNetworkMaster",
@@ -943,7 +942,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
     }
     const eLIB::PhysLibCell* cell = nm->getPhysLibCell();
     const MasterId id = static_cast<MasterId>(nm->getId());
-    if (id < 0 || static_cast<size_t>(id) >= network->getMasters().size()) {
+    if (id < 0) {
       addProblem(Severity::Fatal, "InvalidNetworkMasterId",
                  cat("Network master slot ", networkMasterIndex,
                      " has out-of-range id ", id));
@@ -1103,11 +1102,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
 
   // --- placed instances: Grid supplies row and column (trusted, no
   // cross-frame re-validation); PhysDesMgr supplies status and origin.
-  placement_.instances.resize(network->getNodes().size());
-  for (size_t networkNodeIndex = 0;
-       networkNodeIndex < network->getNodes().size();
-       ++networkNodeIndex) {
-    const auto& nodePtr = network->getNodes()[networkNodeIndex];
+  placement_.instances.reserve(network->getNodes().size());
+  for (const auto& [networkNodeIndex, nodePtr] : network->getNodes()) {
     const Node* node = nodePtr.get();
     if (node == nullptr) {
       addProblem(Severity::Fatal, "NullNetworkNode",
@@ -1153,7 +1149,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
     const bool isFiller = node->isFiller();
 
     const InstanceId id = static_cast<InstanceId>(node->getId());
-    if (id < 0 || static_cast<size_t>(id) >= network->getNodes().size()) {
+    if (id < 0) {
       addProblem(Severity::Fatal, "InvalidNetworkNodeId",
                  cat("Network node slot ", networkNodeIndex,
                      " has out-of-range id ", id));
@@ -1302,7 +1298,8 @@ bool FillerRepairEngine::Impl::isNonBlockingCheckerInitDiagnostic(
 
   std::set<std::string> usedLayerNames;
   const eLIB::TechLib& tech = des_mgr_->getTopTech();
-  for (const auto& masterPtr : network_->getMasters()) {
+  for (const auto& [masterId, masterPtr] : network_->getMasters()) {
+    (void) masterId;
     if (masterPtr == nullptr || masterPtr->getPhysLibCell() == nullptr) {
       continue;
     }

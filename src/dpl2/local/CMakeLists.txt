@@ -11,6 +11,7 @@ set(DPL2_FAKE_UDM "${DPL2_ROOT}/test/local/fake_udm/include")
 
 add_library(dpl2_local_runtime STATIC
   "${DPL2_SRC}/DePlace.cpp"
+  "${DPL2_SRC}/Place.cpp"
   "${DPL2_SRC}/PlacementDRC.cpp"
   "${DPL2_SRC}/infrastructure/Grid.cpp"
   "${DPL2_SRC}/infrastructure/Object.cpp"
@@ -27,6 +28,7 @@ target_compile_features(dpl2_local_runtime PUBLIC cxx_std_20)
 target_include_directories(dpl2_local_runtime
   PUBLIC
     "${DPL2_ROOT}/include"
+    "${DPL2_ROOT}/test/local/include"
     "${DPL2_SRC}"
     "${DPL2_SRC}/infrastructure"
   SYSTEM PUBLIC

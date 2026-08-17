@@ -81,7 +81,8 @@ function(dpl2_configure_chain_target target strictness)
   # destination build.
   target_include_directories(
     ${target}
-    PRIVATE "${DPL2_SRC}" "${DPL2_SRC}/infrastructure"
+    PRIVATE "${CMAKE_CURRENT_LIST_DIR}/local/include"
+            "${DPL2_SRC}" "${DPL2_SRC}/infrastructure"
             "${CMAKE_CURRENT_LIST_DIR}/../include")
   target_include_directories(${target} SYSTEM PRIVATE ${Boost_INCLUDE_DIRS})
   target_link_libraries(${target} PRIVATE dpl2_test_udm)
@@ -100,7 +101,8 @@ endfunction()
 add_library(dpl2_filler_repair_deps INTERFACE)
 target_include_directories(
   dpl2_filler_repair_deps
-  INTERFACE "${DPL2_SRC}" "${DPL2_SRC}/infrastructure"
+  INTERFACE "${CMAKE_CURRENT_LIST_DIR}/local/include"
+            "${DPL2_SRC}" "${DPL2_SRC}/infrastructure"
             "${CMAKE_CURRENT_LIST_DIR}/../include")
 target_include_directories(
   dpl2_filler_repair_deps SYSTEM INTERFACE ${Boost_INCLUDE_DIRS})
@@ -125,6 +127,17 @@ add_library(dpl2_fr_chain_common OBJECT
     "${DPL2_SRC}/drc/util.cpp"
     "${DPL2_SRC}/drc/ImplantLayerChecker.cpp")
 dpl2_configure_chain_target(dpl2_fr_chain_common delivered)
+
+# Compile the destination ownership/call chain against the same UDM switch.
+# This is intentionally an object-only gate: ImportDb/OpenROAD wiring is local
+# executable glue, while these three files are the code copied to dpl2.
+add_library(dpl2_fr_deplace_compile_check OBJECT
+    "${CMAKE_CURRENT_LIST_DIR}/../src/DePlace.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/../src/PlacementDRC.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/../src/Place.cpp")
+target_link_libraries(dpl2_fr_deplace_compile_check PRIVATE
+    dpl2_fr_chain_common dpl2::fillerRepair)
+dpl2_configure_chain_target(dpl2_fr_deplace_compile_check delivered)
 
 # The payload builds itself and its portable tests from its own CMakeLists;
 # we never list its files. Handing it our already-compiled infra/checker

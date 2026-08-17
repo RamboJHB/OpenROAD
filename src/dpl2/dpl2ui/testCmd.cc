@@ -39,7 +39,8 @@ class TestEcoFlowCmd::FakeDrcFixer
     int violations_fixed = 0;
     int checked = 0;
 
-    for (auto& node : de_place_->getNetwork()->getNodes()) {
+    for (auto& [nodeId, node] : de_place_->getNetwork()->getNodes()) {
+      (void) nodeId;
       if (node->isFixed()) {
         continue;
       }

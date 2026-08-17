@@ -22,7 +22,8 @@ class PlacementDRC
   void addChecker(DRCCheckerType type, std::unique_ptr<DRCChecker> checker);
   bool checkDRC(const Node* cell, std::vector<CellChangeRecord>& ccRecords) const;
   bool checkDRC(const Node* cell, GridX x, GridY y,
-const eUNL::PhysOrientation& orient,std::vector<CellChangeRecord>& ccRecords) const;
+                const eUTL::PhysOrientation& orient,
+                std::vector<CellChangeRecord>& ccRecords) const;
   // Read-only overlay variant: runs all registered checkers.  Every checker
   // consumes @p overlayChanges (the std-cell/filler cells the candidate
   // footprint displaces) as the read-only overlay, without mutating the
@@ -30,7 +31,7 @@ const eUNL::PhysOrientation& orient,std::vector<CellChangeRecord>& ccRecords) co
   // cell-change list; it is passed through for the ImplantLayer code maintained
   // by others.
   bool checkDRC(const Node* cell, GridX x, GridY y,
-              const eUNL::PhysOrientation& orient,
+              const eUTL::PhysOrientation& orient,
               std::vector<CellChangeRecord>& cellChanges,
               std::vector<CellChangeRecord>& overlayChanges) const;
 

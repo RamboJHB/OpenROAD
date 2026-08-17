@@ -434,7 +434,8 @@ class FakeInfrastructureFixture final : public E2ETestInfrastructure
       }
       network_.addNode(id, desMgr);
     }
-    for (const auto& node : network_.getNodes()) {
+    for (const auto& [nodeId, node] : network_.getNodes()) {
+      (void) nodeId;
       grid_.paintPixel(node.get());
     }
     return true;

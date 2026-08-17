@@ -678,7 +678,10 @@ CheckRequest request(RowId rowId, ColId colId, MasterId masterId)
                       rowId,
                       colId,
                       (rowId % 2) != 0 ? PhysOrientationE::MX
-                                       : PhysOrientationE::R0};
+                                       : PhysOrientationE::R0,
+                      OpType::Replace,
+                      nullptr,
+                      {}};
 }
 
 CheckRequest retargeted(const Scenario& scn)
@@ -998,7 +1001,10 @@ class PortableCheckerOracle final : public fr::RepairOracle
         first.targetPlace.masterId,
         first.targetPlace.rowId,
         static_cast<ColId>(first.targetPlace.x / view_.siteWidth()),
-        toCheckerOrient(first.targetPlace.orientation)};
+        toCheckerOrient(first.targetPlace.orientation),
+        OpType::Replace,
+        nullptr,
+        {}};
     const ::Rect guardRect
         = makeRect(first.guardRegion.x.xl,
                    first.guardRegion.rowLo * ROW_HEIGHT,
@@ -1292,7 +1298,7 @@ TEST(ImplantCheckerNullSafetyTest,
                              eUTL::PhysOrientationE::R0,
                              changes));
 
-  const Node* node = network->getNodes().front().get();
+  const Node* node = network->getNodes().begin()->second.get();
   ASSERT_NE(node, nullptr);
   ASSERT_NE(node->getMaster(), nullptr);
   CheckRequest request;
@@ -1344,7 +1350,7 @@ TEST(ImplantCheckerNullSafetyTest,
   EXPECT_TRUE(hasDiagnostic(overlayResults.front().diagnostics,
                             "unknown_target_instance"));
 
-  Node* mutableNode = network->getNodes().front().get();
+  Node* mutableNode = network->getNodes().begin()->second.get();
   Master* savedMaster = mutableNode->getMaster();
   mutableNode->setMaster(nullptr);
   const CheckResult missingMaster = checker.checkDirect(request);
@@ -1357,10 +1363,30 @@ TEST(ImplantCheckerNullSafetyTest,
 TEST(InfrastructureNullSafetyTest, RejectsNullOwnedObjectsAndClearedGridAccess)
 {
   Network emptyNetwork;
-  EXPECT_FALSE(emptyNetwork.addNode(std::unique_ptr<Node>()));
-  EXPECT_FALSE(emptyNetwork.addMaster(std::unique_ptr<Master>()));
+  emptyNetwork.addNode(std::unique_ptr<Node>());
+  emptyNetwork.addMaster(std::unique_ptr<Master>());
   EXPECT_TRUE(emptyNetwork.getNodes().empty());
   EXPECT_TRUE(emptyNetwork.getMasters().empty());
+
+  auto sparseMaster = std::make_unique<Master>();
+  sparseMaster->setId(7);
+  sparseMaster->setDbMaster(LibCellID(0, 107));
+  emptyNetwork.addMaster(std::move(sparseMaster));
+  auto nextMaster = std::make_unique<Master>();
+  nextMaster->setId(-1);
+  nextMaster->setDbMaster(LibCellID(0, 108));
+  emptyNetwork.addMaster(std::move(nextMaster));
+  EXPECT_NE(emptyNetwork.getMaster(7), nullptr);
+  EXPECT_NE(emptyNetwork.getMaster(8), nullptr);
+
+  auto sparseNode = std::make_unique<Node>();
+  sparseNode->setId(11);
+  emptyNetwork.addNode(std::move(sparseNode));
+  auto nextNode = std::make_unique<Node>();
+  nextNode->setId(-1);
+  emptyNetwork.addNode(std::move(nextNode));
+  EXPECT_NE(emptyNetwork.getNode(11), nullptr);
+  EXPECT_NE(emptyNetwork.getNode(12), nullptr);
 
   PlannerCheckerFixture fixture;
   Grid* grid = fixture.grid();

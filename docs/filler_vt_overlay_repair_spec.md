@@ -59,7 +59,7 @@ bool initializeFillerRepair(
     const std::vector<const PhysLibCell*>& targetMasters);
 bool isLegal(LeafCellID cellId,
              LibCellID newMaster,
-             std::vector<CellChangeRecord>& fillerChanges) const;
+             std::vector<CellChangeRecord>& fillerChanges);
 bool findLegal(CellChangeRecord& targetAdd,
                int diameter,
                std::vector<CellChangeRecord>& fillerChanges) const;
@@ -93,11 +93,19 @@ with configured filler masters using its real edge table before construction.
 A master or filler-setting change after publication is outside the immutable
 revision and is rejected.
 
-`ImplantLayerChecker::check(...)` remains the Node-facing entry. It first performs
-the ordinary target overlay check. With repair enabled and an initialized
-engine bound, it calls `engine.repair(request)` when a same-footprint Replace
-fails direct DRC. On success it appends the returned records to the
-caller-owned vector. The checker stores no repair result.
+`ImplantLayerChecker::check(...)` remains the Node-facing entry. Its shared
+boundary is
+`check(cell, x, y, orient, cellChanges, overlayChanges)`: the second list is
+the caller's read-only displaced-cell overlay and only successful filler
+records are appended to the first list. With repair enabled and an initialized
+engine bound, the checker calls `engine.repair(request)` when a same-footprint
+Replace fails direct DRC. It always calls the engine for an uncommitted Add,
+even when implant DRC is clean, because the Add must still remove/re-tile
+covered fillers. The checker stores no request or repair result.
+
+An uncommitted Node is distinguished from an existing Node by committed
+database identity, not by numeric Node ID alone. This is required because a
+new infrastructure Node defaults to ID 0, which may already be occupied.
 
 For a fixed-origin master swap, opto calls
 `DePlace::isLegal(cellId, newMaster, fillerChanges)`. It builds a request-local
@@ -190,9 +198,10 @@ Filler identity has two explicit authorities:
 
 UDM macro-type flags and master-name prefixes are not used by the engine.
 Infrastructure must register configured filler masters and every candidate
-std-cell target master with the real edge table before engine initialization.
-The engine may refresh the filler flag on an existing Master, but it never
-creates an incomplete Master.
+std-cell target master with the real edge table before checker/engine
+initialization. Checker master metadata is immutable after construction.
+Neither checker nor engine adds or lazily rebuilds a master during a worker
+request.
 
 Network must contain every placed/fixed object that can cover the core,
 including hard macros. Placement blockages remain Grid state and are not
@@ -403,6 +412,13 @@ checker batches, not on the number of planner objects allocated. Keep one
 initialized checker/engine pair for a design revision; constructing a pair per
 proposal measures initialization, not normal repair latency. Disable the
 diagnostic transcript with `FR_VERBOSE=0` for throughput runs.
+
+The checker snapshot visits each Network instance at most once even when a
+wide or multi-row cell occupies many Grid pixels. The engine accepts stable,
+sparse Network IDs without rescanning the containers, and builds its immutable
+slot tables once. `PlacementDRC` evaluates into a request-local trial vector
+and publishes changes only after every checker succeeds, avoiding both partial
+output and rollback work on failure.
 
 The following regression baseline was measured on 2026-08-06 using an Apple
 M4 (10 cores, 16 GB), macOS 26.2, Apple Clang 17, Release builds, and

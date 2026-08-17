@@ -2,6 +2,7 @@
 // Copyright (c) 2021-2025, The OpenROAD Authors
 
 #pragma once
+#include <algorithm>
 #include <string>
 #include <map>
 #include <memory>
@@ -72,19 +73,35 @@ class Network
   void addPin(const eLIB::PhysLibPort* libport, Master* master);
 
   void addNode(std::unique_ptr<Node> n) {
+    if (n == nullptr) {
+      return;
+    }
     // Respect an id already assigned by the caller (used by tests); otherwise
     // fall back to a fresh id from the monotonic counter.
-    const int id = n->getId() >= 0 ? n->getId() : next_node_id_++;
+    const int id = n->getId() >= 0 ? n->getId() : next_node_id_;
+    if (nodes_.find(id) != nodes_.end()) {
+      return;
+    }
+    n->setId(id);
     const LeafCellID instId = n->getDbInst();
+    nodes_.emplace(id, std::move(n));
+    next_node_id_ = std::max(next_node_id_, id + 1);
     if (instId.isValid()) {
       inst_to_node_idx_[instId] = id;
     }
-    nodes_.emplace(id, std::move(n));
   }
   void addMaster(std::unique_ptr<Master> m) {
-    const int id = m->getId() >= 0 ? m->getId() : next_master_id_++;
+    if (m == nullptr) {
+      return;
+    }
+    const int id = m->getId() >= 0 ? m->getId() : next_master_id_;
+    if (masters_.find(id) != masters_.end()) {
+      return;
+    }
+    m->setId(id);
     master_to_idx_[m->getDbMaster()] = id;
     masters_.emplace(id, std::move(m));
+    next_master_id_ = std::max(next_master_id_, id + 1);
   }
   void setFillerSetting(const fillerSetting* setting) {
     filler_setting_ = setting;

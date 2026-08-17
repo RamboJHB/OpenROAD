@@ -20,14 +20,12 @@ Implemented and verified in this branch:
   budgets;
 - a complete GoogleTest source tree, a compact `fillerRepair2` migration
   payload, dump replay, and repository-local OpenROAD/ODB command wiring;
-- 344 normal regression tests, the same 344 under ASan, 12 focused ThreadSanitizer
-  concurrency/binding tests, strict-warning compilation of the
-  `fillerRepair2` migration payload, and repeatable local ODB smoke runs.
-
-The separately imported direct-rule `checker-simple` golden suite is not part
-of those 344 tests: 9/15 cases pass and six existing violation-count goldens
-still disagree with this branch's checker output. No golden was changed for
-the DePlace integration.
+- test-only UDM-compatible headers for the new DePlace/Place/checker surface,
+  plus a compile gate for the complete DePlace -> PlacementDRC -> checker ->
+  engine ownership chain;
+- 362 normal GoogleTests, including all 15 unchanged destination checker
+  golden cases, strict-warning compilation of both fillerRepair payloads, and
+  repeatable local ODB smoke runs; the same 362 tests pass under ASan.
 
 The remaining risks are destination sign-off and bounded-search behavior, not
 missing runtime plumbing:
@@ -85,7 +83,8 @@ matching changes when the destination does not already contain them.
 
 ### Checker
 
-- `DRCChecker` exposes the five-argument `check(..., fcRecord)` virtual.
+- `DRCChecker` exposes the six-argument
+  `check(..., cellChanges, overlayChanges)` virtual.
 - `ImplantLayerChecker(Grid*, Design*, Network*)` borrows the object set
   initialized by DePlace and exposes that same set to filler repair.
 - `ImplantLayerChecker` exposes `checkPlaceWithOverlays(...)` and returns one
@@ -95,8 +94,10 @@ matching changes when the destination does not already contain them.
 - DePlace creates `PlacementDRC`, registers the implant checker there, owns the
   engine directly, and atomically publishes that one ready non-owning engine
   pointer; null/unready/replacement binding is rejected. Node-facing
-  `check()` calls repair only for failed same-footprint Replace/rotation.
-  Explicit std-cell Add/Delete uses `checker.repair(targetChange, changes)`.
+  `check()` calls repair for a failed same-footprint Replace/rotation and for
+  every Add (room creation is required even when implant DRC is clean).
+  Explicit std-cell Add/Delete also uses
+  `checker.repair(targetChange, changes)`.
 - The checker obtains `PhysDesMgr` from the explicit Design, not global Session
   state. DePlace owns object-set consistency; checker and engine do not compare
   design identities.
@@ -105,8 +106,8 @@ matching changes when the destination does not already contain them.
 - Overlay validation accepts one atomic mix of filler `Replace`, `Delete`, and
   request-local `Add`, validates complete one/two-row rectangles and row/site
   orientation, and requires every filler under a target Add to be deleted.
-- Checker master metadata may be lazily completed for a registered request
-  master; shared tables must not be observed half-built.
+- Checker master metadata is built once after full master registration and is
+  immutable while worker checks run.
 
 Relevant files:
 
@@ -152,7 +153,8 @@ src/dpl2/src/infrastructure/network.{h,cpp}
 - `DePlace::initializeFillerRepair(targetMasters)` registers every configured
   filler master plus the complete std-cell target-master universe using the
   real edge table, refreshes matching Nodes as fillers, and publishes the
-  complete checker/engine chain before workers start.
+  complete checker/engine chain before workers start. Master metadata is then
+  immutable; checker worker calls never register or rebuild masters.
 
 Relevant files:
 
@@ -236,9 +238,11 @@ if (deplace.findLegal(targetAdd, searchDiameter, fillerChanges)) {
 ```
 
 The checker loads its atomic enable state and published engine pointer once at
-request entry. Engine `repair()` methods are const and share state access, so
-workers do not serialize; only repository-local snapshot/debug reconfiguration
-takes exclusive access.
+request entry. Engine `repair()` methods share read access, so workers do not
+serialize. A Node-facing Add always enters the engine even when direct implant
+DRC is clean, because covered fillers still need a complete Delete/re-tile
+transaction. A temporary Node is identified as Add by its missing committed
+database identity, so its default numeric Node ID cannot collide with node 0.
 
 The input x/y are absolute physical coordinates. Delete/Replace must exactly
 match the engine snapshot; `findLegal` may update an Add's x/y/orientation.
@@ -314,6 +318,12 @@ ALL=1 SANITIZE=address src/dpl2/test/build_all.sh
 This adds fake-UDM engine/infrastructure cases. It validates the local boundary
 but does not replace a build and smoke test against the destination's real UDM
 and infrastructure.
+
+The fake UDM switch also supplies `unl/nlChange.hh`, `unl/nlEditor.hh`,
+`mv/mvObj.hh`, pin/term access, hierarchy/design access, physical library
+shape/site APIs, and minimal change-editor behavior needed to compile the new
+destination sources. These files remain test-only; no fake type or conditional
+include is present in runtime sources.
 
 ### Loaded-design command
 

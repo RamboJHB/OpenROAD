@@ -1151,6 +1151,48 @@ TEST_P(FillerRepairEngineE2E,
 }
 
 TEST_P(FillerRepairEngineE2E,
+       CheckerNodeEntryTreatsDefaultIdAsAnUncommittedAdd)
+{
+  CheckerHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.checkerReady());
+  dpl2::Network* const network = harness.checker().getNetwork();
+  dpl2::Grid* const grid = harness.checker().getGrid();
+  ASSERT_NE(network, nullptr);
+  ASSERT_NE(grid, nullptr);
+  dpl2::Master* const master = network->getMaster(
+      harness.design().master(frt::MasterRole::Buffer).getLibCellId());
+  ASSERT_NE(master, nullptr);
+
+  // Node defaults to id 0, which is already a committed node in this design.
+  // Its invalid database id is what makes this an uncommitted Add.
+  dpl2::Node added;
+  added.setMaster(master);
+  added.setType(dpl2::Node::CELL);
+  added.setWidth(dpl2::DbuX{
+      harness.design().master(frt::MasterRole::Buffer)
+          .getWidth()
+          .getStorage()});
+  added.setHeight(dpl2::DbuY{
+      harness.design().master(frt::MasterRole::Buffer)
+          .getHeight()
+          .getStorage()});
+  added.setLeft(dpl2::DbuX{18 * frt::kSiteWidth});
+  added.setBottom(dpl2::DbuY{0});
+  added.setOrient(eUTL::PhysOrientationE::MX);
+
+  std::vector<dpl2::CellChangeRecord> changes;
+  std::vector<dpl2::CellChangeRecord> overlayChanges;
+  ASSERT_TRUE(harness.checker().check(&added,
+                                      dpl2::GridX{18},
+                                      dpl2::GridY{0},
+                                      added.getOrient(),
+                                      changes,
+                                      overlayChanges));
+  ASSERT_EQ(changes.size(), 1U);
+  EXPECT_EQ(changes.front().op_, dpl2::OpType::Delete);
+}
+
+TEST_P(FillerRepairEngineE2E,
        CheckerEntryFillsDeletedTwoRowStdCell)
 {
   frt::DesignSetup setup = GetParam().setup;
@@ -1938,7 +1980,9 @@ TEST_P(FillerRepairEngineE2E, UnpaintedFillerSitesMakeTheGridNotFull)
   ASSERT_TRUE(grid->isFullUtil());
 
   dpl2::Node* filler = nullptr;
-  for (const auto& node : objects.infrastructure().network()->getNodes()) {
+  for (const auto& [nodeId, node] :
+       objects.infrastructure().network()->getNodes()) {
+    (void) nodeId;
     if (node->isFiller()) {
       filler = node.get();
       break;
@@ -2019,7 +2063,9 @@ TEST_P(FillerRepairEngineE2E, FillerIsNotAStandardCell)
   ASSERT_TRUE(objects.hasInfrastructure());
   int fillers = 0;
   int stdCells = 0;
-  for (const auto& node : objects.infrastructure().network()->getNodes()) {
+  for (const auto& [nodeId, node] :
+       objects.infrastructure().network()->getNodes()) {
+    (void) nodeId;
     if (node->isFiller()) {
       ++fillers;
       EXPECT_FALSE(node->isStdCell()) << "filler reported as a standard cell";
@@ -2035,7 +2081,9 @@ TEST_P(FillerRepairEngineE2E, NodeAndMasterAgreeOnFillerness)
 {
   ProviderObjects objects(GetParam().setup);
   ASSERT_TRUE(objects.hasInfrastructure());
-  for (const auto& node : objects.infrastructure().network()->getNodes()) {
+  for (const auto& [nodeId, node] :
+       objects.infrastructure().network()->getNodes()) {
+    (void) nodeId;
     ASSERT_NE(node->getMaster(), nullptr);
     EXPECT_EQ(node->isFiller(), node->getMaster()->isFiller())
         << "node " << node->getId() << " disagrees with its master";
@@ -2062,7 +2110,8 @@ TEST_P(FillerRepairEngineE2E, UpdateNodeRefreshesFillerness)
   // A master already registered in this Network, so the swap is the only
   // thing under test.
   const eLIB::PhysLibCell* fillerMaster = nullptr;
-  for (const auto& node : network->getNodes()) {
+  for (const auto& [nodeId, node] : network->getNodes()) {
+    (void) nodeId;
     if (node->isFiller() && node->getMaster() != nullptr) {
       fillerMaster = node->getMaster()->getPhysLibCell();
       break;
@@ -2128,8 +2177,9 @@ TEST_P(FillerRepairEngineE2E, NetworkRejectsNullImportDependencies)
   const dpl2::Master* before = target->getMaster();
   const size_t nodeCount = network->getNodes().size();
 
-  EXPECT_FALSE(network->addNode(
-      objects.design().cell(frt::CellRole::Target), nullptr));
+  const size_t nodeCountBefore = network->getNodes().size();
+  network->addNode(objects.design().cell(frt::CellRole::Target), nullptr);
+  EXPECT_EQ(network->getNodes().size(), nodeCountBefore);
   EXPECT_EQ(network->getNodes().size(), nodeCount);
   EXPECT_FALSE(network->updateNode(nullptr, objects.design().desMgr(), master));
   EXPECT_FALSE(network->updateNode(target, nullptr, master));
@@ -2157,7 +2207,7 @@ TEST_P(FillerRepairEngineE2E, EngineRejectsNullNetworkNode)
                                        objects.infrastructure().grid(),
                                        network,
                                        setting));
-  network->getNodes().emplace_back(nullptr);
+  network->getNodes().emplace(std::numeric_limits<int>::max(), nullptr);
   dpl2::ipl::ImplantLayerChecker checker(
       objects.infrastructure().grid(), objects.design().design(), network);
   dpl2::fillerRepair::FillerRepairEngine engine(checker);

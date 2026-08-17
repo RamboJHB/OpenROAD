@@ -225,6 +225,9 @@ Master* Network::addMaster(const PhysLibCell& db_master,
                            const Grid* grid,
                            const EdgeTypeTable* edge_types)
 {
+  if (grid == nullptr || edge_types == nullptr) {
+    return nullptr;
+  }
   LibCellID masterId = db_master.getLibCellId();
   const auto it = master_to_idx_.find(masterId);
   if (it != master_to_idx_.end()) {
@@ -328,6 +331,9 @@ Node* Network::getNode(LeafCellID cellId)
 
 void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
 {
+  if (desMgr == nullptr) {
+    return;
+  }
   Node ndi;
   const int id = next_node_id_++;
   const PhysCell& inst = desMgr->getPhysCell(cellId);
@@ -357,6 +363,9 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
 
 void Network::addFillerNode(LeafCellID cellId, const PhysDesMgr* desMgr)
 {
+  if (desMgr == nullptr) {
+    return;
+  }
   Node ndi;
   const int id = next_node_id_++;
   const PhysCell& inst = desMgr->getPhysCell(cellId);
@@ -437,9 +446,15 @@ bool Network::updateNode(Node* ndi,
                          const PhysDesMgr* desMgr,
                          const PhysLibCell& physLibCell)
 {
+  if (ndi == nullptr || desMgr == nullptr) {
+    return false;
+  }
+  auto master = getMaster(physLibCell.getLibCellId());
+  if (master == nullptr) {
+    return false;
+  }
   LeafCellID cellId = ndi->getDbInst();
   const PhysCell& inst = desMgr->getPhysCell(cellId);
-  auto master = getMaster(physLibCell.getLibCellId());
   ndi->setMaster(master);
   ndi->setType(master->isFiller() ? Node::FILLER : Node::CELL);
   ndi->setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);

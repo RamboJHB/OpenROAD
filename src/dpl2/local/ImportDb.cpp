@@ -265,30 +265,6 @@ void DePlace::initPlacementDRC()
   drc_engine_ = std::make_unique<PlacementDRC>(grid_.get());
 }
 
-void DePlace::unplaceCell(Node* cell)
-{
-  grid_->erasePixel(cell);
-}
-
-void DePlace::placeCell(Node* cell, const GridX x, const GridY y)
-{
-  if (cell == nullptr) {
-    return;
-  }
-  cell->setLeft(DbuX{x.v * grid_->getSiteWidth().v});
-  cell->setBottom(grid_->gridYToDbu(y));
-  grid_->paintPixel(cell, x, y);
-}
-
-bool DePlace::legalCellInRect(const Rect&, Node* cell)
-{
-  if (cell == nullptr) {
-    return false;
-  }
-  placeCell(cell, grid_->gridX(cell), grid_->gridSnapDownY(cell));
-  return true;
-}
-
 namespace local {
 
 bool importOpenRoadDb(odb::dbDatabase* database,
