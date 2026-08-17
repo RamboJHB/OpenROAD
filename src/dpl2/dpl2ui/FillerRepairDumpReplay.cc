@@ -296,15 +296,46 @@ class DumpCheckerOracle final : public fr::RepairOracle
     for (const fr::OracleRequest& request : requests) {
       changes.push_back(request.fillerChanges);
     }
-    const ipl::CheckRequest target{
-        first.targetPlace.instanceId,
-        first.targetPlace.masterId,
-        first.targetPlace.rowId,
-        static_cast<ipl::ColId>(first.targetPlace.x / view_.siteWidth()),
+    Network* const network = checker_.getNetwork();
+    Node* const replaced = network != nullptr
+                               ? network->getNode(first.targetPlace.instanceId)
+                               : nullptr;
+    Master* const replacement = network != nullptr
+                                    ? network->getMaster(
+                                          first.targetPlace.masterId)
+                                    : nullptr;
+    if (replaced == nullptr || replaced->getMaster() == nullptr
+        || replacement == nullptr) {
+      for (size_t index = 0; index < requests.size(); ++index) {
+        results[index].requestId = requests[index].requestId;
+        results[index].status = fr::OracleStatus::CheckerError;
+      }
+      return results;
+    }
+    Node temporary;
+    temporary.setId(replaced->getId());
+    temporary.setDbInst(replaced->getDbInst());
+    temporary.setMaster(replacement);
+    temporary.setType(Node::CELL);
+    temporary.setWidth(replaced->getWidth());
+    temporary.setHeight(replaced->getHeight());
+    temporary.setLeft(replaced->getLeft());
+    temporary.setBottom(replaced->getBottom());
+    temporary.setOrient(toCheckerOrient(first.targetPlace.orientation));
+    const eLIB::LibCellID oldMaster = replaced->getMaster()->getDbMaster();
+    const ipl::CheckRequestOverlay target{
+        &temporary,
+        GridX(static_cast<ipl::ColId>(first.targetPlace.x
+                                      / view_.siteWidth())),
+        GridY(first.targetPlace.rowId),
         toCheckerOrient(first.targetPlace.orientation),
-        OpType::Replace,
-        nullptr,
-        {}};
+        {{OpType::Delete,
+          replaced->getDbInst(),
+          eUTL::UvDist(replaced->getLeft().v),
+          eUTL::UvDist(replaced->getBottom().v),
+          oldMaster,
+          oldMaster,
+          replaced->getOrient()}}};
     const fr::DbCoord yl
         = static_cast<fr::DbCoord>(first.guardRegion.rowLo) * view_.rowHeight();
     const fr::DbCoord yh

@@ -10,10 +10,8 @@
 #include <iostream>
 #include <iterator>
 #include <limits>
-#include <mutex>
 #include <physlib/techRuleCheck.hh>
 #include <set>
-#include <shared_mutex>
 #include <sstream>
 #include <unordered_map>
 
@@ -30,13 +28,6 @@ constexpr Dbu ADJACENT_ROW_VERTICAL_SPACING = 1;
 const LeafCellID* cellChangeLeafCellId(const CellChangeRecord& change)
 {
     return std::get_if<LeafCellID>(&change.cell_data_);
-}
-
-// [fillerRepair-layout] Add records have no database instance yet. Their
-// request-local name is the stable identity used while evaluating one batch.
-const std::string* cellChangeName(const CellChangeRecord& change)
-{
-    return std::get_if<std::string>(&change.cell_data_);
 }
 
 inline Layer::Polar opposite(Layer::Polar p)
@@ -209,7 +200,7 @@ Layer::Polar ImplantLayerChecker::getPolar(RowId rowA, RowId rowB) const
 ImplantLayerChecker::ImplantLayerChecker(Grid* grid,
                                          eUNL::Design* design,
                                          Network* network)
-    : DRCChecker(grid), network_(network), design_(design)
+    : DRCChecker(grid, design), network_(network)
 {
     if (grid_ == nullptr) {
         diagnostics_.push_back(
@@ -519,7 +510,8 @@ bool ImplantLayerChecker::buildMstIntervals()
                    || !rule->getIntersectLayers().empty();
         });
 
-    for (MasterItem& item : masterItems_) {
+    for (auto& [masterId, item] : masterItems_) {
+        (void) masterId;
         const Dbu width = item.width;
         // Build intervals for each shape
         std::vector<MasterInterval> intervals;
@@ -631,12 +623,12 @@ bool ImplantLayerChecker::buildMstIntervals()
 // library.
 void ImplantLayerChecker::buildMasters()
 {
-    int masterCount = network_->getMasters().size();
     // [fillerRepair-fix] A late Network registration rebuilds this table.
     // Replace old entries instead of appending every raw shape a second time.
-    masterItems_.assign(masterCount, MasterItem{});
+    masterItems_.clear();
 
-    for (const std::unique_ptr<Master>& masterPtr : network_->getMasters()) {
+    for (const auto& [networkMasterId, masterPtr] : network_->getMasters()) {
+        (void) networkMasterId;
         const Master* nm = masterPtr.get();
         if (!nm) {
             diagnostics_.push_back(
@@ -644,7 +636,7 @@ void ImplantLayerChecker::buildMasters()
             continue;
         }
         MasterId mid = nm->getId();
-        if (mid < 0 || mid >= masterCount) {
+        if (mid < 0) {
             diagnostics_.push_back(
                 {"invalid_network_master_id", makeMessage("master ", mid)});
             continue;
@@ -728,7 +720,8 @@ void ImplantLayerChecker::buildMasters()
 // spanning full width.
 void ImplantLayerChecker::rebuildMasterShapes()
 {
-    for (MasterItem& item : masterItems_) {
+    for (auto& [masterId, item] : masterItems_) {
+        (void) masterId;
         if (item.rawShapes.empty()) {
             item.shapes.clear();
             continue;
@@ -858,139 +851,248 @@ void ImplantLayerChecker::rebuildMasterShapes()
 // --------------------------------------------------------------------------------
 // Checker Entry Interface
 // --------------------------------------------------------------------------------
-// [FRPORT] The base checker entry delegates to the repair-aware overload.
 bool ImplantLayerChecker::check(const Node* node,
                                 GridX x,
                                 GridY y,
                                 const eUTL::PhysOrientation& orient) const
 {
-    std::vector<CellChangeRecord> fcRecord;
-    return check(node, x, y, orient, fcRecord);
+    std::vector<CellChangeRecord> cellChanges;
+    std::vector<CellChangeRecord> overlayChanges;
+    if (node != nullptr && node->getMaster() != nullptr
+        && node->getDbInst().isValid()) {
+        overlayChanges.push_back(
+            {OpType::Delete,
+             node->getDbInst(),
+             UvDist(node->getLeft().v),
+             UvDist(node->getBottom().v),
+             node->getMaster()->getDbMaster(),
+             node->getMaster()->getDbMaster(),
+             node->getOrient()});
+    }
+    return check(node, x, y, orient, cellChanges, overlayChanges);
 }
 
 bool ImplantLayerChecker::check(const Node* node,
                                 GridX x,
                                 GridY y,
                                 const eUTL::PhysOrientation& orient,
-                                std::vector<CellChangeRecord>& fcRecord) const
+                                std::vector<CellChangeRecord>& cellChanges,
+                                std::vector<CellChangeRecord>& overlayChanges) const
 {
     if (!node || node->getMaster() == nullptr || !hasUsableInfrastructure()) {
         return false;
     }
-    CheckRequest request;
-    request.instanceId = node->getId();
-    request.masterId = node->getMaster()->getId();
-    // Preserve the caller's proposed row so unsupported movement is rejected
-    // against the engine snapshot instead of being silently normalized.
-    request.rowId = y.v;
-    request.colId = x.v;
+    CheckRequestOverlay request;
+    request.cell = node;
+    request.x = x;
+    request.y = y;
     request.orientation = orient;
-    request.targetOp = OpType::Replace;
-    ensureMasterData(request.masterId);
-
-    // Load the published configuration once. A concurrent helper disable can
-    // affect the next call, but cannot split this request between DRC-only and
-    // repair-aware semantics.
-    const bool repairEnabled
-        = enableFillerRepair_.load(std::memory_order_acquire);
-    const fillerRepair::FillerRepairEngine* const repairEngine
-        = repairEnabled
-              ? fillerRepairEngine_.load(std::memory_order_acquire)
-              : nullptr;
-
-    // Node-facing checks are same-footprint Replace/rotation only. Std-cell
-    // Add/Delete transactions use repair(CellChangeRecord) so the operation
-    // is explicit and the caller retains the target record.
-    if (repairEngine != nullptr && targetFootprintChanged(request)) {
+    request.overlayChanges = overlayChanges;
+    DiagVec requestDiagnostics;
+    const std::optional<ResolvedRequest> resolved
+        = resolveRequest(request, requestDiagnostics);
+    if (!resolved.has_value()) {
         return false;
     }
-    bool isLegal = checkDirect(request).isLegal;
-    // [fillerRepair-fix] Helper-built checkers disable repair so their checks
-    // retain DRC-only semantics; ordinary checker instances default to enabled.
-    // [FRPORT] Dispatch failed checks to the initialized DePlace-owned engine.
-    if (!isLegal && repairEngine != nullptr) {
-        isLegal = repairFillers(*repairEngine, request, fcRecord);
+    if (checkDirect(*resolved).isLegal) {
+        return true;
     }
-    return isLegal;
-}
-
-bool ImplantLayerChecker::repair(const CellChangeRecord& targetChange,
-                                 std::vector<CellChangeRecord>& fcRecord) const
-{
     if (!enableFillerRepair_.load(std::memory_order_acquire)) {
         return false;
     }
-    const fillerRepair::FillerRepairEngine* const engine
-        = fillerRepairEngine_.load(std::memory_order_acquire);
+    std::vector<CellChangeRecord> trial;
+    if (!repairOverlay(request, trial)) {
+        return false;
+    }
+    cellChanges.insert(cellChanges.end(),
+                       std::make_move_iterator(trial.begin()),
+                       std::make_move_iterator(trial.end()));
+    return true;
+}
+
+bool ImplantLayerChecker::check(
+    const Node* node,
+    std::vector<CellChangeRecord>& cellChanges,
+    std::vector<CellChangeRecord>& overlayChanges) const
+{
+    if (node == nullptr || grid_ == nullptr) {
+        return false;
+    }
+    return check(node,
+                 grid_->gridX(node),
+                 grid_->gridSnapDownY(node),
+                 node->getOrient(),
+                 cellChanges,
+                 overlayChanges);
+}
+
+CheckResult ImplantLayerChecker::checkDirect(
+    const CheckRequestOverlay& request) const
+{
+    CheckResult result;
+    DiagVec requestDiagnostics;
+    const std::optional<ResolvedRequest> resolved
+        = resolveRequest(request, requestDiagnostics);
+    if (!resolved.has_value()) {
+        result.diagnostics = diagnostics_;
+        result.diagnostics.insert(result.diagnostics.end(),
+                                  requestDiagnostics.begin(),
+                                  requestDiagnostics.end());
+        return result;
+    }
+    return checkDirect(*resolved);
+}
+
+std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
+    const CheckRequestOverlay& request,
+    const Rect& guardRegion,
+    const std::vector<FillerChanges>& fillerChanges) const
+{
+    DiagVec requestDiagnostics;
+    const std::optional<ResolvedRequest> resolved
+        = resolveRequest(request, requestDiagnostics);
+    if (resolved.has_value()) {
+        return checkPlaceWithOverlays(*resolved, guardRegion, fillerChanges);
+    }
+    std::vector<CheckResult> results(fillerChanges.size());
+    for (CheckResult& result : results) {
+        result.diagnostics = diagnostics_;
+        result.diagnostics.insert(result.diagnostics.end(),
+                                  requestDiagnostics.begin(),
+                                  requestDiagnostics.end());
+    }
+    return results;
+}
+
+const MasterItem* ImplantLayerChecker::masterItem(MasterId masterId) const
+{
+    const auto found = masterItems_.find(masterId);
+    return found != masterItems_.end() ? &found->second : nullptr;
+}
+
+std::optional<ImplantLayerChecker::ResolvedRequest>
+ImplantLayerChecker::resolveRequest(
+    const CheckRequestOverlay& request,
+    DiagVec& diagnostics) const
+{
+    if (!hasUsableInfrastructure() || request.cell == nullptr
+        || request.cell->getMaster() == nullptr) {
+        diagnostics.push_back(
+            {"invalid_target_cell",
+             "overlay request requires a temporary cell with a master"});
+        return std::nullopt;
+    }
+    if (request.overlayChanges.size() != 1) {
+        diagnostics.push_back(
+            {"invalid_target_overlay_count",
+             "overlay request must name exactly one replaced Network node"});
+        return std::nullopt;
+    }
+    const CellChangeRecord& overlay = request.overlayChanges.front();
+    const LeafCellID* cellId = cellChangeLeafCellId(overlay);
+    if (overlay.op_ != OpType::Delete || cellId == nullptr
+        || !cellId->isValid()) {
+        diagnostics.push_back(
+            {"invalid_target_overlay",
+             "target overlay must be one Delete record carrying LeafCellID"});
+        return std::nullopt;
+    }
+    const Node* replaced = network_->getNode(*cellId);
+    if (replaced == nullptr || replaced->getMaster() == nullptr
+        || (!replaced->isStdCell() && !replaced->isFiller()
+            && replaced->getType() != Node::CELL)) {
+        diagnostics.push_back(
+            {"unknown_target_overlay",
+             "target overlay does not resolve to a standard cell or filler"});
+        return std::nullopt;
+    }
+    if (request.cell->getMaster()->isFiller()) {
+        diagnostics.push_back(
+            {"target_master_is_filler",
+             "the temporary target must use a standard-cell master"});
+        return std::nullopt;
+    }
+
+    const MasterItem* replacement
+        = masterItem(request.cell->getMaster()->getId());
+    const MasterItem* original = masterItem(replaced->getMaster()->getId());
+    if (replacement == nullptr || original == nullptr) {
+        diagnostics.push_back(
+            {"unknown_target_master",
+             "both target masters must be registered before repair starts"});
+        return std::nullopt;
+    }
+    if (replacement->width != original->width
+        || replacement->height != original->height) {
+        diagnostics.push_back(
+            {"target_footprint_mismatch",
+             "temporary and replaced cells must have identical footprints"});
+        return std::nullopt;
+    }
+    if (overlay.orig_lib_cell_.isValid()
+        && overlay.orig_lib_cell_ != replaced->getMaster()->getDbMaster()) {
+        diagnostics.push_back(
+            {"target_original_master_mismatch",
+             "overlay original master disagrees with the Network node"});
+        return std::nullopt;
+    }
+    if (request.x != grid_->gridX(replaced)
+        || request.y != grid_->gridSnapDownY(replaced)) {
+        diagnostics.push_back(
+            {"target_move_unsupported",
+             "filler repair accepts only an in-place one-to-one replacement"});
+        return std::nullopt;
+    }
+    if (request.x.v < 0 || request.y.v < 0
+        || request.x >= grid_->getRowSiteCount()
+        || request.y >= grid_->getRowCount()) {
+        diagnostics.push_back(
+            {"placement_out_of_grid", "temporary target is outside the grid"});
+        return std::nullopt;
+    }
+
+    ResolvedRequest resolved;
+    resolved.instanceId = replaced->getId();
+    resolved.masterId = request.cell->getMaster()->getId();
+    resolved.rowId = request.y.v;
+    resolved.colId = request.x.v;
+    resolved.orientation = request.orientation;
+    resolved.cell = request.cell;
+    resolved.replaced = replaced;
+    resolved.overlayChanges = request.overlayChanges;
+    return resolved;
+}
+
+const fillerRepair::FillerRepairEngine*
+ImplantLayerChecker::fillerRepairEngine() const
+{
+    std::call_once(fillerRepairInit_, [this]() {
+        fillerRepairEngine_
+            = std::make_unique<fillerRepair::FillerRepairEngine>(*this);
+    });
+    return fillerRepairEngine_ != nullptr && fillerRepairEngine_->isReady()
+               ? fillerRepairEngine_.get()
+               : nullptr;
+}
+
+bool ImplantLayerChecker::repairOverlay(
+    const CheckRequestOverlay& request,
+    std::vector<CellChangeRecord>& fillerChanges) const
+{
+    const fillerRepair::FillerRepairEngine* engine = fillerRepairEngine();
     if (engine == nullptr) {
         return false;
     }
-    fillerRepair::RepairOutcome outcome
-        = engine->repair(targetChange);
+    fillerRepair::RepairOutcome outcome = engine->repair(request);
     if (!outcome.hasSolution) {
         return false;
     }
-    fcRecord.insert(fcRecord.end(),
-                    std::make_move_iterator(outcome.changes.begin()),
-                    std::make_move_iterator(outcome.changes.end()));
+    fillerChanges = std::move(outcome.changes);
     return true;
-}
-
-// [FRPORT] Translate the checker request into engine output appended for opto.
-bool ImplantLayerChecker::repairFillers(
-    const fillerRepair::FillerRepairEngine& engine,
-    const CheckRequest& request,
-    std::vector<CellChangeRecord>& fcRecord) const
-{
-    fillerRepair::RepairOutcome outcome = engine.repair(request);
-    if (!outcome.hasSolution) {
-        return false;
-    }
-    // Append-only into the caller's record; the checker stores nothing.
-    fcRecord.insert(fcRecord.end(),
-                    std::make_move_iterator(outcome.changes.begin()),
-                    std::make_move_iterator(outcome.changes.end()));
-    return true;
-}
-
-bool ImplantLayerChecker::setFillerRepairEngine(
-    const fillerRepair::FillerRepairEngine* engine)
-{
-    if (engine == nullptr || !engine->isReady()) {
-        return false;
-    }
-    const fillerRepair::FillerRepairEngine* expected = nullptr;
-    if (fillerRepairEngine_.compare_exchange_strong(
-            expected,
-            engine,
-            std::memory_order_release,
-            std::memory_order_acquire)) {
-        return true;
-    }
-    return expected == engine;
-}
-
-void ImplantLayerChecker::ensureMasterData(MasterId masterId) const
-{
-    if (masterId < 0) {
-        return;
-    }
-    {
-        std::shared_lock<std::shared_mutex> lock(masterItemsMutex_);
-        if (static_cast<size_t>(masterId) < masterItems_.size()) {
-            return;
-        }
-    }
-    std::unique_lock<std::shared_mutex> lock(masterItemsMutex_);
-    if (static_cast<size_t>(masterId) >= masterItems_.size()) {
-        ImplantLayerChecker* self = const_cast<ImplantLayerChecker*>(this);
-        self->buildMasters();
-        self->buildMstIntervals();
-    }
 }
 
 // Run all implant rules against the snapshot around a single placement request.
-CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
+CheckResult ImplantLayerChecker::checkDirect(const ResolvedRequest& request) const
 {
     CheckResult result;
     if (!hasUsableInfrastructure()) {
@@ -998,11 +1100,9 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
         result.diagnostics = diagnostics_;
         return result;
     }
-    // A candidate master may be registered after checker construction. Extend
-    // the table once under an exclusive lock, then keep this check on a shared
-    // lock so concurrent checker calls cannot observe a partial rebuild.
-    ensureMasterData(request.masterId);
-    std::shared_lock<std::shared_mutex> masterLock(masterItemsMutex_);
+    // DePlace registers every filler and target master before constructing
+    // the checker. The table is immutable after publication, so worker checks
+    // need no master-table lock.
     if (siteWidth_ <= 0 || request.colId < 0) {
         result.diagnostics = diagnostics_;
         result.diagnostics.push_back(
@@ -1010,7 +1110,9 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
              makeMessage("instance ", request.instanceId)});
         return result;
     }
-    Node* node = network_->getNode(request.instanceId);
+    const Node* node = request.cell != nullptr
+                           ? request.cell
+                           : network_->getNode(request.instanceId);
     if (node == nullptr) {
         result.diagnostics = diagnostics_;
         result.diagnostics.push_back(
@@ -1027,11 +1129,8 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
         result.isLegal = false;
         return result;
     }
-    const bool targetHasData
-        = request.masterId >= 0
-          && request.masterId < static_cast<MasterId>(masterItems_.size())
-          && masterItems_[request.masterId].width > 0;
-    if (!targetHasData) {
+    const MasterItem* const targetMaster = masterItem(request.masterId);
+    if (targetMaster == nullptr || targetMaster->width <= 0) {
         result.diagnostics = diagnostics_;
         result.diagnostics.push_back(
             {"unknown_target_master",
@@ -1057,6 +1156,15 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
     }
     std::set<InstanceId> excludedNodes = overlap.fillers;
     excludedNodes.insert(request.instanceId);
+    for (const CellChangeRecord& change : request.overlayChanges) {
+        const LeafCellID* const cellId = cellChangeLeafCellId(change);
+        if (cellId != nullptr) {
+            const int nodeId = network_->getNodeId(*cellId);
+            if (nodeId >= 0) {
+                excludedNodes.insert(nodeId);
+            }
+        }
+    }
 
     const CheckShapes& snapshot = getSnapshot(request, excludedNodes);
     for (const CheckShape& shape : snapshot) {
@@ -1073,7 +1181,7 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
     // prepare the target intervals
     XInterval tgtItv;
     tgtItv.xl = request.colId * siteWidth_;
-    tgtItv.xh = tgtItv.xl + masterItems_[request.masterId].width;
+    tgtItv.xh = tgtItv.xl + targetMaster->width;
     std::vector<XInterval> itvs{tgtItv};
 
     const std::vector<CheckShape> shapes = mergeShapes(snapshot);
@@ -1107,10 +1215,15 @@ std::vector<CheckResult> ImplantLayerChecker::checkAllNodesDirect() const
     if (!hasUsableInfrastructure()) {
         return {};
     }
-    const std::vector<std::unique_ptr<Node>>& nodes = getNodes();
+    std::vector<const Node*> nodes;
+    nodes.reserve(getNodes().size());
+    for (const auto& [id, node] : getNodes()) {
+        (void) id;
+        nodes.push_back(node.get());
+    }
     std::vector<CheckResult> results(nodes.size());
     auto run_job = [&](size_t i) {
-        const Node* node = nodes[i].get();
+        const Node* node = nodes[i];
         if (node == nullptr || node->getMaster() == nullptr) {
             results[i].isLegal = false;
             results[i].diagnostics = diagnostics_;
@@ -1120,12 +1233,14 @@ std::vector<CheckResult> ImplantLayerChecker::checkAllNodesDirect() const
                  makeMessage("network node ", static_cast<int>(i))});
             return;
         }
-        CheckRequest req;
+        ResolvedRequest req;
         req.instanceId = node->getId();
         req.masterId = node->getMaster()->getId();
         req.rowId = grid_->gridSnapDownY(node).v;
         req.colId = grid_->gridX(node).v;
         req.orientation = node->getOrient();
+        req.cell = node;
+        req.replaced = node;
         results[i] = checkDirect(req);
     };
     if (DrcUtil::getArena()) {
@@ -1140,26 +1255,27 @@ std::vector<CheckResult> ImplantLayerChecker::checkAllNodesDirect() const
 
 // Collect all shape intervals in the neighborhood of a placement request.
 CheckShapes ImplantLayerChecker::getSnapshot(
-    const CheckRequest& request,
+    const ResolvedRequest& request,
     const std::set<InstanceId>& excludedNodes) const
 {
     CheckShapes snapshot;
 
-    const Node* tgtNode = network_->getNode(request.instanceId);
+    const Node* tgtNode = request.cell != nullptr
+                              ? request.cell
+                              : network_->getNode(request.instanceId);
     if (tgtNode == nullptr || tgtNode->getMaster() == nullptr || siteWidth_ <= 0
         || rowHeight_ <= 0) {
         return snapshot;
     }
     // [fillerRepair-layout] The Network Node can still describe the old
     // footprint. Snapshot reach must follow the requested overlay master.
-    const bool targetHasData
-        = request.masterId >= 0
-          && request.masterId < static_cast<MasterId>(masterItems_.size());
+    const MasterItem* const targetMaster = masterItem(request.masterId);
+    const bool targetHasData = targetMaster != nullptr;
     const Dbu targetWidth
-        = targetHasData ? masterItems_[request.masterId].width
+        = targetHasData ? targetMaster->width
                         : tgtNode->getWidth().v;
     const Dbu targetHeight
-        = targetHasData ? masterItems_[request.masterId].height
+        = targetHasData ? targetMaster->height
                         : tgtNode->getHeight().v;
     int width = std::max(1, (targetWidth + siteWidth_ - 1) / siteWidth_);
     int height = std::max(1, (targetHeight + rowHeight_ - 1) / rowHeight_);
@@ -1169,75 +1285,27 @@ CheckShapes ImplantLayerChecker::getSnapshot(
     ColId col1 = std::min(request.colId + width + maxRuleValue_ - 1,
                           grid_->getRowSiteCount().v - 1);
     std::set<InstanceId> collectedNodes;
-    auto shapesForNode = [&](const Node* node) {
-        const std::pair<GridX, GridY> coord = grid_->gridXY(node);
-        return getNodeShape(node->getId(),
-                            node->getMaster()->getId(),
-                            coord.second.v,
-                            coord.first.v,
-                            node->getOrient(),
-                            false);
-    };
-    auto appendNode = [&](const Node* node) {
-        if (node == nullptr || node->getMaster() == nullptr
-            || excludedNodes.find(node->getId()) != excludedNodes.end()
-            || !collectedNodes.insert(node->getId()).second) {
-            return CheckShapes{};
-        }
-        CheckShapes shapes = shapesForNode(node);
-        snapshot.insert(snapshot.end(), shapes.begin(), shapes.end());
-        return shapes;
-    };
-    CheckShapes frontier;
     for (RowId r = row0; r <= row1; r++) {
         for (ColId c = col0; c <= col1; c++) {
             Pixel* p = grid_->gridPixel(GridX{c}, GridY{r});
-            CheckShapes shapes = appendNode(p == nullptr ? nullptr : p->cell);
-            frontier.insert(frontier.end(), shapes.begin(), shapes.end());
-        }
-    }
-
-    // The rule-radius crop can cut through a longer abutting implant run.
-    // Follow same-slot/layer contacts past that crop so the local merge keeps
-    // the same owners as the committed full-row run.
-    for (size_t i = 0; i < frontier.size(); ++i) {
-        const CheckShape shape = frontier[i];
-        const ColId left
-            = shape.x.xl > 0 ? (shape.x.xl - 1) / siteWidth_ : -1;
-        const ColId right = static_cast<ColId>(
-            (static_cast<int64_t>(shape.x.xh) + siteWidth_ - 1)
-            / siteWidth_);
-        for (ColId col : {left, right}) {
-            if (col < 0 || col >= grid_->getRowSiteCount().v) {
+            if (p == nullptr || p->cell == nullptr) {
                 continue;
             }
-            Pixel* pixel = grid_->gridPixel(GridX{col}, GridY{shape.rowId});
-            const Node* node = pixel == nullptr ? nullptr : pixel->cell;
+            const Node* node = p->cell;
             if (node == nullptr || node->getMaster() == nullptr
                 || excludedNodes.find(node->getId()) != excludedNodes.end()
-                || collectedNodes.find(node->getId()) != collectedNodes.end()) {
+                || !collectedNodes.insert(node->getId()).second) {
                 continue;
             }
-            const CheckShapes candidateShapes = shapesForNode(node);
-            const bool connects = std::any_of(
-                candidateShapes.begin(),
-                candidateShapes.end(),
-                [&](const CheckShape& candidate) {
-                    return candidate.rowId == shape.rowId
-                           && candidate.bandSlot == shape.bandSlot
-                           && candidate.layer == shape.layer
-                           && touchesOrOverlaps(candidate.x, shape.x);
-                });
-            if (!connects) {
-                continue;
-            }
-            collectedNodes.insert(node->getId());
-            snapshot.insert(snapshot.end(),
-                            candidateShapes.begin(),
-                            candidateShapes.end());
-            frontier.insert(frontier.end(),
-                            candidateShapes.begin(),
-                            candidateShapes.end());
+            const std::pair<GridX, GridY> coord = grid_->gridXY(node);
+            const CheckShapes shapes
+                = getNodeShape(node->getId(),
+                               node->getMaster()->getId(),
+                               coord.second.v,
+                               coord.first.v,
+                               node->getOrient(),
+                               false);
+            snapshot.insert(snapshot.end(), shapes.begin(), shapes.end());
         }
     }
 
@@ -1254,7 +1322,7 @@ CheckShapes ImplantLayerChecker::getSnapshot(
 // Collect shape intervals within a guard region including filler overlay
 // changes.
 CheckShapes ImplantLayerChecker::getOverlaySnapshot(
-    const CheckRequest& request,
+    const ResolvedRequest& request,
     const Rect& guardRegion,
     const FillerChanges& fillerChanges,
     bool useNewFillers,
@@ -1266,13 +1334,15 @@ CheckShapes ImplantLayerChecker::getOverlaySnapshot(
     RowId row1 = guardRegion._yh.getStorage() / rowHeight_;
     ColId col0 = guardRegion._xl.getStorage() / siteWidth_;
     ColId col1 = guardRegion._xh.getStorage() / siteWidth_;
+    std::set<InstanceId> collectedNodes;
     for (RowId r = row0; r <= row1; r++) {
         for (ColId c = col0; c <= col1; c++) {
             Pixel* p = grid_->gridPixel(GridX{c}, GridY{r});
             if (p && p->cell) {
                 const Node* node = p->cell;
                 const InstanceId nodeId = node->getId();
-                if (excludedNodes.find(nodeId) != excludedNodes.end()) {
+                if (excludedNodes.find(nodeId) != excludedNodes.end()
+                    || !collectedNodes.insert(nodeId).second) {
                     continue;
                 }
                 if (node->getMaster() == nullptr) {
@@ -1291,51 +1361,16 @@ CheckShapes ImplantLayerChecker::getOverlaySnapshot(
         }
     }
 
-    if (request.targetOp != OpType::Delete) {
-        const CheckShapes& targetShapes = getNodeShape(request.instanceId,
-                                                       request.masterId,
-                                                       request.rowId,
-                                                       request.colId,
-                                                       request.orientation,
-                                                       true);
-        snapshot.insert(
-            snapshot.end(), targetShapes.begin(), targetShapes.end());
-    }
+    const CheckShapes& targetShapes = getNodeShape(request.instanceId,
+                                                   request.masterId,
+                                                   request.rowId,
+                                                   request.colId,
+                                                   request.orientation,
+                                                   true);
+    snapshot.insert(snapshot.end(), targetShapes.begin(), targetShapes.end());
 
-    int addIndex = 0;
     for (const CellChangeRecord& change : fillerChanges) {
-        if (change.op_ == OpType::Add) {
-            // [fillerRepair-layout] Added fillers use negative, request-local
-            // participant IDs. They never enter Network or shared checker
-            // state, so parallel candidates cannot collide.
-            if (!useNewFillers) {
-                ++addIndex;
-                continue;
-            }
-            const MasterId masterId
-                = network_->getMasterId(change.new_lib_cell_);
-            const int64_t xRelative
-                = change.x_.getStorage() - grid_->getCore().getXL().getStorage();
-            const int64_t yRelative
-                = change.y_.getStorage() - grid_->getCore().getYL().getStorage();
-            const ColId colId = siteWidth_ > 0
-                                    ? static_cast<ColId>(xRelative / siteWidth_)
-                                    : 0;
-            const RowId rowId
-                = grid_->gridSnapDownY(
-                    DbuY{static_cast<int>(yRelative)}).v;
-            const InstanceId syntheticId = -1 - addIndex++;
-            const CheckShapes& fillerShapes = getNodeShape(syntheticId,
-                                                           masterId,
-                                                           rowId,
-                                                           colId,
-                                                           change.orientation_,
-                                                           true);
-            snapshot.insert(
-                snapshot.end(), fillerShapes.begin(), fillerShapes.end());
-            continue;
-        }
-        if (change.op_ == OpType::Delete) {
+        if (change.op_ != OpType::Replace) {
             continue;
         }
         const LeafCellID* cellId = cellChangeLeafCellId(change);
@@ -1377,27 +1412,26 @@ CheckShapes ImplantLayerChecker::getNodeShape(InstanceId instanceId,
                                               bool isCandidate) const
 {
     CheckShapes shapes;
-    if (masterId < 0 || static_cast<size_t>(masterId) >= masterItems_.size()
-        || siteWidth_ <= 0 || rowHeight_ <= 0) {
+    const MasterItem* const master = masterItem(masterId);
+    if (master == nullptr || siteWidth_ <= 0 || rowHeight_ <= 0) {
         return shapes;
     }
     Dbu originX = colId * siteWidth_;
     Dbu originY = rowId * rowHeight_;
-    const MasterItem& master = masterItems_[masterId];
-    for (const MasterShape& shape : master.shapes) {
+    for (const MasterShape& shape : master->shapes) {
         Dbu xl = shape.rect._xl.getStorage();
         Dbu yl = shape.rect._yl.getStorage();
         Dbu xh = shape.rect._xh.getStorage();
         Dbu yh = shape.rect._yh.getStorage();
         if (orientation == PhysOrientationE::MY
             || orientation == PhysOrientationE::R180) {
-            xl = master.width - xh;
-            xh = master.width - xl;
+            xl = master->width - xh;
+            xh = master->width - xl;
         }
         if (orientation == PhysOrientationE::MX
             || orientation == PhysOrientationE::R180) {
-            yl = master.height - yh;
-            yh = master.height - yl;
+            yl = master->height - yh;
+            yh = master->height - yl;
         }
         CheckShape placed;
         placed.ownerInstanceIds.emplace_back(instanceId);
@@ -1644,14 +1678,7 @@ std::vector<CheckOutcome> ImplantLayerChecker::evalRule(
                         outcomes.push_back(outcome);
                         continue;
                     }
-                    // Unlike same-layer spacing, distinct implant layers can
-                    // legally be queried while their x intervals overlap.
-                    // Keep a normalized window so the target-local outcome is
-                    // evaluated instead of being skipped as a reversed gap.
-                    outcome.xWindow
-                        = touchesOrOverlaps(checkTarget.x, neighbor.x)
-                              ? intersect(checkTarget.x, neighbor.x)
-                              : gap(checkTarget.x, neighbor.x);
+                    outcome.xWindow = gap(checkTarget.x, neighbor.x);
                     outcome.measuredValue
                         = rule.getSource() == RuleSource::Lef58Spacing
                                   && rlt == Relationship::InterRow
@@ -1913,421 +1940,105 @@ std::vector<Violation> ImplantLayerChecker::makeViolations(
     return violations;
 }
 
-// [fillerRepair-layout] Check the pixel grid against the requested target
-// footprint. The Network Node may already carry the candidate master while
-// Grid/UDM still describe the pre-commit placement.
+// Confirm that the proposed target covers only the one object named by the
+// request. Both isLegal and findLegal are strict one-to-one replacements.
 OverlapInfo ImplantLayerChecker::checkOverlap(
-    const CheckRequest& request) const
+    const ResolvedRequest& request) const
 {
     OverlapInfo info;
-    const Node* node
-        = network_ != nullptr ? network_->getNode(request.instanceId) : nullptr;
-    if (node == nullptr && request.targetOp != OpType::Add) {
-        info.diags = Diagnostic{"unknown_target_instance",
-                                "cannot check overlap for a null node"};
+    const MasterItem* master = masterItem(request.masterId);
+    if (grid_ == nullptr || request.replaced == nullptr || master == nullptr
+        || siteWidth_ <= 0 || rowHeight_ <= 0) {
+        info.diags = Diagnostic{"invalid_target_overlay",
+                                "cannot evaluate target footprint"};
         return info;
     }
-    if (grid_ == nullptr || siteWidth_ <= 0 || rowHeight_ <= 0
-        || request.masterId < 0
-        || request.masterId >= static_cast<MasterId>(masterItems_.size())) {
-        info.diags = Diagnostic{"unknown_target_master",
-                                makeMessage("master ", request.masterId)};
-        return info;
-    }
-    const MasterItem& master = masterItems_[request.masterId];
+
     const int widthSites
-        = std::max(1, (master.width + siteWidth_ - 1) / siteWidth_);
+        = std::max(1, (master->width + siteWidth_ - 1) / siteWidth_);
     const int heightRows
-        = std::max(1, (master.height + rowHeight_ - 1) / rowHeight_);
-    const GridX xEnd{request.colId + widthSites};
-    const GridY yEnd{request.rowId + heightRows};
-    for (GridX x{request.colId}; x < xEnd; x++) {
-        for (GridY y{request.rowId}; y < yEnd; y++) {
-            Pixel* pixel = grid_->gridPixel(x, y);
-            Node* node2 = pixel ? pixel->cell : nullptr;
-            if (node2 != nullptr && node2 != node) {
-                if (node2->isFiller()) {
-                    info.fillers.insert(node2->getId());
-                } else {
-                    info.diags = Diagnostic{
-                        "placement_overlap_in_input",
-                        "inst " + std::to_string(request.instanceId) + ", "
-                            + std::to_string(node2->getId())};
-                    return info;
-                }
+        = std::max(1, (master->height + rowHeight_ - 1) / rowHeight_);
+    for (GridY y{request.rowId}; y < GridY{request.rowId + heightRows}; ++y) {
+        for (GridX x{request.colId}; x < GridX{request.colId + widthSites}; ++x) {
+            const Pixel* pixel = grid_->gridPixel(x, y);
+            const Node* occupant = pixel != nullptr ? pixel->cell : nullptr;
+            if (pixel == nullptr || !pixel->is_valid
+                || pixel->padding_reserved_by != nullptr
+                || occupant != request.replaced) {
+                info.diags = Diagnostic{
+                    "target_not_one_to_one",
+                    "temporary target must exactly replace one committed node"};
+                return info;
             }
         }
     }
     return info;
 }
 
-bool ImplantLayerChecker::targetFootprintChanged(
-    const CheckRequest& request) const
-{
-    // [fillerRepair-layout] This query is read-only and O(1). It is used only
-    // to decide whether a direct-legal target still needs filler Delete/Add.
-    std::shared_lock<std::shared_mutex> masterLock(masterItemsMutex_);
-    if (grid_ == nullptr || grid_->getDesMgr() == nullptr || network_ == nullptr
-        || siteWidth_ <= 0 || rowHeight_ <= 0 || request.masterId < 0
-        || request.masterId >= static_cast<MasterId>(masterItems_.size())) {
-        return false;
-    }
-    const Node* node = network_->getNode(request.instanceId);
-    if (node == nullptr) {
-        return false;
-    }
-    const eUNL::PhysCell physical
-        = grid_->getDesMgr()->getPhysCell(node->getDbInst());
-    if (!physical.isValid()) {
-        return false;
-    }
-    const MasterItem& requested = masterItems_[request.masterId];
-    const int requestedWidth
-        = std::max(1, (requested.width + siteWidth_ - 1) / siteWidth_);
-    const int requestedHeight
-        = std::max(1, (requested.height + rowHeight_ - 1) / rowHeight_);
-    const int oldWidth = std::max(
-        1,
-        (physical.getPhysMaster().getWidth().getStorage() + siteWidth_ - 1)
-            / siteWidth_);
-    const int oldHeight = std::max(
-        1,
-        (physical.getPhysMaster().getHeight().getStorage() + rowHeight_ - 1)
-            / rowHeight_);
-    const Rect core = grid_->getCore();
-    const int oldCol
-        = (physical.getOrigin().getX().getStorage()
-           - core.getXL().getStorage())
-          / siteWidth_;
-    const int oldY
-        = physical.getOrigin().getY().getStorage()
-          - core.getYL().getStorage();
-    const int oldRow = grid_->gridSnapDownY(DbuY{oldY}).v;
-    return oldCol != request.colId || oldRow != request.rowId
-           || oldWidth != requestedWidth || oldHeight != requestedHeight;
-}
-
-// Validate an overlay placement request and its filler changes for consistency.
+// Validate the planner's candidate transaction. The public target overlay was
+// already resolved once; every candidate record must now be a same-footprint
+// filler Replace and may not modify that target.
 DiagVec ImplantLayerChecker::validateOverlayRequest(
-    const CheckRequest& request,
-    const FillerChanges& fillerChanges,
-    bool enforceLayoutTransaction) const
+    const ResolvedRequest& request,
+    const FillerChanges& fillerChanges) const
 {
-    std::vector<Diagnostic> diagnostics;
-    if (network_ == nullptr) {
-        diagnostics.push_back(
-            {"missing_network",
-             "overlay validation requires an initialized Network"});
-        return diagnostics;
-    }
-    if (siteWidth_ <= 0) {
-        diagnostics.push_back({"placement_not_site_aligned",
-                               makeMessage("instance ", request.instanceId)});
-    }
-    if (grid_ == nullptr || request.rowId < 0 || request.colId < 0
-        || request.rowId >= grid_->getRowCount().v
-        || request.colId >= grid_->getRowSiteCount().v) {
-        diagnostics.push_back({"placement_out_of_grid",
-                               makeMessage("instance ", request.instanceId)});
-    }
-    const Node* targetNode = network_->getNode(request.instanceId);
-    if (request.targetOp == OpType::Add && targetNode != nullptr) {
-        diagnostics.push_back({"added_target_already_exists",
-                               makeMessage("instance ", request.instanceId)});
-    } else if (request.targetOp != OpType::Add && targetNode == nullptr) {
-        diagnostics.push_back({"unknown_target_instance",
-                               makeMessage("instance ", request.instanceId)});
-    } else if (targetNode != nullptr && targetNode->getMaster() == nullptr) {
-        diagnostics.push_back({"target_instance_missing_master",
-                               makeMessage("instance ", request.instanceId)});
-    }
-    const bool targetHasData
-        = request.masterId >= 0
-          && request.masterId < static_cast<MasterId>(masterItems_.size())
-          && masterItems_[request.masterId].width > 0;
-    if (!targetHasData) {
-        diagnostics.push_back({"unknown_target_master",
-                               makeMessage("master ", request.masterId)});
-    } else {
-        // [fillerRepair-layout] Validate the complete target rectangle, not
-        // only its origin. This is required for 2-row and growing masters.
-        const MasterItem& targetMaster = masterItems_[request.masterId];
-        const int widthSites
-            = std::max(1,
-                       (targetMaster.width + siteWidth_ - 1) / siteWidth_);
-        const int heightRows
-            = rowHeight_ > 0
-                  ? std::max(1,
-                             (targetMaster.height + rowHeight_ - 1)
-                                 / rowHeight_)
-                  : 1;
-        if (request.colId + widthSites > grid_->getRowSiteCount().v
-            || request.rowId + heightRows > grid_->getRowCount().v) {
-            diagnostics.push_back(
-                {"placement_out_of_grid",
-                 makeMessage("target footprint outside grid ",
-                             request.instanceId)});
-        }
-    }
-
-    struct AddedPlacement
-    {
-        std::string name;
-        MasterId masterId = -1;
-        RowId rowId = -1;
-        ColId colId = -1;
-        int widthSites = 0;
-        int heightRows = 0;
-    };
-    std::vector<AddedPlacement> additions;
-    std::set<InstanceId> seenExisting;
-    std::set<InstanceId> deleted;
-    std::set<std::string> seenNames;
+    DiagVec diagnostics;
+    std::set<InstanceId> seen;
     for (const CellChangeRecord& change : fillerChanges) {
-        if (change.op_ == OpType::Add) {
-            // [fillerRepair-layout] An Add is request-local and therefore
-            // names a cell that does not exist in Network yet.
-            const std::string* name = cellChangeName(change);
-            if (name == nullptr || name->empty()) {
-                diagnostics.push_back(
-                    {"added_cell_data_not_name",
-                     "Add record must carry a non-empty request-local name"});
-                continue;
-            }
-            if (!seenNames.insert(*name).second) {
-                diagnostics.push_back(
-                    {"duplicate_added_filler_name",
-                     "duplicate added filler name " + *name});
-                continue;
-            }
-            const MasterId newMasterId
-                = network_->getMasterId(change.new_lib_cell_);
-            const bool newMasterHasData
-                = newMasterId >= 0
-                  && newMasterId < static_cast<MasterId>(masterItems_.size())
-                  && masterItems_[newMasterId].width > 0;
-            const Master* newMaster = newMasterHasData
-                                          ? network_->getMaster(newMasterId)
-                                          : nullptr;
-            if (!newMasterHasData || newMaster == nullptr
-                || !newMaster->isFiller()) {
-                diagnostics.push_back(
-                    {"added_master_not_filler",
-                     makeMessage("added master is not a filler ",
-                                 newMasterId)});
-                continue;
-            }
-            const int64_t xRelative
-                = change.x_.getStorage() - grid_->getCore().getXL().getStorage();
-            const int64_t yRelative
-                = change.y_.getStorage() - grid_->getCore().getYL().getStorage();
-            if (xRelative < 0 || yRelative < 0
-                || xRelative % siteWidth_ != 0) {
-                diagnostics.push_back(
-                    {"added_filler_not_site_aligned",
-                     "added filler " + *name + " is not site aligned"});
-                continue;
-            }
-            const ColId colId = static_cast<ColId>(xRelative / siteWidth_);
-            const RowId rowId = grid_->gridSnapDownY(
-                DbuY{static_cast<int>(yRelative)}).v;
-            if (grid_->gridYToDbu(GridY{rowId}).v != yRelative) {
-                diagnostics.push_back(
-                    {"added_filler_not_row_aligned",
-                     "added filler " + *name + " is not row aligned"});
-                continue;
-            }
-            const MasterItem& item = masterItems_[newMasterId];
-            const int widthSites
-                = std::max(1, (item.width + siteWidth_ - 1) / siteWidth_);
-            const int heightRows
-                = rowHeight_ > 0
-                      ? std::max(1,
-                                 (item.height + rowHeight_ - 1) / rowHeight_)
-                      : 1;
-            if (colId < 0 || rowId < 0
-                || colId + widthSites > grid_->getRowSiteCount().v
-                || rowId + heightRows > grid_->getRowCount().v) {
-                diagnostics.push_back(
-                    {"added_filler_out_of_grid",
-                     "added filler " + *name + " is outside the grid"});
-                continue;
-            }
-            if (!item.siteName.empty()) {
-                const std::optional<PhysOrientation> expected
-                    = grid_->getSiteOrientation(
-                        GridX{colId}, GridY{rowId}, item.siteName);
-                if (!expected.has_value()
-                    || expected->getValue() != change.orientation_.getValue()) {
-                    diagnostics.push_back(
-                        {"added_filler_orientation_mismatch",
-                         "added filler " + *name
-                             + " does not match row/site orientation"});
-                    continue;
-                }
-            }
-            additions.push_back(
-                {*name, newMasterId, rowId, colId, widthSites, heightRows});
-            continue;
-        }
-
-        if (change.op_ != OpType::Replace
-            && change.op_ != OpType::Delete) {
-            diagnostics.push_back(
-                {"unsupported_cell_change_operation",
-                 "filler overlay supports Replace, Delete, and Add only"});
-            continue;
-        }
         const LeafCellID* cellId = cellChangeLeafCellId(change);
-        if (cellId == nullptr) {
+        if (change.op_ != OpType::Replace || cellId == nullptr
+            || !cellId->isValid()) {
             diagnostics.push_back(
-                {"changed_cell_data_not_leaf_id",
-                 "Replace/Delete record must identify an existing LeafCellID"});
+                {"invalid_filler_change",
+                 "filler repair candidates must contain Replace records only"});
             continue;
         }
-        const InstanceId fillerInstId = network_->getNodeId(*cellId);
-        if (!seenExisting.insert(fillerInstId).second) {
-            diagnostics.push_back(
-                {"duplicate_filler_change",
-                 makeMessage("duplicate filler change ", fillerInstId)});
-            continue;
-        }
-        if (request.targetOp != OpType::Add
-            && fillerInstId == request.instanceId) {
+        const InstanceId instanceId = network_->getNodeId(*cellId);
+        const Node* filler = network_->getNode(instanceId);
+        if (instanceId == request.instanceId) {
             diagnostics.push_back(
                 {"target_cannot_be_changed_filler",
-                 makeMessage("target cannot be changed filler ",
-                             fillerInstId)});
-        }
-        const Node* fillerNode = network_->getNode(fillerInstId);
-        if (fillerNode == nullptr) {
-            diagnostics.push_back(
-                {"unknown_filler_instance",
-                 makeMessage("unknown filler instance ", fillerInstId)});
+                 "the replaced target is owned by the caller, not filler repair"});
             continue;
         }
-        if (fillerNode->getMaster() == nullptr) {
+        if (!seen.insert(instanceId).second) {
             diagnostics.push_back(
-                {"filler_instance_missing_master",
-                 makeMessage("filler instance ", fillerInstId)});
+                {"duplicate_filler_change",
+                 makeMessage("duplicate filler change ", instanceId)});
             continue;
         }
-        if (!fillerNode->isFiller()) {
+        if (filler == nullptr || filler->getMaster() == nullptr
+            || !filler->isFiller()) {
             diagnostics.push_back(
                 {"changed_instance_not_filler",
-                 makeMessage("changed instance is not filler ", fillerInstId)});
-        }
-        if (change.op_ == OpType::Delete) {
-            deleted.insert(fillerInstId);
+                 makeMessage("changed instance is not filler ", instanceId)});
             continue;
         }
+        if (change.orig_lib_cell_.isValid()
+            && change.orig_lib_cell_ != filler->getMaster()->getDbMaster()) {
+            diagnostics.push_back(
+                {"filler_original_master_mismatch",
+                 makeMessage("original filler master mismatch ", instanceId)});
+        }
 
+        const MasterItem* original
+            = masterItem(filler->getMaster()->getId());
         const MasterId newMasterId
             = network_->getMasterId(change.new_lib_cell_);
-        const bool newMasterHasData
-            = newMasterId >= 0
-              && newMasterId < static_cast<MasterId>(masterItems_.size())
-              && masterItems_[newMasterId].width > 0;
-        if (!newMasterHasData) {
-            diagnostics.push_back(
-                {"unknown_filler_master",
-                 makeMessage("unknown filler master ", newMasterId)});
-            continue;
-        }
-        const Master* newMaster = network_->getMaster(newMasterId);
-        if (newMaster == nullptr || !newMaster->isFiller()) {
+        const MasterItem* replacement = masterItem(newMasterId);
+        const Master* replacementMaster = network_->getMaster(newMasterId);
+        if (original == nullptr || replacement == nullptr
+            || replacementMaster == nullptr || !replacementMaster->isFiller()) {
             diagnostics.push_back(
                 {"replacement_master_not_filler",
-                 makeMessage("replacement master is not filler ",
-                             newMasterId)});
+                 makeMessage("replacement master is not filler ", newMasterId)});
+            continue;
         }
-        const MasterId oldMasterId = fillerNode->getMaster()->getId();
-        const bool oldMasterHasData
-            = oldMasterId >= 0
-              && oldMasterId < static_cast<MasterId>(masterItems_.size())
-              && masterItems_[oldMasterId].width > 0;
-        if (oldMasterHasData && newMasterHasData
-            && (masterItems_[oldMasterId].width
-                    != masterItems_[newMasterId].width
-                || masterItems_[oldMasterId].height
-                       != masterItems_[newMasterId].height)) {
+        if (original->width != replacement->width
+            || original->height != replacement->height) {
             diagnostics.push_back(
                 {"replacement_footprint_mismatch",
-                 makeMessage("replacement footprint mismatch ", fillerInstId)});
-        }
-    }
-
-    // A new std-cell Add must explicitly delete every filler under its
-    // footprint. Replace is same-footprint-only and Delete has no new target.
-    if (enforceLayoutTransaction && targetHasData
-        && request.targetOp == OpType::Add) {
-        const OverlapInfo overlap = checkOverlap(request);
-        if (overlap.diags.has_value()) {
-            diagnostics.push_back(*overlap.diags);
-        }
-        for (const InstanceId filler : overlap.fillers) {
-            if (deleted.count(filler) == 0) {
-                diagnostics.push_back(
-                    {"overlapping_filler_not_deleted",
-                     makeMessage("target-overlapping filler not deleted ",
-                                 filler)});
-            }
-        }
-    }
-
-    if (!targetHasData || grid_ == nullptr) {
-        return diagnostics;
-    }
-    const MasterItem& targetMaster = masterItems_[request.masterId];
-    const int targetWidth
-        = std::max(1, (targetMaster.width + siteWidth_ - 1) / siteWidth_);
-    const int targetHeight
-        = rowHeight_ > 0
-              ? std::max(
-                    1, (targetMaster.height + rowHeight_ - 1) / rowHeight_)
-              : 1;
-    std::set<std::pair<RowId, ColId>> addedSites;
-    for (const AddedPlacement& add : additions) {
-        for (int rowOffset = 0; rowOffset < add.heightRows; ++rowOffset) {
-            for (int colOffset = 0; colOffset < add.widthSites; ++colOffset) {
-                const RowId row = add.rowId + rowOffset;
-                const ColId col = add.colId + colOffset;
-                if (request.targetOp != OpType::Delete
-                    && row >= request.rowId
-                    && row < request.rowId + targetHeight
-                    && col >= request.colId
-                    && col < request.colId + targetWidth) {
-                    diagnostics.push_back(
-                        {"added_filler_overlaps_target",
-                         "added filler " + add.name + " overlaps target"});
-                    continue;
-                }
-                if (!addedSites.emplace(row, col).second) {
-                    diagnostics.push_back(
-                        {"added_fillers_overlap",
-                         "added filler " + add.name
-                             + " overlaps another added filler"});
-                    continue;
-                }
-                const Pixel* pixel = grid_->gridPixel(GridX{col}, GridY{row});
-                if (pixel == nullptr || !pixel->is_valid
-                    || pixel->padding_reserved_by != nullptr) {
-                    diagnostics.push_back(
-                        {"added_filler_on_illegal_site",
-                         "added filler " + add.name
-                             + " covers an illegal or reserved site"});
-                    continue;
-                }
-                const Node* occupant = pixel->cell;
-                if (occupant == nullptr || occupant->getId() == request.instanceId
-                    || deleted.count(occupant->getId()) != 0) {
-                    continue;
-                }
-                diagnostics.push_back(
-                    {"added_filler_overlaps_input",
-                     makeMessage("added filler overlaps instance ",
-                                 occupant->getId())});
-            }
+                 makeMessage("replacement footprint mismatch ", instanceId)});
         }
     }
     return diagnostics;
@@ -2608,7 +2319,7 @@ LayerId ImplantLayerChecker::getLayerId(const std::string& name) const
 // Evaluate multiple filler overlay variants against a placement
 // request in parallel.
 std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
-    const CheckRequest& request,
+    const ResolvedRequest& request,
     const Rect& guardRegion,
     const std::vector<FillerChanges>& fillerChanges) const
 {
@@ -2621,16 +2332,11 @@ std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
         }
         return results;
     }
-    // Complete setup-time target registration before taking the shared lock
-    // used by this whole batch. Filler masters come from the engine's frozen
-    // catalog and were necessarily registered before it was published; avoid
-    // rescanning every change in this hot path.
-    ensureMasterData(request.masterId);
-    std::shared_lock<std::shared_mutex> masterLock(masterItemsMutex_);
+    // Master metadata is immutable after checker construction; DePlace
+    // registers the full filler/target universe before publishing workers.
     // [fillerRepair-layout] This is target-only batch setup. Each concrete
     // candidate below still receives full transaction validation.
-    const DiagVec targetDiagnostics
-        = validateOverlayRequest(request, {}, false);
+    const DiagVec targetDiagnostics = validateOverlayRequest(request, {});
     if (!targetDiagnostics.empty()) {
         for (CheckResult& result : results) {
             result.isLegal = false;
@@ -2660,7 +2366,7 @@ std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
 // Evaluate one filler overlay: filter new violations to only those touching
 // the target.
 CheckResult ImplantLayerChecker::checkPlaceWithOverlay(
-    const CheckRequest& request,
+    const ResolvedRequest& request,
     const Rect& guardRegion,
     const FillerChanges& fillerChanges,
     const std::vector<Violation>& oldViolations) const
@@ -2709,7 +2415,7 @@ CheckResult ImplantLayerChecker::checkPlaceWithOverlay(
 // Run all rules within a guard region, accounting for old vs new filler
 // masters.
 CheckResult ImplantLayerChecker::checkOverlayRegion(
-    const CheckRequest& request,
+    const ResolvedRequest& request,
     const Rect& guardRegion,
     const FillerChanges& fillerChanges,
     bool useNewFillers) const
@@ -2725,9 +2431,8 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(
     }
 
     std::set<InstanceId> excludedNodes;
-    Node* node = network_->getNode(request.instanceId);
-    if (request.targetOp != OpType::Add
-        && (node == nullptr || node->getMaster() == nullptr)) {
+    const Node* node = request.replaced;
+    if (node == nullptr || node->getMaster() == nullptr) {
         result.diagnostics.push_back(
             {node == nullptr ? "unknown_target_instance"
                              : "target_instance_missing_master",
@@ -2735,23 +2440,7 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(
         result.isLegal = false;
         return result;
     }
-    if (node != nullptr) {
-        excludedNodes.insert(request.instanceId);
-    }
-    if (request.targetOp == OpType::Add) {
-        // The baseline intentionally hides fillers under the proposed buffer.
-        // A concrete candidate must name those deletions explicitly.
-        const OverlapInfo& overlap = checkOverlap(request);
-        if (overlap.diags) {
-            result.diagnostics.push_back(*overlap.diags);
-            result.isLegal = false;
-            return result;
-        }
-        if (!useNewFillers) {
-            excludedNodes.insert(overlap.fillers.begin(),
-                                 overlap.fillers.end());
-        }
-    }
+    excludedNodes.insert(request.instanceId);
     for (const CellChangeRecord& change : fillerChanges) {
         const LeafCellID* cellId = cellChangeLeafCellId(change);
         if (cellId != nullptr) {
@@ -2774,26 +2463,15 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(
     }
 
     std::vector<XInterval> itvs;
-    if (request.targetOp != OpType::Delete) {
-        XInterval tgtItv;
-        tgtItv.xl = request.colId * siteWidth_;
-        tgtItv.xh = tgtItv.xl + masterItems_[request.masterId].width;
-        itvs.push_back(tgtItv);
+    const MasterItem* const targetMaster = masterItem(request.masterId);
+    if (targetMaster == nullptr) {
+        result.diagnostics.push_back(
+            {"unknown_target_master", makeMessage("master ", request.masterId)});
+        return result;
     }
+    itvs.push_back({request.colId * siteWidth_,
+                    request.colId * siteWidth_ + targetMaster->width});
     for (const CellChangeRecord& change : fillerChanges) {
-        if (change.op_ == OpType::Add) {
-            const MasterId masterId
-                = network_->getMasterId(change.new_lib_cell_);
-            if (masterId >= 0
-                && masterId < static_cast<MasterId>(masterItems_.size())) {
-                XInterval itv;
-                itv.xl = change.x_.getStorage()
-                         - grid_->getCore().getXL().getStorage();
-                itv.xh = itv.xl + masterItems_[masterId].width;
-                itvs.emplace_back(itv);
-            }
-            continue;
-        }
         const LeafCellID* cellId = cellChangeLeafCellId(change);
         Node* filler = cellId != nullptr ? network_->getNode(*cellId) : nullptr;
         if (filler == nullptr) {
@@ -2942,7 +2620,8 @@ void ImplantLayerChecker::printStats(std::ostream& os, bool isShort) const
     os << "Implant Groups: " << layerGroups_.size() << "\n";
     os << "Masters with Implant Shapes: " << masterItems_.size() << "\n";
     if (!isShort) {
-        for (const MasterItem& m : masterItems_) {
+        for (const auto& [masterId, m] : masterItems_) {
+            (void) masterId;
             if (m.width == 0)
                 continue;
             os << "  MasterId=" << m.masterId << " width=" << m.width
@@ -2967,7 +2646,8 @@ void ImplantLayerChecker::printStats(std::ostream& os, bool isShort) const
     int fillerNum = 0;
     size_t placedCount = 0;
     placedCount = network_->getNodes().size();
-    for (const std::unique_ptr<Node>& nodePtr : network_->getNodes()) {
+    for (const auto& [nodeId, nodePtr] : network_->getNodes()) {
+        (void) nodeId;
         const Node* node = nodePtr.get();
         if (node && node->isFiller())
             fillerNum++;
@@ -2975,7 +2655,8 @@ void ImplantLayerChecker::printStats(std::ostream& os, bool isShort) const
     os << "Placed Instances: " << placedCount << " filler: " << fillerNum
        << "\n";
     if (!isShort) {
-        for (const std::unique_ptr<Node>& nodePtr : network_->getNodes()) {
+        for (const auto& [nodeId, nodePtr] : network_->getNodes()) {
+            (void) nodeId;
             const Node* node = nodePtr.get();
             if (!node)
                 continue;

@@ -3,21 +3,19 @@
 
 // The runtime half of filler repair: everything that touches the database.
 //
-// It borrows Grid, Network and the caller-owned checker, builds a snapshot
-// pinned to one design revision, and feeds the pure search (RepairPlanner) by
-// implementing its two seams: PlacementView and RepairOracle.
+// It borrows the caller-owned checker, freezes one placement revision, and
+// feeds the pure search (RepairPlanner) through PlacementView and a
+// request-local RepairOracle.
 //
-// repair() answers with one atomic filler edit transaction and changes
-// nothing. Replace may repair filler VT around a same-footprint std-cell
-// swap/rotation; target Delete fills its hole; target Add removes fillers for
-// a new buffer and refills only collateral area.
+// repair() accepts one temporary standard-cell Node plus exactly one overlay
+// record naming the same-footprint Network Node it replaces. It answers only
+// with surrounding filler Replace records and changes nothing.
 // UDM, Grid and Network come out exactly as they went in; committing is the
 // caller's decision.
 
 #pragma once
 
 #include <memory>
-#include <shared_mutex>
 #include <vector>
 
 #include <drc/ImplantLayerChecker.h>
@@ -50,62 +48,19 @@ class FillerRepairEngine
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
-  // [PORT-DROP] Per-engine override for the [fr][stage] transcript, which is
-  // ON by default and silenced globally by FR_VERBOSE=0. Nothing in the
-  // payload or in normal runtime calls this -- only the repository-local
-  // regression, which does not travel. DELETE it and the Impl method behind
-  // it (~10 lines) unless you want per-engine control that the environment
-  // variable cannot give you.
-  void setDebugLogging(bool enabled);
-
-  // Bind this engine to the checker only when this returns true. Diagnostics
-  // are retained for callers and also printed by the constructor when eager
-  // initialization fails (unless FR_VERBOSE=0).
+  // Diagnostics are retained for setup/debug reporting. A not-ready engine
+  // always fails closed and never returns partial changes.
   bool isReady() const;
   std::vector<ipl::Diagnostic> getInitDiagnostics() const;
 
-  // [PORT-DROP] Rebuilds the private snapshot in place. No normal call path
-  // reaches it: an infrastructure revision requires its owner to construct
-  // and initialize a new checker/engine pair. Only the
-  // repository-local regression drives snapshot refresh through here, and
-  // that does not travel. DELETE it (~30 lines with its Impl half).
-  //
-  // Contract while it exists: never changes Network Nodes; rebuild
-  // Grid/Network first if rows, blockages or the instance set changed; a
-  // stale or incomplete Network makes it fail closed; not concurrent with
-  // repair().
-  bool update();
-
-  // Pre-commit implant overlay query. The only placement gate here is
-  // regional: repair refuses to run on top of a gap/overlap inside the rows
-  // it can edit. Whole-design placement legality stays with infrastructure.
-  // This is the checker-facing entry: the candidate pose/master are consumed
-  // from the exact CheckRequest built by ImplantLayerChecker::check().
-  RepairOutcome repair(const ipl::CheckRequest& request) const;
-
-  // Opto-facing entry for one pre-commit standard-cell transaction. Add uses a
-  // request-local name and creates room for a new buffer; Delete fills the old
-  // cell footprint; Replace supports only a same-footprint master/orientation
-  // change at the snapshot origin. The target record remains caller-owned.
-  RepairOutcome repair(const CellChangeRecord& targetChange) const;
-
-  // [PORT-DROP] The same repair, entered with raw UDM handles instead of a
-  // CheckRequest. The normal checker path already has this request;
-  // ImplantLayerChecker::check(), which has the CheckRequest already built;
-  // this overload exists so the repository-local regression can call the
-  // engine without a checker, and that does not travel. DELETE it (~25 lines)
-  // unless you have a caller holding UDM handles and no CheckRequest.
-  RepairOutcome repair(eUNL::LeafCellID targetCell,
-                       const eLIB::PhysLibCell& newMaster) const;
+  // The overlay record is caller-owned and represents either the old std cell
+  // (isLegal) or the one filler replaced by a new std cell (findLegal). Both
+  // footprints must be identical and the target may not move. The result is
+  // atomic, Replace-only, and never contains that overlay target itself.
+  RepairOutcome repair(const ipl::CheckRequestOverlay& request) const;
 
  private:
   class Impl;
-  const ipl::ImplantLayerChecker& checker_;
-  // Multiple checker workers hold shared access and execute independently.
-  // Repository-local snapshot/debug reconfiguration takes exclusive access;
-  // it never serializes ordinary repair calls against one another.
-  mutable std::shared_mutex state_mutex_;
-  bool debug_logging_ = debugLoggingDefault();
   std::unique_ptr<Impl> impl_;
 };
 

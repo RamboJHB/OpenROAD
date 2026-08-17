@@ -95,6 +95,9 @@ class DebugLog
     }
   }
 
+  // A visible phase boundary. The leading blank line prevents initialization,
+  // snapshot, search-window, and result records from becoming one dense wall
+  // of text in a redirected transcript.
   void section(const char* stage, const std::string& title) const
   {
     if (enabled_) {
@@ -102,6 +105,8 @@ class DebugLog
     }
   }
 
+  // A named record. Each value stays paired with its label and long values
+  // wrap beneath the record instead of extending one terminal-wide line.
   void block(const char* stage,
              const std::string& title,
              std::initializer_list<DebugField> fields) const
@@ -151,6 +156,9 @@ class DebugLog
     emit(stage, wrapLines(lines), false);
   }
 
+  // A compact table with adaptive column widths. Wide cells are wrapped in
+  // place, so adding a long diagnostic or master description never recreates
+  // the unreadable one-line transcript this interface is meant to avoid.
   void table(const char* stage,
              const std::string& title,
              const std::vector<std::string>& headers,
@@ -336,6 +344,8 @@ class DebugLog
     for (const std::string& line : lines) {
       output += cat("[fr][", stage, "] ", line, '\n');
     }
+    // One stdio call per logical record keeps a table or field block together
+    // when multiple checker workers emit transcripts concurrently.
     std::fwrite(output.data(), 1, output.size(), stdout);
   }
 

@@ -5,9 +5,11 @@
 #include <techObjTypes.hh>
 #include <unl/unlObjTypes.hh>
 
+#include <atomic>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -163,6 +165,7 @@ struct MasterItem
     std::vector<MasterShape> shapes;      // rebuilt band shapes
     std::vector<MasterShape> rawShapes;   // original raw shapes (preserved input)
     Dbu siteHeight = 0;                   // site height from the master's site type
+    std::string siteName;
     bool isFiller = false;
     std::vector<MasterInterval> intervals;
 };
@@ -222,22 +225,15 @@ struct OverlapInfo
     std::optional<Diagnostic> diags;
 };
 
-//deprecated
-struct CheckRequest
-{
-    InstanceId instanceId = 0;
-    MasterId masterId = 0;
-    RowId rowId = 0;
-    ColId colId = 0;
-    PhysOrientation orientation = PhysOrientationE::R0;
-    Node* cell = nullptr;                   // newly created node
-    std::vector<CellChangeRecord> overlayChanges; // old cells need be changed
-};
-
+// Public pre-commit wire. The temporary Node is the proposed std cell; the
+// single overlay record names the committed std cell/filler it replaces.
 struct CheckRequestOverlay
 {
-    Node* cell; // newly created node
-    std::vector<CellChangeRecord> overlayChanges; // old cells need be changed
+    const Node* cell = nullptr;
+    GridX x{0};
+    GridY y{0};
+    PhysOrientation orientation = PhysOrientationE::R0;
+    std::vector<CellChangeRecord> overlayChanges;
 };
 
 struct CheckResult
@@ -280,8 +276,14 @@ public:
 
     // Repair is enabled for the normal checker path.
     // ImplantLayerCheckerHelper disables it for checker-only tests.
-    void setFillerRepairEnabled(bool enabled) { enableFillerRepair_ = enabled; }
-    bool isFillerRepairEnabled() const { return enableFillerRepair_; }
+    void setFillerRepairEnabled(bool enabled)
+    {
+        enableFillerRepair_.store(enabled, std::memory_order_release);
+    }
+    bool isFillerRepairEnabled() const
+    {
+        return enableFillerRepair_.load(std::memory_order_acquire);
+    }
 
     CheckResult checkDirect(const CheckRequestOverlay& request) const;
     std::vector<CheckResult> checkPlaceWithOverlays(
@@ -304,6 +306,9 @@ public:
     const std::map<MasterId, MasterItem>& getMasterItems() const
     {return masterItems_;}
     const std::vector<Layer>& getLayers() const {return layers_;}
+    Grid* getGrid() const { return grid_; }
+    Network* getNetwork() const { return network_; }
+    eUNL::Design* getDesign() const { return design_; }
 
     const std::vector<Diagnostic>& getDiags() const {return diagnostics_;}
     size_t mergedShapeCount() const;
@@ -312,15 +317,28 @@ public:
     friend class ImplantLayerCheckerHelper;
 
 private:
+    struct ResolvedRequest
+    {
+        InstanceId instanceId = -1;
+        MasterId masterId = -1;
+        RowId rowId = -1;
+        ColId colId = -1;
+        PhysOrientation orientation = PhysOrientationE::R0;
+        const Node* cell = nullptr;
+        const Node* replaced = nullptr;
+        std::vector<CellChangeRecord> overlayChanges;
+    };
+
     // init functions
     bool init(PhysDesMgr* desMgr);
 
-    // Filler repair is lazy (most checks pass and never need it): the engine
-    // is created and initialized on the first enabled failing check. On a
-    // repairable failure the repair records are APPENDED to the caller's
-    // fcRecord; the checker keeps no filler-change member state.
-    bool repairFillers(const CheckRequestOverlay& request,
-        std::vector<CellChangeRecord>& fcRecord) const;
+    bool hasUsableInfrastructure() const;
+    const MasterItem* masterItem(MasterId masterId) const;
+    std::optional<ResolvedRequest> resolveRequest(
+        const CheckRequestOverlay& request, DiagVec& diagnostics) const;
+    const fillerRepair::FillerRepairEngine* fillerRepairEngine() const;
+    bool repairOverlay(const CheckRequestOverlay& request,
+        std::vector<CellChangeRecord>& fillerChanges) const;
     void buildLayers(PhysDesMgr* desMgr);
     static void parseLayerName(const std::string& name,
         Layer::Vt& vt, Layer::Polar& polar);
@@ -340,9 +358,9 @@ private:
     bool isIntersectCoverage(const Rule& rule, const CheckShape& target,
         const CheckShape& neighbor, const CheckShapes& shapes) const;
 
-    CheckShapes getSnapshot(const CheckRequestOverlay& request,
+    CheckShapes getSnapshot(const ResolvedRequest& request,
         const std::set<InstanceId>& excludedNodes) const;
-    CheckShapes getOverlaySnapshot(const CheckRequestOverlay& request,
+    CheckShapes getOverlaySnapshot(const ResolvedRequest& request,
         const Rect& guardRegion, const FillerChanges& fillerChanges,
         bool useNewFillers, const std::set<InstanceId>& excludedNodes) const;
     CheckShapes getNodeShape(InstanceId instanceId, MasterId masterId,
@@ -356,18 +374,22 @@ private:
     std::vector<Violation> makeViolations(const std::vector<CheckOutcome>& outcomes,
         const CheckShapes& shapes) const;
 
-    CheckResult checkPlaceWithOverlay(const CheckRequestOverlay& request,
+    CheckResult checkDirect(const ResolvedRequest& request) const;
+    std::vector<CheckResult> checkPlaceWithOverlays(
+        const ResolvedRequest& request, const Rect& guardRegion,
+        const std::vector<FillerChanges>& fillerChanges) const;
+    CheckResult checkPlaceWithOverlay(const ResolvedRequest& request,
         const Rect& guardRegion, const FillerChanges& fillerChanges,
         const std::vector<Violation>& oldViolations) const;
-    CheckResult checkOverlayRegion(const CheckRequestOverlay& request,
+    CheckResult checkOverlayRegion(const ResolvedRequest& request,
         const Rect& guardRegion, const FillerChanges& fillerChanges,
         bool useNewFillers) const;
 
     CheckShapes mergeGroupShapes(const CheckShapes& rawShapes,
         bool isCandidate) const;
 
-    OverlapInfo checkOverlap(const Node* node) const;
-    DiagVec validateOverlayRequest(const CheckRequestOverlay& request,
+    OverlapInfo checkOverlap(const ResolvedRequest& request) const;
+    DiagVec validateOverlayRequest(const ResolvedRequest& request,
         const FillerChanges& fillerChanges) const;
     bool touchesInstance(const Violation& violation, InstanceId instanceId) const;
     bool containsViolation(const Violation& oldViolation,
@@ -392,8 +414,10 @@ private:
     Dbu rowHeight_ = 0;
     Dbu siteWidth_ = 1;
     int maxRuleValue_ = 1; // the maxValue for all rules' minValue
-    mutable int nextCandShapeId_ = -1; // Temporary candidate shape ids.
-    bool enableFillerRepair_ = true;
+    std::atomic<bool> enableFillerRepair_{true};
+    mutable std::once_flag fillerRepairInit_;
+    mutable std::unique_ptr<fillerRepair::FillerRepairEngine>
+        fillerRepairEngine_;
 
     std::map<eLIB::TechLayerRelativeID, LayerId> techLayerToIdx_;
     std::map<std::string, LayerId> layerNameToIdx_;

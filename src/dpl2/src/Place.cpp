@@ -564,11 +564,9 @@ bool DePlace::canBePlaced(const Node* cell, GridX bin_x, GridY bin_y,
   const GridY y_end
       = grid_->gridEndY(grid_->gridYToDbu(bin_y) + cell->getHeight());
 
-  // fillerChanges, when non-null, gates the candidate site through the
-  // read-only overlay DRC (findLeg probe): checkPixels() then runs the
-  // neighbour-reading checkers over the caller's filler changes, building the
-  // std-cell overlay internally.  Ordinary placement paths pass nullptr and
-  // keep the full-checker DRC at the end of checkPixels().
+  // With fillerChanges, findLeg admits only a candidate that exactly replaces
+  // one same-footprint filler, then asks the overlay DRC for surrounding
+  // filler swaps. Ordinary placement paths pass nullptr.
   return checkPixels(cell, bin_x, bin_y, x_end, y_end, fillerChanges);
 }
 
@@ -658,40 +656,42 @@ bool DePlace::checkPixels(const Node* cell,
 
   std::vector<CellChangeRecord> ccRecords;
   if (fillerChanges != nullptr) {
-    // findLeg probe (read-only overlay): run the DRC over all registered
-    // checkers.  The caller's filler change list (fillerChanges, for
-    // ImplantLayer) is carried through; the std-cell overlay (the fillers the
-    // candidate footprint covers, built from the current grid at this site)
-    // is passed as overlayChanges.  ImplantLayer code is maintained by others;
-    // it is invoked with the throw-away node as-is.  Move the node's coords to
-    // this candidate site first so checkers that read position measure against
-    // it.  (cell is const here, but it points to a non-const stack temporary
-    // owned by findLeg -- safe to cast.)
+    // findLegal supports exactly one temporary std cell replacing exactly one
+    // same-footprint filler. Empty space, multiple fillers, and partial filler
+    // coverage are not this API's operation.
     setGridLoc(const_cast<Node*>(cell), x, y);
-    std::vector<CellChangeRecord> stdCell;
-    std::set<Node*> collected;
+    Node* replacedFiller = nullptr;
     for (GridY y1 = y; y1 < y_end; ++y1) {
       for (GridX x1 = x; x1 < x_end; ++x1) {
         const Pixel* pixel = grid_->gridPixel(x1, y1);
-        if (pixel == nullptr || pixel->cell == nullptr) {
-          continue;
+        if (pixel == nullptr || pixel->cell == nullptr
+            || !pixel->cell->isFiller()) {
+          return false;
         }
-        Node* occupant = pixel->cell;
-        if (!occupant->isFiller() || collected.count(occupant)) {
-          continue;
+        if (replacedFiller == nullptr) {
+          replacedFiller = pixel->cell;
+        } else if (replacedFiller != pixel->cell) {
+          return false;
         }
-        collected.insert(occupant);
-        stdCell.push_back(CellChangeRecord{
-            OpType::Delete, occupant->getDbInst(), UvDist(0), UvDist(0),
-            LibCellID(), LibCellID(), PhysOrientationE::R0});
       }
     }
-    bool ok = drc_engine_->checkDRC(cell, x, y, orient, *fillerChanges, stdCell);
-    std::cout << "  [findLeg checkDRC] (" << x.v << "," << y.v << ") => "
-              << (ok ? "PASS" : "FAIL")
-              << "  displaced-fillers=" << stdCell.size()
-              << "  cellChanges=" << fillerChanges->size() << "\n";
-    return ok;
+    if (replacedFiller == nullptr || replacedFiller->getMaster() == nullptr
+        || grid_->gridX(replacedFiller) != x
+        || grid_->gridSnapDownY(replacedFiller) != y
+        || grid_->gridEndX(replacedFiller) != x_end
+        || grid_->gridEndY(replacedFiller) != y_end) {
+      return false;
+    }
+    std::vector<CellChangeRecord> overlayChanges{CellChangeRecord{
+        OpType::Delete,
+        replacedFiller->getDbInst(),
+        UvDist(replacedFiller->getLeft().v),
+        UvDist(replacedFiller->getBottom().v),
+        replacedFiller->getMaster()->getDbMaster(),
+        replacedFiller->getMaster()->getDbMaster(),
+        replacedFiller->getOrient()}};
+    return drc_engine_->checkDRC(
+        cell, x, y, orient, *fillerChanges, overlayChanges);
   }
   return drc_engine_->checkDRC(cell, x, y, orient, ccRecords);
 }

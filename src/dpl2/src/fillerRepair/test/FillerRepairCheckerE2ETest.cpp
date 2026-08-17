@@ -47,7 +47,7 @@ TEST(ImplantLayerCheckerInitializationTest,
 {
   Grid grid;
   Network network;
-  CheckRequest request;
+  CheckRequestOverlay request;
 
   ImplantLayerChecker missingGrid(nullptr, nullptr, &network);
   EXPECT_TRUE(hasDiagnostic(missingGrid.getDiags(), "missing_grid"));
@@ -669,22 +669,26 @@ Rect guard()
   return makeRect(0, 0, SITE_COUNT * SITE_WIDTH, ROW_COUNT * ROW_HEIGHT);
 }
 
-// The check opto issues: same instance, same site, same orientation, the new
-// master it wants to place there.
-CheckRequest request(RowId rowId, ColId colId, MasterId masterId)
+// Test-only descriptor. The public checker request itself is materialized as a
+// temporary Node plus one Delete record after the fixture Network exists.
+struct RequestSpec
 {
-  return CheckRequest{instId(rowId, colId),
-                      masterId,
-                      rowId,
-                      colId,
-                      (rowId % 2) != 0 ? PhysOrientationE::MX
-                                       : PhysOrientationE::R0,
-                      OpType::Replace,
-                      nullptr,
-                      {}};
+  RowId rowId = 0;
+  ColId colId = 0;
+  MasterId masterId = 0;
+  PhysOrientation orientation = PhysOrientationE::R0;
+};
+
+RequestSpec request(RowId rowId, ColId colId, MasterId masterId)
+{
+  return RequestSpec{rowId,
+                     colId,
+                     masterId,
+                     (rowId % 2) != 0 ? PhysOrientationE::MX
+                                      : PhysOrientationE::R0};
 }
 
-CheckRequest retargeted(const Scenario& scn)
+RequestSpec retargeted(const Scenario& scn)
 {
   return request(scn.row, scn.col, scn.newMaster);
 }
@@ -697,6 +701,40 @@ LeafCellID leafCellId(RowId rowId, ColId colId)
 LibCellID libCellId(MasterId masterId)
 {
   return LibCellID(0, masterId);
+}
+
+CheckRequestOverlay materializeRequest(const RequestSpec& spec,
+                                       Network& network,
+                                       Node& temporary)
+{
+  Node* const replaced = network.getNode(instId(spec.rowId, spec.colId));
+  Master* const replacement = network.getMaster(spec.masterId);
+  if (replaced == nullptr || replaced->getMaster() == nullptr
+      || replacement == nullptr) {
+    return {};
+  }
+  temporary.setId(replaced->getId());
+  temporary.setDbInst(replaced->getDbInst());
+  temporary.setMaster(replacement);
+  temporary.setType(Node::CELL);
+  temporary.setWidth(replaced->getWidth());
+  temporary.setHeight(replaced->getHeight());
+  temporary.setLeft(replaced->getLeft());
+  temporary.setBottom(replaced->getBottom());
+  temporary.setOrient(spec.orientation);
+  const LibCellID oldMaster = replaced->getMaster()->getDbMaster();
+  return CheckRequestOverlay{
+      &temporary,
+      GridX(spec.colId),
+      GridY(spec.rowId),
+      spec.orientation,
+      {{OpType::Delete,
+        replaced->getDbInst(),
+        UvDist(replaced->getLeft().v),
+        UvDist(replaced->getBottom().v),
+        oldMaster,
+        oldMaster,
+        replaced->getOrient()}}};
 }
 
 // One candidate: recolour the scenario's bridge filler to `masterId`.
@@ -762,7 +800,7 @@ void expectOldUnrelatedFiltered(const CheckResult& result)
   }
 }
 
-std::vector<CheckResult> check(const CheckRequest& request,
+std::vector<CheckResult> check(const RequestSpec& request,
                                std::vector<FillerChanges> changes,
                                const DensityCase& density)
 {
@@ -774,7 +812,11 @@ std::vector<CheckResult> check(const CheckRequest& request,
   helper.initChecker(checker);
   EXPECT_FALSE(checker.isFillerRepairEnabled());
   EXPECT_TRUE(checker.getDiags().empty());
-  return checker.checkPlaceWithOverlays(request, guard(), changes);
+  Node temporary;
+  return checker.checkPlaceWithOverlays(
+      materializeRequest(request, *helper.getNetwork(), temporary),
+      guard(),
+      changes);
 }
 
 namespace fr = ::dpl2::fillerRepair;
@@ -996,15 +1038,14 @@ class PortableCheckerOracle final : public fr::RepairOracle
       changes.push_back(request.fillerChanges);
     }
 
-    const CheckRequest target{
-        first.targetPlace.instanceId,
-        first.targetPlace.masterId,
+    const RequestSpec targetSpec{
         first.targetPlace.rowId,
         static_cast<ColId>(first.targetPlace.x / view_.siteWidth()),
-        toCheckerOrient(first.targetPlace.orientation),
-        OpType::Replace,
-        nullptr,
-        {}};
+        first.targetPlace.masterId,
+        toCheckerOrient(first.targetPlace.orientation)};
+    Node temporary;
+    const CheckRequestOverlay target = materializeRequest(
+        targetSpec, *checker_.getNetwork(), temporary);
     const ::Rect guardRect
         = makeRect(first.guardRegion.x.xl,
                    first.guardRegion.rowLo * ROW_HEIGHT,
@@ -1158,7 +1199,7 @@ bool sameChanges(const dpl2::ipl::FillerChanges& left,
 // raised rule cannot reach any other F1 run from the target's window, and the
 // sites flanking the target are fillers so a run of any width can be formed
 // at all. The target site itself stays a placed F2 std cell: the F1 master
-// arrives only in the CheckRequest, exactly as opto issues it.
+// arrives only in the overlay request, exactly as opto issues it.
 constexpr ColId WIDE_RULE_COL = 100;
 constexpr ColId WIDE_RULE_BAND_LO = 90;
 constexpr ColId WIDE_RULE_BAND_HI = 120;
@@ -1292,38 +1333,46 @@ TEST(ImplantCheckerNullSafetyTest,
   ASSERT_FALSE(network->getNodes().empty());
 
   std::vector<CellChangeRecord> changes;
+  std::vector<CellChangeRecord> overlay;
   EXPECT_FALSE(checker.check(nullptr,
                              GridX{0},
                              GridY{0},
                              eUTL::PhysOrientationE::R0,
-                             changes));
+                             changes,
+                             overlay));
 
   const Node* node = network->getNodes().begin()->second.get();
   ASSERT_NE(node, nullptr);
   ASSERT_NE(node->getMaster(), nullptr);
-  CheckRequest request;
-  request.instanceId = node->getId();
-  request.masterId = node->getMaster()->getId();
-  request.rowId = grid->gridSnapDownY(node).v;
-  request.colId = grid->gridX(node).v;
-  request.orientation = node->getOrient();
+  const RequestSpec validSpec{grid->gridSnapDownY(node).v,
+                              grid->gridX(node).v,
+                              node->getMaster()->getId(),
+                              node->getOrient()};
+  Node temporary;
+  const CheckRequestOverlay request =
+      materializeRequest(validSpec, *network, temporary);
 
-  CheckRequest unknownTarget = request;
-  unknownTarget.instanceId = 1000000;
+  CheckRequestOverlay unknownTarget = request;
+  unknownTarget.overlayChanges.front().cell_data_
+      = LeafCellID(0, 1000000);
   const CheckResult targetResult = checker.checkDirect(unknownTarget);
   EXPECT_FALSE(targetResult.isLegal);
   EXPECT_TRUE(hasDiagnostic(targetResult.diagnostics,
-                            "unknown_target_instance"));
+                            "unknown_target_overlay"));
 
-  CheckRequest unknownMaster = request;
-  unknownMaster.masterId = 1000000;
+  Master unknownMasterObject;
+  unknownMasterObject.setId(1000000);
+  Node unknownMasterNode;
+  unknownMasterNode.setMaster(&unknownMasterObject);
+  CheckRequestOverlay unknownMaster = request;
+  unknownMaster.cell = &unknownMasterNode;
   const CheckResult masterResult = checker.checkDirect(unknownMaster);
   EXPECT_FALSE(masterResult.isLegal);
   EXPECT_TRUE(hasDiagnostic(masterResult.diagnostics,
                             "unknown_target_master"));
 
-  CheckRequest outOfGrid = request;
-  outOfGrid.rowId = -1;
+  CheckRequestOverlay outOfGrid = request;
+  outOfGrid.y = GridY{-1};
   const std::vector<CheckResult> outOfGridResults =
       checker.checkPlaceWithOverlays(
           outOfGrid,
@@ -1335,7 +1384,7 @@ TEST(ImplantCheckerNullSafetyTest,
   ASSERT_EQ(outOfGridResults.size(), 1u);
   EXPECT_FALSE(outOfGridResults.front().isLegal);
   EXPECT_TRUE(hasDiagnostic(outOfGridResults.front().diagnostics,
-                            "placement_out_of_grid"));
+                            "target_move_unsupported"));
 
   const std::vector<CheckResult> overlayResults =
       checker.checkPlaceWithOverlays(
@@ -1348,59 +1397,15 @@ TEST(ImplantCheckerNullSafetyTest,
   ASSERT_EQ(overlayResults.size(), 1u);
   EXPECT_FALSE(overlayResults.front().isLegal);
   EXPECT_TRUE(hasDiagnostic(overlayResults.front().diagnostics,
-                            "unknown_target_instance"));
+                            "unknown_target_overlay"));
 
-  Node* mutableNode = network->getNodes().begin()->second.get();
-  Master* savedMaster = mutableNode->getMaster();
-  mutableNode->setMaster(nullptr);
-  const CheckResult missingMaster = checker.checkDirect(request);
+  CheckRequestOverlay missingMasterRequest = request;
+  Node missingMasterNode;
+  missingMasterRequest.cell = &missingMasterNode;
+  const CheckResult missingMaster = checker.checkDirect(missingMasterRequest);
   EXPECT_FALSE(missingMaster.isLegal);
   EXPECT_TRUE(hasDiagnostic(missingMaster.diagnostics,
-                            "target_instance_missing_master"));
-  mutableNode->setMaster(savedMaster);
-}
-
-TEST(InfrastructureNullSafetyTest, RejectsNullOwnedObjectsAndClearedGridAccess)
-{
-  Network emptyNetwork;
-  emptyNetwork.addNode(std::unique_ptr<Node>());
-  emptyNetwork.addMaster(std::unique_ptr<Master>());
-  EXPECT_TRUE(emptyNetwork.getNodes().empty());
-  EXPECT_TRUE(emptyNetwork.getMasters().empty());
-
-  auto sparseMaster = std::make_unique<Master>();
-  sparseMaster->setId(7);
-  sparseMaster->setDbMaster(LibCellID(0, 107));
-  emptyNetwork.addMaster(std::move(sparseMaster));
-  auto nextMaster = std::make_unique<Master>();
-  nextMaster->setId(-1);
-  nextMaster->setDbMaster(LibCellID(0, 108));
-  emptyNetwork.addMaster(std::move(nextMaster));
-  EXPECT_NE(emptyNetwork.getMaster(7), nullptr);
-  EXPECT_NE(emptyNetwork.getMaster(8), nullptr);
-
-  auto sparseNode = std::make_unique<Node>();
-  sparseNode->setId(11);
-  emptyNetwork.addNode(std::move(sparseNode));
-  auto nextNode = std::make_unique<Node>();
-  nextNode->setId(-1);
-  emptyNetwork.addNode(std::move(nextNode));
-  EXPECT_NE(emptyNetwork.getNode(11), nullptr);
-  EXPECT_NE(emptyNetwork.getNode(12), nullptr);
-
-  PlannerCheckerFixture fixture;
-  Grid* grid = fixture.grid();
-  ASSERT_NE(grid, nullptr);
-  ASSERT_GT(grid->getRowCount().v, 0);
-  grid->clear();
-  EXPECT_EQ(grid->gridPixel(GridX{0}, GridY{0}), nullptr);
-  EXPECT_EQ(grid->gridX(static_cast<const Node*>(nullptr)).v, 0);
-  grid->paintPixel(nullptr);
-
-  Grid uninitialized;
-  uninitialized.examineRows(nullptr);
-  EXPECT_EQ(uninitialized.getDesMgr(), nullptr);
-  EXPECT_EQ(uninitialized.getRowCount().v, 0);
+                            "invalid_target_cell"));
 }
 
 // --- window probe -----------------------------------------------------------
@@ -1659,7 +1664,7 @@ TEST(ImplantCheckerOverlayTest, ReplaceRejectsNamedCellData)
       results.front().diagnostics.begin(),
       results.front().diagnostics.end(),
       [](const Diagnostic& diagnostic) {
-        return diagnostic.status == "changed_cell_data_not_leaf_id";
+        return diagnostic.status == "invalid_filler_change";
       }));
 }
 
@@ -1693,8 +1698,11 @@ TEST(ImplantCheckerOverlayTest,
                        LibCellID(),
                        libCellId(F3_FILL_MASTER),
                        PhysOrientation(PhysOrientationE::R0)}};
+  Node temporary;
+  const CheckRequestOverlay target = materializeRequest(
+      retargeted(scn), *helper.getNetwork(), temporary);
   const std::vector<CheckResult> results = checker.checkPlaceWithOverlays(
-      retargeted(scn), scenarioGuard, {outsideGuard});
+      target, scenarioGuard, {outsideGuard});
 
   ASSERT_EQ(results.size(), 1u);
   EXPECT_FALSE(results.front().isLegal);

@@ -6,17 +6,17 @@
 #include <infrastructure/network.h>
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
-#include <drc/PaddingChecker.h>
+#include <drc/ImplantLayerChecker.h>
 #include <PlacementDRC.h>
 
 namespace dpl2 {
 
 DePlace::DePlace(PhysDesMgr* desMgr)
     : desMgr_(desMgr),
+      arch_(std::make_unique<Architecture>()),
       network_(std::make_unique<Network>()),
       padding_(std::make_shared<Padding>()),
-      grid_(std::make_unique<Grid>()),
-      arch_(std::make_unique<Architecture>())
+      grid_(std::make_unique<Grid>())
 {
   design_ = eUNL::Session::getSession().getCurrentDesign();
   padding_->setDesginManager(desMgr);
@@ -25,10 +25,10 @@ DePlace::DePlace(PhysDesMgr* desMgr)
 }
 
 DePlace::DePlace()
-    : network_(std::make_unique<Network>()),
+    : arch_(std::make_unique<Architecture>()),
+      network_(std::make_unique<Network>()),
       padding_(std::make_shared<Padding>()),
-      grid_(std::make_unique<Grid>()),
-      arch_(std::make_unique<Architecture>())
+      grid_(std::make_unique<Grid>())
 {
   eUNL::Session& sess = eUNL::Session::getSession();
   eUNL::Design* design = sess.getCurrentDesign();
@@ -91,6 +91,48 @@ bool DePlace::registerFillerRepairMasters()
   return true;
 }
 
+bool DePlace::prepareFillerRepair(const PhysLibCell& targetMaster)
+{
+  std::lock_guard<std::mutex> lock(filler_repair_init_mutex_);
+  if (network_ == nullptr || grid_ == nullptr || filler_setting_ == nullptr
+      || edge_type_table_ == nullptr) {
+    return false;
+  }
+
+  if (drc_engine_ != nullptr) {
+    DRCChecker* const existing
+        = drc_engine_->getChecker(DRCCheckerType::ImplantLayer);
+    if (existing != nullptr) {
+      const auto* checker = dynamic_cast<ipl::ImplantLayerChecker*>(existing);
+      const int masterId = network_->getMasterId(targetMaster.getLibCellId());
+      return checker != nullptr && masterId >= 0
+             && checker->getMasterItems().contains(masterId);
+    }
+  }
+
+  if (network_->getMaster(targetMaster.getLibCellId()) == nullptr
+      && network_->addMaster(targetMaster,
+                             *filler_setting_,
+                             grid_.get(),
+                             edge_type_table_.get()) == nullptr) {
+    return false;
+  }
+  if (!registerFillerRepairMasters()) {
+    return false;
+  }
+  if (drc_engine_ == nullptr) {
+    initPlacementDRC();
+  }
+  if (drc_engine_ == nullptr) {
+    return false;
+  }
+  drc_engine_->addChecker(
+      DRCCheckerType::ImplantLayer,
+      std::make_unique<ipl::ImplantLayerChecker>(
+          grid_.get(), design_, network_.get()));
+  return true;
+}
+
 void DePlace::setPaddingGlobal(const int left, const int right)
 {
   padding_->setPaddingGlobal(GridX{left}, GridX{right});
@@ -112,15 +154,13 @@ void DePlace::setPadding(PhysLibCell* master, const int left, const int right)
  *
  * Builds a throw-away node with the target master at the target's current
  * coordinates (never inserted into the network, never painted), feeds the
- * node plus an overlay of the cells the new footprint displaces (the target
- * std-cell being swapped in place, and any fillers the new footprint covers)
- * to the single-entry DRC check, and returns the verdict.  No in-memory
- * placement state is mutated.
+ * node plus the one old Network std cell as the replacement overlay, and
+ * returns the verdict. No in-memory placement state is mutated.
  *
  * @param  masterId    Target library cell master.
  * @param  target      The std-cell currently occupying the probe site.
- * @param  cellChanges [in/out] Caller's filler change list, carried through for
- *                     the ImplantLayer checker (reserved).
+ * @param  cellChanges [out] Atomic surrounding-filler Replace records when
+ *                     repair succeeds; unchanged when the check fails.
  * @retval true        The swap is DRC-legal at the current location.
  * @retval false       The swap violates DRC.
  */
@@ -132,14 +172,14 @@ bool DePlace::isLegalProbe(LibCellID masterId, const Node* target,
   }
   const PhysLibCell& new_pcell = design_->getLibAcc().getPhysLibCell(masterId);
 
-  // Reuse the registered master if present; otherwise register it (same
-  // semantics as findLeg).  Registering a master definition does not mutate
-  // placement state.
-  Master* master = this->network_->getMaster(masterId);
-  if (master == nullptr) {
-    master = this->network_->addMaster(new_pcell, *filler_setting_,
-                                       this->grid_.get(),
-                                       this->edge_type_table_.get());
+  if (!prepareFillerRepair(new_pcell)) {
+    return false;
+  }
+  Master* const master = this->network_->getMaster(masterId);
+  if (master == nullptr || target->getMaster() == nullptr
+      || target->getWidth().v != new_pcell.getWidth().getStorage()
+      || target->getHeight().v != new_pcell.getHeight().getStorage()) {
+    return false;
   }
 
   // Throw-away node anchored at the target's current coordinates.
@@ -149,36 +189,13 @@ bool DePlace::isLegalProbe(LibCellID masterId, const Node* target,
 
   const GridX x = grid_->gridX(probe.getLeft());
   const GridY y = grid_->gridSnapDownY(probe.getBottom());
-  const GridX x_end = x + grid_->gridWidth(&probe);
-  const GridY y_end
-      = grid_->gridEndY(grid_->gridYToDbu(y) + probe.getHeight());
-
-  // Overlay = cells the new footprint displaces: the target std-cell being
-  // swapped in place plus any fillers covered by the (possibly larger) new
-  // footprint.  The neighbour-reading checkers treat these as already
-  // removed/replaced, without touching the grid.
+  // isLegal is a one-to-one in-place std-cell replacement. The old Network
+  // node is the complete input overlay; filler repair may only return changes
+  // for surrounding fillers.
   std::vector<CellChangeRecord> overlayChanges;
-  std::set<Node*> collected;
   overlayChanges.push_back(CellChangeRecord{
       OpType::Delete, target->getDbInst(), UvDist(0), UvDist(0),
       LibCellID(), LibCellID(), PhysOrientationE::R0});
-  collected.insert(const_cast<Node*>(target));
-  for (GridY y1 = y; y1 < y_end; ++y1) {
-    for (GridX x1 = x; x1 < x_end; ++x1) {
-      const Pixel* pixel = grid_->gridPixel(x1, y1);
-      if (pixel == nullptr || pixel->cell == nullptr) {
-        continue;
-      }
-      Node* occupant = pixel->cell;
-      if (!occupant->isFiller() || collected.count(occupant)) {
-        continue;
-      }
-      collected.insert(occupant);
-      overlayChanges.push_back(CellChangeRecord{
-          OpType::Delete, occupant->getDbInst(), UvDist(0), UvDist(0),
-          LibCellID(), LibCellID(), PhysOrientationE::R0});
-    }
-  }
 
   const auto orient
       = grid_->getSiteOrientation(x, y, new_pcell.getTechSite()->getName()).value();
@@ -189,15 +206,13 @@ bool DePlace::isLegalProbe(LibCellID masterId, const Node* target,
  * @brief Check DRC legality of swapping a cell to a given master at its current
  *        location.
  *
- * Unplaces @p instId, loads the PhysLibCell for @p masterId into the grid,
- * updates the Node, and runs DRC check.  The cell is NOT moved — only its
- * master is swapped in place.  After the check the old master is restored
- * and the cell is re-placed.
+ * Builds a temporary same-footprint node and checks it against an overlay of
+ * the committed cell. The cell is not moved or mutated.
  *
  * @param  instId    LeafCellID of the cell to test.
  * @param  masterId  Target library cell master to test-swap to.
- * @param  ccRecords  [out] Filler-change records accumulated during DRC check
- * (reserved).
+ * @param  ccRecords [out] Atomic surrounding-filler Replace records when
+ *                    repair succeeds; unchanged on failure.
  * @retval true      The swap is DRC-legal at the current location.
  * @retval false     The swap violates DRC (insufficient space or
  * incompatible footprint).
@@ -218,7 +233,8 @@ bool DePlace::isLegal(LeafCellID instId, LibCellID masterId,
  * Iterates over @p ccRecords and performs each operation:
  *    - OpType::Replace: swaps the cell's master via NlEditor sizeCell change,
  *      then updates the in-memory Node.
- *    - OpType::Delete / Add: reserved for future use.
+ *    - OpType::Delete: removes an existing cell.
+ *    - OpType::Add: currently ignored by this generic commit path.
  *
  * @param ccRecords  Vector of CellChangeRecord describing the changes.
  * @return true on success.
@@ -334,8 +350,8 @@ void DePlace::initTempNode(Node& cell, Master* master,
  * @param va        Optional voltage-area to restrict placement to.
  * @param diameter  Search region extension (in uv units).
  * @param masterId  Target library cell master to place.
- * @param ccRecords  [out] Filler-change records accumulated during DRC check
- * (reserved).
+ * @param ccRecords [out] Atomic surrounding-filler Replace records for the
+ *                  selected candidate; unchanged when no legal site exists.
  * @return The (left, bottom) UV coordinates of the found site,
  * or (-1, -1) on failure.
  */
@@ -352,11 +368,12 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   // Reuse the registered master if present; otherwise register it (same
   // semantics as the existing findLeg overloads).  The master itself must be
   // reachable from the node because isFiller()/checkers read Master fields.
-  Master* master = this->network_->getMaster(masterId);
+  if (!prepareFillerRepair(new_pcell_)) {
+    return {-1, -1};
+  }
+  Master* const master = this->network_->getMaster(masterId);
   if (master == nullptr) {
-    master = this->network_->addMaster(new_pcell_, *filler_setting_,
-                                       this->grid_.get(),
-                                       this->edge_type_table_.get());
+    return {-1, -1};
   }
 
   // Build a throw-away Node (not inserted into the network, never painted).
@@ -387,10 +404,9 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   // inside legalCellInRect() is disabled.
   Node* search_cell = &cell;
   std::pair<int, int> Coordinate;
-  // ccRecords carries the caller-supplied filler change list (for ImplantLayer).
-  // The std-cell overlay (fillers a candidate site displaces) is built
-  // internally by checkPixels() per candidate site, so only the filler list
-  // needs to travel down the search chain.
+  // checkPixels() accepts only an exact-cover filler at each candidate and
+  // builds that one filler Delete overlay internally. ccRecords receives only
+  // surrounding filler Replace records from the accepted candidate.
   if (va == nullptr) {
     Coordinate = legalCellInRect(rect, search_cell, &ccRecords);
   } else {

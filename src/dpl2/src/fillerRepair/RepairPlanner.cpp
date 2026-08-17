@@ -745,6 +745,12 @@ RepairWindow buildWindow(const TargetPlace& anchor,
   XInterval x = anchorSpan;
 
   const auto include = [&](const PlacedInstance& inst, bool isBridge) {
+    // In findLegal the anchor id belongs to the filler being replaced by the
+    // temporary standard cell. That target is caller-owned overlay state and
+    // must never reappear as a surrounding filler change.
+    if (inst.id == anchor.instanceId) {
+      return;
+    }
     editable.insert(inst.id);
     if (isBridge) {
       bridge.insert(inst.id);
@@ -901,6 +907,9 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
           if (!all[i].isFiller || span.xh < leftFrontier) {
             break;
           }
+          if (all[i].id == anchor.instanceId) {
+            continue;
+          }
           editable.insert(all[i].id);
           leftFrontier = span.xl;
           x.xl = std::min(x.xl, span.xl);
@@ -921,6 +930,9 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
           }
           if (!all[i].isFiller || span.xl > rightFrontier) {
             break;
+          }
+          if (all[i].id == anchor.instanceId) {
+            continue;
           }
           editable.insert(all[i].id);
           rightFrontier = span.xh;

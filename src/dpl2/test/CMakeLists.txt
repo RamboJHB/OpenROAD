@@ -11,6 +11,12 @@ include(GoogleTest)
 
 option(DPL2_ENABLE_ASAN "Build fillerRepair tests with AddressSanitizer" OFF)
 option(DPL2_TEST_USE_FAKE_UDM "Use the test-only UDM-compatible headers" ON)
+if(DPL2_ENABLE_ASAN AND APPLE)
+  # Applies to the test executables created by the fillerRepair subdirectory
+  # as well as those declared in this harness.
+  set(CMAKE_TEST_LAUNCHER
+      "${CMAKE_COMMAND};-E;env;ASAN_OPTIONS=detect_container_overflow=0")
+endif()
 set(DPL2_TEST_FAKE_UDM_INCLUDE_DIR
     "${CMAKE_CURRENT_LIST_DIR}/local/fake_udm/include" CACHE PATH
     "Test-only UDM-compatible include root")
@@ -63,6 +69,14 @@ function(dpl2_configure_test target standard strictness)
         ${target} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
       target_link_options(
         ${target} PRIVATE -fsanitize=address -fno-omit-frame-pointer)
+      # Homebrew's prebuilt GoogleTest is not ASan-instrumented. On macOS its
+      # libc++ vector annotations otherwise report a container-overflow inside
+      # GoogleTest itself while CMake is only listing tests. Keep every other
+      # ASan check enabled and wrap both discovery and execution consistently.
+      if(APPLE)
+        set_property(TARGET ${target} PROPERTY TEST_LAUNCHER
+          "${CMAKE_COMMAND};-E;env;ASAN_OPTIONS=detect_container_overflow=0")
+      endif()
     else()
       message(FATAL_ERROR "DPL2_ENABLE_ASAN requires a Clang or GNU compiler")
     endif()
@@ -139,6 +153,19 @@ target_link_libraries(dpl2_fr_deplace_compile_check PRIVATE
     dpl2_fr_chain_common dpl2::fillerRepair)
 dpl2_configure_chain_target(dpl2_fr_deplace_compile_check delivered)
 
+# Keep the local diagnostic command on the same public DePlace contract. It is
+# object-only because the destination command framework supplies registration
+# and Tcl linkage; compiling it here catches stale repair APIs immediately.
+add_library(dpl2_fr_command_compile_check OBJECT
+    "${CMAKE_CURRENT_LIST_DIR}/../dpl2ui/testFillerRepairCmd.cc")
+target_include_directories(
+  dpl2_fr_command_compile_check
+  PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../dpl2ui"
+          "${CMAKE_CURRENT_LIST_DIR}/../local/command_shim/include")
+target_link_libraries(
+  dpl2_fr_command_compile_check PRIVATE dpl2_fr_chain_common)
+dpl2_configure_chain_target(dpl2_fr_command_compile_check strict)
+
 # The payload builds itself and its portable tests from its own CMakeLists;
 # we never list its files. Handing it our already-compiled infra/checker
 # objects is exactly what a destination does with DPL2_RUNTIME_LIBRARIES, so
@@ -156,7 +183,6 @@ file(MAKE_DIRECTORY "${DPL2_FR2_STAGE_ROOT}/fillerRepair")
 file(COPY "${DPL2_SRC}/fillerRepair2/"
      DESTINATION "${DPL2_FR2_STAGE_ROOT}/fillerRepair")
 add_library(dpl2_filler_repair2_compile_check OBJECT
-    "${DPL2_FR2_STAGE_ROOT}/fillerRepair/FillerRetiler.cpp"
     "${DPL2_FR2_STAGE_ROOT}/fillerRepair/RepairPlanner.cpp"
     "${DPL2_FR2_STAGE_ROOT}/fillerRepair/FillerRepairEngine.cpp")
 target_include_directories(

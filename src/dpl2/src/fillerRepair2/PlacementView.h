@@ -2,6 +2,16 @@
 // Copyright (c) 2026, The OpenROAD Authors
 
 // Seam 1 of 2: how the search sees the design. (Seam 2 is RepairOracle --
+// whether something is legal.) The runtime engine implements both; the search
+// itself knows nothing about UDM, Grid or Network.
+//
+// It answers exactly two questions -- "what is placed where?" and "which
+// masters could replace this filler?" -- and it is read-only. Nothing here
+// changes the design; committing an answer is the caller's job.
+//
+// Threading: runtime views are immutable after engine initialization or are
+// private to one repair call, so concurrent repair readers are supported.
+// Test doubles must provide the same stable-reference behavior when shared.
 
 #pragma once
 
@@ -27,9 +37,15 @@ struct MasterInfo
   DbCoord width = 0;
   DbCoord height = 0;
   bool isFiller = false;
-// VT family. Uniform across the master's bands by checker construction
+  // VT family. Uniform across the master's bands by checker construction
+  // (master_implant_family_mismatch), so one value covers every band.
   VtId vt = kUnknownVt;
-// Bottom-band implant polarity in the master's R0 frame; bands alternate
+  // Bottom-band implant polarity in the master's R0 frame; bands alternate
+  // upward (checker rebuildMasterShapes, anchored at the bottommost shape's
+  // layer). Placement under MX/R180 flips the bands, but a SWAP keeps
+  // position AND orientation, so a replacement only has to match this
+  // R0-frame layout -- a mismatched layout puts every band on the opposite
+  // track and the checker rejects the overlay (polarity mismatch).
   BandPolarity bottomBandPolarity = BandPolarity::N;
 };
 
@@ -48,30 +64,42 @@ class PlacementView
  public:
   virtual ~PlacementView() = default;
 
-// Sorted ascending. The reference stays valid for the data source's lifetime;
+  // Sorted ascending. The reference stays valid for the data source's lifetime;
+  // window building and guard clamping call this on every step, so
+  // implementations must NOT rebuild the list per call.
   virtual const std::vector<RowId>& rows() const = 0;
 
   virtual DbCoord siteWidth() const = 0;
 
-// Sorted by x ascending (ties by id). A multi-height instance is present in
-// every row it occupies.
+  // Sorted by x ascending (ties by id). Multi-height contract:
+  // an instance spanning several rows is reported by every row it occupies.
+  // Returned by reference: this is the planner's hottest query (precheck,
+  // window building, ranking) and rows
+  // hold thousands of instances on real designs -- per-call copies are the
+  // dominant planner cost, so implementations must return stored buckets.
   virtual const std::vector<PlacedInstance>& instancesInRow(
       RowId rowId) const = 0;
 
+  // nullptr when unknown.
   virtual const PlacedInstance* instance(InstanceId id) const = 0;
   virtual const MasterInfo* masterInfo(MasterId id) const = 0;
 
-// Configured replacement universe, sorted ascending and unique (the
+  // Configured replacement universe, sorted ascending and unique (the
+  // default candidate filter relies on that order for determinism).
   virtual const std::vector<MasterId>& fillerMasterIds() const = 0;
-// Build one planner Replace record; the engine assembles layout Delete/Add.
+  // Build the exact checker/public wire record for one planner replacement.
+  // Layout Delete/Add records are assembled by the runtime engine. This is
+  // the sole mapping point from dense planner ids to UDM ids and coordinates.
   virtual CellChangeRecord cellChangeRecord(InstanceId instanceId,
                                             MasterId newMasterId) const = 0;
-// Has a working default built from the accessors above; virtual so a view
+  // Has a working default built from the accessors above; virtual so a view
+  // that already knows its usable replacements can answer directly instead of
+  // being re-derived.
   virtual MasterCandidateResult getUsableMasterCandidates(
       InstanceId fillerInstanceId) const;
 
  protected:
-// Shared "no such row" result so implementations can return a reference.
+  // Shared "no such row" result so implementations can return a reference.
   static const std::vector<PlacedInstance>& emptyInstances();
 };
 
@@ -84,8 +112,14 @@ inline XInterval instanceSpan(const PlacementView& view, const PlacedInstance& i
 }
 
 // A row on a real design holds thousands of instances; we care about the
+// handful near the target. `instancesInRow` is sorted by x and -- on this path,
+// which only runs once the region is known gap- and overlap-free -- the
+// instances do not overlap, so their right edges rise monotonically too. That
+// is what lets the two searches below jump straight to the range of interest
+// instead of walking the row.
 
 // First index whose right edge lies strictly right of `bound` (the first
+// instance not entirely to the left of it).
 inline int firstRightEdgeAfter(const PlacementView& view,
                                const std::vector<PlacedInstance>& all,
                                DbCoord bound)
@@ -119,6 +153,16 @@ inline int firstStartAtOrAfter(const std::vector<PlacedInstance>& all,
 }
 
 // Everything in one row that overlaps `x`, plus `ring` more whole instances
+// off each end:
+//
+//     x:                 [-------)
+//     row:  [ A ][ B ][ C ][ D ][ E ][ F ][ G ]
+//     ring=1 gives:      B  C  D  E  F     (C..E overlap, B and F are the ring)
+//
+// Counted by INDEX, so every kind of cell counts -- a std cell is a ring
+// member like any other and never stops the walk. When `x` falls in a gap the
+// overlap range is empty and the ring simply yields the nearest instance on
+// each side, which is what a caller looking for neighbours wants.
 inline std::vector<PlacedInstance> instancesInRing(const PlacementView& view,
                                                    RowId rowId,
                                                    const XInterval& x,
@@ -182,6 +226,8 @@ inline MasterCandidateResult PlacementView::getUsableMasterCandidates(
     return result;
   }
 
+  // fillerMasterIds() is sorted unique by contract -> candidates come out
+  // ascending and deterministic without a per-call sort.
   int polarityFiltered = 0;
   for (const MasterId id : fillerMasterIds()) {
     const MasterInfo* candidate = masterInfo(id);
@@ -191,7 +237,11 @@ inline MasterCandidateResult PlacementView::getUsableMasterCandidates(
           cat("configured filler master ", id, " is not in the view")));
       continue;
     }
-// Same size, different (known) VT family, and the same R0-frame band
+    // Same size, different (known) VT family, and the same R0-frame band
+    // polarity layout: a swap keeps position/orientation, so a candidate
+    // whose bottom band has the opposite polarity would land every band on
+    // the wrong track -- the checker rejects such overlays unconditionally,
+    // offering them only burns checker calls.
     if (id != inst->masterId && candidate->isFiller
         && candidate->vt != kUnknownVt && candidate->vt != current->vt
         && candidate->width == current->width
@@ -204,7 +254,10 @@ inline MasterCandidateResult PlacementView::getUsableMasterCandidates(
     }
   }
   if (result.candidates.empty()) {
-// Distinguish "the library has nothing" from "everything size/VT
+    // Distinguish "the library has nothing" from "everything size/VT
+    // compatible was dropped by the polarity-layout filter": the latter
+    // pattern usually means the polarity metadata (layer-name parse) is
+    // broken, and silently reporting NoUsableMaster would hide it.
     if (polarityFiltered > 0) {
       result.diagnostics.push_back(makeDiag(
           Severity::Warning, "PolarityLayoutFiltered",

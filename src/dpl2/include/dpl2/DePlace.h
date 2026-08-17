@@ -7,6 +7,7 @@
 #include <boost/geometry/geometries/point_xy.hpp>
 #include <boost/geometry/geometry.hpp>
 #include <boost/geometry/index/rtree.hpp>
+#include <mutex>
 
 // UDM
 #include <phys/fpManager.hh>
@@ -64,12 +65,12 @@ namespace dpl2 {
 class Grid;
 class Node;
 class Master;
-class Pixel;
+struct Pixel;
 class PixelPt;
-class GridPt;
-class GridRect;
-class DbuPt;
-class DbuRect;
+struct GridPt;
+struct GridRect;
+struct DbuPt;
+struct DbuRect;
 class Padding;
 class EdgeTypeTable;
 class Network;
@@ -230,12 +231,14 @@ class DePlace {
   void initTempNode(Node& cell, Master* master, const PhysLibCell& pcell,
                     const Point2D& origin) const;
 
-  // Read-only overlay DRC of swapping @p target to master @p masterId at its
-  // current location, without touching in-memory placement state (the target
-  // cell and any fillers its new footprint covers are fed to the checkers as
-  // a removed/replaced overlay).
+  // Read-only overlay DRC of replacing @p target with master @p masterId at
+  // the same location and footprint. The old Network target is the sole
+  // overlay record; returned records may change surrounding fillers only.
   bool isLegalProbe(LibCellID masterId, const Node* target,
                     std::vector<CellChangeRecord>& cellChanges);
+  // Lazily publishes the immutable checker/engine revision after the active
+  // filler list and the requested target master are registered.
+  bool prepareFillerRepair(const PhysLibCell& targetMaster);
 
   // Grid initialization
   void initGrid();
@@ -249,6 +252,7 @@ class DePlace {
   std::unique_ptr<Network> network_;     // The netlist, cells, etc.
   std::shared_ptr<Padding> padding_;
   std::unique_ptr<PlacementDRC> drc_engine_;
+  std::mutex filler_repair_init_mutex_;
   std::unique_ptr<EdgeTypeTable> edge_type_table_;
   Rect core_;
 

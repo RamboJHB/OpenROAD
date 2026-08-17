@@ -53,13 +53,11 @@ class DRCChecker
                      GridY y,
                      const eUTL::PhysOrientation& orient) const = 0;
 
-  // List-carrying variant.  Every checker receives two change lists:
-  //    - cellChanges   : the caller's planned cell-change list (filler
-  //                      modifications, consumed by ImplantLayer code
-  //                      maintained by others);
-  //    - overlayChanges: the std-cell/filler cells displaced by the candidate
-  //                      footprint, treated as already removed by the
-  //                      neighbour-reading checkers (EdgeSpacing/Padding).
+  // Two-list pre-commit variant:
+  //    - cellChanges: in/out atomic repair transaction. ImplantLayer appends
+  //      only surrounding filler Replace records after a complete solution;
+  //    - overlayChanges: input containing the one committed node replaced by
+  //      the temporary cell.
   // A checker ignores whichever list is not part of its rule.
   virtual bool check(const Node* cell,
                      GridX x,

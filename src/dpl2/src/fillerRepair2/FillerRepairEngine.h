@@ -2,9 +2,16 @@
 // Copyright (c) 2026, The OpenROAD Authors
 
 // The runtime half of filler repair: everything that touches the database.
-// repair() is non-mutating and returns one checker-verified atomic transaction:
-// same-footprint Replace, filler Add after target Delete, or filler Delete plus
-// collateral refill before a new target Add.
+//
+// It borrows the caller-owned checker, freezes one placement revision, and
+// feeds the pure search (RepairPlanner) through PlacementView and a
+// request-local RepairOracle.
+//
+// repair() accepts one temporary standard-cell Node plus exactly one overlay
+// record naming the same-footprint Network Node it replaces. It answers only
+// with surrounding filler Replace records and changes nothing.
+// UDM, Grid and Network come out exactly as they went in; committing is the
+// caller's decision.
 
 #pragma once
 
@@ -31,22 +38,26 @@ struct RepairOutcome
 class FillerRepairEngine
 {
  public:
+  // The checker is the engine's only infrastructure seam. It exposes the
+  // Grid, Design and Network initialized by DePlace and must outlive the
+  // engine. Construction eagerly builds the immutable repair snapshot before
+  // the object can be published to checker worker threads.
   explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
   ~FillerRepairEngine();
 
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
-  // Construction eagerly builds the immutable snapshot from the checker.
-  // Bind this engine only when it is ready.
+  // Diagnostics are retained for setup/debug reporting. A not-ready engine
+  // always fails closed and never returns partial changes.
   bool isReady() const;
   std::vector<ipl::Diagnostic> getInitDiagnostics() const;
 
-  // Non-mutating, pre-commit overlay repair.
-  RepairOutcome repair(const ipl::CheckRequest& request) const;
-  // Add uses a request-local name. Delete/Replace identify an existing target;
-  // Replace must retain the immutable snapshot footprint and origin.
-  RepairOutcome repair(const CellChangeRecord& targetChange) const;
+  // The overlay record is caller-owned and represents either the old std cell
+  // (isLegal) or the one filler replaced by a new std cell (findLegal). Both
+  // footprints must be identical and the target may not move. The result is
+  // atomic, Replace-only, and never contains that overlay target itself.
+  RepairOutcome repair(const ipl::CheckRequestOverlay& request) const;
 
  private:
   class Impl;

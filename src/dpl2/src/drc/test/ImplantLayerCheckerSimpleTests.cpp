@@ -761,13 +761,9 @@ void replaySimpleCase(const SimpleCase& testCase)
     size_t totalViolations = 0;
     std::set<UniqueViolationKey> uniqueViolations;
     for (const PlacedInst& instance : testCase.placedInsts) {
-        const CheckRequest request{instance.instanceId,
-                                   instance.masterId,
-                                   instance.rowId,
-                                   instance.colId,
-                                   instance.orientation};
-        const CheckResult result = checker.checkDirect(request);
-        directtest::expectMatches(input, request, result);
+        const CheckResult result = checker.checkDirect(
+            directtest::requestFor(*helper.getNetwork(), instance));
+        directtest::expectMatches(input, instance, result);
         totalViolations += result.violations.size();
         for (const Violation& violation : result.violations) {
             if (uniqueViolations.insert(uniqueKeyFor(instance, violation))

@@ -250,10 +250,9 @@ struct FillerRepairRequest
   std::vector<Violation> violations;
 };
 
-// Out: the atomic filler edits that make the target transaction legal --
-// checker-verified, or empty. Existing filler VT changes are Replace records;
-// target Delete produces filler Adds and target Add produces filler Deletes
-// plus any Adds needed to refill collateral area.
+// Out: the atomic, checker-verified surrounding-filler edits that make the
+// target transaction legal, or empty. Every edit is a Replace record; the
+// one target overlay is caller-owned and never appears here.
 // `hasSolution` with no changes means there was nothing to fix.
 struct FillerRepairResult
 {

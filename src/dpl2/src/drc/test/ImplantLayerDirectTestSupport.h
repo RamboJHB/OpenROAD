@@ -95,15 +95,38 @@ inline std::set<ViolationSignature> signatures(const CheckResult& result)
     return signatures;
 }
 
+inline CheckRequestOverlay requestFor(Network& network,
+                                      const PlacedInst& placed)
+{
+    Node* const node = network.getNode(placed.instanceId);
+    EXPECT_NE(node, nullptr);
+    if (node == nullptr || node->getMaster() == nullptr) {
+        return {};
+    }
+    const LibCellID master = node->getMaster()->getDbMaster();
+    return CheckRequestOverlay{
+        node,
+        GridX(placed.colId),
+        GridY(placed.rowId),
+        placed.orientation,
+        {{OpType::Delete,
+          node->getDbInst(),
+          UvDist(node->getLeft().v),
+          UvDist(node->getBottom().v),
+          master,
+          master,
+          node->getOrient()}}};
+}
+
 inline void expectMatches(const ImplantInput& input,
-                          const CheckRequest& request,
+                          const PlacedInst& placed,
                           const CheckResult& fastResult)
 {
     SCOPED_TRACE(::testing::Message()
                  << "direct cross-validation request: instance="
-                 << request.instanceId << " master=" << request.masterId
-                 << " row=" << request.rowId << " col=" << request.colId
-                 << " orientation=" << static_cast<int>(request.orientation));
+                 << placed.instanceId << " master=" << placed.masterId
+                 << " row=" << placed.rowId << " col=" << placed.colId
+                 << " orientation=" << static_cast<int>(placed.orientation));
 
     ImplantLayerCheckerHelper helper;
     helper.initialize(input);
@@ -112,7 +135,8 @@ inline void expectMatches(const ImplantInput& input,
     helper.initChecker(direct);
     ASSERT_TRUE(direct.getDiags().empty());
 
-    const CheckResult directResult = direct.checkDirect(request);
+    const CheckResult directResult =
+        direct.checkDirect(requestFor(*helper.getNetwork(), placed));
     EXPECT_EQ(fastResult.isLegal, directResult.isLegal);
     const std::set<ViolationSignature> fastSignatures = signatures(fastResult);
     const std::set<ViolationSignature> directSignatures =
