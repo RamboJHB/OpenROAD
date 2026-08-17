@@ -225,8 +225,10 @@ void ImplantLayerCheckerHelper::initialize(const ImplantInput& input)
         node->setOrient(pi.orientation);
         node->setPlaced(true);
         node->setType(pi.isFiller ? Node::FILLER : Node::CELL);
-        if (pi.masterId >= 0) {
-            node->setMaster(network_->getMaster(pi.masterId));
+        if (pi.masterId >= 0
+            && pi.masterId
+                   < static_cast<MasterId>(network_->getMasters().size())) {
+            node->setMaster(network_->getMasters()[pi.masterId].get());
         }
         node->setDbInst(LeafCellID(0, pi.instanceId));
 
@@ -266,10 +268,11 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
                            return diagnostic.status == "missing_design";
                        }),
         checker.diagnostics_.end());
-    // Preserve the stable (and potentially sparse) Network master ids.
-    checker.masterItems_.clear();
-    for (const MasterItem& inputMaster : inputMasters_) {
-        MasterItem item = inputMaster;
+    // Populate masterItems_ indexed by MasterId (aligned with Network::masters_)
+    const size_t masterCount = network_->getMasters().size();
+    checker.masterItems_.resize(masterCount);
+    for (size_t i = 0; i < masterCount && i < inputMasters_.size(); ++i) {
+        MasterItem item = inputMasters_[i];
         // Override width/height from the MasterItem (from input),
         // but also set siteHeight from rowHeight
         if (item.siteHeight == 0) {
@@ -281,7 +284,7 @@ void ImplantLayerCheckerHelper::initChecker(ImplantLayerChecker& checker)
         if (item.height == 0) {
             item.height = inputRowHeight_;
         }
-        checker.masterItems_[item.masterId] = std::move(item);
+        checker.masterItems_[i] = std::move(item);
     }
 
     checker.buildRules();
@@ -383,8 +386,7 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
 
     // -- masters --
     out << "masters " << checker.masterItems_.size() << "\n";
-    for (const auto& [masterId, master] : checker.masterItems_) {
-        (void) masterId;
+    for (const MasterItem& master : checker.masterItems_) {
         out << master.masterId << ' ' << master.width << ' ' << master.height
             << ' ' << master.isFiller << ' ' << master.siteHeight << ' '
             << std::quoted(master.siteName) << ' ' << master.shapes.size()
@@ -405,8 +407,7 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
     // derived from node coordinates.
     std::vector<PlacedInst> placedInsts;
     if (checker.network_) {
-        for (const auto& [nodeId, nodePtr] : checker.network_->getNodes()) {
-            (void) nodeId;
+        for (const std::unique_ptr<Node>& nodePtr : checker.network_->getNodes()) {
             const Node* node = nodePtr.get();
             if (!node) {
                 continue;

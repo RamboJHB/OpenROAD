@@ -8,10 +8,6 @@
 #include <boost/geometry/geometry.hpp>
 #include <boost/geometry/index/rtree.hpp>
 
-#include <cstddef>
-#include <mutex>
-#include <vector>
-
 // UDM
 #include <phys/fpManager.hh>
 #include <phys/physDesMgr.hh>
@@ -68,18 +64,12 @@ namespace dpl2 {
 class Grid;
 class Node;
 class Master;
-namespace ipl {
-class ImplantLayerChecker;
-}
-namespace fillerRepair {
-class FillerRepairEngine;
-}
-struct Pixel;
+class Pixel;
 class PixelPt;
-struct GridPt;
-struct GridRect;
-struct DbuPt;
-struct DbuRect;
+class GridPt;
+class GridRect;
+class DbuPt;
+class DbuRect;
 class Padding;
 class EdgeTypeTable;
 class Network;
@@ -145,14 +135,9 @@ class DePlace {
                               std::vector<CellChangeRecord>& ccRecords);
   bool isLegal(LeafCellID instId, LibCellID masterId,
       std::vector<CellChangeRecord>& ccRecords);
-  bool findLegal(CellChangeRecord& targetAdd,
-                 int diameter,
-                 std::vector<CellChangeRecord>& fillerChanges) const;
   bool commit(const std::vector<CellChangeRecord>& ccRecords);
   Rect getBoundingBox(const Rect& operableRect);
   PhysDesMgr* getDesMgr() {return desMgr_;};
-  eUNL::Design* getDesign() { return design_; }
-  const eUNL::Design* getDesign() const { return design_; }
   Grid* getGrid() {return grid_.get();};
   const Grid* getGrid() const {return grid_.get();};
   Network* getNetwork() {return network_.get();};
@@ -160,15 +145,10 @@ class DePlace {
   PlacementDRC* getPlacementDRC() {return drc_engine_.get();};
   Rect getCoreArea();
   fillerSetting* getFillerSetting() { return filler_setting_.get();};
-  // [FRPORT] Setup-time publication of one immutable repair revision. Call
-  // after fillerSetting and the complete opto target-master set are known.
-  bool initializeFillerRepair(
-      const std::vector<const PhysLibCell*>& targetMasters = {});
-  bool isFillerRepairReady() const;
-  bool repairFillers(const CellChangeRecord& targetChange,
-                     std::vector<CellChangeRecord>& fillerChanges) const;
-  // [FRPORT] Infrastructure-owned master registration uses the real edge
-  // table. This remains available to callers that only need classification.
+// Network Master construction stays with the infrastructure
+// owner that has the real edge table. It also refreshes existing Node filler
+// types. Call after updating fillerSetting and before a checker may lazily
+// initialize filler repair.
   bool registerFillerRepairMasters();
  private:
   using bgPoint
@@ -191,8 +171,6 @@ class DePlace {
   void importClear();
   void initEdgeTypeTable();
   void createNetwork();
-  bool registerFillerRepairMasters(
-      const std::vector<const PhysLibCell*>& targetMasters);
   void deleteGrid();
   bool hasOneSiteMaster(PhysDesMgr* desMgr);
   void setUpPlacementGroups();
@@ -258,16 +236,6 @@ class DePlace {
   // a removed/replaced overlay).
   bool isLegalProbe(LibCellID masterId, const Node* target,
                     std::vector<CellChangeRecord>& cellChanges);
-  std::pair<int, int> findLegalAdd(
-      const std::string& targetName,
-      const PhysLibCell& master,
-      GridX preferredX,
-      GridY preferredY,
-      GridX xMin,
-      GridX xMax,
-      GridY yMin,
-      GridY yMax,
-      std::vector<CellChangeRecord>& fillerChanges) const;
 
   // Grid initialization
   void initGrid();
@@ -295,16 +263,6 @@ class DePlace {
 
   // filler cell config
   std::unique_ptr<fillerSetting> filler_setting_;
-
-  // [FRPORT] DePlace owns the revision. PlacementDRC owns the checker; the
-  // engine only borrows it, while the checker publishes a non-owning atomic
-  // engine pointer to concurrent check() calls. Declaration order guarantees
-  // the engine is destroyed before PlacementDRC destroys the checker.
-  ipl::ImplantLayerChecker* implant_layer_checker_{nullptr};
-  std::unique_ptr<fillerRepair::FillerRepairEngine> filler_repair_engine_;
-  std::vector<LibCellID> filler_repair_filler_ids_;
-  std::size_t filler_repair_master_count_{0};
-  mutable std::mutex filler_repair_init_mutex_;
 
   // Placement tracking
   std::vector<Node*> placement_failures_;

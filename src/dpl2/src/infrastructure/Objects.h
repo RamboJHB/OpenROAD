@@ -38,8 +38,6 @@ class MasterEdge
   Rect bbox_;
 };
 
-class Pin;
-
 class Master
 {
  public:
@@ -54,8 +52,6 @@ class Master
   void addEdge(const MasterEdge& edge);
   void setBBox(const Rect& box);
   void clearEdges();
-  void addPin(Pin* pin) { pins_.push_back(pin); }
-  const std::vector<Pin*>& getPins() const { return pins_; }
   ADD_SETTER_GETTER_PP(int, Id, id_);
   ADD_SETTER_GETTER_PP(LibCellID, DbMaster, db_master_);
   ADD_SETTER_GETTER_PP(int, BottomPowerType, bottom_pwr_);
@@ -72,11 +68,11 @@ class Master
   // [FRPORT] Authoritative filler classification shared by infra and engine.
   bool is_filler_{false};
   std::vector<MasterEdge> edges_;
-  std::vector<Pin*> pins_;
   int bottom_pwr_{0};
   int top_pwr_{0};
 };
 
+class Pin;
 class Group;
 
 class Node
@@ -218,15 +214,13 @@ class Pin
     Dir_UNKNOWN
   };
 
-  Pin() = default;
+  Pin();
   ADD_SETTER_GETTER_PP(int, Direction, dir_);
   ADD_SETTER_GETTER_PTR_PP(Node, Node, node_);
   ADD_SETTER_GETTER_PTR_PP(Edge, Edge, edge_);
   ADD_SETTER_GETTER_PP(DbuX, OffsetX, offsetX_);
   ADD_SETTER_GETTER_PP(DbuY, OffsetY, offsetY_);
   ADD_SETTER_GETTER_PP(int, PinLayer, pinLayer_);
-  ADD_SETTER_GETTER_PP(int, PinMask, pinMask_);
-  ADD_SETTER_GETTER_PP(Rect, Bbox, bbox_);
   ADD_SETTER_GETTER_PP(DbuX, PinWidth, pinWidth_);
   ADD_SETTER_GETTER_PP(DbuY, PinHeight, pinHeight_);
 
@@ -239,8 +233,6 @@ class Pin
   int dir_{Dir_INOUT};
   // Layer.
   int pinLayer_{0};
-  int pinMask_{0};
-  Rect bbox_;
   // Node and edge for pin.
   Node* node_{nullptr};
   Edge* edge_{nullptr};
