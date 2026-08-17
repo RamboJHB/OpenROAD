@@ -306,7 +306,7 @@ std::pair<int, int> DePlace::findLeg(LeafCellID cellId, int diameter,
  * @return The (left, bottom) UV coordinates of the
  * placed cell, or (-1, -1) on failure.
  */
-std::pair<int, int> DePlace::·(LeafCellID cellId, std::string moduleName)
+std::pair<int, int> DePlace::findLeg(LeafCellID cellId, std::string moduleName)
 {
   std::vector<CellChangeRecord> ignored;
   const std::pair<int, int> result
