@@ -200,7 +200,8 @@ class CheckerHarness
   // presetContext=false leaves the repair context unset so a test can drive
   // the production path instead: the registered setting provider.
   explicit CheckerHarness(const frt::DesignSetup& setup,
-                          bool presetContext = true)
+                          bool presetContext = true,
+                          const char* fillers = kDefaultFillers)
       : objects_(setup)
   {
     if (!objects_.hasDesign() || !objects_.hasInfrastructure()) {
@@ -208,7 +209,7 @@ class CheckerHarness
     }
     filler_setting_ = std::make_unique<dpl2::fillerSetting>(
         objects_.design().design());
-    filler_setting_->addFillerCell(kDefaultFillers);
+    filler_setting_->addFillerCell(fillers);
     checker_ = std::make_unique<dpl2::ipl::ImplantLayerChecker>(
         objects_.infrastructure().grid(),
         objects_.infrastructure().network());
@@ -262,6 +263,12 @@ class CheckerHarness
            && network->updateNode(target, design().desMgr(), master);
   }
 
+  bool replaceCellMaster(frt::CellRole cellRole, frt::MasterRole masterRole)
+  {
+    design().replaceCellMaster(cellRole, masterRole);
+    return syncInfrastructureCell(cellRole) && update();
+  }
+
   // Opto-style entry: the caller owns the record vector and the checker
   // appends repair data into it (it keeps no member copy).
   bool checkTarget()
@@ -277,6 +284,44 @@ class CheckerHarness
                               grid->gridSnapDownY(target),
                               target->getOrient(),
                               fc_record_);
+  }
+
+  bool checkReplacement(frt::CellRole role,
+                        frt::MasterRole replacementRole)
+  {
+    fc_record_.clear();
+    dpl2::Grid* grid = objects_.infrastructure().grid();
+    dpl2::Network* network = objects_.infrastructure().network();
+    dpl2::Node* target = network->getNode(design().cell(role));
+    const eLIB::PhysLibCell& replacementCell
+        = design().master(replacementRole);
+    dpl2::Master* replacement = network->addMaster(
+        replacementCell, *filler_setting_, grid, &noEdgeTypes());
+    if (target == nullptr || target->getMaster() == nullptr
+        || (!target->isStdCell() && !target->isFiller())
+        || replacement == nullptr
+        || replacement->isFiller()) {
+      return false;
+    }
+
+    dpl2::Node temporary;
+    temporary.setId(target->getId());
+    temporary.setMaster(replacement);
+    temporary.setType(dpl2::Node::CELL);
+    temporary.setLeft(target->getLeft());
+    temporary.setBottom(target->getBottom());
+    temporary.setWidth(
+        dpl2::DbuX{replacementCell.getWidth().getStorage()});
+    temporary.setHeight(
+        dpl2::DbuY{replacementCell.getHeight().getStorage()});
+    temporary.setOrient(target->getOrient());
+
+    return checker_->check(
+        &temporary,
+        grid->gridX(target),
+        grid->gridSnapDownY(target),
+        target->getOrient(),
+        fc_record_);
   }
 
   const std::vector<dpl2::CellChangeRecord>& fillerChanges() const
@@ -779,6 +824,63 @@ TEST_P(FillerRepairEngineE2E, CheckerEntryCleanCandidateHasNoChanges)
 
   EXPECT_TRUE(harness.checkTarget());
   EXPECT_TRUE(harness.fillerChanges().empty());
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       SharedCheckerEntrySupportsStdAndFillerTargetsWithoutMutation)
+{
+  CheckerHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.checkerReady());
+  const auto before = harness.design().snapshot();
+
+  EXPECT_TRUE(harness.checkReplacement(
+      frt::CellRole::TargetLeftFiller, frt::MasterRole::BufferLow));
+  EXPECT_TRUE(harness.fillerChanges().empty());
+  EXPECT_EQ(harness.design().snapshot(), before);
+
+  EXPECT_TRUE(harness.checkReplacement(
+      frt::CellRole::Target, frt::MasterRole::TargetNew));
+  EXPECT_EQ(harness.fillerChanges().size(), 1U);
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       EngineAcceptsFillerTargetWithStandardCellReplacement)
+{
+  EngineHarness harness(GetParam().setup);
+  ASSERT_TRUE(harness.engineReady());
+  const auto before = harness.design().snapshot();
+  const auto outcome = harness.engine().repair(
+      harness.design().cell(frt::CellRole::TargetLeftFiller),
+      harness.design().master(frt::MasterRole::BufferLow));
+
+  EXPECT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  EXPECT_TRUE(outcome.changes.empty());
+  EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "TargetNotStdCell"));
+  EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       FillerToStandardCellOverlayCanRepairSurroundingFillers)
+{
+  CheckerHarness harness(GetParam().setup, true, kFillersWithExtra);
+  ASSERT_TRUE(harness.checkerReady());
+  ASSERT_TRUE(harness.replaceCellMaster(
+      frt::CellRole::Target, frt::MasterRole::ExtraUninstantiatedFiller));
+  const auto before = harness.design().snapshot();
+
+  ASSERT_TRUE(harness.checkReplacement(
+      frt::CellRole::Target, frt::MasterRole::TargetNew));
+  ASSERT_EQ(harness.fillerChanges().size(), 1U);
+  const dpl2::CellChangeRecord& change = harness.fillerChanges().front();
+  const auto* changedCell
+      = std::get_if<eUNL::LeafCellID>(&change.cell_data_);
+  ASSERT_NE(changedCell, nullptr);
+  EXPECT_NE(*changedCell, harness.design().cell(frt::CellRole::Target));
+  EXPECT_EQ(change.new_lib_cell_,
+            harness.design().master(frt::MasterRole::RepairFiller)
+                .getLibCellId());
   EXPECT_EQ(harness.design().snapshot(), before);
 }
 

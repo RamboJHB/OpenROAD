@@ -13,11 +13,12 @@ namespace dpl2 {
 // loaded design.
 //
 //   test_filler_repair                          sweep every movable cell
-//   test_filler_repair -inst <inst> -master <name>  one specific VT swap
+//   test_filler_repair -inst <inst> -master <name>  one specific replacement
 //
-// `-inst` takes an instance name, or the numeric node id the sweep prints.
-// `-master` takes the replacement master's cell name. Both must be given
-// together; with neither, the command sweeps.
+// `-inst` takes a standard-cell or filler instance name, or the numeric node
+// id the sweep prints. `-master` takes a same-footprint standard-cell master.
+// Both must be given together; with neither, the command sweeps both std->std
+// and filler->std replacements.
 //
 // It talks to ImplantLayerChecker DIRECTLY, not through DePlace::isLegal /
 // PlacementDRC: this command must be usable before that wiring exists, and
@@ -33,16 +34,16 @@ namespace dpl2 {
 // configured filler master with the infrastructure-owned edge table.
 //
 // No placement is committed. Master registration may extend Network's catalog;
-// proposal Node masters are restored and UDM is never written.
+// proposals use temporary Nodes and UDM is never written.
 class TestFillerRepairCmd : public uvTCL::CciCommand
 {
  public:
   TestFillerRepairCmd()
       : uvTCL::CciCommand("test_filler_repair",
           "check implant DRC and report the filler swaps the repair engine "
-          "proposes; -inst <inst> -master <name> for one specific VT swap",
+          "proposes; -inst <inst> -master <name> for one replacement",
           false /*echo*/, false /*hidden*/, false /*internal*/),
-      instOpt_(this, "inst", "std cell instance name/the node id the sweep prints",
+      instOpt_(this, "inst", "std/filler instance name or printed node id",
                false /*isRequired*/, false /*isHidden*/,false /*isPositional*/),
       masterOpt_(this, "master", "replacement master cell name(same width&height)",
                  false /*isRequired*/, false /*isHidden*/, false /*isPositional*/)

@@ -1555,12 +1555,18 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
     return result;
   }
   const Node* targetNode = network_->getNode(targetId);
-  if (targetNode == nullptr || !targetNode->isStdCell() || inst->isFiller
-      || filler_settings_ == nullptr
+  const bool targetIsStdCell = targetNode != nullptr
+                               && targetNode->isStdCell()
+                               && !inst->isFiller;
+  const bool targetIsFiller = targetNode != nullptr
+                              && targetNode->isFiller()
+                              && inst->isFiller;
+  if ((!targetIsStdCell && !targetIsFiller) || filler_settings_ == nullptr
       || !isStandardCellMaster(*newMaster, *filler_settings_)) {
     addDiagnostic(Severity::Fatal,
                   "TargetNotStdCell",
-                  "target and replacement master must both be standard cells");
+                  "target must be a standard cell or filler and the "
+                  "replacement master must be a standard cell");
     return result;
   }
   const DbCoord replacementWidth = newMaster->getWidth().getStorage();
@@ -1824,12 +1830,14 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   for (const CellChangeRecord& change : planned.changes) {
     const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(change);
     if (change.op_ != dpl2::OpType::Replace || cellId == nullptr
-        || !cellId->isValid() || !change.new_lib_cell_.isValid()) {
+        || !cellId->isValid() || !change.new_lib_cell_.isValid()
+        || network_->getNodeId(*cellId) == targetId) {
       result.hasSolution = false;
       result.changes.clear();
       addDiagnostic(Severity::Fatal,
                     "MappingLost",
-                    "accepted filler record has an invalid UDM id mapping");
+                    "accepted filler record has an invalid UDM id mapping "
+                    "or edits the replaced target");
       return result;
     }
   }

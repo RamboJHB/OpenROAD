@@ -1,6 +1,6 @@
 # fillerRepair ↔ delivered code: contract and change list
 
-Updated: 2026-08-05. Working baseline: `944ce7ba66`.
+Updated: 2026-08-18. Working branch: `codex/filler-repair-hardening`.
 
 Everything fillerRepair needs from outside itself, and every edit it required
 in code it does not own. Edits are tagged `[fillerRepair-fix]` in the source so
@@ -42,6 +42,14 @@ consults the repair engine; when a checker-verified swap set exists, `check()`
 returns true and **appends** the records. The checker stores no filler-change
 member — `getFillerChanges()`, `initFillerRepair()`, `updateFillerRepair()` and
 `precheckFillerRepair()` do not exist.
+
+The same `check()` entry supports std-to-std and filler-to-std. For a
+non-mutating proposal, the temporary Node keeps the committed instance ID and
+supplies the same-footprint standard-cell master and orientation.
+`checkDirect()` already excludes `CheckRequest::instanceId` from the snapshot,
+so the original committed std cell or filler is ignored without rewriting
+Network or UDM. A filler target is also excluded from planner candidates, and
+successful output contains only surrounding filler `Replace` records.
 
 ### Overlay API (used by the engine's private oracle)
 
@@ -340,10 +348,10 @@ metadata disagreement still blocks and returns no partial repair.
 
 ## 6. Verified boundary
 
-91 portable planner cases and 79 portable real-checker cases build, link and
+92 portable planner cases and 79 portable real-checker cases build, link and
 run in **both** harness modes — fake-UDM and the destination-shaped migration
-gate (170/170, normal and ASan). Repository-local fake-UDM engine regression:
-108 cases. Full local suite 278/278, normal and ASan.
+gate (171/171, normal and ASan). Repository-local fake-UDM engine regression:
+117 cases. Full local suite 288/288, normal and ASan.
 
 Those counts build the full `fillerRepair/` verification package. The sibling
 `fillerRepair2/` runtime-only projection is not compiled or compared by these

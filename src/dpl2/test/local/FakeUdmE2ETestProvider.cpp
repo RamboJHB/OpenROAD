@@ -33,6 +33,7 @@ constexpr MasterSpec kMasters[] = {
     {"SL6", 0, 6, false, 0, 1}, {"TL4", 1, 4, false, 0, 1},
     {"TH4", 2, 4, false, 2, 3}, {"FL2", 3, 2, true, 0, 1},
     {"FH2", 4, 2, true, 2, 3},  {"FS2", 5, 2, true, 4, 5},
+    {"BL2", 9, 2, false, 0, 1},
 };
 
 struct Placement
@@ -74,6 +75,7 @@ int masterIndex(MasterRole role)
     case MasterRole::RepairFiller: return 4;
     case MasterRole::ExtraUninstantiatedFiller: return 6;
     case MasterRole::MismatchedTarget: return 8;
+    case MasterRole::BufferLow: return 9;
   }
   return -1;
 }

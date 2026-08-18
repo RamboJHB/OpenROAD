@@ -58,11 +58,11 @@ Footprint footprintOf(const eLIB::PhysLibCell& cell)
                    cell.getHeight().getStorage()};
 }
 
-// Candidates are drawn ONLY from masters already registered in Network. Two
-// reasons: Network::updateNode requires the master to be present, and
-// registering new ones here would grow shared state (and, with no
-// EdgeTypeTable to hand, grow it undecorated) for a command that is supposed
-// to leave the database exactly as it found it.
+// Candidates are drawn ONLY from masters already registered in Network: the
+// checker request carries a Network master ID, and registering new ones here
+// would grow shared state (and, with no EdgeTypeTable to hand, grow it
+// undecorated) for a command that is supposed to leave the database exactly
+// as it found it.
 std::map<Footprint, std::vector<const eLIB::PhysLibCell*>> buildCandidateIndex(
     Network* network)
 {
@@ -133,7 +133,7 @@ const eLIB::PhysLibCell* findMaster(eUNL::Design* design,
 }
 
 // Everything one proposal needs, so the sweep and the targeted path share
-// exactly one definition of "swap it in, ask, put it back".
+// exactly one non-mutating replacement path.
 struct ProposalResult
 {
   bool evaluated = false;
@@ -141,29 +141,44 @@ struct ProposalResult
   std::vector<CellChangeRecord> changes;
 };
 
-ProposalResult evaluateProposal(const ipl::ImplantLayerChecker& checker,
-                                Grid* grid,
-                                Network* network,
-                                PhysDesMgr* desMgr,
-                                Node* node,
-                                const eLIB::PhysLibCell& original,
-                                const eLIB::PhysLibCell& candidate)
+// The temporary Node keeps the committed instance ID and carries only the
+// proposed standard-cell master/placement. checkDirect excludes that instance
+// ID from its snapshot, whether the committed node is a standard cell or a
+// filler, so both replacement kinds use the same checker entry without a
+// Network or UDM rewrite.
+ProposalResult evaluateReplacementProposal(
+    const ipl::ImplantLayerChecker& checker,
+    Grid* grid,
+    Network* network,
+    Node* node,
+    const eLIB::PhysLibCell& candidate)
 {
   ProposalResult result;
-  if (!network->updateNode(node, desMgr, candidate)) {
+  Master* replacement = network->getMaster(candidate.getLibCellId());
+  if (node == nullptr || node->getMaster() == nullptr
+      || replacement == nullptr || replacement->isFiller()) {
     return result;
   }
+
+  Node temporary;
+  temporary.setId(node->getId());
+  temporary.setMaster(replacement);
+  temporary.setType(Node::CELL);
+  temporary.setLeft(node->getLeft());
+  temporary.setBottom(node->getBottom());
+  temporary.setOrigLeft(node->getOrigLeft());
+  temporary.setOrigBottom(node->getOrigBottom());
+  temporary.setWidth(DbuX{candidate.getWidth().getStorage()});
+  temporary.setHeight(DbuY{candidate.getHeight().getStorage()});
+  temporary.setOrient(node->getOrient());
+
   result.evaluated = true;
-  result.legal = checker.check(node, grid->gridX(node),
-                               grid->gridSnapDownY(node), node->getOrient(),
-                               result.changes);
-  // The command is observational: restore the shared Network view even when
-  // the proposal is illegal. UDM was never changed.
-  if (!network->updateNode(node, desMgr, original)) {
-    result.evaluated = false;
-    result.legal = false;
-    result.changes.clear();
-  }
+  result.legal = checker.check(
+      &temporary,
+      grid->gridX(node),
+      grid->gridSnapDownY(node),
+      node->getOrient(),
+      result.changes);
   return result;
 }
 
@@ -283,8 +298,8 @@ bool TestFillerRepairCmd::exec()
       std::cout << "ERROR: no such instance: " << instanceOpt << "\n";
       return false;
     }
-    if (!node->isStdCell()) {
-      std::cout << "ERROR: instance is not a standard cell\n";
+    if (!node->isStdCell() && !node->isFiller()) {
+      std::cout << "ERROR: instance is not a standard cell or filler\n";
       return false;
     }
     if (node->isFixed()) {
@@ -318,9 +333,9 @@ bool TestFillerRepairCmd::exec()
                 << "); repair supports same-size swaps only\n";
       return false;
     }
-    // updateNode resolves the master through Network, so it has to be there
-    // already. Registering it here would leave an undecorated master behind
-    // in shared state.
+    // The checker request resolves its master through Network, so it has to be
+    // there already. Registering it here would leave an undecorated master
+    // behind in shared state.
     if (network->getMaster(candidate->getLibCellId()) == nullptr) {
       std::cout << "ERROR: master " << masterOpt << " is not registered in "
                    "Network (no placed instance uses it)\n";
@@ -333,10 +348,10 @@ bool TestFillerRepairCmd::exec()
     std::cout << "  master: " << nameOf(original->getLibCellId()) << " -> "
               << nameOf(candidate->getLibCellId()) << "\n";
 
-    const ProposalResult proposal = evaluateProposal(
-        checker, grid, network, desMgr, node, *original, *candidate);
+    const ProposalResult proposal = evaluateReplacementProposal(
+        checker, grid, network, node, *candidate);
     if (!proposal.evaluated) {
-      std::cout << "ERROR: could not apply and restore the Network proposal\n";
+      std::cout << "ERROR: could not evaluate the replacement proposal\n";
       return false;
     }
 
@@ -390,9 +405,9 @@ bool TestFillerRepairCmd::exec()
             << "  not clean: " << baselineIllegal << "\n";
 
   // =============================================================================
-  // Phase 2 -- propose same-footprint master swaps.
+  // Phase 2 -- propose same-footprint std -> std and filler -> std swaps.
   // =============================================================================
-  std::cout << "\n--- phase 2: proposed VT swaps (max " << kMaxProposals
+  std::cout << "\n--- phase 2: proposed replacements (max " << kMaxProposals
             << ") ---\n";
   const auto candidates = buildCandidateIndex(network);
 
@@ -409,7 +424,8 @@ bool TestFillerRepairCmd::exec()
       truncated = true;
       break;
     }
-    if (!node || node->isFixed() || !node->isStdCell()) {
+    if (!node || node->isFixed()
+        || (!node->isStdCell() && !node->isFiller())) {
       continue;
     }
     Master* master = node->getMaster();
@@ -428,10 +444,10 @@ bool TestFillerRepairCmd::exec()
         continue;
       }
       ++proposals;
-      const ProposalResult proposal = evaluateProposal(
-          checker, grid, network, desMgr, node.get(), *original, *candidate);
+      const ProposalResult proposal = evaluateReplacementProposal(
+          checker, grid, network, node.get(), *candidate);
       if (!proposal.evaluated) {
-        std::cout << "ERROR: could not apply and restore proposal for node="
+        std::cout << "ERROR: could not evaluate proposal for node="
                   << node->getId() << "\n";
         return false;
       }
@@ -442,7 +458,9 @@ bool TestFillerRepairCmd::exec()
         ++repaired;
         totalSwaps += static_cast<int>(proposal.changes.size());
         if (reported++ < kMaxReportedLines) {
-          std::cout << "  repairable: node=" << node->getId() << "  "
+          std::cout << "  repairable "
+                    << (node->isFiller() ? "filler->std" : "std->std")
+                    << ": node=" << node->getId() << "  "
                     << nameOf(originalId) << " -> "
                     << nameOf(candidate->getLibCellId())
                     << "  swaps=" << proposal.changes.size() << "\n";
@@ -451,7 +469,9 @@ bool TestFillerRepairCmd::exec()
       } else {
         ++unrepairable;
         if (reported++ < kMaxReportedLines) {
-          std::cout << "  NO repair: node=" << node->getId() << "  "
+          std::cout << "  NO repair "
+                    << (node->isFiller() ? "filler->std" : "std->std")
+                    << ": node=" << node->getId() << "  "
                     << nameOf(originalId) << " -> "
                     << nameOf(candidate->getLibCellId()) << "\n";
         }
@@ -464,7 +484,7 @@ bool TestFillerRepairCmd::exec()
   std::cout << "\n--- Result ---\n";
   std::cout << "  baseline cells checked : " << baselineChecked << "\n";
   std::cout << "  baseline not clean     : " << baselineIllegal << "\n";
-  std::cout << "  VT proposals evaluated : " << proposals
+  std::cout << "  replacements evaluated  : " << proposals
             << (truncated ? "  (stopped at the cap)" : "") << "\n";
   std::cout << "    legal without repair : " << cleanRightAway << "\n";
   std::cout << "    repaired by fillers  : " << repaired << "  ("

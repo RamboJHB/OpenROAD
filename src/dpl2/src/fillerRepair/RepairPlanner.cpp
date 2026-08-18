@@ -678,6 +678,12 @@ RepairWindow buildWindow(const TargetPlace& anchor,
   XInterval x = anchorSpan;
 
   const auto include = [&](const PlacedInstance& inst, bool isBridge) {
+    // The committed target may itself be a filler. It is replaced by the
+    // temporary standard cell and must never also be offered as a surrounding
+    // filler swap.
+    if (inst.id == anchor.instanceId) {
+      return;
+    }
     editable.insert(inst.id);
     if (isBridge) {
       bridge.insert(inst.id);
@@ -747,6 +753,8 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                 current.editableFillers.end());
   std::set<InstanceId> bridge(current.bridgeFillers.begin(),
                               current.bridgeFillers.end());
+  editable.erase(anchor.instanceId);
+  bridge.erase(anchor.instanceId);
   XInterval x = current.x;
 
   bool growLeft = false;
@@ -804,6 +812,9 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
         hasSeed = true;
       }
       for (const InstanceId id : current.editableFillers) {
+        if (id == anchor.instanceId) {
+          continue;
+        }
         const PlacedInstance* inst = view.instance(id);
         if (inst == nullptr || inst->rowId != rowId) {
           continue;
@@ -826,7 +837,9 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
              i >= 0 && added < step;
              --i) {
           const XInterval span = instanceSpan(view, all[i]);
-          if (span.xh > leftFrontier || editable.count(all[i].id) > 0) {
+          if (all[i].id == anchor.instanceId
+              || span.xh > leftFrontier
+              || editable.count(all[i].id) > 0) {
             continue;
           }
           if (!all[i].isFiller || span.xh < leftFrontier) {
@@ -847,7 +860,9 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
              i < static_cast<int>(all.size()) && added < step;
              ++i) {
           const XInterval span = instanceSpan(view, all[i]);
-          if (span.xl < rightFrontier || editable.count(all[i].id) > 0) {
+          if (all[i].id == anchor.instanceId
+              || span.xl < rightFrontier
+              || editable.count(all[i].id) > 0) {
             continue;
           }
           if (!all[i].isFiller || span.xl > rightFrontier) {

@@ -1,7 +1,7 @@
 # 功能规格 — Filler VT Overlay 修复 V2.1(checker-guided,本阶段 swap-only)
 
-状态:**V2.1 定稿**。分支:`claude/wizardly-carson-secahu`。基线:`2023-base`。
-最后更新 2026-08-05。`src/dpl2/src/fillerRepair` 是完整 verification source of
+状态:**V2.1 定稿**。分支:`codex/filler-repair-hardening`。基线:`2023-base`。
+最后更新 2026-08-18。`src/dpl2/src/fillerRepair` 是完整 verification source of
 truth；`src/dpl2/src/fillerRepair2` 是从它裁出的 runtime-only migration payload。
 接口与行为同时对齐 `src/dpl2/src/drc` checker 源码。
 
@@ -14,7 +14,8 @@ V2.1 相对 V2 是一次 reviewer 驱动的修订,聚焦三处高价值改动:**
 差异清单见 [§12](#12-与-v1-的差异清单)。V1 存档文件(`spec_v1` / `addendum_v1`)
 已作为冗余文档移除,其内容被 §12 差异表完整覆盖。
 
-**一句话**:opto/ECO 对一个 std cell 提议 VT/type overlay;
+**一句话**:opto/ECO 对一个已提交 std cell 或 filler 提议同 footprint 的 std-cell
+overlay;
 repair 在局部窗口内生成 **swap move**
 (同位置同尺寸换 filler master),按启发式排序后**枚举 move 子集并
 成批交给 checker overlay API 验证**,用同一 `guardRegion` 下的 baseline-delta clean 作为
@@ -64,7 +65,8 @@ V2 定稿并完成最初的 planner 实现后,拿到真实 checker 源码,做了
 
 1. infrastructure 在进入 opto/repair 前保证全设计 placement 合法；repair 自己
    对可编辑行重复区域 gap/overlap gate，失败即返回 Warning 和空 changes。
-2. opto/ECO **一次提议一个 std cell** 的 VT/type overlay(master 替换,位置不变)。
+2. opto/ECO **一次提议一个 std cell 或 filler** 被同 footprint 的 std-cell master
+   替换(位置不变)。
 3. 该 cell 周围的 filler 仍保留旧 implant type,在 cell/filler 或 filler/filler 边界上
    产生 implant 层 DRC 违例。
 4. checker 对 changed cell 做 target-local 检查,把完整 violation snapshot 交给
@@ -103,8 +105,9 @@ filler)。因此 `Violation` 是 constraint 不是唯一 root cause,repair 的�
 **anchor 邻域的 violation cluster + 候选 filler 集合**,目标是让整个 cluster 在
 checker result 中 clean。
 
-**`targetPlace` 是 std-cell anchor,不是 repair window**。它指向被 opto 改动的
-std cell 的 candidate placement(instanceId/masterId/rowId/x/orientation),供 checker
+**`targetPlace` 是 replacement anchor,不是 repair window**。它指向被 opto 替换的
+已提交 std cell/filler 实例和临时 std-cell master
+(instanceId/masterId/rowId/x/orientation),供 checker
 重建局部 check context。repair 的"窗口"由 pure planner 生成(§6.3),每个
 checker request 额外携带由窗口外扩得到的 `guardRegion`。
 
@@ -222,14 +225,16 @@ setup (一次): DePlace 注册 fillerSetting provider
   (无 DePlace owner 的 harness 改用 setFillerRepairContext(desMgr, &setting))
 
 opto: std::vector<CellChangeRecord> fcRecord;            [调用方持有]
-opto: checker.check(node, x, y, orient, fcRecord)        [pre-commit]
-  → checkDirect(request).isLegal
+opto: checker.check(tempNode, x, y, orient, fcRecord)   [std/filler -> std]
+      tempNode 沿用 committed instance ID，携带 replacement master
+     → checkDirect(request).isLegal
+        (snapshot 排除 request.instanceId 上的 committed std/filler)
      → true : 直接返回,repair 从不介入
      → false: repairFillers(request, fcRecord)
         → 懒建 engine(缺配置或 init 失败都 fail closed 并关闭该 checker 的 repair)
         → 区域 precheck(只查可编辑行的 gap/overlap)
            → 不合法: Warning(PrecheckFailed) + 不做修复
-        → 校验 target 的 std-cell/type/width/height
+        → 校验 target 是 std cell/filler、replacement 是 std cell，且 footprint 相同
         → 初始快照: target overlay + 零 filler 改动
            → 无 violation: success + 空改动
            → 有 violation: internal::RepairPlanner
@@ -241,7 +246,8 @@ opto/infrastructure: commit target + fcRecord
 ```
 
 checker request 的 master 来自 `Node::getMaster()->getId()`,因此已在 Network 中。
-engine 先验证 std-cell/type/width/height;若 DePlace 在 init 后才注册该 master,
+engine 先验证 target 类型、replacement std-cell 类型与 width/height；若 DePlace
+在 init 后才注册该 master,
 则重建 private checker/planner snapshot。完整 verification package 的 direct
 UDM-handle overload 只供 focused engine tests；推荐迁移的 `fillerRepair2` 不包含
 它。snapshot、candidate catalog 与 checker overlay client 都是
@@ -309,12 +315,12 @@ runtime-only 投影，复制其内容到目的地已有的 `fillerRepair/` 路�
   checker request master 若在快照建立后才加入 Network,repair 在验证后触发
   checker/snapshot 重建。infrastructure 负责同步 Node 的物理状态;repair 不负责
   更新 Node,也不负责发现新增/删除的 UDM instance。
-- 91 个可移植 planner unit tests 与 database-free doubles 位于
+- 92 个可移植 planner unit tests 与 database-free doubles 位于
   `test/` 根目录并与 E2E test 同级;不 include local fake UDM tree/provider。
 - 79 个可移植 E2E 位于 `test/FillerRepairCheckerE2ETest.cpp`;通过 final checker 的
   `ImplantLayerCheckerHelper` 直接构造 7-row dense input,不读 DEF/LEF,不需要
   目的地实现 UDM fixture/provider。
-- 108 个 checker/engine cases、fake UDM include
+- 117 个 checker/engine cases、fake UDM include
   tree/provider/runner 全部位于交付目录外的 `src/dpl2/test/local`;
 - 完整目录的 CMake 暴露 `dpl2::fillerRepair`(runtime,C++20)和
   `dpl2::fillerRepairPlanner`(pure pipeline,C++17)，并拥有 portable tests 与
@@ -379,9 +385,9 @@ checker API 与 infrastructure API 仍可协商修改;本节是推荐形态。�
 ### 5.1 共享基础类型
 
 ```cpp
-struct TargetPlace   // 实现中可继续命名为 CheckRequest,语义必须是 std-cell anchor
+struct TargetPlace   // 实现中可继续命名为 CheckRequest,语义是 replacement anchor
 {
-    InstanceId instanceId = 0;  // opto changed std cell
+    InstanceId instanceId = 0;  // committed std cell or filler being replaced
     MasterId masterId = 0;      // new/candidate std-cell master
     RowId rowId = 0;
     DbCoord x = 0;
@@ -723,7 +729,7 @@ spec 要求之外的功能。不可修的终判只有一个来源:④OracleGate 
 
 | 级别 | 内容 |
 |---|---|
-| L0 | violation participants ∪ anchor std cell 左右相邻 filler ∪ bridge filler(见下)——最小 participant/bridge 窗口 |
+| L0 | violation participants ∪ replacement anchor 左右相邻 filler ∪ bridge filler(见下)——最小 participant/bridge 窗口 |
 | adaptive-L1 | 受控渐进扩窗:每步优先向"当前 best 非-clean candidate 的 blocking violation 所在侧"扩入固定 K 个相邻 filler(K≈2,纵向含耦合相邻行 ±1);若该单侧无法加入 filler,确定性尝试反方向;重算完备枚举判定并循环到扩窗截止 |
 
 - intra-row violation 从 L0 入,inter-row 从含 ±1 行的 L0 入(bridge 集合天然覆盖)。
@@ -745,7 +751,7 @@ spec 要求之外的功能。不可修的终判只有一个来源:④OracleGate 
   按既有 **truncated** 语义收尾(不得声明 definitive),仍然不返回 partial。
 - multi-height 预留规则:窗口按行扩展时,跨行 instance 把它占用的所有行拉进同一窗口。
 
-**bridge filler 默认必选**(不是兜底):与 anchor std cell 左右接触的 filler、上下行
+**bridge filler 默认必选**(不是兜底):与 replacement anchor 左右接触的 filler、上下行
 中与 anchor x-boundary 对齐的 filler、宽度 ≤ rule window 或明显短于相邻大 filler 的
 短 filler、夹在两个不同 VT 大区之间的短 filler run——即使不在任何 participant list
 中也进入候选集。§1.2 的例子里正解就是这类 filler。
@@ -811,7 +817,7 @@ size-1/2 子集就等价于 anchor-follow 组合,不需要独立的种子注入�
 |---|---|---|
 | 1 | `directParticipant` | filler 出现在 violation participants 中 |
 | 2 | `bridgeScore` | 位于 anchor 与相邻大 implant 区之间的短 filler |
-| 3 | `cellAnchorVote` | targetVT == anchor std cell 的新 VT(本问题最常见正解方向) |
+| 3 | `cellAnchorVote` | targetVT == replacement std cell 的新 VT(本问题最常见正解方向) |
 | 4 | `width` | 更窄优先 |
 | 5 | `position` | x 更小优先,再 row 更小,保证 deterministic |
 
@@ -1037,7 +1043,7 @@ Node filler flag 与 configured allow-list 是 engine authority，UDM macro-type
 
 ## 10. 测试集
 
-当前 91 个 planner cases 是独立 GoogleTests,位于交付目录中的
+当前 92 个 planner cases 是独立 GoogleTests,位于交付目录中的
 `fillerRepair/test/`,并与 79 个 portable E2E cases 同级;E2E cases 集中在
 `fillerRepair/test/FillerRepairCheckerE2ETest.cpp`。fixture 通过
 `ImplantLayerCheckerHelper` 构造 7 行 × 200 sites 的 Grid/Network/checker input;
@@ -1048,9 +1054,9 @@ filler:std-cell 比例。dense placement 风险、快速失败与 span-rewrite �
 `docs/filler_repair_dense_placement_analysis.md`;它是 future design note,不改变本阶段
 swap-only normative contract。
 
-108 个 checker/engine fake-UDM cases、provider 与完整 local fake regression 均位于
-`src/dpl2/test/local`,不进入迁移目录。完整 suite 为 278/278；portable migration
-gate 为 170/170，normal 与 ASan 均通过。两套 gate 构建完整 `fillerRepair/`，不自动
+117 个 checker/engine fake-UDM cases、provider 与完整 local fake regression 均位于
+`src/dpl2/test/local`,不进入迁移目录。完整 suite 为 288/288；portable migration
+gate 为 171/171，normal 与 ASan 均通过。两套 gate 构建完整 `fillerRepair/`，不自动
 覆盖 runtime-only `fillerRepair2/` 镜像。
 
 前置与协议:
@@ -1127,7 +1133,7 @@ gate 语义:
 
 ## 11. 实现状态
 
-swap-only 功能已实现并于 2026-08-04 重新验证:
+same-footprint replacement + swap-only repair 已实现并于 2026-08-18 重新验证:
 
 - pure planner 完整落地:`Swap`/cache key、violation 归一化 + signature、
   L0 + adaptive-L1 window + guardRegion、swap 生成器、Ranker(5 特征,
@@ -1140,14 +1146,14 @@ swap-only 功能已实现并于 2026-08-04 重新验证:
   portable final-checker GoogleTest E2E、pure precheck sweep 与 CMake/CTest 接入;
   编译由模块自己的 `src/dpl2/src/fillerRepair/CMakeLists.txt` 拥有
   (target `dpl2::fillerRepair` / `dpl2::fillerRepairPlanner`)。
-- 91 个 planner unit tests、79 个 portable checker/planner/precheck cases 与 108 个
+- 92 个 planner unit tests、79 个 portable checker/planner/precheck cases 与 117 个
   fake-UDM checker/engine tests 全为 GoogleTest;
-  91 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
+  92 个 planner tests 与 database-free doubles 已移入 `fillerRepair/test/` 根目录,
   和 helper-built portable E2E 一起迁移;fake UDM checker/engine suite 留在 local;
   regional precheck/repair 均 non-mutating;
   runtime integration 使用 checker `check()` 预留点与 fillerRepair;
   Network Node 同步由 infrastructure 独立负责,checker DRC 算法未修改。
-  2026-08-04 完整 local suite 为 278/278、migration gate 为 170/170，normal 与
+  2026-08-18 完整 local suite 为 288/288、migration gate 为 171/171，normal 与
   ASan 均通过。
 - `fillerRepair2/` 提供 destination-only runtime projection：只保留 C++20 runtime
   target，移除 tests、standalone discovery 与 test-only APIs。它必须随完整目录的

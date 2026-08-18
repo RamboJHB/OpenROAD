@@ -1890,6 +1890,61 @@ void testWindowL0ExactMembership()
   EXPECT_TRUE(!window.containsEditable(202));
 }
 
+void testWindowExcludesFillerAnchor()
+{
+  fr::TestPlacementView design = makeLibrary();
+  design.addRow(0, 0, 12)
+      .place(99, fillerMaster(4, kVt1), 0, 0)
+      .place(100, fillerMaster(4, kVt1), 0, 4)
+      .place(101, fillerMaster(4, kVt1), 0, 8);
+
+  fr::FillerRepairRequest request;
+  request.targetPlace = anchorPlace(design, 100);
+  request.targetPlace.masterId = cellMaster(kVt2);
+  fr::Violation violation = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {4, 8});
+  fr::ViolationParticipant target;
+  target.instanceId = 100;
+  target.masterId = fillerMaster(4, kVt1);
+  target.rowId = 0;
+  target.xRange = {4, 8};
+  target.isFiller = true;
+  violation.participants = {target};
+  request.violations = {violation};
+
+  const auto normalized = fr::normalizeViolations(
+      request, fr::DebugLog(verbose()));
+  fr::RepairWindow window = fr::buildWindow(request.targetPlace,
+                                             normalized,
+                                             design,
+                                             1,
+                                             fr::DebugLog(verbose()));
+  EXPECT_TRUE(!window.containsEditable(100));
+  EXPECT_TRUE(window.containsEditable(99));
+  EXPECT_TRUE(window.containsEditable(101));
+
+  // Even a stale incoming window cannot reintroduce the replacement target
+  // during adaptive growth.
+  window.editableFillers.push_back(100);
+  window.bridgeFillers.push_back(100);
+  const fr::RepairWindow expanded = fr::expandWindowAdaptive(
+      window,
+      request.targetPlace,
+      request.violations,
+      design,
+      1,
+      fr::DebugLog(verbose()));
+  EXPECT_TRUE(!expanded.containsEditable(100));
+  EXPECT_TRUE(std::find(expanded.bridgeFillers.begin(),
+                        expanded.bridgeFillers.end(),
+                        100)
+              == expanded.bridgeFillers.end());
+}
+
 void testWindowBridgeConditionsEach()
 {
   // Vt Type: {1,2} | Widths: {2,4} | cell type: 1=std, 0=filler
@@ -5208,6 +5263,7 @@ void registerPlannerTests()
       {"relatedness", testRelatedness},
       {"window_L0", testWindowL0},
       {"window_L0_exact_membership", testWindowL0ExactMembership},
+      {"window_excludes_filler_anchor", testWindowExcludesFillerAnchor},
       {"window_bridge_conditions_each", testWindowBridgeConditionsEach},
       {"window_at_design_edges", testWindowAtDesignEdges},
       {"guard_quantization_contains_window_and_is_stable",

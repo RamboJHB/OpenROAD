@@ -55,7 +55,8 @@ enum class MasterRole
   TargetNew,
   RepairFiller,
   ExtraUninstantiatedFiller,
-  MismatchedTarget
+  MismatchedTarget,
+  BufferLow
 };
 
 struct DesignSetup

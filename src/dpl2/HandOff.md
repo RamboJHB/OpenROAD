@@ -1,14 +1,14 @@
 # HandOff — filler VT overlay repair
 
-Updated: 2026-08-05. Branch: `claude/wizardly-carson-secahu`.
+Updated: 2026-08-18. Branch: `codex/filler-repair-hardening`.
 
-What this feature does: opto changes one standard cell's VT. The fillers around
-it still carry the old implant type, which is an MW/MS violation. This finds a
-set of same-size filler master swaps that removes the violation, validates them
-with the real `ImplantLayerChecker`, and hands the records back to opto to
-commit. It never mutates UDM placement or Grid. During initialization it may
-register configured masters; infrastructure has already classified filler
-Masters and Nodes from `fillerSetting::core_`.
+What this feature does: opto replaces one committed standard cell or filler
+with a same-footprint standard-cell master. The fillers around it may then
+violate implant MW/MS. This finds same-size surrounding filler master swaps,
+validates them with the real `ImplantLayerChecker`, and hands the records back
+to opto to commit. It never mutates UDM placement or Grid. During
+initialization it may register configured masters; infrastructure has already
+classified filler Masters and Nodes from `fillerSetting::core_`.
 
 ---
 
@@ -35,11 +35,11 @@ Verification results follow:
 
 | | |
 |---|---|
-| local suite | 278/278, normal and ASan |
-| migration gate (destination code path) | 170/170, normal and ASan |
+| local suite | 288/288, normal and ASan |
+| migration gate (destination code path) | 171/171, normal and ASan |
 | `fillerRepair2` manual strict syntax check | both runtime sources, C++20, `-Wall -Wextra -Werror`; not part of CTest |
 | checker formatting | four checker files, 120-column profile; identical non-whitespace content before and after |
-| `testFillerRepairCmd` | source call sites synchronized; not compiled in this Codespace because the app/CCI framework headers are unavailable; **never linked** here |
+| `testFillerRepairCmd` | C++20 `-Wall -Wextra -Werror` syntax check passed with temporary CCI command-header shims; **never linked** here |
 
 ---
 
@@ -59,8 +59,8 @@ destination. `fillerRepair2/README.md` is the minimal copy/link instruction;
 
 `fillerRepair/` is the source of truth. `fillerRepair2/` is a hand-maintained
 runtime projection, not a generated directory: every runtime algorithm, API,
-wire or diagnostic change must be mirrored before migration. The 278-test local
-suite, 170-test migration gate and standalone module build all compile the full
+wire or diagnostic change must be mirrored before migration. The 288-test local
+suite, 171-test migration gate and standalone module build all compile the full
 directory. They do **not** establish parity with `fillerRepair2/`; build that
 payload against the destination dependencies before copying it into place.
 
@@ -93,7 +93,9 @@ suite, migration gate, and an ASan full run before enabling repair.
 
 ## 2. The caller boundary
 
-`ImplantLayerChecker::check()` is the only entry. Opto owns the record vector;
+`ImplantLayerChecker::check()` is the shared std-to-std and filler-to-std
+entry. A non-mutating caller passes a temporary standard-cell Node carrying
+the committed instance ID and replacement master. Opto owns the result vector;
 the checker appends into it and keeps no filler-change member state.
 
 Before the test command constructs its checker, it calls
@@ -108,6 +110,18 @@ if (legal && !fcRecord.empty()) {
   commitFillerSwaps(fcRecord);   // commit stays with opto/infrastructure
 }
 ```
+
+For filler -> std, pass a temporary Node with the filler instance ID. The
+position and footprint must match:
+
+```cpp
+bool legal = checker.check(&temporaryStdCell, x, y, orient, fcRecord);
+```
+
+`checkDirect()` excludes `CheckRequest::instanceId` from the snapshot, so the
+committed cell at that position is ignored whether it is a std cell or filler.
+The target is the replacement anchor, not an editable repair filler; the
+planner and final output also explicitly exclude its instance ID.
 
 Each current repair entry is
 `CellChangeRecord{Replace, CellData{LeafCellID}, x_, y_,
@@ -351,12 +365,12 @@ file must stay: the checker uses it.
 
 | | |
 |---|---|
-| Portable planner tests | 91 |
+| Portable planner tests | 92 |
 | Portable real-checker E2E | 79 |
-| Repository-local engine regression | 108 (fake UDM, not migrated) |
-| Full local suite | 278/278, normal and ASan |
-| Migration gate (destination code path) | 170/170, normal and ASan |
-| Standalone module build | 170/170 |
+| Repository-local engine regression | 117 (fake UDM, not migrated) |
+| Full local suite | 288/288, normal and ASan |
+| Migration gate (destination code path) | 171/171, normal and ASan |
+| Standalone module build | 171/171 |
 | Runtime-only `fillerRepair2` | manual strict syntax check; no automated parity/build gate |
 
 The migration gate builds the full verification package the way a destination does

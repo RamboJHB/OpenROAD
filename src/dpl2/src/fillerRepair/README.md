@@ -1,6 +1,6 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-08-05.
+Updated: 2026-08-18.
 
 Working baseline: **`944ce7ba66`**. The only retained later changes are the
 current `test_filler_repair` command and the infrastructure-owned
@@ -8,9 +8,12 @@ current `test_filler_repair` command and the infrastructure-owned
 Planner, engine and checker behavior in this tree otherwise matches that
 baseline.
 
-`ImplantLayerChecker::check()` is the caller-facing entry. Opto owns the
-`CellChangeRecord` vector; the checker appends checker-verified repair swaps
-into that reference and keeps **no** filler-change member state. The
+`ImplantLayerChecker::check()` is shared by std-to-std and filler-to-std.
+For a non-mutating proposal, the caller supplies a temporary standard-cell
+Node with the committed instance ID and the replacement master. The checker
+excludes the committed Node at that ID from its snapshot. Opto owns the
+`CellChangeRecord` vector; the checker appends checker-verified surrounding
+filler swaps into that reference and keeps **no** filler-change member state. The
 `FillerRepairEngine` is created **lazily** on the first DRC-illegal check —
 a run whose checks all pass never pays engine initialization.
 
@@ -200,7 +203,7 @@ nothing else, which is what keeps it database-free and portable.
 | `Debug.h` | `[fr][stage]` transcript (`cat`, `show`, `DebugLog`) |
 | `CMakeLists.txt` | the module's own targets — `dpl2::fillerRepair` (payload, C++20) and `dpl2::fillerRepairPlanner` (pure pipeline, C++17); a destination adds the directory and links a target rather than listing sources |
 | `test/CMakeLists.txt` | the portable tests, added when `DPL2_FILLER_REPAIR_BUILD_TESTS=ON` |
-| `test/RepairPlannerTest.cpp` | 91 portable database-free planner cases; the two seam doubles and the synthetic master catalog are folded into this one file |
+| `test/RepairPlannerTest.cpp` | 92 portable database-free planner cases; the two seam doubles and the synthetic master catalog are folded into this one file |
 | `test/FillerRepairCheckerE2ETest.cpp` | 79 portable real-checker, repair-window and planner-to-checker cases (see the fixture model below) |
 
 ## Debug transcript
@@ -306,12 +309,12 @@ Full migration instructions, including the destination checklist, are in
 
 ## Verification
 
-- portable planner: 91 cases; portable checker E2E: 79 cases (both compile,
+- portable planner: 92 cases; portable checker E2E: 79 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
-- repository-local fake-UDM engine regression: 108 cases under
+- repository-local fake-UDM engine regression: 117 cases under
   `src/dpl2/test/local/`.
-- 2026-08-04 full local suite: 278/278 normal and ASan; migration gate
-  170/170 normal and ASan; standalone module build 170/170.
+- 2026-08-18 full local suite: 288/288 normal and ASan; migration gate
+  171/171 normal and ASan; standalone module build 171/171.
 
 ### Search cost
 
