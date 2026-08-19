@@ -58,12 +58,20 @@ namespace dpl2::fillerRepair {
 eUTL::PhysOrientation toCellChangeOrientation(Orient orientation)
 {
   switch (orientation) {
+    case Orient::R90:
+      return eUTL::PhysOrientationE::R90;
     case Orient::R180:
       return eUTL::PhysOrientationE::R180;
+    case Orient::R270:
+      return eUTL::PhysOrientationE::R270;
     case Orient::MX:
       return eUTL::PhysOrientationE::MX;
+    case Orient::MX90:
+      return eUTL::PhysOrientationE::MX90;
     case Orient::MY:
       return eUTL::PhysOrientationE::MY;
+    case Orient::MY90:
+      return eUTL::PhysOrientationE::MY90;
     case Orient::R0:
       break;
   }
