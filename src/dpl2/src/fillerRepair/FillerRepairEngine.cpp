@@ -362,6 +362,16 @@ std::string orientationName(eUTL::PhysOrientation orientation)
   return cat("unknown(", static_cast<int>(orientation.getValue()), ")");
 }
 
+const char* operationName(dpl2::OpType operation)
+{
+  switch (operation) {
+    case dpl2::OpType::Replace: return "Replace";
+    case dpl2::OpType::Delete: return "Delete";
+    case dpl2::OpType::Add: return "Add";
+  }
+  return "Unknown";
+}
+
 const char* polarityName(BandPolarity polarity)
 {
   return polarity == BandPolarity::P ? "P" : "N";
@@ -1324,6 +1334,108 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
   changes.reserve(legalIndices.size());
   for (const size_t index : legalIndices) {
     changes.push_back(requests[index].fillerChanges);
+  }
+
+  if (log_.enabled()) {
+    const auto describeMaster = [this](MasterId masterId) {
+      const MasterInfo* info = masterInfo(masterId);
+      return info != nullptr
+                 ? cat("{networkId=", masterId, " found=1 width=", info->width,
+                       " height=", info->height, " filler=", info->isFiller,
+                       " vt=", info->vt, " bottomPolarity=",
+                       polarityName(info->bottomBandPolarity), '}')
+                 : cat("{networkId=", masterId, " found=0}");
+    };
+    log_.msg(
+        "proposal",
+        cat("batch payload: inputRequests=", requests.size(),
+            " passedProposals=", changes.size(),
+            " precheckFiltered=", requests.size() - changes.size(),
+            " target{instance=", target.instanceId,
+            " master=", target.masterId, " row=", target.rowId,
+            " col=", target.colId,
+            " orient=", orientationName(target.orientation),
+            " masterInfo=", describeMaster(target.masterId),
+            "} guard{planner=", show(first.guardRegion),
+            " checkerDbu=[", guard.getXL().getStorage(), ',',
+            guard.getYL().getStorage(), ",", guard.getXH().getStorage(), ',',
+            guard.getYH().getStorage(), "]}"));
+    for (size_t proposalIndex = 0; proposalIndex < changes.size();
+         ++proposalIndex) {
+      const size_t sourceIndex = legalIndices[proposalIndex];
+      const OracleRequest& sourceRequest = requests[sourceIndex];
+      log_.msg("proposal",
+               cat("proposal[", proposalIndex,
+                   "]: sourceRequestIndex=", sourceIndex,
+                   " requestId=", sourceRequest.requestId,
+                   " changes=", changes[proposalIndex].size()));
+      for (size_t changeIndex = 0;
+           changeIndex < changes[proposalIndex].size();
+           ++changeIndex) {
+        const CellChangeRecord& change
+            = changes[proposalIndex][changeIndex];
+        const eUNL::LeafCellID* cellId
+            = cellChangeRecordLeafCellId(change);
+        const std::string* cellName
+            = std::get_if<std::string>(&change.cell_data_);
+        const int nodeId
+            = cellId != nullptr ? network_->getNodeId(*cellId) : -1;
+        const Node* node = nodeId >= 0 ? network_->getNode(nodeId) : nullptr;
+        const PlacedInstance* snapshot
+            = nodeId >= 0 ? instance(static_cast<InstanceId>(nodeId)) : nullptr;
+        const int originalMasterId
+            = network_->getMasterId(change.orig_lib_cell_);
+        const int replacementMasterId
+            = network_->getMasterId(change.new_lib_cell_);
+        const int nodeMasterId
+            = node != nullptr && node->getMaster() != nullptr
+                  ? node->getMaster()->getId()
+                  : -1;
+        const std::string cellData
+            = cellId != nullptr
+                  ? cat("LeafCellID{index=", cellId->getIndexValue(),
+                        " valid=", cellId->isValid(), "}")
+                  : cellName != nullptr
+                        ? cat("name{value=\"", *cellName, "\"}")
+                        : std::string("unknown");
+        const std::string nodeData
+            = node != nullptr
+                  ? cat("{found=1 id=", node->getId(),
+                        " master=", nodeMasterId,
+                        " type=", static_cast<int>(node->getType()),
+                        " filler=", node->isFiller(),
+                        " stdCell=", node->isStdCell(),
+                        " placed=", node->isPlaced(),
+                        " left=", node->getLeft().v,
+                        " bottom=", node->getBottom().v,
+                        " orient=", orientationName(node->getOrient()), '}')
+                  : std::string("{found=0}");
+        const std::string snapshotData
+            = snapshot != nullptr
+                  ? cat("{found=1 id=", snapshot->id,
+                        " master=", snapshot->masterId,
+                        " row=", snapshot->rowId, " x=", snapshot->x,
+                        " orient=",
+                        orientationName(toUdmOrient(snapshot->orientation)),
+                        " filler=", snapshot->isFiller, '}')
+                  : std::string("{found=0}");
+        log_.msg(
+            "proposal",
+            cat("proposal[", proposalIndex, "] change[", changeIndex,
+                "]: op=", operationName(change.op_), '(',
+                static_cast<int>(change.op_), ") cell=", cellData,
+                " nodeId=", nodeId,
+                " record{origLib=", change.orig_lib_cell_.getIndexValue(),
+                " newLib=", change.new_lib_cell_.getIndexValue(),
+                " x=", change.x_.getStorage(),
+                " y=", change.y_.getStorage(),
+                " orient=", orientationName(change.orientation_),
+                "} node=", nodeData, " snapshot=", snapshotData,
+                " originalMaster=", describeMaster(originalMasterId),
+                " replacementMaster=", describeMaster(replacementMasterId)));
+      }
+    }
+    log_.checkpoint("proposal", "batch payload complete");
   }
 
   // [PORT-ADAPT] ImplantLayerChecker::checkPlaceWithOverlays -- THE call the
