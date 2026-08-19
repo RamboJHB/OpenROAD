@@ -53,13 +53,17 @@ enum class BandPolarity : uint8_t
   P
 };
 
-// Placement orientation. UDM has its own richer type; the search keeps this
+// Preserve all eight UDM axis-aligned orientations without a UDM dependency.
 enum class Orient : uint8_t
 {
   R0,
+  R90,
   R180,
+  R270,
   MX,
-  MY
+  MX90,
+  MY,
+  MY90
 };
 
 // A rectangle of design, counted in ROWS rather than y coordinates -- rows

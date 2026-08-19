@@ -34,6 +34,49 @@ inline Layer::Polar opposite(Layer::Polar p)
   return (p == Layer::Polar::N) ? Layer::Polar::P : Layer::Polar::N;
 }
 
+bool knownOrientation(PhysOrientation orientation)
+{
+  switch (orientation.getValue()) {
+    case PhysOrientationE::R0:
+    case PhysOrientationE::R90:
+    case PhysOrientationE::R180:
+    case PhysOrientationE::R270:
+    case PhysOrientationE::MX:
+    case PhysOrientationE::MX90:
+    case PhysOrientationE::MY:
+    case PhysOrientationE::MY90:
+      return true;
+  }
+  return false;
+}
+
+bool quarterTurn(PhysOrientation orientation)
+{
+  switch (orientation.getValue()) {
+    case PhysOrientationE::R90:
+    case PhysOrientationE::R270:
+    case PhysOrientationE::MX90:
+    case PhysOrientationE::MY90:
+      return true;
+    case PhysOrientationE::R0:
+    case PhysOrientationE::R180:
+    case PhysOrientationE::MX:
+    case PhysOrientationE::MY:
+      return false;
+  }
+  return false;
+}
+
+Dbu orientedWidth(const MasterItem& master, PhysOrientation orientation)
+{
+  return quarterTurn(orientation) ? master.height : master.width;
+}
+
+Dbu orientedHeight(const MasterItem& master, PhysOrientation orientation)
+{
+  return quarterTurn(orientation) ? master.width : master.height;
+}
+
 bool Rule::isWidth() const
 {
   return source_ == RuleSource::Width || source_ == RuleSource::Lef58Width;
@@ -830,7 +873,7 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
     self->buildMasters();
     self->buildMstIntervals();
   }
-  if (siteWidth_ <= 0 || request.colId < 0) {
+  if (siteWidth_ <= 0 || rowHeight_ <= 0 || request.colId < 0) {
     result.diagnostics = diagnostics_;
     result.diagnostics.push_back({"placement_not_site_aligned", makeMessage("instance ", request.instanceId)});
     return result;
@@ -856,13 +899,26 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
     result.isLegal = false;
     return result;
   }
-  if (request.rowId < 0 || request.rowId >= grid_->getRowCount().v || request.colId >= grid_->getRowSiteCount().v) {
+  if (!knownOrientation(request.orientation)) {
+    result.diagnostics = diagnostics_;
+    result.diagnostics.push_back({"unsupported_orientation", makeMessage("instance ", request.instanceId)});
+    result.isLegal = false;
+    return result;
+  }
+  const MasterItem& targetMaster = masterItems_[request.masterId];
+  const Dbu targetWidth = orientedWidth(targetMaster, request.orientation);
+  const Dbu targetHeight = orientedHeight(targetMaster, request.orientation);
+  const ColId targetCols = (targetWidth + siteWidth_ - 1) / siteWidth_;
+  const RowId targetRows = (targetHeight + rowHeight_ - 1) / rowHeight_;
+  if (request.rowId < 0 || request.colId < 0
+      || request.rowId + targetRows > grid_->getRowCount().v
+      || request.colId + targetCols > grid_->getRowSiteCount().v) {
     result.diagnostics = diagnostics_;
     result.diagnostics.push_back({"placement_out_of_grid", makeMessage("instance ", request.instanceId)});
     result.isLegal = false;
     return result;
   }
-  const OverlapInfo& overlap = checkOverlap(node);
+  const OverlapInfo& overlap = checkOverlap(request);
   if (overlap.diags) {
     result.diagnostics = diagnostics_;
     result.diagnostics.push_back(*overlap.diags);
@@ -885,7 +941,7 @@ CheckResult ImplantLayerChecker::checkDirect(const CheckRequest& request) const
   // prepare the target intervals
   XInterval tgtItv;
   tgtItv.xl = request.colId * siteWidth_;
-  tgtItv.xh = tgtItv.xl + node->getWidth().v;
+  tgtItv.xh = tgtItv.xl + targetWidth;
   std::vector<XInterval> itvs{tgtItv};
 
   const std::vector<CheckShape> shapes = mergeShapes(snapshot);
@@ -1051,37 +1107,100 @@ CheckShapes ImplantLayerChecker::getOverlaySnapshot(const CheckRequest& request,
 
 // Transform a master's canonical shapes to placed coordinates with orientation.
 CheckShapes ImplantLayerChecker::getNodeShape(InstanceId instanceId, MasterId masterId, RowId rowId, ColId colId,
-                                              PhysOrientation orientation, bool isCandidate) const
+                                               PhysOrientation orientation, bool isCandidate) const
 {
   CheckShapes shapes;
-  if (masterId < 0 || static_cast<size_t>(masterId) >= masterItems_.size() || siteWidth_ <= 0 || rowHeight_ <= 0) {
+  if (masterId < 0 || static_cast<size_t>(masterId) >= masterItems_.size() || siteWidth_ <= 0 || rowHeight_ <= 0
+      || !knownOrientation(orientation)) {
     return shapes;
   }
-  Dbu originX = colId * siteWidth_;
-  Dbu originY = rowId * rowHeight_;
+  const Dbu originX = colId * siteWidth_;
+  const Dbu originY = rowId * rowHeight_;
+  const Dbu halfRow = rowHeight_ / 2;
+  if (halfRow <= 0) {
+    return shapes;
+  }
+
   const MasterItem& master = masterItems_[masterId];
   for (const MasterShape& shape : master.shapes) {
-    Dbu xl = shape.rect._xl.getStorage();
-    Dbu yl = shape.rect._yl.getStorage();
-    Dbu xh = shape.rect._xh.getStorage();
-    Dbu yh = shape.rect._yh.getStorage();
-    if (orientation == PhysOrientationE::MY || orientation == PhysOrientationE::R180) {
-      xl = master.width - xh;
-      xh = master.width - xl;
+    const Dbu sourceXl = shape.rect._xl.getStorage();
+    const Dbu sourceYl = shape.rect._yl.getStorage();
+    const Dbu sourceXh = shape.rect._xh.getStorage();
+    const Dbu sourceYh = shape.rect._yh.getStorage();
+    Dbu xl = sourceXl;
+    Dbu yl = sourceYl;
+    Dbu xh = sourceXh;
+    Dbu yh = sourceYh;
+
+    switch (orientation.getValue()) {
+      case PhysOrientationE::R0:
+        break;
+      case PhysOrientationE::R90:
+        xl = master.height - sourceYh;
+        xh = master.height - sourceYl;
+        yl = sourceXl;
+        yh = sourceXh;
+        break;
+      case PhysOrientationE::R180:
+        xl = master.width - sourceXh;
+        xh = master.width - sourceXl;
+        yl = master.height - sourceYh;
+        yh = master.height - sourceYl;
+        break;
+      case PhysOrientationE::R270:
+        xl = sourceYl;
+        xh = sourceYh;
+        yl = master.width - sourceXh;
+        yh = master.width - sourceXl;
+        break;
+      case PhysOrientationE::MX:
+        yl = master.height - sourceYh;
+        yh = master.height - sourceYl;
+        break;
+      case PhysOrientationE::MX90:
+        xl = sourceYl;
+        xh = sourceYh;
+        yl = sourceXl;
+        yh = sourceXh;
+        break;
+      case PhysOrientationE::MY:
+        xl = master.width - sourceXh;
+        xh = master.width - sourceXl;
+        break;
+      case PhysOrientationE::MY90:
+        xl = master.height - sourceYh;
+        xh = master.height - sourceYl;
+        yl = master.width - sourceXh;
+        yh = master.width - sourceXl;
+        break;
     }
-    if (orientation == PhysOrientationE::MX || orientation == PhysOrientationE::R180) {
-      yl = master.height - yh;
-      yh = master.height - yl;
+
+    if (xl >= xh || yl >= yh) {
+      continue;
     }
-    CheckShape placed;
-    placed.ownerInstanceIds.emplace_back(instanceId);
-    placed.ownerShapeIds.emplace_back(shape.shapeId);
-    placed.layer = shape.layer;
-    placed.x = {originX + xl, originX + xh};
-    placed.rowId = (originY + yl) / rowHeight_;
-    placed.bandSlot = (originY + yl) % rowHeight_ > 0 ? BandSlot::Top : BandSlot::Bottom;
-    placed.isCandidate = isCandidate;
-    shapes.push_back(placed);
+    Dbu y = yl;
+    while (y < yh) {
+      const int rowOffset = static_cast<int>(y / rowHeight_);
+      const Dbu rowBase = static_cast<Dbu>(rowOffset) * rowHeight_;
+      const Dbu bottomEnd = rowBase + halfRow;
+      const BandSlot bandSlot = y < bottomEnd ? BandSlot::Bottom : BandSlot::Top;
+      const Dbu slotEnd = bandSlot == BandSlot::Bottom ? bottomEnd : rowBase + rowHeight_;
+      const Dbu pieceEnd = std::min(yh, slotEnd);
+      if (pieceEnd <= y) {
+        break;
+      }
+
+      CheckShape placed;
+      placed.ownerInstanceIds.emplace_back(instanceId);
+      placed.ownerShapeIds.emplace_back(shape.shapeId);
+      placed.layer = shape.layer;
+      placed.x = {originX + xl, originX + xh};
+      placed.rowId = (originY + y) / rowHeight_;
+      placed.bandSlot = bandSlot;
+      placed.isCandidate = isCandidate;
+      shapes.push_back(placed);
+      y = pieceEnd;
+    }
   }
   return shapes;
 }
@@ -1515,25 +1634,32 @@ std::vector<Violation> ImplantLayerChecker::makeViolations(const std::vector<Che
   return violations;
 }
 
-// Check pixel grid for overlapping non-filler cells at a node's placement.
-OverlapInfo ImplantLayerChecker::checkOverlap(const Node* node) const
+// Check the requested oriented footprint for overlapping non-filler cells.
+OverlapInfo ImplantLayerChecker::checkOverlap(const CheckRequest& request) const
 {
   OverlapInfo info;
-  if (node == nullptr) {
-    info.diags = Diagnostic{"unknown_target_instance", "cannot check overlap for a null node"};
+  if (request.masterId < 0 || static_cast<size_t>(request.masterId) >= masterItems_.size()
+      || !knownOrientation(request.orientation)) {
+    info.diags = Diagnostic{"unknown_target_master", makeMessage("master ", request.masterId)};
     return info;
   }
 
-  for (GridX x = grid_->gridX(node); x < grid_->gridEndX(node); x++) {
-    for (GridY y = grid_->gridSnapDownY(node); y < grid_->gridEndY(node); y++) {
+  const MasterItem& master = masterItems_[request.masterId];
+  const Dbu width = orientedWidth(master, request.orientation);
+  const Dbu height = orientedHeight(master, request.orientation);
+  const ColId colCount = (width + siteWidth_ - 1) / siteWidth_;
+  const RowId rowCount = (height + rowHeight_ - 1) / rowHeight_;
+  for (GridX x{request.colId}; x < GridX{request.colId + colCount}; x++) {
+    for (GridY y{request.rowId}; y < GridY{request.rowId + rowCount}; y++) {
       Pixel* pixel = grid_->gridPixel(x, y);
-      Node* node2 = pixel ? pixel->cell : nullptr;
-      if (node2 != nullptr && node2 != node) {
-        if (node2->isFiller()) {
-          info.fillers.insert(node2->getId());
+      Node* node = pixel ? pixel->cell : nullptr;
+      if (node != nullptr && node->getId() != request.instanceId) {
+        if (node->isFiller()) {
+          info.fillers.insert(node->getId());
         } else {
           info.diags = Diagnostic{"placement_overlap_in_input",
-                                  "inst " + std::to_string(node->getId()) + ", " + std::to_string(node2->getId())};
+                                  "inst " + std::to_string(request.instanceId) + ", "
+                                      + std::to_string(node->getId())};
           return info;
         }
       }
@@ -1551,13 +1677,12 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(const CheckRequest& request,
     diagnostics.push_back({"missing_network", "overlay validation requires an initialized Network"});
     return diagnostics;
   }
-  if (siteWidth_ <= 0) {
+  if (siteWidth_ <= 0 || rowHeight_ <= 0) {
     diagnostics.push_back({"placement_not_site_aligned", makeMessage("instance ", request.instanceId)});
   }
-  if (grid_ == nullptr || request.rowId < 0 || request.colId < 0 || request.rowId >= grid_->getRowCount().v
-      || request.colId >= grid_->getRowSiteCount().v) {
-    diagnostics.push_back({"placement_out_of_grid", makeMessage("instance ", request.instanceId)});
-  }
+  bool placementOutOfGrid = grid_ == nullptr || siteWidth_ <= 0
+                            || rowHeight_ <= 0 || request.rowId < 0
+                            || request.colId < 0;
   const Node* targetNode = network_->getNode(request.instanceId);
   if (targetNode == nullptr) {
     diagnostics.push_back({"unknown_target_instance", makeMessage("instance ", request.instanceId)});
@@ -1568,6 +1693,21 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(const CheckRequest& request,
                              && masterItems_[request.masterId].width > 0;
   if (!targetHasData) {
     diagnostics.push_back({"unknown_target_master", makeMessage("master ", request.masterId)});
+  }
+  if (!knownOrientation(request.orientation)) {
+    diagnostics.push_back({"unsupported_orientation", makeMessage("instance ", request.instanceId)});
+  } else if (!placementOutOfGrid && targetHasData) {
+    const MasterItem& targetMaster = masterItems_[request.masterId];
+    const Dbu targetWidth = orientedWidth(targetMaster, request.orientation);
+    const Dbu targetHeight = orientedHeight(targetMaster, request.orientation);
+    const ColId targetCols = (targetWidth + siteWidth_ - 1) / siteWidth_;
+    const RowId targetRows = (targetHeight + rowHeight_ - 1) / rowHeight_;
+    placementOutOfGrid
+        = request.rowId + targetRows > grid_->getRowCount().v
+          || request.colId + targetCols > grid_->getRowSiteCount().v;
+  }
+  if (placementOutOfGrid) {
+    diagnostics.push_back({"placement_out_of_grid", makeMessage("instance ", request.instanceId)});
   }
 
   std::set<InstanceId> seen;
@@ -1961,7 +2101,7 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(const CheckRequest& request,
     result.isLegal = false;
     return result;
   }
-  const OverlapInfo& overlap = checkOverlap(node);
+  const OverlapInfo& overlap = checkOverlap(request);
   if (overlap.diags) {
     result.diagnostics.push_back(*overlap.diags);
     result.isLegal = false;
@@ -1988,7 +2128,7 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(const CheckRequest& request,
   // prepare the target intervals
   XInterval tgtItv;
   tgtItv.xl = request.colId * siteWidth_;
-  tgtItv.xh = tgtItv.xl + node->getWidth().v;
+  tgtItv.xh = tgtItv.xl + orientedWidth(masterItems_[request.masterId], request.orientation);
   std::vector<XInterval> itvs{tgtItv};
   for (const CellChangeRecord& change : fillerChanges) {
     const LeafCellID* cellId = cellChangeLeafCellId(change);

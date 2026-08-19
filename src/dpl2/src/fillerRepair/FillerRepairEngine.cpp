@@ -343,9 +343,16 @@ ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic);
 
 Orient toPlannerOrient(eUTL::PhysOrientation orientation)
 {
-  if (orientation == eUTL::PhysOrientationE::R180) return Orient::R180;
-  if (orientation == eUTL::PhysOrientationE::MX) return Orient::MX;
-  if (orientation == eUTL::PhysOrientationE::MY) return Orient::MY;
+  switch (orientation.getValue()) {
+    case eUTL::PhysOrientationE::R90: return Orient::R90;
+    case eUTL::PhysOrientationE::R180: return Orient::R180;
+    case eUTL::PhysOrientationE::R270: return Orient::R270;
+    case eUTL::PhysOrientationE::MX: return Orient::MX;
+    case eUTL::PhysOrientationE::MX90: return Orient::MX90;
+    case eUTL::PhysOrientationE::MY: return Orient::MY;
+    case eUTL::PhysOrientationE::MY90: return Orient::MY90;
+    case eUTL::PhysOrientationE::R0: break;
+  }
   return Orient::R0;
 }
 
@@ -380,9 +387,13 @@ const char* polarityName(BandPolarity polarity)
 eUTL::PhysOrientation toUdmOrient(Orient orient)
 {
   switch (orient) {
+    case Orient::R90: return eUTL::PhysOrientationE::R90;
     case Orient::R180: return eUTL::PhysOrientationE::R180;
+    case Orient::R270: return eUTL::PhysOrientationE::R270;
     case Orient::MX: return eUTL::PhysOrientationE::MX;
+    case Orient::MX90: return eUTL::PhysOrientationE::MX90;
     case Orient::MY: return eUTL::PhysOrientationE::MY;
+    case Orient::MY90: return eUTL::PhysOrientationE::MY90;
     case Orient::R0: break;
   }
   return eUTL::PhysOrientationE::R0;
@@ -390,10 +401,24 @@ eUTL::PhysOrientation toUdmOrient(Orient orient)
 
 bool supportedOrientation(eUTL::PhysOrientation orientation)
 {
-  return orientation == eUTL::PhysOrientationE::R0
-         || orientation == eUTL::PhysOrientationE::R180
-         || orientation == eUTL::PhysOrientationE::MX
-         || orientation == eUTL::PhysOrientationE::MY;
+  switch (orientation.getValue()) {
+    case eUTL::PhysOrientationE::R0:
+    case eUTL::PhysOrientationE::R90:
+    case eUTL::PhysOrientationE::R180:
+    case eUTL::PhysOrientationE::R270:
+    case eUTL::PhysOrientationE::MX:
+    case eUTL::PhysOrientationE::MX90:
+    case eUTL::PhysOrientationE::MY:
+    case eUTL::PhysOrientationE::MY90:
+      return true;
+  }
+  return false;
+}
+
+bool quarterTurn(Orient orientation)
+{
+  return orientation == Orient::R90 || orientation == Orient::R270
+         || orientation == Orient::MX90 || orientation == Orient::MY90;
 }
 
 std::string masterDebug(const eLIB::PhysLibCell& cell)
@@ -1557,9 +1582,19 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
 Region FillerRepairEngine::Impl::snapshotGuard(const TargetPlace& target) const
 {
   const MasterInfo* master = masterInfo(target.masterId);
-  const DbCoord width = master != nullptr ? master->width : 0;
-  const DbCoord heightRows =
-      master != nullptr ? std::max<DbCoord>(master->height, 1) : 1;
+  DbCoord width = 0;
+  DbCoord heightRows = 1;
+  if (master != nullptr) {
+    if (quarterTurn(target.orientation)) {
+      const DbCoord rowHeight = std::max<DbCoord>(placement_.rowHeight, 1);
+      width = master->height * rowHeight;
+      heightRows = std::max<DbCoord>(
+          (master->width + rowHeight - 1) / rowHeight, 1);
+    } else {
+      width = master->width;
+      heightRows = std::max<DbCoord>(master->height, 1);
+    }
+  }
   return snapshotGuard(target.rowId, target.x, width, heightRows);
 }
 
@@ -1759,6 +1794,7 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   }
   log_.checkpoint("repair", "replacement geometry lookup begin");
   const DbCoord replacementWidth = newMaster->getWidth().getStorage();
+  const DbCoord replacementHeightDbu = newMaster->getHeight().getStorage();
   const DbCoord replacementHeight = grid_->gridHeight(*newMaster).v;
   log_.checkpoint("repair",
                   cat("replacement geometry lookup done: old=",
@@ -1792,8 +1828,22 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
       = checkerRequest.has_value()
             ? toPlannerOrient(checkerRequest->orientation)
             : targetOrientation;
-  const Region initialInfluence = snapshotGuard(
-      requestedRowId, requestedX, replacementWidth, replacementHeight);
+  const DbCoord targetFootprintWidth
+      = quarterTurn(requestedOrientation) ? replacementHeightDbu
+                                          : replacementWidth;
+  const DbCoord targetRowHeight
+      = std::max<DbCoord>(placement_.rowHeight, 1);
+  const DbCoord targetFootprintHeightRows
+      = quarterTurn(requestedOrientation)
+            ? std::max<DbCoord>(
+                  (replacementWidth + targetRowHeight - 1) / targetRowHeight,
+                  1)
+            : replacementHeight;
+  const Region initialInfluence
+      = snapshotGuard(requestedRowId,
+                      requestedX,
+                      targetFootprintWidth,
+                      targetFootprintHeightRows);
   log_.checkpoint("repair",
                   cat("target influence ready: targetInst=", targetInstanceId,
                       " influence=", show(initialInfluence)));
@@ -1868,9 +1918,8 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   target.x = requestedX;
   target.orientation = requestedOrientation;
 
-  const bool samePlacement = target.rowId == targetRowId
-                             && target.x == targetX
-                             && target.orientation == targetOrientation;
+  const bool samePosition
+      = target.rowId == targetRowId && target.x == targetX;
 
   if (log_.enabled()) {
     const eUNL::PhysCell physical = des_mgr_->getPhysCell(*targetCell);
@@ -1929,7 +1978,7 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
             " row=", targetRowId,
             " xDbu=", targetX,
             " orient=", orientationName(toUdmOrient(targetOrientation)),
-            " samePlacement=", samePlacement,
+            " samePosition=", samePosition,
             "} network{master=", targetNode->getMaster()->getId(),
             " left=", targetNode->getLeft().v,
             " bottom=", targetNode->getBottom().v,
@@ -1956,6 +2005,14 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
             " requestedHeightRows=",
             requestedMasterInfo != nullptr ? requestedMasterInfo->height : -1,
             "} matchingPhysRows=[", matchingRows, "]"));
+  }
+
+  if (!samePosition) {
+    addDiagnostic(Severity::Warning,
+                  "UnsupportedTargetMove",
+                  "filler repair supports target master/orientation changes "
+                  "at the committed position only");
+    return result;
   }
 
   // 2) Initial snapshot: the new target place with ZERO filler changes.
@@ -2010,14 +2067,6 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
             " polarityMismatch=", stats.polarityMismatch, '}'));
     return result;
   }
-  if (!samePlacement) {
-    addDiagnostic(Severity::Warning,
-                  "UnsupportedTargetMove",
-                  "filler repair supports same-position target master swaps "
-                  "only");
-    return result;
-  }
-
   // 3) Pure search over this object's data-source and oracle interfaces.
   FillerRepairRequest request;
   request.targetPlace = target;

@@ -150,9 +150,11 @@ If configuration has not arrived yet, the check returns illegal, emits one
 resets the checker. Structural `FillerRepairEngine::init()` failures are also
 fail-closed.
 
-**Swap-only.** Same instance, same position, same orientation, same width and
-height, different master. A target whose placement moved is refused
-(`UnsupportedTargetMove`).
+**Swap-only.** Same instance and position, same unrotated master width and
+height, different master. The target request may use any UDM orientation
+(`R0/R90/R180/R270/MX/MX90/MY/MY90`); quarter turns use the rotated
+footprint for bounds, overlap and checker guards. A target whose row or x
+position moved is refused (`UnsupportedTargetMove`).
 
 ---
 

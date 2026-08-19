@@ -121,10 +121,14 @@ namespace {
 const char* candidateOrientName(Orient orientation)
 {
   switch (orientation) {
-    case Orient::R180: return "R180";
-    case Orient::MX: return "MX";
-    case Orient::MY: return "MY";
     case Orient::R0: return "R0";
+    case Orient::R90: return "R90";
+    case Orient::R180: return "R180";
+    case Orient::R270: return "R270";
+    case Orient::MX: return "MX";
+    case Orient::MX90: return "MX90";
+    case Orient::MY: return "MY";
+    case Orient::MY90: return "MY90";
   }
   return "UNKNOWN";
 }

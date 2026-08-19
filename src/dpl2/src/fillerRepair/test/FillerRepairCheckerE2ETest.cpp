@@ -542,8 +542,8 @@ Rect guard()
   return makeRect(0, 0, SITE_COUNT * SITE_WIDTH, ROW_COUNT * ROW_HEIGHT);
 }
 
-// The check opto issues: same instance, same site, same orientation, the new
-// master it wants to place there.
+// The check opto issues: same instance and site, plus the requested master
+// and any of the eight UDM orientations.
 CheckRequest request(RowId rowId, ColId colId, MasterId masterId)
 {
   return CheckRequest{instId(rowId, colId),
@@ -650,24 +650,44 @@ namespace fr = ::dpl2::fillerRepair;
 
 fr::Orient toPlannerOrient(PhysOrientation orientation)
 {
-  if (orientation == PhysOrientationE::R180)
-    return fr::Orient::R180;
-  if (orientation == PhysOrientationE::MX)
-    return fr::Orient::MX;
-  if (orientation == PhysOrientationE::MY)
-    return fr::Orient::MY;
+  switch (orientation.getValue()) {
+    case PhysOrientationE::R90:
+      return fr::Orient::R90;
+    case PhysOrientationE::R180:
+      return fr::Orient::R180;
+    case PhysOrientationE::R270:
+      return fr::Orient::R270;
+    case PhysOrientationE::MX:
+      return fr::Orient::MX;
+    case PhysOrientationE::MX90:
+      return fr::Orient::MX90;
+    case PhysOrientationE::MY:
+      return fr::Orient::MY;
+    case PhysOrientationE::MY90:
+      return fr::Orient::MY90;
+    case PhysOrientationE::R0:
+      break;
+  }
   return fr::Orient::R0;
 }
 
 PhysOrientation toCheckerOrient(fr::Orient orientation)
 {
   switch (orientation) {
+    case fr::Orient::R90:
+      return PhysOrientationE::R90;
     case fr::Orient::R180:
       return PhysOrientationE::R180;
+    case fr::Orient::R270:
+      return PhysOrientationE::R270;
     case fr::Orient::MX:
       return PhysOrientationE::MX;
+    case fr::Orient::MX90:
+      return PhysOrientationE::MX90;
     case fr::Orient::MY:
       return PhysOrientationE::MY;
+    case fr::Orient::MY90:
+      return PhysOrientationE::MY90;
     case fr::Orient::R0:
       break;
   }
@@ -953,8 +973,8 @@ class PortableCheckerOracle final : public fr::RepairOracle
   int batch_count_ = 0;
 };
 
-// The planner-side form of `retargeted()`: same instance, same site, same
-// orientation, the master opto wants there.
+// The planner-side form of `retargeted()`: instance, site, requested master
+// and orientation.
 fr::TargetPlace plannerTarget(const Scenario& scn)
 {
   // Odd rows are placed MX (band polarity alternates per row).

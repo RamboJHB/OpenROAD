@@ -356,7 +356,7 @@ class ImplantLayerChecker final : public DRCChecker
 
   CheckShapes mergeGroupShapes(const CheckShapes& rawShapes, bool isCandidate) const;
 
-  OverlapInfo checkOverlap(const Node* node) const;
+  OverlapInfo checkOverlap(const CheckRequest& request) const;
   DiagVec validateOverlayRequest(const CheckRequest& request, const FillerChanges& fillerChanges) const;
   bool touchesInstance(const Violation& violation, InstanceId instanceId) const;
   bool containsViolation(const Violation& oldViolation, const Violation& newViolation) const;

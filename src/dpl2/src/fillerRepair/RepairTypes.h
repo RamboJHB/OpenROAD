@@ -101,15 +101,18 @@ enum class BandPolarity : uint8_t
   P
 };
 
-// Placement orientation. UDM has its own richer type; the search keeps this
-// four-value enum so it stays database-free, and the engine maps between them
-// at the boundary.
+// Placement orientation. The search stays database-free while preserving all
+// eight UDM axis-aligned orientations across the engine/checker boundary.
 enum class Orient : uint8_t
 {
   R0,
+  R90,
   R180,
+  R270,
   MX,
-  MY
+  MX90,
+  MY,
+  MY90
 };
 
 // A rectangle of design, counted in ROWS rather than y coordinates -- rows

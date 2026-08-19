@@ -1,6 +1,6 @@
 # fillerRepair — filler VT overlay repair
 
-Updated: 2026-08-18.
+Updated: 2026-08-19.
 
 Working baseline: **`944ce7ba66`**. The only retained later changes are the
 current `test_filler_repair` command and the infrastructure-owned
@@ -14,6 +14,11 @@ Node with the committed instance ID and the replacement master. The checker
 excludes the committed Node at that ID from its snapshot. Opto owns the
 `CellChangeRecord` vector; the checker appends checker-verified surrounding
 filler swaps into that reference and keeps **no** filler-change member state. The
+target may change to any of UDM's eight orientations; the checker transforms
+implant rectangles and uses the rotated footprint for bounds and overlap.
+Target row/x must remain unchanged, and an orientation that creates overlap,
+leaves the grid, or violates implant polarity still fails closed. Surrounding
+filler swaps preserve each filler's existing orientation. The
 `FillerRepairEngine` is created **lazily** on the first DRC-illegal check —
 a run whose checks all pass never pays engine initialization.
 
@@ -146,7 +151,7 @@ the per-engine log override. Copy its contents into the destination's existing
 It is a hand-maintained projection of this directory, which remains the source
 of truth; mirror every runtime/API change into both directories.
 
-The 278-test local suite, 170-test migration gate and standalone module build
+The 291-test local suite, 171-test migration gate and standalone module build
 all compile this full directory. They do not automatically compile or compare
 `fillerRepair2/`; that minimal payload still needs a destination build (or an
 equivalent strict syntax check) before migration.
@@ -311,10 +316,10 @@ Full migration instructions, including the destination checklist, are in
 
 - portable planner: 92 cases; portable checker E2E: 79 cases (both compile,
   link and run in fake-UDM AND real-UDM harness modes — the migration gate).
-- repository-local fake-UDM engine regression: 117 cases under
+- repository-local fake-UDM engine regression: 120 cases under
   `src/dpl2/test/local/`.
-- 2026-08-18 full local suite: 288/288 normal and ASan; migration gate
-  171/171 normal and ASan; standalone module build 171/171.
+- 2026-08-19 full local suite: 291/291; migration gate 171/171;
+  standalone module build 171/171.
 
 ### Search cost
 

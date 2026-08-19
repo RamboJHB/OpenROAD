@@ -1,6 +1,6 @@
 # fillerRepair2 migration payload
 
-Updated: 2026-08-18.
+Updated: 2026-08-19.
 
 This runtime payload is restored to working baseline **`944ce7ba66`**. The
 retained `registerFillerRepairMasters()` and `test_filler_repair` changes live
@@ -34,7 +34,7 @@ include/link dependencies to it.
 runtime-only projection, not generated output. Mirror every runtime algorithm,
 API, shared-wire or diagnostic change here before migration.
 
-The repository's 288-test local suite, 171-test migration gate and standalone
+The repository's 291-test local suite, 171-test migration gate and standalone
 module build compile the full `fillerRepair/` directory. They do not compile or
 compare this projection automatically. Build this directory against the
 destination dependency target, or run an equivalent C++20 strict syntax check,
@@ -66,7 +66,9 @@ baseline result and skips window/search work.
 
 `ImplantLayerChecker::check()` is shared by std-to-std and filler-to-std. A
 temporary standard-cell Node keeps the committed instance ID, allowing the
-checker to exclude the original std cell or filler from its snapshot. Repair
-is non-mutating and returns only surrounding filler
+checker to exclude the original std cell or filler from its snapshot. The
+target request may use any of UDM's eight orientations while retaining its
+row/x position; rotated bounds and overlap are checked by the shared checker.
+Repair is non-mutating and returns only surrounding filler
 `Replace` records on the shared `ipl::FillerChanges`/`CellChangeRecord` wire
 for infrastructure to commit.

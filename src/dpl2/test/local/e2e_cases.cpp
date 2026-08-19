@@ -24,6 +24,15 @@ namespace {
 
 constexpr const char* kDefaultFillers = "FL2 FH2 FS2";
 constexpr const char* kFillersWithExtra = "FL2 FH2 FS2 FX4";
+constexpr std::array<eUTL::PhysOrientationE, 8> kAllOrientations{
+    eUTL::PhysOrientationE::R0,
+    eUTL::PhysOrientationE::R90,
+    eUTL::PhysOrientationE::R180,
+    eUTL::PhysOrientationE::R270,
+    eUTL::PhysOrientationE::MX,
+    eUTL::PhysOrientationE::MX90,
+    eUTL::PhysOrientationE::MY,
+    eUTL::PhysOrientationE::MY90};
 
 bool hasDiagnostic(const std::vector<dpl2::ipl::Diagnostic>& diagnostics,
                    const std::string& status)
@@ -168,7 +177,9 @@ class EngineHarness
   bool engineReady() const { return engine_ready_; }
   frt::E2ETestDesign& design() { return objects_.design(); }
   dpl2::fillerRepair::FillerRepairEngine& engine() { return *engine_; }
+  dpl2::Grid& grid() { return *objects_.infrastructure().grid(); }
   dpl2::Network& network() { return *objects_.infrastructure().network(); }
+  dpl2::fillerSetting& fillerSetting() { return *filler_setting_; }
   bool syncInfrastructureCell(frt::CellRole role)
   {
     return syncInfrastructureNode(design(),
@@ -287,7 +298,17 @@ class CheckerHarness
   }
 
   bool checkReplacement(frt::CellRole role,
-                        frt::MasterRole replacementRole)
+                         frt::MasterRole replacementRole)
+  {
+    dpl2::Network* network = objects_.infrastructure().network();
+    const dpl2::Node* target = network->getNode(design().cell(role));
+    return target != nullptr
+           && checkReplacement(role, replacementRole, target->getOrient());
+  }
+
+  bool checkReplacement(frt::CellRole role,
+                         frt::MasterRole replacementRole,
+                         const eUTL::PhysOrientation& orientation)
   {
     fc_record_.clear();
     dpl2::Grid* grid = objects_.infrastructure().grid();
@@ -310,18 +331,26 @@ class CheckerHarness
     temporary.setType(dpl2::Node::CELL);
     temporary.setLeft(target->getLeft());
     temporary.setBottom(target->getBottom());
-    temporary.setWidth(
-        dpl2::DbuX{replacementCell.getWidth().getStorage()});
-    temporary.setHeight(
-        dpl2::DbuY{replacementCell.getHeight().getStorage()});
-    temporary.setOrient(target->getOrient());
+    const bool quarterTurn
+        = orientation == eUTL::PhysOrientationE::R90
+          || orientation == eUTL::PhysOrientationE::R270
+          || orientation == eUTL::PhysOrientationE::MX90
+          || orientation == eUTL::PhysOrientationE::MY90;
+    const auto width = quarterTurn
+                          ? replacementCell.getHeight().getStorage()
+                          : replacementCell.getWidth().getStorage();
+    const auto height = quarterTurn
+                           ? replacementCell.getWidth().getStorage()
+                           : replacementCell.getHeight().getStorage();
+    temporary.setWidth(dpl2::DbuX{width});
+    temporary.setHeight(dpl2::DbuY{height});
+    temporary.setOrient(orientation);
 
-    return checker_->check(
-        &temporary,
-        grid->gridX(target),
-        grid->gridSnapDownY(target),
-        target->getOrient(),
-        fc_record_);
+    return checker_->check(&temporary,
+                           grid->gridX(target),
+                           grid->gridSnapDownY(target),
+                           orientation,
+                           fc_record_);
   }
 
   const std::vector<dpl2::CellChangeRecord>& fillerChanges() const
@@ -843,6 +872,53 @@ TEST_P(FillerRepairEngineE2E,
       frt::CellRole::Target, frt::MasterRole::TargetNew));
   EXPECT_EQ(harness.fillerChanges().size(), 1U);
   EXPECT_EQ(harness.design().snapshot(), before);
+}
+
+TEST_P(FillerRepairEngineE2E,
+       AllOrientationsReachRepairForStdAndFillerTargets)
+{
+  struct TargetCase
+  {
+    frt::CellRole target;
+    frt::MasterRole replacement;
+  };
+  constexpr std::array<TargetCase, 2> kTargets{
+      TargetCase{frt::CellRole::Target, frt::MasterRole::TargetNew},
+      TargetCase{frt::CellRole::TargetLeftFiller,
+                 frt::MasterRole::BufferLow}};
+
+  for (const TargetCase& targetCase : kTargets) {
+    for (eUTL::PhysOrientationE orientation : kAllOrientations) {
+      SCOPED_TRACE(static_cast<int>(orientation));
+      EngineHarness harness(GetParam().setup);
+      ASSERT_TRUE(harness.engineReady());
+      dpl2::Node* target
+          = harness.network().getNode(harness.design().cell(targetCase.target));
+      ASSERT_NE(target, nullptr);
+      const eLIB::PhysLibCell& replacementCell
+          = harness.design().master(targetCase.replacement);
+      dpl2::Master* replacement = harness.network().addMaster(
+          replacementCell,
+          harness.fillerSetting(),
+          &harness.grid(),
+          &noEdgeTypes());
+      ASSERT_NE(replacement, nullptr);
+
+      dpl2::ipl::CheckRequest request;
+      request.instanceId = target->getId();
+      request.masterId = replacement->getId();
+      request.rowId = harness.grid().gridSnapDownY(target).v;
+      request.colId = harness.grid().gridX(target).v;
+      request.orientation = orientation;
+      const auto outcome = harness.engine().repair(request);
+
+      EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "InvalidCheckRequest"));
+      EXPECT_FALSE(
+          hasDiagnostic(outcome.diagnostics, "UnsupportedTargetMove"));
+      EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "TargetNotStdCell"));
+      EXPECT_FALSE(hasDiagnostic(outcome.diagnostics, "TargetSizeMismatch"));
+    }
+  }
 }
 
 TEST_P(FillerRepairEngineE2E,
