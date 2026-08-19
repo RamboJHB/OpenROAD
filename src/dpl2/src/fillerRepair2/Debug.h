@@ -57,6 +57,13 @@ class DebugLog
       std::fprintf(stdout, "[fr][%s] %s\n", stage, text.c_str());
     }
   }
+  void checkpoint(const char* stage, const std::string& text) const
+  {
+    if (enabled_) {
+      std::fprintf(stdout, "[fr][%s] %s\n", stage, text.c_str());
+      std::fflush(stdout);
+    }
+  }
 
 // Deferred form for call sites inside loops: msg(stage, [&] { return
   template <typename Fn,

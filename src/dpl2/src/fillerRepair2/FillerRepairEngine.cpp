@@ -900,9 +900,20 @@ bool FillerRepairEngine::Impl::isNonBlockingCheckerInitDiagnostic(
     return false;
   }
 
+  const auto& masters = network_->getMasters();
+  log_.checkpoint(
+      "checker-diag",
+      cat("used-layer scan begin: status=", diagnostic.status,
+          " masters=", masters.size()));
   std::set<std::string> usedLayerNames;
   const eLIB::TechLib& tech = des_mgr_->getTopTech();
-  for (const auto& masterPtr : network_->getMasters()) {
+  for (size_t masterIndex = 0; masterIndex < masters.size(); ++masterIndex) {
+    if (masterIndex % 100 == 0) {
+      log_.checkpoint("checker-diag",
+                      cat("used-layer scan progress: masterIndex=", masterIndex,
+                          '/', masters.size()));
+    }
+    const auto& masterPtr = masters[masterIndex];
     if (masterPtr == nullptr || masterPtr->getPhysLibCell() == nullptr) {
       continue;
     }
@@ -916,6 +927,9 @@ bool FillerRepairEngine::Impl::isNonBlockingCheckerInitDiagnostic(
       }
     }
   }
+  log_.checkpoint("checker-diag",
+                  cat("used-layer scan done: masters=", masters.size(),
+                      " usedLayers=", usedLayerNames.size()));
 
   for (const ipl::Layer& layer : checker_overlay_.get()->getLayers()) {
     const std::string marker = cat("layer ", layer.getName(), " ");
@@ -1210,11 +1224,14 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     changes.push_back(requests[index].fillerChanges);
   }
 
+  log_.checkpoint("checker-call",
+                  cat("overlay begin: candidates=", changes.size(),
+                      " targetInst=", target.instanceId));
   const std::vector<ipl::CheckResult> raw
       = checker_overlay_.check(target, guard, changes);
-  log_.msg("engine",
-           cat("overlay batch: ", changes.size(), " candidate(s) -> ",
-               raw.size(), " result(s)"));
+  log_.checkpoint("checker-call",
+                  cat("overlay done: candidates=", changes.size(),
+                      " results=", raw.size()));
 
 // Ordered correlation is the final checker's entire batch protocol. Any
   if (raw.size() != legalIndices.size()) {
@@ -1319,6 +1336,8 @@ Region FillerRepairEngine::Impl::snapshotGuard(RowId rowId,
 RepairOutcome FillerRepairEngine::Impl::repair(
     const ipl::CheckRequest& request)
 {
+  log_.checkpoint("repair", "enter: source=checker");
+
   RepairOutcome result;
   const auto addDiagnostic = [&result](Severity severity,
                                        const std::string& code,
@@ -1433,7 +1452,13 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       requestedRowId, requestedX, replacementWidth, replacementHeight);
 
 // Fail before registering an uninstantiated replacement master. The
+  log_.checkpoint("repair",
+                  cat("precheck begin: targetInst=", targetInstanceId,
+                      " influence=", show(initialInfluence)));
   const ipl::CheckResult placement = localPrecheck(initialInfluence);
+  log_.checkpoint("repair",
+                  cat("precheck done: legal=", placement.isLegal,
+                      " diagnostics=", placement.diagnostics.size()));
   if (!placement.isLegal) {
     result.diagnostics = placement.diagnostics;
     addDiagnostic(Severity::Warning,
@@ -1590,7 +1615,14 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                target.masterId, " guard=",
                show(snapshotRequest.guardRegion)));
 
+  log_.checkpoint("repair",
+                  cat("snapshot checker begin: targetInst=", target.instanceId,
+                      " guard=", show(snapshotRequest.guardRegion)));
   const OracleResult snapshot = checkPlaceWithOverlay(snapshotRequest);
+  log_.checkpoint("repair",
+                  cat("snapshot checker done: status=",
+                      static_cast<int>(snapshot.status),
+                      " violations=", snapshot.violations.size()));
   if (snapshot.status != OracleStatus::Checked) {
     for (const Diagnostic& diagnostic : snapshot.diagnostics) {
       result.diagnostics.push_back(toPublicDiagnostic(diagnostic));
@@ -1635,8 +1667,15 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   FillerRepairRequest plannerRequest;
   plannerRequest.targetPlace = target;
   plannerRequest.violations = snapshot.violations;
+  log_.checkpoint("repair",
+                  cat("planner begin: targetInst=", target.instanceId,
+                      " violations=", plannerRequest.violations.size()));
   internal::RepairPlanner planner(*this, *this, repair_config_);
   const FillerRepairResult planned = planner.repair(plannerRequest);
+  log_.checkpoint("repair",
+                  cat("planner done: hasSolution=", planned.hasSolution,
+                      " changes=", planned.changes.size(),
+                      " diagnostics=", planned.diagnostics.size()));
 
   result.hasSolution = planned.hasSolution;
   for (const Diagnostic& diagnostic : planned.diagnostics) {
@@ -1691,22 +1730,30 @@ ipl::Diagnostic toPublicDiagnostic(const Diagnostic& diagnostic)
 bool FillerRepairEngine::Impl::init(eUNL::PhysDesMgr* desMgr,
                                     const fillerSetting& fillerSettings)
 {
+  log_.checkpoint("engine-init", "init begin");
   if (init_attempted_) {
+    log_.checkpoint("engine-init", "init rejected: already attempted");
     return false;
   }
   init_attempted_ = true;
   des_mgr_ = desMgr;
+  log_.checkpoint("engine-init", "infrastructure bind begin");
   if (!bindInfrastructure(desMgr, fillerSettings)) {
+    log_.checkpoint("engine-init", "infrastructure bind failed");
     return false;
   }
+  log_.checkpoint("engine-init", "infrastructure bind done");
 
   initialized_ = rebuildOracle();
+  log_.checkpoint("engine-init",
+                  cat("rebuild oracle returned: ready=", initialized_));
   if (!initialized_) {
     init_diagnostics_.insert(init_diagnostics_.end(),
                              oracle_diagnostics_.begin(),
                              oracle_diagnostics_.end());
     return false;
   }
+  log_.checkpoint("engine-init", "init done");
   return true;
 }
 
@@ -1927,15 +1974,40 @@ bool FillerRepairEngine::Impl::ensureMasterRegistered(
 
 bool FillerRepairEngine::Impl::rebuildOracle()
 {
+  log_.checkpoint("engine-init", "rebuild oracle begin");
   checker_overlay_.clear();
   oracle_diagnostics_.clear();
   repair_config_.verbose = log_.enabled();
   // The private checker receives the manager already retained by Grid.
+  log_.checkpoint("engine-init", "private checker construction begin");
   checker_overlay_.reset(grid_, network_);
+  log_.checkpoint(
+      "engine-init",
+      cat("private checker construction done: diagnostics=",
+          checker_overlay_.get()->getDiags().size(),
+          " layers=", checker_overlay_.get()->getLayers().size()));
+  log_.checkpoint("engine-init", "placement snapshot begin");
   buildPlannerData();
+  log_.checkpoint("engine-init", "placement snapshot done");
+  const auto& checkerDiagnostics = checker_overlay_.get()->getDiags();
+  log_.checkpoint("engine-init",
+                  cat("checker diagnostic scan begin: count=",
+                      checkerDiagnostics.size()));
   bool checkerReady = true;
-  for (const ipl::Diagnostic& diagnostic : checker_overlay_.get()->getDiags()) {
-    if (isNonBlockingCheckerInitDiagnostic(diagnostic)) {
+  for (size_t diagnosticIndex = 0;
+       diagnosticIndex < checkerDiagnostics.size();
+       ++diagnosticIndex) {
+    const ipl::Diagnostic& diagnostic = checkerDiagnostics[diagnosticIndex];
+    log_.checkpoint("engine-init",
+                    cat("checker diagnostic classify begin: index=",
+                        diagnosticIndex, '/', checkerDiagnostics.size(),
+                        " status=", diagnostic.status));
+    const bool nonBlocking = isNonBlockingCheckerInitDiagnostic(diagnostic);
+    log_.checkpoint("engine-init",
+                    cat("checker diagnostic classify done: index=",
+                        diagnosticIndex, '/', checkerDiagnostics.size(),
+                        " nonBlocking=", nonBlocking));
+    if (nonBlocking) {
       log_.msg("engine",
                cat("non-blocking checker init diagnostic: ",
                    diagnostic.status, " ", diagnostic.message));
@@ -1956,12 +2028,16 @@ bool FillerRepairEngine::Impl::rebuildOracle()
              cat("blocking checker init diagnostic: ", diagnostic.status,
                  " ", diagnostic.message));
   }
+  log_.checkpoint("engine-init",
+                  cat("checker diagnostic scan done: ready=", checkerReady));
   if (checkerReady && isReady()) {
+    log_.checkpoint("engine-init", "rebuild oracle done: ready=1");
     return true;
   }
   for (const Diagnostic& diagnostic : setup_diagnostics_) {
     oracle_diagnostics_.push_back(toPublicDiagnostic(diagnostic));
   }
+  log_.checkpoint("engine-init", "rebuild oracle done: ready=0");
   return false;
 }
 

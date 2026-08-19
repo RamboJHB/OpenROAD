@@ -72,6 +72,17 @@ class DebugLog
     }
   }
 
+  // Coarse progress markers are explicitly flushed so a redirected transcript
+  // still identifies the call that has not returned. Keep these out of hot
+  // per-candidate paths unless they bracket an expensive external operation.
+  void checkpoint(const char* stage, const std::string& text) const
+  {
+    if (enabled_) {
+      std::fprintf(stdout, "[fr][%s] %s\n", stage, text.c_str());
+      std::fflush(stdout);
+    }
+  }
+
   // Deferred form for call sites inside loops: msg(stage, [&] { return
   // cat(...); }). The plain overload above evaluates its argument at the call
   // site, so a silenced log still pays for every cat() -- here the callable
