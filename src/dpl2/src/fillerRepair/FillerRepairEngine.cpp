@@ -1491,12 +1491,35 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
                   cat("enter: source=",
                       checkerRequest.has_value() ? "checker" : "direct"));
   RepairOutcome result;
-  const auto addDiagnostic = [&result](Severity severity,
-                                       const std::string& code,
-                                       const std::string& message) {
+  struct RepairTraceGuard
+  {
+    const DebugLog& log;
+    const RepairOutcome& result;
+    ~RepairTraceGuard()
+    {
+      log.checkpoint("repair",
+                     cat("exit: hasSolution=", result.hasSolution,
+                         " changes=", result.changes.size(),
+                         " diagnostics=", result.diagnostics.size()));
+    }
+  } traceGuard{log_, result};
+  const auto addDiagnostic = [this, &result](Severity severity,
+                                             const std::string& code,
+                                             const std::string& message) {
     result.diagnostics.push_back(
         toPublicDiagnostic(makeDiag(severity, code, message)));
+    log_.checkpoint("repair",
+                    cat("diagnostic: severity=", static_cast<int>(severity),
+                        " code=", code, " message=", message));
   };
+  if (checkerRequest.has_value()) {
+    log_.checkpoint(
+        "repair",
+        cat("checker request: instance=", checkerRequest->instanceId,
+            " master=", checkerRequest->masterId,
+            " row=", checkerRequest->rowId, " col=", checkerRequest->colId,
+            " orient=", orientationName(checkerRequest->orientation)));
+  }
 
   if (repair_active_.exchange(true, std::memory_order_acq_rel)) {
     addDiagnostic(Severity::Fatal,
@@ -1504,6 +1527,7 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
                   "repair() re-entered on one FillerRepairEngine");
     return result;
   }
+  log_.checkpoint("repair", "entry lock acquired");
   struct ActiveGuard
   {
     std::atomic<bool>& flag;
@@ -1527,6 +1551,8 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
                   "infrastructure snapshot failed validation; repair refused");
     return result;
   }
+  log_.checkpoint("repair",
+                  cat("engine state accepted: initialized=", initialized_));
 
   // 1) Resolve the checker request (preferred) or the direct UDM request to
   // one immutable engine-snapshot target before touching the shared Network
@@ -1539,8 +1565,11 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   } else if (targetCell.has_value()) {
     targetId = network_->getNodeId(*targetCell);
   }
+  log_.checkpoint("repair", cat("target id resolved: targetId=", targetId));
   const PlacedInstance* inst =
       targetId >= 0 ? instance(static_cast<InstanceId>(targetId)) : nullptr;
+  log_.checkpoint("repair",
+                  cat("target snapshot lookup done: found=", inst != nullptr));
   if (inst == nullptr) {
     addDiagnostic(Severity::Fatal,
                   "UnknownTarget",
@@ -1557,12 +1586,22 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
                     "checker supplied an invalid target placement request");
       return result;
     }
+    log_.checkpoint("repair", "checker request fields accepted");
     targetCell = placement_.instances[inst->id]->udm.cellId;
+    log_.checkpoint("repair",
+                    cat("replacement master lookup begin: masterId=",
+                        checkerRequest->masterId));
     const Master* requestedMaster = network_->getMaster(
         static_cast<int>(checkerRequest->masterId));
+    log_.checkpoint("repair",
+                    cat("replacement master lookup done: found=",
+                        requestedMaster != nullptr));
     newMaster = requestedMaster != nullptr
                     ? requestedMaster->getPhysLibCell()
                     : nullptr;
+    log_.checkpoint("repair",
+                    cat("replacement physical master lookup done: found=",
+                        newMaster != nullptr));
   }
   if (!targetCell.has_value() || newMaster == nullptr) {
     addDiagnostic(Severity::Fatal,
@@ -1570,7 +1609,11 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
                   "target replacement master is absent from Network");
     return result;
   }
+  log_.checkpoint("repair", "target cell and replacement master resolved");
   const MasterInfo* oldMaster = masterInfo(inst->masterId);
+  log_.checkpoint("repair",
+                  cat("current master snapshot lookup done: masterId=",
+                      inst->masterId, " found=", oldMaster != nullptr));
   if (oldMaster == nullptr) {
     addDiagnostic(Severity::Fatal,
                   "TargetMasterUnknown",
@@ -1584,16 +1627,32 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
   const bool targetIsFiller = targetNode != nullptr
                               && targetNode->isFiller()
                               && inst->isFiller;
+  const bool replacementIsStdCell
+      = filler_settings_ != nullptr
+        && isStandardCellMaster(*newMaster, *filler_settings_);
+  log_.checkpoint(
+      "repair",
+      cat("target classification done: nodeFound=", targetNode != nullptr,
+          " targetIsStdCell=", targetIsStdCell,
+          " targetIsFiller=", targetIsFiller,
+          " settingsFound=", filler_settings_ != nullptr,
+          " replacementIsStdCell=", replacementIsStdCell));
   if ((!targetIsStdCell && !targetIsFiller) || filler_settings_ == nullptr
-      || !isStandardCellMaster(*newMaster, *filler_settings_)) {
+      || !replacementIsStdCell) {
     addDiagnostic(Severity::Fatal,
                   "TargetNotStdCell",
                   "target must be a standard cell or filler and the "
                   "replacement master must be a standard cell");
     return result;
   }
+  log_.checkpoint("repair", "replacement geometry lookup begin");
   const DbCoord replacementWidth = newMaster->getWidth().getStorage();
   const DbCoord replacementHeight = grid_->gridHeight(*newMaster).v;
+  log_.checkpoint("repair",
+                  cat("replacement geometry lookup done: old=",
+                      oldMaster->width, 'x', oldMaster->height,
+                      " replacement=", replacementWidth, 'x',
+                      replacementHeight));
   if (oldMaster->width != replacementWidth
       || oldMaster->height != replacementHeight) {
     addDiagnostic(Severity::Fatal,
@@ -1623,6 +1682,9 @@ RepairOutcome FillerRepairEngine::Impl::repairImpl(
             : targetOrientation;
   const Region initialInfluence = snapshotGuard(
       requestedRowId, requestedX, replacementWidth, replacementHeight);
+  log_.checkpoint("repair",
+                  cat("target influence ready: targetInst=", targetInstanceId,
+                      " influence=", show(initialInfluence)));
 
   // Fail before registering an uninstantiated replacement master. The
   // rejected-request contract covers the in-memory Network registry too.
