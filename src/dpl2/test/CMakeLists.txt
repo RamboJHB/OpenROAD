@@ -143,8 +143,8 @@ add_library(dpl2_fr_chain_common OBJECT
 dpl2_configure_chain_target(dpl2_fr_chain_common delivered)
 
 # Compile the destination ownership/call chain against the same UDM switch.
-# This is intentionally an object-only gate: ImportDb/OpenROAD wiring is local
-# executable glue, while these three files are the code copied to dpl2.
+# The destination dbToOpendp.cpp calls the install helper compiled through
+# DePlace.cpp; its other checker headers are intentionally not faked here.
 add_library(dpl2_fr_deplace_compile_check OBJECT
     "${CMAKE_CURRENT_LIST_DIR}/../src/DePlace.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/PlacementDRC.cpp"
@@ -241,6 +241,19 @@ gtest_discover_tests(
   dpl2_implant_checker_simple_test
   TEST_PREFIX "checker-simple."
   NO_PRETTY_VALUES
+  DISCOVERY_TIMEOUT 30)
+
+add_executable(
+  dpl2_placement_drc_lifecycle_test
+  "${CMAKE_CURRENT_LIST_DIR}/local/placement_drc_lifecycle_test.cpp"
+  "${DPL2_SRC}/PlacementDRC.cpp")
+target_link_libraries(
+  dpl2_placement_drc_lifecycle_test PRIVATE
+  GTest::gtest_main dpl2_fr_chain_common dpl2::fillerRepair)
+dpl2_configure_chain_target(dpl2_placement_drc_lifecycle_test strict)
+gtest_discover_tests(
+  dpl2_placement_drc_lifecycle_test
+  TEST_PREFIX "placement-drc."
   DISCOVERY_TIMEOUT 30)
 
 # --- Fake-UDM only ---------------------------------------------------------

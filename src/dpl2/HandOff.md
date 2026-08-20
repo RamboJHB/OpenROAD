@@ -14,6 +14,7 @@ The destination-facing call chain is:
 
 ```text
 DePlace
+  -> ensureFillerRepairReady() (one-time classification/checker publication)
   -> PlacementDRC::checkDRC(temp, x, y, orient,
                             fillerChanges, overlayChanges)
   -> ImplantLayerChecker::check(...)
@@ -37,8 +38,10 @@ The concrete destination touch points are:
   `CheckRequestOverlay`, lazy engine dispatch, and overlay batch oracle;
 - `src/dpl2/src/drc/DRCChecker.h`: the two-vector virtual check interface;
 - `src/dpl2/src/PlacementDRC.h/.cpp`: atomic trial/publish dispatch;
-- `src/dpl2/src/DePlace.cpp` and `include/dpl2/DePlace.h`: setup-time master
-  registration and the isLegal temporary-node request;
+- `src/dpl2/src/DePlace.cpp` and `include/dpl2/DePlace.h`: one-time filler
+  classification/checker publication and the isLegal temporary-node request;
+- `src/dpl2/src/dbToOpendp.cpp`: installs the initial repair-disabled Implant
+  checker from `initPlacementDRC()` after importing the full master catalog;
 - `src/dpl2/src/Place.cpp`: exact one-filler candidate rule for findLegal;
 - `src/dpl2/src/infrastructure/Objects.h`: shared `CellChangeRecord` wire, if
   the destination does not already have the same definition.
@@ -65,13 +68,15 @@ linked into the destination library.
 
 ## Preconditions
 
-Before the first parallel checker call:
+Before the first parallel repair call:
 
 1. DePlace has finished Grid, Network, Design, and fillerSetting setup.
-2. Every configured filler master has a Network Master and `isFiller=true`.
-3. Every standard-cell master opto may propose is registered.
-4. Grid and Network describe the same committed placement revision.
-5. No database mutation runs concurrently with checker/engine calls.
+2. `ensureFillerRepairReady()` has refreshed master/node filler classification
+   and replaced the pre-configuration checker exactly once.
+3. Every configured filler master has a Network Master and `isFiller=true`.
+4. Every standard-cell master opto may propose was imported by createNetwork.
+5. Grid and Network describe the same committed placement revision.
+6. No database mutation runs concurrently with checker/engine calls.
 
 The checker and lazy engine are immutable for that revision. Publish a new
 checker revision after a committed placement mutation before beginning a new
@@ -97,6 +102,7 @@ The gate compiles:
 - the runtime payload at C++20 with `-Wall -Wextra -Werror`;
 - `fillerRepair2` as a copy-only migration compile check;
 - destination DePlace/Place/PlacementDRC sources;
+- checker replacement and atomic failed-dispatch lifecycle tests;
 - unchanged checker golden expectations;
 - portable checker/planner E2E;
 - fake-UDM runtime E2E, including one- and two-row targets and concurrent
@@ -106,7 +112,10 @@ The gate compiles:
 
 - Confirm the destination's real `CellChangeRecord` field names and ID variant
   exactly match this branch.
-- Confirm its target masters are all registered before first use.
+- Confirm destination `createNetwork()` imports every library master, including
+  masters without a placed instance.
+- Confirm fillerSetting is complete before the first isLegal/findLegal worker
+  crosses the configuration barrier.
 - Confirm opto treats the single Delete record as target overlay input and
   commits only the returned filler Replace records in the same transaction.
 - Establish the revision barrier used to replace the checker after commit.

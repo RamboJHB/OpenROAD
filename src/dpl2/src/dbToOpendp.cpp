@@ -59,6 +59,7 @@ void DePlace::initEdgeTypeTable()
 
 void DePlace::initPlacementDRC()
 {
+  filler_repair_ready_.store(false, std::memory_order_relaxed);
   drc_engine_ = std::make_unique<PlacementDRC>(grid_.get());
 
 // Register all DRC checkers into the extensible framework.
@@ -75,9 +76,10 @@ void DePlace::initPlacementDRC()
   drc_engine_->addChecker(
       DRCCheckerType::OneSiteGap,
       std::make_unique<OneSiteGapChecker>(grid_.get(), design_, disallow_one_site_gaps_));
-  drc_engine_->addChecker(
-      DRCCheckerType::ImplantLayer,
-      std::make_unique<ipl::ImplantLayerChecker>(grid_.get(), design_, network_.get()));
+  // [FRPORT] fillerSetting is normally populated after DePlace imports the database.
+  // Keep direct implant DRC available, but do not allow its one-shot lazy
+  // repair initialization to observe the pre-configuration master catalog.
+  installImplantLayerChecker(false);
   drc_engine_->addChecker(DRCCheckerType::FixedMask,
       std::make_unique<FixedMaskChecker>(grid_.get(), design_, desMgr_));
 }
@@ -162,10 +164,6 @@ void DePlace::createNetwork()
   eLIB::PhysMacroUsageSet usages;
   desMgr_->iterateAllPhysCells(arena, swVisitor, usages);
 
-  if (!registerFillerRepairMasters()) {
-      std::cerr << "ERROR : Network: could not register configured "
-                "filler masters in Network\n";
-  }
 }
 
 void DePlace::setUpPlacementGroups()

@@ -19,6 +19,8 @@ class PlacementDRC
   explicit PlacementDRC(Grid* grid);
   ~PlacementDRC();
 
+  // [FRPORT] Registers a checker or replaces the existing checker of the same type
+  // during single-threaded setup. Do not call while checks run.
   void addChecker(DRCCheckerType type, std::unique_ptr<DRCChecker> checker);
   bool checkDRC(const Node* cell, std::vector<CellChangeRecord>& ccRecords) const;
   bool checkDRC(const Node* cell,

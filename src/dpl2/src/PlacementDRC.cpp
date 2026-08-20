@@ -73,6 +73,20 @@ bool PlacementDRC::checkDRC(const Node* cell,
 void PlacementDRC::addChecker(const DRCCheckerType type,
                               std::unique_ptr<DRCChecker> checker)
 {
+  if (checker == nullptr) {
+    return;
+  }
+  const auto found = checker_map_.find(type);
+  if (found != checker_map_.end()) {
+    for (std::unique_ptr<DRCChecker>& current : checkers_) {
+      if (current.get() == found->second) {
+        current = std::move(checker);
+        found->second = current.get();
+        return;
+      }
+    }
+    checker_map_.erase(found);
+  }
   checker_map_[type] = checker.get();
   checkers_.push_back(std::move(checker));
 }

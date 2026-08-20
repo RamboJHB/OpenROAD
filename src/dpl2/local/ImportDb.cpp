@@ -214,9 +214,9 @@ bool buildUdmProjection(odb::dbDatabase* database,
 
 namespace dpl2 {
 
-// The delivered DePlace snapshot intentionally did not include its database
-// import implementation. This local definition builds the real Grid/Network
-// over the OpenROAD projection above; it is not copied with fillerRepair.
+// Local OpenROAD validation projects ODB into the test-only UDM provider, then
+// builds the real Grid/Network/DePlace chain over that projection. Destination
+// builds use src/dbToOpendp.cpp instead.
 void DePlace::importDb()
 {
   importClear();
@@ -244,15 +244,17 @@ void DePlace::initEdgeTypeTable()
 
 void DePlace::createNetwork()
 {
-  if (desMgr_ == nullptr) {
+  if (desMgr_ == nullptr || design_ == nullptr) {
     return;
   }
-  for (const auto& [id, cell] : desMgr_->cells_) {
-    (void) id;
-    if (cell.master != nullptr) {
-      network_->addMaster(
-          *cell.master, *filler_setting_, grid_.get(), edge_type_table_.get());
-    }
+  // Match the destination dbToOpendp path: every library master is available
+  // before a target is proposed, including masters with no placed instance.
+  const eUNL::LibObjAccessor& libAcc = design_->getLibAcc();
+  for (const auto& libCell : libAcc.getLibCellIter(true, false)) {
+    network_->addMaster(libAcc.getPhysLibCell(libCell.getId()),
+                        *filler_setting_,
+                        grid_.get(),
+                        edge_type_table_.get());
   }
   for (const auto& [id, cell] : desMgr_->cells_) {
     (void) cell;
@@ -262,7 +264,9 @@ void DePlace::createNetwork()
 
 void DePlace::initPlacementDRC()
 {
+  filler_repair_ready_.store(false, std::memory_order_relaxed);
   drc_engine_ = std::make_unique<PlacementDRC>(grid_.get());
+  installImplantLayerChecker(false);
 }
 
 namespace local {

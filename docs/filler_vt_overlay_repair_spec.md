@@ -69,11 +69,19 @@ bool check(const Node* temporary,
 all registered checkers against a local trial vector and publishes it only if
 all checkers pass.
 
-Before the first call, DePlace registers the configured filler masters and the
-target standard-cell master with Network using its real edge table, then
-publishes one ImplantLayerChecker. The checker creates its repair engine lazily
-with `std::call_once`. The engine takes Grid, Design, Network, and fillerSetting
-only from that checker.
+`dbToOpendp::createNetwork()` imports the complete library master catalog.
+`initPlacementDRC()` installs an ImplantLayerChecker with repair disabled so
+direct implant DRC remains available while fillerSetting is still being
+configured. The first `isLegal`/`findLegal` request crosses a one-time DePlace
+configuration barrier: it refreshes Network master/node filler classification
+from the final fillerSetting, rebuilds and replaces that checker, and publishes
+the immutable revision to workers. No target-specific `addMaster` is needed.
+
+Only after direct DRC finds a violation does the published checker create its
+repair engine lazily with `std::call_once`. The engine takes Grid, Design,
+Network, and fillerSetting only from that checker. A configuration failure is
+retryable before publication; an engine initialization attempt is deliberately
+one-shot after publication.
 
 The request flow is:
 
@@ -102,12 +110,16 @@ Opto owns the target replacement and commits the returned filler replacements.
 - Every proposed batch is accepted only by `checkPlaceWithOverlays`.
 - Request-local oracle state makes simultaneous repairs read-only and
   deterministic.
+- `PlacementDRC::addChecker` replaces an existing checker of the same type
+  during single-threaded setup; stale checker instances are never left in the
+  dispatch vector.
 
 ## Revision lifetime
 
-The checker/engine/master catalog is immutable after its first repair call.
-All standard-cell masters that opto may propose must therefore be registered
-before that publication. Database commits must not race with checker calls.
+The checker/engine/master catalog is immutable after DePlace publishes the
+final filler configuration. All standard-cell masters are imported before that
+publication. Database commits and fillerSetting changes must not race with
+checker calls.
 After a committed placement revision, the owner must publish a new checker
 revision before starting another repair phase.
 

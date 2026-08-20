@@ -7,6 +7,7 @@
 #include <boost/geometry/geometries/point_xy.hpp>
 #include <boost/geometry/geometry.hpp>
 #include <boost/geometry/index/rtree.hpp>
+#include <atomic>
 #include <mutex>
 
 // UDM
@@ -146,11 +147,6 @@ class DePlace {
   PlacementDRC* getPlacementDRC() {return drc_engine_.get();};
   Rect getCoreArea();
   fillerSetting* getFillerSetting() { return filler_setting_.get();};
-// Network Master construction stays with the infrastructure
-// owner that has the real edge table. It also refreshes existing Node filler
-// types. Call after updating fillerSetting and before a checker may lazily
-// initialize filler repair.
-  bool registerFillerRepairMasters();
  private:
   using bgPoint
       = boost::geometry::model::d2::point_xy<int,
@@ -236,9 +232,15 @@ class DePlace {
   // overlay record; returned records may change surrounding fillers only.
   bool isLegalProbe(LibCellID masterId, const Node* target,
                     std::vector<CellChangeRecord>& cellChanges);
-  // Lazily publishes the immutable checker/engine revision after the active
-  // filler list and the requested target master are registered.
-  bool prepareFillerRepair(const PhysLibCell& targetMaster);
+  // [FRPORT] Refresh Network master/node filler classification from the final
+  // fillerSetting. Called under filler_repair_init_mutex_ only.
+  bool registerFillerRepairMasters();
+  // [FRPORT] Finalizes filler classification and publishes one immutable checker
+  // revision. Failed attempts remain retryable until fillerSetting is ready.
+  bool ensureFillerRepairReady();
+  // [FRPORT] Installs the Implant checker at the destination initialization seam.
+  // Repair stays disabled until ensureFillerRepairReady() republishes it.
+  void installImplantLayerChecker(bool enableFillerRepair);
 
   // Grid initialization
   void initGrid();
@@ -253,6 +255,7 @@ class DePlace {
   std::shared_ptr<Padding> padding_;
   std::unique_ptr<PlacementDRC> drc_engine_;
   std::mutex filler_repair_init_mutex_;
+  std::atomic<bool> filler_repair_ready_{false};  // [FRPORT]
   std::unique_ptr<EdgeTypeTable> edge_type_table_;
   Rect core_;
 

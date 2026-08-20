@@ -1056,6 +1056,16 @@ class LibAcc
   {
     return *phys_cells_.at(id.getIndexValue());
   }
+  std::vector<eLIB::LibCell> getLibCellIter(bool, bool) const
+  {
+    std::vector<eLIB::LibCell> cells;
+    cells.reserve(lib_cells_.size());
+    for (const auto& [id, cell] : lib_cells_) {
+      (void) id;
+      cells.push_back(cell);
+    }
+    return cells;
+  }
 
   // --- test-population: register a master under a name.
   void addMaster(const std::string& name, const eLIB::PhysLibCell* cell)
@@ -1077,6 +1087,8 @@ class LibAcc
 }  // namespace fake_udm
 
 namespace eUNL {
+
+using LibObjAccessor = fake_udm::LibAcc;
 
 class Design
 {
