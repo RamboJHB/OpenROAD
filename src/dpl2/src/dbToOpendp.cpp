@@ -75,7 +75,9 @@ void DePlace::initPlacementDRC()
   //     std::make_unique<OneSiteGapChecker>(grid_.get(), design_, disallow_one_site_gaps_));
   // [FRPORT] The final fillerSetting was applied while importing Network.
   // This checker is the single immutable revision used by placement workers.
-  installImplantLayerChecker();
+  drc_engine_->addChecker(
+      DRCCheckerType::ImplantLayer,
+      std::make_unique<ipl::ImplantLayerChecker>(grid_.get(), design_, network_.get()));
   // drc_engine_->addChecker(DRCCheckerType::FixedMask,
   //     std::make_unique<FixedMaskChecker>(grid_.get(), design_, desMgr_));
 }

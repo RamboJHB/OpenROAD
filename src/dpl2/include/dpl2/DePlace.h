@@ -230,8 +230,6 @@ class DePlace {
   // overlay record; returned records may change surrounding fillers only.
   bool isLegalProbe(LibCellID masterId, const Node* target,
                     std::vector<CellChangeRecord>& cellChanges);
-  // [FRPORT] Installs the Implant checker at the destination initialization seam.
-  void installImplantLayerChecker();
 
   // Grid initialization
   void initGrid();

@@ -6,7 +6,6 @@
 #include <infrastructure/network.h>
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
-#include <drc/ImplantLayerChecker.h>
 #include <PlacementDRC.h>
 
 namespace dpl2 {
@@ -50,15 +49,6 @@ DePlace::DePlace()
 }
 
 DePlace::~DePlace() = default;
-
-void DePlace::installImplantLayerChecker()
-{
-  if (drc_engine_ == nullptr) {
-    return;
-  }
-  auto checker = std::make_unique<ipl::ImplantLayerChecker>(grid_.get(), design_, network_.get());
-  drc_engine_->addChecker(DRCCheckerType::ImplantLayer, std::move(checker));
-}
 
 void DePlace::setPaddingGlobal(const int left, const int right)
 {

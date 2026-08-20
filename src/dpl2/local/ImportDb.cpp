@@ -14,6 +14,7 @@
 #include <odb/db.h>
 
 #include <PlacementDRC.h>
+#include <drc/ImplantLayerChecker.h>
 #include <fake_udm.h>
 #include <infrastructure/Grid.h>
 #include <infrastructure/Objects.h>
@@ -265,7 +266,9 @@ void DePlace::createNetwork()
 void DePlace::initPlacementDRC()
 {
   drc_engine_ = std::make_unique<PlacementDRC>(grid_.get());
-  installImplantLayerChecker();
+  drc_engine_->addChecker(
+      DRCCheckerType::ImplantLayer,
+      std::make_unique<ipl::ImplantLayerChecker>(grid_.get(), design_, network_.get()));
 }
 
 namespace local {
