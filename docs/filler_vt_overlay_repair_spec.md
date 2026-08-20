@@ -1,5 +1,7 @@
 # Filler VT overlay repair specification
 
+This specification covers the second destination-port version of fillerRepair.
+
 ## Scope
 
 Filler repair is a pre-commit, non-mutating search used by detailed placement.

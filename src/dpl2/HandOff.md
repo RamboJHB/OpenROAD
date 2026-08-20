@@ -2,6 +2,10 @@
 
 ## Current state
 
+This handoff describes the second destination-port version of fillerRepair.
+Its checker-side marker is the two repair failure logs added in
+`ImplantLayerChecker::repairOverlay()`.
+
 The module now has one target contract: a temporary standard-cell `Node` plus
 one `CellChangeRecord` Delete overlay naming the committed node it replaces.
 The result is an atomic list of surrounding filler `Replace` records.
