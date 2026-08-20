@@ -1086,10 +1086,12 @@ bool ImplantLayerChecker::repairOverlay(
 {
     const fillerRepair::FillerRepairEngine* engine = fillerRepairEngine();
     if (engine == nullptr) {
+        std::cout<<"ImplantLayerChecker::repairOverlay: fillerRepair engine not ready"<<std::endl;
         return false;
     }
     fillerRepair::RepairOutcome outcome = engine->repair(request);
     if (!outcome.hasSolution) {
+        std::cout<<"ImplantLayerChecker::repairOverlay: no solution found"<<std::endl;
         return false;
     }
     fillerChanges = std::move(outcome.changes);
