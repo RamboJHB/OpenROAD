@@ -856,7 +856,6 @@ bool ImplantLayerChecker::check(const Node* node,
                                 GridY y,
                                 const eUTL::PhysOrientation& orient) const
 {
-    std::vector<CellChangeRecord> cellChanges;
     std::vector<CellChangeRecord> overlayChanges;
     if (node != nullptr && node->getMaster() != nullptr
         && node->getDbInst().isValid()) {
@@ -869,7 +868,13 @@ bool ImplantLayerChecker::check(const Node* node,
              node->getMaster()->getDbMaster(),
              node->getOrient()});
     }
-    return check(node, x, y, orient, cellChanges, overlayChanges);
+    CheckRequestOverlay request;
+    request.cell = node;
+    request.x = x;
+    request.y = y;
+    request.orientation = orient;
+    request.overlayChanges = overlayChanges;
+    return checkDirect(request).isLegal;
 }
 
 bool ImplantLayerChecker::check(const Node* node,

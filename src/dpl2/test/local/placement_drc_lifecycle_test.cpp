@@ -51,6 +51,72 @@ class RecordingChecker final : public DRCChecker
   bool append_change_;
 };
 
+class InterfaceChecker final : public DRCChecker
+{
+ public:
+  InterfaceChecker(Grid* grid, int& directCalls, int& overlayCalls)
+      : DRCChecker(grid, nullptr),
+        direct_calls_(directCalls),
+        overlay_calls_(overlayCalls)
+  {
+  }
+
+  bool check(const Node*, GridX, GridY,
+             const eUTL::PhysOrientation&) const override
+  {
+    ++direct_calls_;
+    return true;
+  }
+
+  bool check(const Node*, GridX, GridY, const eUTL::PhysOrientation&,
+             std::vector<CellChangeRecord>& cellChanges,
+             std::vector<CellChangeRecord>&) const override
+  {
+    ++overlay_calls_;
+    cellChanges.push_back(CellChangeRecord{});
+    return true;
+  }
+
+ private:
+  int& direct_calls_;
+  int& overlay_calls_;
+};
+
+TEST(PlacementDRCLifecycleTest, SelectsCheckerInterfacePerRequest)
+{
+  Grid grid;
+  PlacementDRC drc(&grid);
+  int firstDirect = 0;
+  int firstOverlay = 0;
+  int secondDirect = 0;
+  int secondOverlay = 0;
+  drc.addChecker(DRCCheckerType::Padding,
+                 std::make_unique<InterfaceChecker>(
+                     &grid, firstDirect, firstOverlay));
+  drc.addChecker(DRCCheckerType::ImplantLayer,
+                 std::make_unique<InterfaceChecker>(
+                     &grid, secondDirect, secondOverlay));
+  Node node;
+  std::vector<CellChangeRecord> changes;
+
+  EXPECT_TRUE(drc.checkDRC(&node, GridX{0}, GridY{0},
+                           eUTL::PhysOrientationE::R0, changes));
+  EXPECT_EQ(firstDirect, 1);
+  EXPECT_EQ(secondDirect, 1);
+  EXPECT_EQ(firstOverlay, 0);
+  EXPECT_EQ(secondOverlay, 0);
+  EXPECT_TRUE(changes.empty());
+
+  std::vector<CellChangeRecord> overlay;
+  EXPECT_TRUE(drc.checkDRC(&node, GridX{0}, GridY{0},
+                           eUTL::PhysOrientationE::R0, changes, overlay));
+  EXPECT_EQ(firstDirect, 1);
+  EXPECT_EQ(secondDirect, 1);
+  EXPECT_EQ(firstOverlay, 1);
+  EXPECT_EQ(secondOverlay, 1);
+  EXPECT_EQ(changes.size(), 2U);
+}
+
 TEST(PlacementDRCLifecycleTest, ReplacesCheckerWithoutRunningStaleInstance)
 {
   Grid grid;

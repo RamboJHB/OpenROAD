@@ -60,7 +60,6 @@ void DePlace::initEdgeTypeTable()
 
 void DePlace::initPlacementDRC()
 {
-  filler_repair_ready_.store(false, std::memory_order_relaxed);
   drc_engine_ = std::make_unique<PlacementDRC>(grid_.get());
 
 // Register all DRC checkers into the extensible framework.
@@ -74,10 +73,9 @@ void DePlace::initPlacementDRC()
   //     std::make_unique<PaddingChecker>(grid_.get(), design_, padding_.get(), desMgr_));
   // drc_engine_->addChecker(DRCCheckerType::OneSiteGap,
   //     std::make_unique<OneSiteGapChecker>(grid_.get(), design_, disallow_one_site_gaps_));
-  // [FRPORT] fillerSetting is normally populated after DePlace imports the database.
-  // Keep direct implant DRC available, but do not allow its one-shot lazy
-  // repair initialization to observe the pre-configuration master catalog.
-  installImplantLayerChecker(false);
+  // [FRPORT] The final fillerSetting was applied while importing Network.
+  // This checker is the single immutable revision used by placement workers.
+  installImplantLayerChecker();
   // drc_engine_->addChecker(DRCCheckerType::FixedMask,
   //     std::make_unique<FixedMaskChecker>(grid_.get(), design_, desMgr_));
 }

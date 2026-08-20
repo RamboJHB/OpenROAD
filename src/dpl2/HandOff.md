@@ -14,9 +14,9 @@ The destination-facing call chain is:
 
 ```text
 DePlace
-  -> ensureFillerRepairReady() (one-time classification/checker publication)
   -> PlacementDRC::checkDRC(temp, x, y, orient,
                             fillerChanges, overlayChanges)
+  -> every registered DRC checker
   -> ImplantLayerChecker::check(...)
   -> lazy FillerRepairEngine::repair(CheckRequestOverlay)
   -> ImplantLayerChecker::checkPlaceWithOverlays(...)
@@ -37,11 +37,13 @@ The concrete destination touch points are:
 - `src/dpl2/src/drc/ImplantLayerChecker.h/.cpp`: dual-record entry,
   `CheckRequestOverlay`, lazy engine dispatch, and overlay batch oracle;
 - `src/dpl2/src/drc/DRCChecker.h`: the two-vector virtual check interface;
-- `src/dpl2/src/PlacementDRC.h/.cpp`: atomic trial/publish dispatch;
-- `src/dpl2/src/DePlace.cpp` and `include/dpl2/DePlace.h`: one-time filler
-  classification/checker publication and the isLegal temporary-node request;
-- `src/dpl2/src/dbToOpendp.cpp`: installs the initial repair-disabled Implant
-  checker from `initPlacementDRC()` after importing the full master catalog;
+- `src/dpl2/src/PlacementDRC.h/.cpp`: direct versus overlay/repair-capable
+  request dispatch and atomic trial publication across every checker;
+- `src/dpl2/src/DePlace.cpp` and `include/dpl2/DePlace.h`: the isLegal
+  temporary-node request;
+- `src/dpl2/src/dbToOpendp.cpp`: installs one Implant checker from
+  `initPlacementDRC()` after importing the full master catalog and final
+  fillerSetting;
 - `src/dpl2/src/Place.cpp`: exact one-filler candidate rule for findLegal;
 - `src/dpl2/src/infrastructure/Objects.h`: shared `CellChangeRecord` wire, if
   the destination does not already have the same definition.
@@ -70,9 +72,9 @@ linked into the destination library.
 
 Before the first parallel repair call:
 
-1. DePlace has finished Grid, Network, and Design setup.
-2. `ensureFillerRepairReady()` retries until usable candidates exist, then
-   refreshes filler classification and replaces the initial checker exactly once.
+1. DePlace has finished Grid, Network, Design, and fillerSetting setup before
+   `initPlacementDRC()`.
+2. `initPlacementDRC()` has registered the complete checker set exactly once.
 3. Usable configured filler masters have a Network Master and `isFiller=true`;
    unusable entries are logged and skipped.
 4. Every standard-cell master opto may propose was imported by createNetwork.
@@ -121,9 +123,7 @@ The gate compiles:
   exactly match this branch.
 - Confirm destination `createNetwork()` imports every library master, including
   masters without a placed instance.
-- Confirm fillerSetting is complete before the first isLegal/findLegal worker
-  when repair candidates are expected; otherwise direct DRC still runs and
-  repair returns no solution.
+- Confirm fillerSetting is complete before `initPlacementDRC()`.
 - Confirm opto treats the single Delete record as target overlay input and
   commits only the returned filler Replace records in the same transaction.
 - Establish the revision barrier used to replace the checker after commit.

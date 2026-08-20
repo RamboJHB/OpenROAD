@@ -274,8 +274,9 @@ public:
     bool check(const Node* cell, std::vector<CellChangeRecord>& cellChanges,
         std::vector<CellChangeRecord>& overlayChanges) const;
 
-    // Repair is enabled for the normal checker path.
-    // ImplantLayerCheckerHelper disables it for checker-only tests.
+    // Fixed before publication. Runtime callers select direct or
+    // repair-capable behavior by check overload; checker helpers disable
+    // repair permanently.
     void setFillerRepairEnabled(bool enabled)
     {
         enableFillerRepair_.store(enabled, std::memory_order_release);

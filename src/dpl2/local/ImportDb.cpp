@@ -264,9 +264,8 @@ void DePlace::createNetwork()
 
 void DePlace::initPlacementDRC()
 {
-  filler_repair_ready_.store(false, std::memory_order_relaxed);
   drc_engine_ = std::make_unique<PlacementDRC>(grid_.get());
-  installImplantLayerChecker(false);
+  installImplantLayerChecker();
 }
 
 namespace local {

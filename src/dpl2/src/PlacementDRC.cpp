@@ -40,10 +40,17 @@ bool PlacementDRC::checkDRC(const Node* cell,
                             const GridX x,
                             const GridY y,
                             const eUTL::PhysOrientation& orient,
-                            std::vector<CellChangeRecord>& ccRecords) const
+                            std::vector<CellChangeRecord>&) const
 {
-  std::vector<CellChangeRecord> overlayChanges;
-  return checkDRC(cell, x, y, orient, ccRecords, overlayChanges);
+  if (cell == nullptr || grid_ == nullptr) {
+    return false;
+  }
+  for (const auto& checker : checkers_) {
+    if (checker != nullptr && !checker->check(cell, x, y, orient)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 bool PlacementDRC::checkDRC(const Node* cell,

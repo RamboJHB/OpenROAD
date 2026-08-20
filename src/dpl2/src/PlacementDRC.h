@@ -22,6 +22,7 @@ class PlacementDRC
   // [FRPORT] Registers a checker or replaces the existing checker of the same type
   // during single-threaded setup. Do not call while checks run.
   void addChecker(DRCCheckerType type, std::unique_ptr<DRCChecker> checker);
+  // Runs every checker in direct-only mode without changing ccRecords.
   bool checkDRC(const Node* cell, std::vector<CellChangeRecord>& ccRecords) const;
   bool checkDRC(const Node* cell,
                 GridX x,
@@ -29,9 +30,8 @@ class PlacementDRC
                 const eUTL::PhysOrientation& orient,
                 std::vector<CellChangeRecord>& ccRecords) const;
 
-  // Checks one temporary node against one caller-supplied replacement overlay.
-  // Repair records are published only if every registered checker accepts the
-  // same request; a failed checker therefore cannot leak a partial repair.
+  // Runs every checker through its explicit overlay/repair-capable interface.
+  // Repair records are published only if every checker accepts the request.
   bool checkDRC(const Node* cell,
                 GridX x,
                 GridY y,

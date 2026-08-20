@@ -122,6 +122,9 @@ TEST(FillerRepairPortableTest, CheckerRepairsTemporaryNodeWithoutMutation)
                                          replaced->getMaster()->getDbMaster(),
                                          replaced->getOrient()}};
   FillerChanges changes;
+  EXPECT_FALSE(checker.check(&temporary, GridX(targetCol), GridY(targetRow),
+                             PhysOrientationE::MX));
+  EXPECT_TRUE(changes.empty());
   EXPECT_TRUE(checker.check(&temporary,
                             GridX(targetCol),
                             GridY(targetRow),

@@ -51,112 +51,12 @@ DePlace::DePlace()
 
 DePlace::~DePlace() = default;
 
-bool DePlace::registerFillerRepairMasters()
-{
-  if (filler_setting_ == nullptr || network_ == nullptr) {
-    std::cout << "[fr][init] skip filler classification: missing Network or fillerSetting\n";
-    return false;
-  }
-
-  const std::vector<const PhysLibCell*> configured = filler_setting_->getFillerPhysCells();
-  if (configured.empty()) {
-    std::cout << "[fr][init] no configured filler masters; direct implant DRC remains available\n";
-    return false;
-  }
-
-  size_t classifiedMasters = 0;
-  for (const auto& [id, master] : network_->getMasters()) {
-    if (master == nullptr) {
-      std::cout << "[fr][init] skip null Network master id=" << id << '\n';
-      continue;
-    }
-    master->setFiller(filler_setting_->isFillerCell(master->getDbMaster()));
-    classifiedMasters += master->isFiller();
-  }
-
-  size_t usableConfigured = 0;
-  for (const PhysLibCell* master : configured) {
-    if (master == nullptr) {
-      std::cout << "[fr][init] skip null configured filler master\n";
-      continue;
-    }
-    Master* registered = network_->getMaster(master->getLibCellId());
-    if (registered == nullptr || !registered->isFiller()) {
-      std::cout << "[fr][init] skip unregistered filler master libCell="
-                << master->getLibCellId().getValue() << '\n';
-      continue;
-    }
-    ++usableConfigured;
-  }
-
-  size_t classifiedNodes = 0;
-  for (const auto& [nid, node] : network_->getNodes()) {
-    if (node == nullptr || node->getMaster() == nullptr) {
-      std::cout << "[fr][init] skip Network node without master id=" << nid << '\n';
-      continue;
-    }
-    if (node->getMaster()->isFiller()) {
-      node->setType(Node::FILLER);
-    } else if (node->getType() == Node::FILLER) {
-      node->setType(Node::CELL);
-    }
-    ++classifiedNodes;
-  }
-  std::cout << "[fr][init] filler classification complete\n"
-            << "[fr][init]   configured=" << configured.size()
-            << " usable=" << usableConfigured << '\n'
-            << "[fr][init]   fillerMasters=" << classifiedMasters
-            << " classifiedNodes=" << classifiedNodes << '\n';
-  return usableConfigured > 0;
-}
-
-bool DePlace::ensureFillerRepairReady()
-{
-  if (filler_repair_ready_.load(std::memory_order_acquire)) {
-    return true;
-  }
-  std::lock_guard<std::mutex> lock(filler_repair_init_mutex_);
-  if (filler_repair_ready_.load(std::memory_order_relaxed)) {
-    return true;
-  }
-  if (network_ == nullptr || grid_ == nullptr || design_ == nullptr) {
-    std::cout << "[fr][init] filler repair unavailable\n"
-              << "[fr][init]   grid=" << (grid_ != nullptr)
-              << " network=" << (network_ != nullptr)
-              << " design=" << (design_ != nullptr) << '\n';
-    return false;
-  }
-  bool candidatesReady = false;
-  if (filler_setting_ != nullptr) {
-    candidatesReady = registerFillerRepairMasters();
-  } else {
-    std::cout << "[fr][init] no fillerSetting; using existing Network filler flags\n";
-  }
-  if (drc_engine_ == nullptr) {
-    initPlacementDRC();
-  }
-  if (drc_engine_ == nullptr) {
-    std::cout << "[fr][init] filler repair unavailable: PlacementDRC is null\n";
-    return false;
-  }
-  if (!candidatesReady) {
-    std::cout << "[fr][init] direct implant DRC only; filler configuration will be retried\n";
-    return true;
-  }
-
-  installImplantLayerChecker(true);
-  filler_repair_ready_.store(true, std::memory_order_release);
-  std::cout << "[fr][init] checker revision published; engine remains lazy\n";
-  return true;
-}
-
-void DePlace::installImplantLayerChecker(const bool enableFillerRepair)
+void DePlace::installImplantLayerChecker()
 {
   if (drc_engine_ == nullptr) {
     return;
   }
   auto checker = std::make_unique<ipl::ImplantLayerChecker>(grid_.get(), design_, network_.get());
-  checker->setFillerRepairEnabled(enableFillerRepair);
   drc_engine_->addChecker(DRCCheckerType::ImplantLayer, std::move(checker));
 }
 
@@ -199,7 +99,7 @@ bool DePlace::isLegalProbe(LibCellID masterId, const Node* target,
   }
   const PhysLibCell& new_pcell = design_->getLibAcc().getPhysLibCell(masterId);
 
-  if (!ensureFillerRepairReady()) {
+  if (drc_engine_ == nullptr) {
     return false;
   }
   Master* const master = this->network_->getMaster(masterId);
@@ -393,9 +293,8 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   Point2D origin = (*pin.getTermIter().begin()).getOrigin();
 
   // createNetwork imports every library master, including masters without a
-  // placed instance. Filler configuration and checker publication happen once
-  // before the first candidate check.
-  if (!ensureFillerRepairReady()) {
+  // placed instance, before the single checker revision is constructed.
+  if (drc_engine_ == nullptr) {
     return {-1, -1};
   }
   Master* const master = this->network_->getMaster(masterId);

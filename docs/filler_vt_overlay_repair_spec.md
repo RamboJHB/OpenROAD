@@ -70,14 +70,17 @@ all registered checkers against a local trial vector and publishes it only if
 all checkers pass.
 
 `dbToOpendp::createNetwork()` imports the complete library master catalog.
-`initPlacementDRC()` installs an ImplantLayerChecker with repair disabled so
-direct implant DRC remains available while fillerSetting is still being
-configured. Each `isLegal`/`findLegal` request retries the DePlace configuration
-barrier until at least one usable filler master exists. That successful attempt
-refreshes Network master/node filler classification, replaces the checker, and
-publishes one immutable revision to workers. Missing or unusable filler entries
-are logged and skipped; direct implant DRC remains available before publication.
-No target-specific `addMaster` is needed.
+The final fillerSetting is already present during import, so Network classifies
+masters and nodes before `initPlacementDRC()` constructs the checker set.
+`initPlacementDRC()` installs exactly one ImplantLayerChecker together with the
+other available DRC checkers. No checker replacement, late classification, or
+target-specific `addMaster` is needed.
+
+The ordinary `PlacementDRC::checkDRC` overload calls every checker's direct
+interface and never repairs. The overload carrying `fillerChanges` and
+`overlayChanges`, used by `isLegal` and `findLegal`, calls every checker's
+explicit overlay interface. Only ImplantLayerChecker may append filler repair
+records, and the local trial vector is discarded if any checker fails.
 
 Only after direct DRC finds a violation does the published checker create its
 repair engine lazily with `std::call_once`. The engine reads Grid, Network,
@@ -114,16 +117,14 @@ Opto owns the target replacement and commits the returned filler replacements.
 - Every proposed batch is accepted only by `checkPlaceWithOverlays`.
 - Request-local oracle state makes simultaneous repairs read-only and
   deterministic.
-- `PlacementDRC::addChecker` replaces an existing checker of the same type
-  during single-threaded setup; stale checker instances are never left in the
-  dispatch vector.
+- Repair permission is selected by the `PlacementDRC::checkDRC` overload, not
+  by changing checker state around a call.
 
 ## Revision lifetime
 
-The checker/engine/master catalog is immutable after DePlace publishes the
-final filler configuration. All standard-cell masters are imported before that
-publication. Database commits and fillerSetting changes must not race with
-checker calls.
+The checker/engine/master catalog is immutable after `initPlacementDRC()`.
+All masters and the final fillerSetting are imported before construction.
+Database commits and fillerSetting changes must not race with checker calls.
 After a committed placement revision, the owner must publish a new checker
 revision before starting another repair phase.
 

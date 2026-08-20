@@ -7,8 +7,6 @@
 #include <boost/geometry/geometries/point_xy.hpp>
 #include <boost/geometry/geometry.hpp>
 #include <boost/geometry/index/rtree.hpp>
-#include <atomic>
-#include <mutex>
 
 // UDM
 #include <phys/fpManager.hh>
@@ -232,15 +230,8 @@ class DePlace {
   // overlay record; returned records may change surrounding fillers only.
   bool isLegalProbe(LibCellID masterId, const Node* target,
                     std::vector<CellChangeRecord>& cellChanges);
-  // [FRPORT] Refresh Network master/node filler classification from the final
-  // fillerSetting. Called under filler_repair_init_mutex_ only.
-  bool registerFillerRepairMasters();
-  // [FRPORT] Finalizes filler classification and publishes one immutable checker
-  // revision. Failed attempts remain retryable until fillerSetting is ready.
-  bool ensureFillerRepairReady();
   // [FRPORT] Installs the Implant checker at the destination initialization seam.
-  // Repair stays disabled until ensureFillerRepairReady() republishes it.
-  void installImplantLayerChecker(bool enableFillerRepair);
+  void installImplantLayerChecker();
 
   // Grid initialization
   void initGrid();
@@ -254,8 +245,6 @@ class DePlace {
   std::unique_ptr<Network> network_;     // The netlist, cells, etc.
   std::shared_ptr<Padding> padding_;
   std::unique_ptr<PlacementDRC> drc_engine_;
-  std::mutex filler_repair_init_mutex_;
-  std::atomic<bool> filler_repair_ready_{false};  // [FRPORT]
   std::unique_ptr<EdgeTypeTable> edge_type_table_;
   Rect core_;
 
