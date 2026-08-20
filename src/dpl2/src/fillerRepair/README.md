@@ -10,12 +10,15 @@ baseline.
 
 `ImplantLayerChecker::check()` is shared by std-to-std and filler-to-std.
 For a non-mutating proposal, the caller supplies a temporary standard-cell
-Node with the committed instance ID and the replacement master. The checker
-excludes the committed Node at that ID from its snapshot. Opto owns the
-`CellChangeRecord` vector; the checker appends checker-verified surrounding
-filler swaps into that reference and keeps **no** filler-change member state. The
-target may change to any of UDM's eight orientations; the checker transforms
-implant rectangles and uses the rotated footprint for bounds and overlap.
+Node with the replacement master. The probe is not registered in Network and
+does not reuse a committed infrastructure ID. The checker resolves the unique
+committed std cell or filler that exactly covers the probe footprint and
+excludes it from the snapshot; ambiguous, partial, or empty coverage fails
+closed. Opto owns the `CellChangeRecord` vector; the checker appends
+checker-verified surrounding filler swaps into that reference and keeps **no**
+filler-change member state. The target may change to any of UDM's eight
+orientations; the checker transforms implant rectangles and uses the rotated
+footprint for bounds and overlap.
 Target row/x must remain unchanged, and an orientation that creates overlap,
 leaves the grid, or violates implant polarity still fails closed. Surrounding
 filler swaps preserve each filler's existing orientation. The

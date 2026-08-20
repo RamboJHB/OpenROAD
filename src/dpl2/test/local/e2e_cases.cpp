@@ -326,7 +326,9 @@ class CheckerHarness
     }
 
     dpl2::Node temporary;
-    temporary.setId(target->getId());
+    // Match production findLegal: the probe is not a Network node and does
+    // not borrow the committed target's infrastructure id.
+    temporary.setId(static_cast<int>(network->getNodes().size()) + 17);
     temporary.setMaster(replacement);
     temporary.setType(dpl2::Node::CELL);
     temporary.setLeft(target->getLeft());

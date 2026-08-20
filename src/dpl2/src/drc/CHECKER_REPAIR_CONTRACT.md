@@ -44,12 +44,15 @@ member — `getFillerChanges()`, `initFillerRepair()`, `updateFillerRepair()` an
 `precheckFillerRepair()` do not exist.
 
 The same `check()` entry supports std-to-std and filler-to-std. For a
-non-mutating proposal, the temporary Node keeps the committed instance ID and
-supplies the same-footprint standard-cell master and orientation.
-`checkDirect()` already excludes `CheckRequest::instanceId` from the snapshot,
-so the original committed std cell or filler is ignored without rewriting
-Network or UDM. A filler target is also excluded from planner candidates, and
-successful output contains only surrounding filler `Replace` records.
+non-mutating proposal, the temporary Node supplies the same-footprint
+standard-cell master and orientation but is not inserted into Network and does
+not reuse the committed instance ID. The checker maps it to the unique
+committed std cell or filler exactly covering the requested footprint, then
+`checkDirect()` excludes that resolved `CheckRequest::instanceId` from the
+snapshot without rewriting Network or UDM. Ambiguous, partial, or empty
+coverage fails closed. A filler target is also excluded from planner
+candidates, and successful output contains only surrounding filler `Replace`
+records.
 
 ### Overlay API (used by the engine's private oracle)
 

@@ -94,9 +94,12 @@ suite, migration gate, and an ASan full run before enabling repair.
 ## 2. The caller boundary
 
 `ImplantLayerChecker::check()` is the shared std-to-std and filler-to-std
-entry. A non-mutating caller passes a temporary standard-cell Node carrying
-the committed instance ID and replacement master. Opto owns the result vector;
-the checker appends into it and keeps no filler-change member state.
+entry. A non-mutating caller may pass the registered target Node or a
+throw-away standard-cell Node carrying the replacement master. For an
+unregistered probe, the checker resolves the unique committed std cell or
+filler that exactly covers the requested footprint; the probe does not borrow
+that object's infrastructure ID. Opto owns the result vector; the checker
+appends into it and keeps no filler-change member state.
 
 Before the test command constructs its checker, it calls
 `DePlace::registerFillerRepairMasters()`. DePlace owns the real edge table, so
@@ -111,17 +114,18 @@ if (legal && !fcRecord.empty()) {
 }
 ```
 
-For filler -> std, pass a temporary Node with the filler instance ID. The
-position and footprint must match:
+For filler -> std, pass the temporary Node at the filler position. The
+committed filler remains in Grid and Network during the probe; it must be the
+only object exactly covering the requested footprint:
 
 ```cpp
 bool legal = checker.check(&temporaryStdCell, x, y, orient, fcRecord);
 ```
 
-`checkDirect()` excludes `CheckRequest::instanceId` from the snapshot, so the
-committed cell at that position is ignored whether it is a std cell or filler.
-The target is the replacement anchor, not an editable repair filler; the
-planner and final output also explicitly exclude its instance ID.
+The checker internally maps the probe to that committed object's infrastructure
+ID, then `checkDirect()` excludes it from the snapshot. The target is the
+replacement anchor, not an editable repair filler; the planner and final output
+also explicitly exclude its instance ID.
 
 Each current repair entry is
 `CellChangeRecord{Replace, CellData{LeafCellID}, x_, y_,

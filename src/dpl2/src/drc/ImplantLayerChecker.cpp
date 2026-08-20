@@ -778,9 +778,80 @@ bool ImplantLayerChecker::check(const Node* node, GridX x, GridY y, const eUTL::
   CheckRequest request;
   request.instanceId = node->getId();
   request.masterId = node->getMaster()->getId();
-  request.rowId = grid_->gridSnapDownY(node).v;
+  request.rowId = y.v;
   request.colId = x.v;
   request.orientation = orient;
+
+  // findLegal probes with a throw-away Node that is neither owned by Network
+  // nor painted on Grid. Resolve that probe to the one committed instance it
+  // exactly covers, while retaining the probe master, pose, and orientation in
+  // the CheckRequest. This makes a retained filler the replacement anchor
+  // without requiring the caller to borrow its infrastructure id.
+  const Node* registeredTarget = network_->getNode(request.instanceId);
+  if (registeredTarget != node) {
+    if (request.masterId >= 0
+        && static_cast<size_t>(request.masterId) >= masterItems_.size()) {
+      ImplantLayerChecker* self = const_cast<ImplantLayerChecker*>(this);
+      self->buildMasters();
+      self->buildMstIntervals();
+    }
+    if (siteWidth_ <= 0 || rowHeight_ <= 0 || request.masterId < 0
+        || static_cast<size_t>(request.masterId) >= masterItems_.size()
+        || !knownOrientation(request.orientation)) {
+      return false;
+    }
+
+    const MasterItem& probeMaster = masterItems_[request.masterId];
+    const Dbu probeWidth = orientedWidth(probeMaster, request.orientation);
+    const Dbu probeHeight = orientedHeight(probeMaster, request.orientation);
+    const ColId probeCols = (probeWidth + siteWidth_ - 1) / siteWidth_;
+    const RowId probeRows = (probeHeight + rowHeight_ - 1) / rowHeight_;
+    if (probeCols <= 0 || probeRows <= 0 || request.rowId < 0
+        || request.colId < 0
+        || request.rowId + probeRows > grid_->getRowCount().v
+        || request.colId + probeCols > grid_->getRowSiteCount().v) {
+      return false;
+    }
+
+    Node* covered = nullptr;
+    for (GridY row{request.rowId}; row < GridY{request.rowId + probeRows};
+         ++row) {
+      for (GridX col{request.colId}; col < GridX{request.colId + probeCols};
+           ++col) {
+        const Pixel* pixel = grid_->gridPixel(col, row);
+        if (pixel == nullptr || pixel->cell == nullptr) {
+          return false;
+        }
+        if (covered == nullptr) {
+          covered = pixel->cell;
+        } else if (covered != pixel->cell) {
+          return false;
+        }
+      }
+    }
+
+    if (covered == nullptr || covered->getMaster() == nullptr
+        || network_->getNode(covered->getId()) != covered
+        || (!covered->isStdCell() && !covered->isFiller())
+        || grid_->gridX(covered).v != request.colId
+        || grid_->gridSnapDownY(covered).v != request.rowId) {
+      return false;
+    }
+    const MasterId coveredMasterId = covered->getMaster()->getId();
+    if (coveredMasterId < 0
+        || static_cast<size_t>(coveredMasterId) >= masterItems_.size()) {
+      return false;
+    }
+    const MasterItem& coveredMaster = masterItems_[coveredMasterId];
+    const Dbu coveredWidth
+        = orientedWidth(coveredMaster, covered->getOrient());
+    const Dbu coveredHeight
+        = orientedHeight(coveredMaster, covered->getOrient());
+    if (coveredWidth != probeWidth || coveredHeight != probeHeight) {
+      return false;
+    }
+    request.instanceId = covered->getId();
+  }
 
   bool isLegal = checkDirect(request).isLegal;
   if (!isLegal) {
