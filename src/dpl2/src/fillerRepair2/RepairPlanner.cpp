@@ -686,15 +686,8 @@ RepairWindow finalizeWindow(int level,
   }
   window.bridgeFillers.assign(bridge.begin(), bridge.end());
 
-  // [PORT-ADAPT] Vertical reach of the guard, and an assumption worth
-  // checking against your rule deck: inter-row rules reach ONE row boundary,
-  // so a violation our edit could cause lives at most one row outside the
-  // window, and two rows of guard covers it with a margin. The horizontal
-  // reach is not guessed like this -- it comes from the checker's own
-  // getMaxRuleValue() (see FillerRepairEngine.cpp). If any implant rule of
-  // yours spans more than one row boundary, this must grow to match, and
-  // nothing will tell you: the checker would simply never be shown the row
-  // where the new violation appeared.
+  // Inter-row rules reach one boundary, so two guard rows cover violations an
+  // edit can create just outside the repair window.
   const std::vector<RowId> guardRows =
       clampRows(view, window.rows.front() - 2, window.rows.back() + 2);
   XInterval guardX = x;
@@ -1702,14 +1695,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   return summary;
 }
 
-// [PORT-TUNE] Everything not already cached in this chunk goes out as ONE
-// batch. Measured here, the alternative -- topping a short batch up with
-// candidates from the next chunk so every call is full -- was evaluated and
-// not done: it trades a fixed per-batch cost (one region scan) against
-// speculatively checking candidates that an earlier answer may make
-// unnecessary, and which way that lands depends on your thread count and on
-// what one candidate actually costs. If batches show up in a real profile,
-// that is the experiment to run; the [fr] transcript reports both values.
+// Everything not already cached in this chunk goes out as one checker batch.
 bool OracleGate::resolve(const Overlay* chunk,
                          const OverlayKey* chunkKeys,
                          std::size_t count,

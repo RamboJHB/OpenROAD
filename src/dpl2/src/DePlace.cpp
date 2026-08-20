@@ -53,58 +53,65 @@ DePlace::~DePlace() = default;
 
 bool DePlace::registerFillerRepairMasters()
 {
-  // [FRPORT] This is the late fillerSetting-to-Network classification seam.
   if (filler_setting_ == nullptr || network_ == nullptr) {
+    std::cout << "[fr][init] skip filler classification: missing Network or fillerSetting\n";
     return false;
   }
 
-  const std::vector<const PhysLibCell*> masters
-      = filler_setting_->getFillerPhysCells();
-  if (masters.empty()
-      || std::any_of(masters.begin(), masters.end(),
-                     [](const PhysLibCell* master) {
-                       return master == nullptr;
-                     })) {
+  const std::vector<const PhysLibCell*> configured = filler_setting_->getFillerPhysCells();
+  if (configured.empty()) {
+    std::cout << "[fr][init] no configured filler masters; direct implant DRC remains available\n";
     return false;
   }
 
-  // dbToOpendp::createNetwork imports the complete library catalog. At this
-  // stage only classification changes; rebuilding edges or adding masters
-  // would make a late configuration depend on infrastructure construction.
+  size_t classifiedMasters = 0;
   for (const auto& [id, master] : network_->getMasters()) {
-    (void) id;
     if (master == nullptr) {
-      return false;
+      std::cout << "[fr][init] skip null Network master id=" << id << '\n';
+      continue;
     }
-    master->setFiller(
-        filler_setting_->isFillerCell(master->getDbMaster()));
-  }
-  for (const PhysLibCell* configured : masters) {
-    if (network_->getMaster(configured->getLibCellId()) == nullptr) {
-      return false;
-    }
+    master->setFiller(filler_setting_->isFillerCell(master->getDbMaster()));
+    classifiedMasters += master->isFiller();
   }
 
-  // Nodes captured their type during import, before set_filler_option commonly
-  // runs. Synchronize only the CELL/FILLER distinction; preserve terminals,
-  // macro cells, and other infrastructure-owned types.
+  size_t usableConfigured = 0;
+  for (const PhysLibCell* master : configured) {
+    if (master == nullptr) {
+      std::cout << "[fr][init] skip null configured filler master\n";
+      continue;
+    }
+    Master* registered = network_->getMaster(master->getLibCellId());
+    if (registered == nullptr || !registered->isFiller()) {
+      std::cout << "[fr][init] skip unregistered filler master libCell="
+                << master->getLibCellId().getValue() << '\n';
+      continue;
+    }
+    ++usableConfigured;
+  }
+
+  size_t classifiedNodes = 0;
   for (const auto& [nid, node] : network_->getNodes()) {
-    (void) nid;
     if (node == nullptr || node->getMaster() == nullptr) {
-      return false;
+      std::cout << "[fr][init] skip Network node without master id=" << nid << '\n';
+      continue;
     }
     if (node->getMaster()->isFiller()) {
       node->setType(Node::FILLER);
     } else if (node->getType() == Node::FILLER) {
       node->setType(Node::CELL);
     }
+    ++classifiedNodes;
   }
-  return true;
+  std::cout << "[fr][init] filler classification complete\n"
+            << "[fr][init]   configured=" << configured.size()
+            << " usable=" << usableConfigured << '\n'
+            << "[fr][init]   fillerMasters=" << classifiedMasters
+            << " classifiedNodes=" << classifiedNodes << '\n';
+  return usableConfigured > 0;
 }
 
 bool DePlace::ensureFillerRepairReady()
 {
-  // [FRPORT] Publish one immutable checker revision before parallel checks.
   if (filler_repair_ready_.load(std::memory_order_acquire)) {
     return true;
   }
@@ -112,53 +119,43 @@ bool DePlace::ensureFillerRepairReady()
   if (filler_repair_ready_.load(std::memory_order_relaxed)) {
     return true;
   }
-  if (network_ == nullptr || grid_ == nullptr || filler_setting_ == nullptr
-      || edge_type_table_ == nullptr) {
-    std::cerr << "[fr][init] missing DePlace infrastructure\n";
+  if (network_ == nullptr || grid_ == nullptr || design_ == nullptr) {
+    std::cout << "[fr][init] filler repair unavailable\n"
+              << "[fr][init]   grid=" << (grid_ != nullptr)
+              << " network=" << (network_ != nullptr)
+              << " design=" << (design_ != nullptr) << '\n';
     return false;
   }
-  if (!registerFillerRepairMasters()) {
-    std::cerr << "[fr][init] fillerSetting is empty or names a master that "
-                 "is absent from Network\n";
-    return false;
+  bool candidatesReady = false;
+  if (filler_setting_ != nullptr) {
+    candidatesReady = registerFillerRepairMasters();
+  } else {
+    std::cout << "[fr][init] no fillerSetting; using existing Network filler flags\n";
   }
   if (drc_engine_ == nullptr) {
     initPlacementDRC();
   }
   if (drc_engine_ == nullptr) {
-    std::cerr << "[fr][init] PlacementDRC construction failed\n";
+    std::cout << "[fr][init] filler repair unavailable: PlacementDRC is null\n";
     return false;
   }
-
-  auto checker = std::make_unique<ipl::ImplantLayerChecker>(
-      grid_.get(), design_, network_.get());
-  for (const PhysLibCell* configured
-       : filler_setting_->getFillerPhysCells()) {
-    const int masterId = network_->getMasterId(configured->getLibCellId());
-    const auto item = checker->getMasterItems().find(masterId);
-    if (masterId < 0 || item == checker->getMasterItems().end()
-        || !item->second.isFiller) {
-      std::cerr << "[fr][init] checker did not capture configured filler "
-                   "master "
-                << configured->getLibCellId().getValue() << '\n';
-      return false;
-    }
+  if (!candidatesReady) {
+    std::cout << "[fr][init] direct implant DRC only; filler configuration will be retried\n";
+    return true;
   }
-  checker->setFillerRepairEnabled(true);
-  // addChecker replaces the pre-configuration checker of the same type.
-  drc_engine_->addChecker(DRCCheckerType::ImplantLayer, std::move(checker));
+
+  installImplantLayerChecker(true);
   filler_repair_ready_.store(true, std::memory_order_release);
+  std::cout << "[fr][init] checker revision published; engine remains lazy\n";
   return true;
 }
 
 void DePlace::installImplantLayerChecker(const bool enableFillerRepair)
 {
-  // [FRPORT] Checker construction stays centralized in DePlace.
   if (drc_engine_ == nullptr) {
     return;
   }
-  auto checker = std::make_unique<ipl::ImplantLayerChecker>(
-      grid_.get(), design_, network_.get());
+  auto checker = std::make_unique<ipl::ImplantLayerChecker>(grid_.get(), design_, network_.get());
   checker->setFillerRepairEnabled(enableFillerRepair);
   drc_engine_->addChecker(DRCCheckerType::ImplantLayer, std::move(checker));
 }

@@ -27,25 +27,6 @@ namespace {
 
 constexpr const char* kFillerMasters = "FL2 FH2 FS2 FH1 FL2D FH1D";
 
-bool hasDiagnostic(const std::vector<dpl2::ipl::Diagnostic>& diagnostics,
-                   const std::string& status)
-{
-  return std::any_of(
-      diagnostics.begin(), diagnostics.end(), [&](const auto& diagnostic) {
-        return diagnostic.status == status;
-      });
-}
-
-std::string diagnosticText(
-    const std::vector<dpl2::ipl::Diagnostic>& diagnostics)
-{
-  std::string text;
-  for (const auto& diagnostic : diagnostics) {
-    text += diagnostic.status + ": " + diagnostic.message + '\n';
-  }
-  return text;
-}
-
 bool sameChanges(const dpl2::ipl::FillerChanges& left,
                  const dpl2::ipl::FillerChanges& right)
 {
@@ -191,7 +172,7 @@ TEST_P(FillerRepairRuntimeE2E, StdCellReplacementReturnsOnlyFillerSwaps)
   RuntimeFixture fixture(GetParam().setup);
   ASSERT_TRUE(fixture.ready());
   dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
-  ASSERT_TRUE(engine.isReady()) << diagnosticText(engine.getInitDiagnostics());
+  ASSERT_TRUE(engine.isReady());
   dpl2::Node temporary;
   dpl2::ipl::CheckRequestOverlay request;
   ASSERT_TRUE(fixture.request(frt::CellRole::Target,
@@ -202,7 +183,7 @@ TEST_P(FillerRepairRuntimeE2E, StdCellReplacementReturnsOnlyFillerSwaps)
 
   const dpl2::fillerRepair::RepairOutcome outcome = engine.repair(request);
 
-  ASSERT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  ASSERT_TRUE(outcome.hasSolution);
   ASSERT_EQ(outcome.changes.size(), 1U);
   EXPECT_TRUE(std::all_of(
       outcome.changes.begin(), outcome.changes.end(), [](const auto& change) {
@@ -260,7 +241,7 @@ TEST_P(FillerRepairRuntimeE2E, RotationDoesNotMutateTheExistingCell)
 
   const auto outcome = engine.repair(request);
 
-  EXPECT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  EXPECT_TRUE(outcome.hasSolution);
   EXPECT_TRUE(outcome.changes.empty());
   EXPECT_EQ(fixture.design().snapshot(), before);
 }
@@ -281,7 +262,7 @@ TEST_P(FillerRepairRuntimeE2E, FindLegalReplacesExactlyOneFiller)
 
   const auto outcome = engine.repair(request);
 
-  ASSERT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  ASSERT_TRUE(outcome.hasSolution);
   EXPECT_TRUE(std::all_of(
       outcome.changes.begin(), outcome.changes.end(), [&](const auto& change) {
         const auto* id = std::get_if<eUNL::LeafCellID>(&change.cell_data_);
@@ -327,8 +308,6 @@ TEST_P(FillerRepairRuntimeE2E, RejectsFootprintChangeWithoutRetiling)
 {
   RuntimeFixture fixture(GetParam().setup);
   ASSERT_TRUE(fixture.ready());
-  dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
-  ASSERT_TRUE(engine.isReady());
   dpl2::Node temporary;
   dpl2::ipl::CheckRequestOverlay request;
   ASSERT_TRUE(fixture.request(frt::CellRole::Target,
@@ -336,11 +315,12 @@ TEST_P(FillerRepairRuntimeE2E, RejectsFootprintChangeWithoutRetiling)
                               temporary,
                               request));
 
-  const auto outcome = engine.repair(request);
+  dpl2::ipl::FillerChanges changes;
 
-  EXPECT_FALSE(outcome.hasSolution);
-  EXPECT_TRUE(outcome.changes.empty());
-  EXPECT_TRUE(hasDiagnostic(outcome.diagnostics, "TargetFootprintMismatch"));
+  EXPECT_FALSE(fixture.checker().check(&temporary, request.x, request.y,
+                                       request.orientation, changes,
+                                       request.overlayChanges));
+  EXPECT_TRUE(changes.empty());
 }
 
 TEST_P(FillerRepairRuntimeE2E, ConcurrentCheckerCallsAreDeterministic)
@@ -384,7 +364,7 @@ TEST(FillerRepairRuntimeE2E, TwoRowTargetUsesTheSameOneToOneContract)
   RuntimeFixture fixture(setup);
   ASSERT_TRUE(fixture.ready());
   dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
-  ASSERT_TRUE(engine.isReady()) << diagnosticText(engine.getInitDiagnostics());
+  ASSERT_TRUE(engine.isReady());
   dpl2::Node temporary;
   dpl2::ipl::CheckRequestOverlay request;
   ASSERT_TRUE(fixture.request(
@@ -397,12 +377,12 @@ TEST(FillerRepairRuntimeE2E, TwoRowTargetUsesTheSameOneToOneContract)
 
   const auto outcome = engine.repair(request);
 
-  EXPECT_TRUE(outcome.hasSolution) << diagnosticText(outcome.diagnostics);
+  EXPECT_TRUE(outcome.hasSolution);
   EXPECT_TRUE(outcome.changes.empty());
   EXPECT_EQ(fixture.design().snapshot(), before);
 }
 
-TEST(FillerRepairRuntimeE2E, MissingFillerConfigurationFailsClosed)
+TEST(FillerRepairRuntimeE2E, MissingFillerConfigurationDoesNotBlockInitialization)
 {
   auto provider = frt::makeE2ETestProvider();
   ASSERT_NE(provider, nullptr);
@@ -417,9 +397,7 @@ TEST(FillerRepairRuntimeE2E, MissingFillerConfigurationFailsClosed)
                                          infrastructure->network());
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
 
-  EXPECT_FALSE(engine.isReady());
-  EXPECT_TRUE(hasDiagnostic(engine.getInitDiagnostics(),
-                            "empty_filler_allow_list"));
+  EXPECT_TRUE(engine.isReady());
 }
 
 INSTANTIATE_TEST_SUITE_P(

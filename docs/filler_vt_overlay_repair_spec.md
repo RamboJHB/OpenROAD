@@ -43,14 +43,14 @@ The engine API is:
 ```cpp
 explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
 bool isReady() const;
-std::vector<ipl::Diagnostic> getInitDiagnostics() const;
 RepairOutcome repair(const ipl::CheckRequestOverlay& request) const;
 ```
 
 `RepairOutcome::changes` contains only same-footprint `OpType::Replace` records
 for surrounding filler instances. It never contains the target node and never
 contains `Add` or `Delete`. A failed repair returns an empty change list; partial
-repairs are forbidden.
+repairs are forbidden. Setup and skipped-request reasons are written to the
+structured `[fr]` log; the engine does not expose a second diagnostic API.
 
 ## Integration flow
 
@@ -72,16 +72,19 @@ all checkers pass.
 `dbToOpendp::createNetwork()` imports the complete library master catalog.
 `initPlacementDRC()` installs an ImplantLayerChecker with repair disabled so
 direct implant DRC remains available while fillerSetting is still being
-configured. The first `isLegal`/`findLegal` request crosses a one-time DePlace
-configuration barrier: it refreshes Network master/node filler classification
-from the final fillerSetting, rebuilds and replaces that checker, and publishes
-the immutable revision to workers. No target-specific `addMaster` is needed.
+configured. Each `isLegal`/`findLegal` request retries the DePlace configuration
+barrier until at least one usable filler master exists. That successful attempt
+refreshes Network master/node filler classification, replaces the checker, and
+publishes one immutable revision to workers. Missing or unusable filler entries
+are logged and skipped; direct implant DRC remains available before publication.
+No target-specific `addMaster` is needed.
 
 Only after direct DRC finds a violation does the published checker create its
-repair engine lazily with `std::call_once`. The engine takes Grid, Design,
-Network, and fillerSetting only from that checker. A configuration failure is
-retryable before publication; an engine initialization attempt is deliberately
-one-shot after publication.
+repair engine lazily with `std::call_once`. The engine reads Grid, Network,
+checker `MasterItem` metadata, and optional fillerSetting candidates through
+that checker. Individual unusable masters/nodes/candidates are logged and
+skipped. Only missing Grid/Network or invalid row/site geometry makes the
+engine unavailable; that one-shot result is shared by all checker workers.
 
 The request flow is:
 
@@ -99,10 +102,11 @@ Opto owns the target replacement and commits the returned filler replacements.
 
 ## Placement and algorithm rules
 
-- Gap/overlap precheck is restricted to legal row segments in the target
-  influence rows; blockages, halos, and invalid pixels are not treated as
-  required coverage.
-- Only configured filler masters are candidates.
+- Request shape, target identity, footprint, orientation, and location are
+  validated at the checker boundary. The engine consumes `CheckRequestOverlay`
+  without repeating those policy checks.
+- Configured filler masters are preferred; checker-helper data falls back to
+  Network masters already classified as fillers.
 - A filler swap preserves width, height, location, and orientation.
 - The target overlay node is excluded from the editable filler universe.
 - The planner keeps adaptive-L1 window growth, ranking, subset search, cache,
@@ -125,12 +129,15 @@ revision before starting another repair phase.
 
 ## Tests
 
-The repository runs three layers:
+The repository runs four layers:
 
 - pure GoogleTest planner coverage with no UDM;
 - final-checker overlay and planner E2E through `ImplantLayerCheckerHelper`;
 - runtime E2E using the test-only fake UDM provider while compiling the real
   infrastructure, checker, and engine sources.
+- a compact `fillerRepair2` GoogleTest that uses
+  `ImplantLayerCheckerHelper`, invokes the checker-owned engine, and verifies
+  the returned swap without mutating Network nodes.
 
 Required runtime cases cover std-to-std replacement, filler-to-new-std
 replacement, rotation, two-row targets, shifted row origins, malformed or

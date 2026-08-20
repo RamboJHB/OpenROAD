@@ -15,48 +15,34 @@
 
 #pragma once
 
-#include <memory>
-#include <vector>
-
 #include <drc/ImplantLayerChecker.h>
-#include <fillerRepair/Debug.h>
+
+#include <memory>
 
 namespace dpl2 {
-
-class Grid;
-class Network;
-
 namespace fillerRepair {
 
 struct RepairOutcome
 {
   bool hasSolution = false;
   ipl::FillerChanges changes;
-  std::vector<ipl::Diagnostic> diagnostics;
 };
 
 class FillerRepairEngine
 {
  public:
-  // The checker is the engine's only infrastructure seam. It exposes the
-  // Grid, Design and Network initialized by DePlace and must outlive the
-  // engine. Construction eagerly builds the immutable repair snapshot before
-  // the object can be published to checker worker threads.
+  // The checker exposes the Grid and Network initialized by DePlace and must
+  // outlive the engine. Construction builds the immutable repair snapshot.
   explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
   ~FillerRepairEngine();
 
   FillerRepairEngine(const FillerRepairEngine&) = delete;
   FillerRepairEngine& operator=(const FillerRepairEngine&) = delete;
 
-  // Diagnostics are retained for setup/debug reporting. A not-ready engine
-  // always fails closed and never returns partial changes.
   bool isReady() const;
-  std::vector<ipl::Diagnostic> getInitDiagnostics() const;
 
-  // The overlay record is caller-owned and represents either the old std cell
-  // (isLegal) or the one filler replaced by a new std cell (findLegal). Both
-  // footprints must be identical and the target may not move. The result is
-  // atomic, Replace-only, and never contains that overlay target itself.
+  // The checker already validates this request. The engine trusts its temporary
+  // Node and target overlay, then returns only checker-approved filler swaps.
   RepairOutcome repair(const ipl::CheckRequestOverlay& request) const;
 
  private:

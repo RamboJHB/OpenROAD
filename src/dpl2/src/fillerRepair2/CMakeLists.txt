@@ -14,3 +14,7 @@ target_include_directories(
 if(TARGET dpl2_filler_repair_deps)
   target_link_libraries(dpl2_filler_repair PUBLIC dpl2_filler_repair_deps)
 endif()
+
+if(UV_BUILD_TESTS)
+  add_subdirectory(test)
+endif()

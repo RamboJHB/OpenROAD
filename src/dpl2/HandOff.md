@@ -27,10 +27,10 @@ filler. Both remain pre-commit and non-mutating.
 
 ## Files to migrate
 
-Copy `src/dpl2/src/fillerRepair2/` to the destination as
-`src/dpl2/src/fillerRepair/`. Its sources are synchronized with the exercised
-`fillerRepair/` implementation; its CMake is intentionally the smaller
-destination form.
+Copy `src/dpl2/src/fillerRepair2/` as `src/dpl2/src/fillerRepair/`. Its runtime
+sources are synchronized with the exercised implementation, its CMake is the
+small integration form, and `test/FillerRepairPortableTest.cpp` follows the
+checker GoogleTest/helper pattern.
 
 The concrete destination touch points are:
 
@@ -70,10 +70,11 @@ linked into the destination library.
 
 Before the first parallel repair call:
 
-1. DePlace has finished Grid, Network, Design, and fillerSetting setup.
-2. `ensureFillerRepairReady()` has refreshed master/node filler classification
-   and replaced the pre-configuration checker exactly once.
-3. Every configured filler master has a Network Master and `isFiller=true`.
+1. DePlace has finished Grid, Network, and Design setup.
+2. `ensureFillerRepairReady()` retries until usable candidates exist, then
+   refreshes filler classification and replaces the initial checker exactly once.
+3. Usable configured filler masters have a Network Master and `isFiller=true`;
+   unusable entries are logged and skipped.
 4. Every standard-cell master opto may propose was imported by createNetwork.
 5. Grid and Network describe the same committed placement revision.
 6. No database mutation runs concurrently with checker/engine calls.
@@ -81,6 +82,11 @@ Before the first parallel repair call:
 The checker and lazy engine are immutable for that revision. Publish a new
 checker revision after a committed placement mutation before beginning a new
 repair phase.
+
+The engine does not require Design or PhysDesMgr. It builds planner metadata
+from checker `MasterItem` records and Network nodes. Only missing Grid/Network
+or invalid row/site geometry blocks initialization; other bad records and
+requests fail with empty changes and structured `[fr]` logs.
 
 ## Verification
 
@@ -101,6 +107,7 @@ The gate compiles:
 - the pure planner at C++17;
 - the runtime payload at C++20 with `-Wall -Wextra -Werror`;
 - `fillerRepair2` as a copy-only migration compile check;
+- the `fillerRepair2` helper-based checker/engine GoogleTest;
 - destination DePlace/Place/PlacementDRC sources;
 - checker replacement and atomic failed-dispatch lifecycle tests;
 - unchanged checker golden expectations;
@@ -115,7 +122,8 @@ The gate compiles:
 - Confirm destination `createNetwork()` imports every library master, including
   masters without a placed instance.
 - Confirm fillerSetting is complete before the first isLegal/findLegal worker
-  crosses the configuration barrier.
+  when repair candidates are expected; otherwise direct DRC still runs and
+  repair returns no solution.
 - Confirm opto treats the single Delete record as target overlay input and
   commits only the returned filler Replace records in the same transaction.
 - Establish the revision barrier used to replace the checker after commit.

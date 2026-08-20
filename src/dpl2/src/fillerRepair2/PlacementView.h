@@ -111,12 +111,9 @@ inline XInterval instanceSpan(const PlacementView& view, const PlacedInstance& i
   return XInterval{inst.x, inst.x + width};
 }
 
-// A row on a real design holds thousands of instances; we care about the
-// handful near the target. `instancesInRow` is sorted by x and -- on this path,
-// which only runs once the region is known gap- and overlap-free -- the
-// instances do not overlap, so their right edges rise monotonically too. That
-// is what lets the two searches below jump straight to the range of interest
-// instead of walking the row.
+// A row can hold thousands of instances; only a handful near the target are
+// relevant. The snapshot is sorted and non-overlapping, so right edges are
+// monotonic and the searches below can jump directly to the relevant range.
 
 // First index whose right edge lies strictly right of `bound` (the first
 // instance not entirely to the left of it).

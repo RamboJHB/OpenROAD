@@ -348,6 +348,7 @@ enum class RuleCheckType
 {
   WIDTH_RULE,
   SPACING_IMPLANT_RULE,
+  LIB_CELL_EDGE_SPACING_TABLE_RULE,
   OTHER_RULE,
 };
 
@@ -414,9 +415,31 @@ class TechRule
   {
   }
   const RuleCheck& getCheck() const { return *check_; }
+  RuleCheckType getCheckType() const { return check_->_type; }
+  const RuleCheck* getCheckPtr() const { return check_.get(); }
 
  private:
   std::shared_ptr<RuleCheck> check_;
+};
+
+class TechCellEdgeSpacingTable : public RuleCheck
+{
+ public:
+  struct Entry
+  {
+    const std::string& getEdgeType1() const { return edgeType1; }
+    const std::string& getEdgeType2() const { return edgeType2; }
+    std::string edgeType1;
+    std::string edgeType2;
+  };
+
+  TechCellEdgeSpacingTable()
+      : RuleCheck(RuleCheckType::LIB_CELL_EDGE_SPACING_TABLE_RULE)
+  {
+  }
+  const std::vector<Entry>& getEntries() const { return entries_; }
+
+  std::vector<Entry> entries_;
 };
 
 class TechLayer
@@ -474,6 +497,7 @@ class TechLib
 {
  public:
   const std::deque<TechLayer>& getLayerIter() const { return layers_; }
+  const std::vector<TechRule>& getRuleIter() const { return rules_; }
   const TechLayer& getTechLayer(TechLayerRelativeID relId) const
   {
     for (const TechLayer& layer : layers_) {
@@ -502,12 +526,15 @@ class TechLib
   }
 
   std::deque<TechLayer> layers_;
+  std::vector<TechRule> rules_;
 };
 
 enum class ShapeUsageE
 {
   UNKNOWN
 };
+
+using PhysMacroUsageSet = std::unordered_set<int>;
 
 enum class SignalTypeE
 {
@@ -629,6 +656,14 @@ class PhysMacroType
   }
   bool isCoreFiller() const { return type_ == TypeE::CORE_FILLER; }
   bool isPadFiller() const { return type_ == TypeE::PAD_FILLER; }
+  bool isPad() const
+  {
+    return type_ >= TypeE::PAD && type_ <= TypeE::PAD_FILLER;
+  }
+  bool isCover() const
+  {
+    return type_ == TypeE::COVER || type_ == TypeE::COVER_BUMP;
+  }
   bool isEndcap() const
   {
     return type_ >= TypeE::ENDCAP
@@ -820,6 +855,24 @@ class PhysBlockage
   std::vector<eLIB::TechShape> shapes_;
 };
 
+class PhysRegion
+{
+ public:
+  const std::vector<eUTL::Rect>& getRects() const { return rects_; }
+  std::vector<eUTL::Rect> rects_;
+};
+
+class PhysGroup
+{
+ public:
+  bool hasRegion() const { return !region_.rects_.empty(); }
+  const PhysRegion& getRegion() const { return region_; }
+  const std::vector<LeafCellID>& getLeafCells() const { return cells_; }
+
+  PhysRegion region_;
+  std::vector<LeafCellID> cells_;
+};
+
 class PhysDesMgr
 {
  public:
@@ -836,6 +889,18 @@ class PhysDesMgr
     return it != pins_.end() ? it->second : PhysPin{};
   }
   const std::deque<PhysBlockage>& getPhysBlockageIter() const;
+  const std::deque<PhysGroup>& getPhysGroupIter() const { return groups_; }
+
+  template <typename Arena, typename Visitor, typename Usage>
+  void iterateAllPhysCells(Arena&, Visitor& visitor, const Usage&) const
+  {
+    for (const auto& [id, data] : cells_) {
+      const PhysCell cell(&data);
+      if (visitor.filter(cell, id)) {
+        visitor.visit(cell, id);
+      }
+    }
+  }
 
   template <typename Arena, typename Visitor>
   void iterateAllPhysNets(Arena&, Visitor&, bool, bool) const
@@ -910,6 +975,7 @@ class PhysDesMgr
   std::map<LeafCellID, PhysCellData> cells_;
   std::map<PhysPinID, PhysPin> pins_;
   std::deque<PhysBlockage> blockages_;
+  std::deque<PhysGroup> groups_;
 };
 
 class PhysCellImpl

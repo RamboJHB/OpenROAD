@@ -65,8 +65,6 @@ class RepairOracle
       const std::vector<OracleRequest>& requests) = 0;
 };
 
-// Used by the portable planner tests, which travel with the payload -- so
-// this is NOT droppable unless you drop those too.
 inline bool isOracleSnapshotClean(const OracleResult& result)
 {
   return result.status == OracleStatus::Checked && result.isLegal

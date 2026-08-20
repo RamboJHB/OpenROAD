@@ -1,0 +1,7 @@
+if(UV_BUILD_TESTS)
+  file(GLOB COMPILER_FILES *.cpp)
+  add_library(uv3d_dpl2_filler_repair_test OBJECT ${COMPILER_FILES})
+  target_include_directories(uv3d_dpl2_filler_repair_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../.." "${TBB_ROOT}/include")
+  target_link_libraries(uv3d_dpl2_filler_repair_test PRIVATE dpl2Lib)
+  set(UNIT_TESTS "${UNIT_TESTS} uv3d_dpl2_filler_repair_test" CACHE STRING "Collect unit tests from sub-directories" FORCE)
+endif()

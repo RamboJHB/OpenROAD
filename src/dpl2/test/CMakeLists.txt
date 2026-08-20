@@ -147,6 +147,7 @@ dpl2_configure_chain_target(dpl2_fr_chain_common delivered)
 # DePlace.cpp; its other checker headers are intentionally not faked here.
 add_library(dpl2_fr_deplace_compile_check OBJECT
     "${CMAKE_CURRENT_LIST_DIR}/../src/DePlace.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/../src/dbToOpendp.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/PlacementDRC.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/../src/Place.cpp")
 target_link_libraries(dpl2_fr_deplace_compile_check PRIVATE
@@ -191,6 +192,23 @@ target_include_directories(
 target_link_libraries(
   dpl2_filler_repair2_compile_check PRIVATE dpl2_filler_repair_deps)
 dpl2_configure_chain_target(dpl2_filler_repair2_compile_check strict)
+
+add_executable(
+  dpl2_filler_repair2_portable_test
+  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/test/FillerRepairPortableTest.cpp"
+  "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp")
+target_include_directories(
+  dpl2_filler_repair2_portable_test
+  BEFORE PRIVATE "${DPL2_FR2_STAGE_ROOT}")
+target_link_libraries(
+  dpl2_filler_repair2_portable_test
+  PRIVATE GTest::gtest_main ZLIB::ZLIB dpl2_fr_chain_common
+          dpl2_filler_repair2_compile_check)
+dpl2_configure_chain_target(dpl2_filler_repair2_portable_test strict)
+gtest_discover_tests(
+  dpl2_filler_repair2_portable_test
+  TEST_PREFIX "portable-fr2."
+  DISCOVERY_TIMEOUT 30)
 
 # --- Targets defined ONCE for both UDM modes -------------------------------
 #

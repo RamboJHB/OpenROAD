@@ -6,12 +6,13 @@
 #include <infrastructure/Objects.h>
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
-#include <drc/PaddingChecker.h>
-#include <drc/EdgeSpacingChecker.h>
-#include <drc/BlockedLayersChecker.h>
-#include <drc/OneSiteGapChecker.h>
+// These checkers are not part of the destination snapshot yet.
+// #include <drc/PaddingChecker.h>
+// #include <drc/EdgeSpacingChecker.h>
+// #include <drc/BlockedLayersChecker.h>
+// #include <drc/OneSiteGapChecker.h>
 #include <drc/ImplantLayerChecker.h>
-#include <drc/FixedMaskCheck.h>
+// #include <drc/FixedMaskCheck.h>
 #include <PlacementDRC.h>
 
 #include <unlObjTypes.hh>
@@ -64,24 +65,21 @@ void DePlace::initPlacementDRC()
 
 // Register all DRC checkers into the extensible framework.
 // Adding a new rule = write a new Checker subclass + add one line here.
-  drc_engine_->addChecker(
-      DRCCheckerType::EdgeSpacing,
-      std::make_unique<EdgeSpacingChecker>(grid_.get(), *edge_type_table_, design_, desMgr_->getTopTech(), desMgr_));
-  drc_engine_->addChecker(
-      DRCCheckerType::BlockedLayers,
-      std::make_unique<BlockedLayersChecker>(grid_.get(), design_));
-  drc_engine_->addChecker(
-      DRCCheckerType::Padding,
-      std::make_unique<PaddingChecker>(grid_.get(), design_, padding_.get(), desMgr_));
-  drc_engine_->addChecker(
-      DRCCheckerType::OneSiteGap,
-      std::make_unique<OneSiteGapChecker>(grid_.get(), design_, disallow_one_site_gaps_));
+  // Re-enable these registrations when their checker sources are available.
+  // drc_engine_->addChecker(DRCCheckerType::EdgeSpacing,
+  //     std::make_unique<EdgeSpacingChecker>(grid_.get(), *edge_type_table_, design_, desMgr_->getTopTech(), desMgr_));
+  // drc_engine_->addChecker(DRCCheckerType::BlockedLayers,
+  //     std::make_unique<BlockedLayersChecker>(grid_.get(), design_));
+  // drc_engine_->addChecker(DRCCheckerType::Padding,
+  //     std::make_unique<PaddingChecker>(grid_.get(), design_, padding_.get(), desMgr_));
+  // drc_engine_->addChecker(DRCCheckerType::OneSiteGap,
+  //     std::make_unique<OneSiteGapChecker>(grid_.get(), design_, disallow_one_site_gaps_));
   // [FRPORT] fillerSetting is normally populated after DePlace imports the database.
   // Keep direct implant DRC available, but do not allow its one-shot lazy
   // repair initialization to observe the pre-configuration master catalog.
   installImplantLayerChecker(false);
-  drc_engine_->addChecker(DRCCheckerType::FixedMask,
-      std::make_unique<FixedMaskChecker>(grid_.get(), design_, desMgr_));
+  // drc_engine_->addChecker(DRCCheckerType::FixedMask,
+  //     std::make_unique<FixedMaskChecker>(grid_.get(), design_, desMgr_));
 }
 
 void DePlace::importClear()

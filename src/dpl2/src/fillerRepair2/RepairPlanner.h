@@ -61,14 +61,7 @@ namespace dpl2::fillerRepair {
 // Every search knob, in one place, so the transcript can print the exact
 // configuration a run used.
 //
-// [PORT-TUNE] Every default below was chosen against a SYNTHETIC oracle that
-// answers instantly. At runtime each checker call is real DRC work, so the
-// budgets are really "how much DRC time may one repair cost", and only your
-// hardware can answer that. Before touching any of them, get the two numbers
-// the transcript already prints on a real design -- `checker requests=` and
-// the wall time of one repair() -- and change one knob at a time. They are
-// safe as shipped: reaching a budget only ever ends the search early, it
-// never produces a wrong answer.
+// Reaching a budget ends the search without returning a partial answer.
 struct RepairConfig
 {
   // Checker calls one window may spend, the baseline request included.
@@ -79,11 +72,7 @@ struct RepairConfig
   // filled design does. Hitting either budget ends the search as *truncated*:
   // never a wrong answer, only a bounded give-up. <= 0 disables this one.
   int checkerCallBudgetPerRepair = 2048;
-  // Candidates per checker batch. [PORT-TUNE] The best value is roughly your
-  // checker's parallelFor width: a batch is one call whose candidates run in
-  // parallel, over a fixed per-batch cost (one region scan). Too small wastes
-  // that scan; too large speculatively checks candidates an earlier one in
-  // the same batch already made unnecessary.
+  // Candidates per checker batch. They run in parallel over one region scan.
   int batchSize = 32;
   // How many fillers one candidate may change at once. Only bites on windows
   // too large to enumerate exhaustively.
@@ -99,11 +88,6 @@ struct RepairConfig
   // How many times the window may grow before giving up. Without it a
   // no-solution case keeps growing until the rows run out, paying a window
   // budget each time. Also truncation, never a wrong answer.
-  //
-  // [PORT-TUNE] 32 is a safety valve, not a tuned value. What it should be is
-  // "how far from the target could a usable filler plausibly be" on your
-  // designs. The transcript names the level each answer came from
-  // ("grown xN"), so a histogram of that over a real run tells you directly.
   int maxAdaptiveLevels = 32;
   bool verbose = true;            // [fr] transcript; FR_VERBOSE=0 silences
 };
@@ -153,9 +137,7 @@ struct OverlayKey
   //     keys:  660  6 600  43 560  25 700  8 000  640
   //
   // so 8 covers every key without ever touching the heap, with headroom. This
-  // is a local fact about the enumerator, not something a destination needs
-  // to revisit -- and a longer key is not a limit anyway, it just spills to
-  // `overflow`. Only raising `maxSubsetSize` would move it.
+  // A longer key is not a limit; it spills to `overflow`.
   static constexpr std::size_t kInlineSwaps = 8;
 
   DbCoord guardXl = 0;
