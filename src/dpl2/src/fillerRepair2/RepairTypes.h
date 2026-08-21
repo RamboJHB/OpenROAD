@@ -52,10 +52,6 @@ struct XInterval
   {
     return xl < other.xh && other.xl < xh;
   }
-  bool operator==(const XInterval& other) const
-  {
-    return xl == other.xl && xh == other.xh;
-  }
 };
 
 // Which VT family a master belongs to. The search only ever asks "same or
@@ -96,7 +92,6 @@ struct Region
   RowId rowLo = 0;
   RowId rowHi = -1;  // empty when rowHi < rowLo
 
-  bool containsRow(RowId r) const { return r >= rowLo && r <= rowHi; }
   bool operator==(const Region& other) const
   {
     return x.xl == other.x.xl && x.xh == other.x.xh && rowLo == other.rowLo
@@ -139,7 +134,6 @@ struct TargetPlace
   RowId rowId = 0;
   DbCoord x = 0;
   Orient orientation = Orient::R0;
-  OpType operation = OpType::Replace;
 };
 
 enum class ViolationKind
@@ -200,22 +194,6 @@ inline InstanceId cellChangeRecordInstanceId(const CellChangeRecord& change)
              : static_cast<InstanceId>(-1);
 }
 
-inline MasterId cellChangeRecordNewMasterId(const CellChangeRecord& change)
-{
-  return static_cast<MasterId>(change.new_lib_cell_.getIndexValue());
-}
-
-inline bool sameCellChangeRecord(const CellChangeRecord& left,
-                                 const CellChangeRecord& right)
-{
-  return left.op_ == right.op_ && left.cell_data_ == right.cell_data_
-         && left.x_ == right.x_
-         && left.y_ == right.y_
-         && left.orig_lib_cell_ == right.orig_lib_cell_
-         && left.new_lib_cell_ == right.new_lib_cell_
-         && left.orientation_.getValue() == right.orientation_.getValue();
-}
-
 // --- Planner entry types ----------------------------------------------------
 
 // In: the retargeted cell, and what the checker said about it.
@@ -227,7 +205,7 @@ struct FillerRepairRequest
 
 // Out: the atomic, checker-verified surrounding-filler edits that make the
 // target transaction legal, or empty. Every edit is a Replace record; the
-// one target overlay is caller-owned and never appears here.
+// Target overlays are caller-owned and never appear here.
 // `hasSolution` with no changes means there was nothing to fix.
 struct FillerRepairResult
 {

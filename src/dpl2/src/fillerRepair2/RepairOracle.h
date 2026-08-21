@@ -65,10 +65,4 @@ class RepairOracle
       const std::vector<OracleRequest>& requests) = 0;
 };
 
-inline bool isOracleSnapshotClean(const OracleResult& result)
-{
-  return result.status == OracleStatus::Checked && result.isLegal
-         && result.violations.empty();
-}
-
 }  // namespace dpl2::fillerRepair

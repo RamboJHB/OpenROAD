@@ -9,8 +9,12 @@
 #include <infrastructure/network.h>
 
 #include <algorithm>
+#include <iterator>
 #include <optional>
+#include <set>
 #include <string>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -19,9 +23,7 @@ namespace fillerRepair {
 
 namespace {
 
-// Immutable planner-facing placement state. Engine rebuilds this component
-// when the Network master universe changes; the planner only sees it through
-// PlacementView accessors.
+// Immutable planner-facing placement snapshot built once with the engine.
 struct PlacementSnapshot
 {
   struct MasterRef
@@ -43,20 +45,6 @@ struct PlacementSnapshot
     PlacedInstance placed;
     RecordRef record;
   };
-
-  void clear()
-  {
-    siteWidth = 0;
-    rowHeight = 0;
-    defaultHaloX = 0;
-    coreXl = 0;
-    coreYl = 0;
-    rows.clear();
-    masters.clear();
-    instances.clear();
-    byRow.clear();
-    fillerMasterIds.clear();
-  }
 
   DbCoord siteWidth = 0;
   DbCoord rowHeight = 0;
@@ -199,6 +187,89 @@ class FillerCandidateCatalog
   bool hasPlacedCandidate_ = false;
 };
 
+// Per-request view that removes caller-deleted fillers from every hot row
+// query without mutating the engine's shared immutable snapshot. The anchor
+// remains addressable for the planner's target metadata check, but it is not
+// an editable row member.
+class OverlayPlacementView final : public PlacementView
+{
+ public:
+  OverlayPlacementView(const PlacementView& base,
+                       const std::set<InstanceId>& excluded,
+                       InstanceId anchor)
+      : base_(base), excluded_(excluded), anchor_(anchor)
+  {
+  }
+
+  const std::vector<RowId>& rows() const override { return base_.rows(); }
+  DbCoord siteWidth() const override { return base_.siteWidth(); }
+  const std::vector<PlacedInstance>& instancesInRow(
+      RowId rowId) const override
+  {
+    const std::vector<PlacedInstance>& source = base_.instancesInRow(rowId);
+    const auto cached = filteredRows_.find(rowId);
+    if (cached != filteredRows_.end()) {
+      return cached->second;
+    }
+    if (passthroughRows_.find(rowId) != passthroughRows_.end()) {
+      return source;
+    }
+    if (std::none_of(source.begin(), source.end(), [this](const auto& inst) {
+          return excluded_.find(inst.id) != excluded_.end();
+        })) {
+      passthroughRows_.insert(rowId);
+      return source;
+    }
+    auto [found, inserted] = filteredRows_.try_emplace(rowId);
+    (void) inserted;
+    found->second.reserve(source.size());
+    std::copy_if(source.begin(), source.end(),
+                 std::back_inserter(found->second), [this](const auto& inst) {
+                   return excluded_.find(inst.id) == excluded_.end();
+                 });
+    return found->second;
+  }
+  const PlacedInstance* instance(InstanceId id) const override
+  {
+    return id != anchor_ && excluded_.find(id) != excluded_.end()
+               ? nullptr
+               : base_.instance(id);
+  }
+  const MasterInfo* masterInfo(MasterId id) const override
+  {
+    return base_.masterInfo(id);
+  }
+  const std::vector<MasterId>& fillerMasterIds() const override
+  {
+    return base_.fillerMasterIds();
+  }
+  CellChangeRecord cellChangeRecord(InstanceId id,
+                                    MasterId masterId) const override
+  {
+    return base_.cellChangeRecord(id, masterId);
+  }
+  MasterCandidateResult getUsableMasterCandidates(
+      InstanceId id) const override
+  {
+    if (excluded_.find(id) != excluded_.end()) {
+      MasterCandidateResult result;
+      result.diagnostics.push_back(makeDiag(
+          Severity::Warning,
+          "CallerDeletedFiller",
+          cat("caller-deleted filler ", id, " is not editable")));
+      return result;
+    }
+    return base_.getUsableMasterCandidates(id);
+  }
+
+ private:
+  const PlacementView& base_;
+  const std::set<InstanceId>& excluded_;
+  InstanceId anchor_ = -1;
+  mutable std::unordered_map<RowId, std::vector<PlacedInstance>> filteredRows_;
+  mutable std::unordered_set<RowId> passthroughRows_;
+};
+
 }  // namespace
 
 class FillerRepairEngine::Impl final : private PlacementView
@@ -212,22 +283,34 @@ class FillerRepairEngine::Impl final : private PlacementView
         log_(debugLogging)
   {
     log_.section("engine", "ENGINE INITIALIZATION");
-    buildInitialSnapshot();
-    if (!initialized_) {
+    buildPlannerData();
+    for (const ipl::Diagnostic& diagnostic : checker_diagnostics_) {
+      log_.block(
+          "engine",
+          "Checker initialization note",
+          {{"status", diagnostic.status}, {"message", diagnostic.message}});
+    }
+    log_.block(
+        "engine",
+        "Initialization result",
+        {{"ready", cat(setup_ok_)},
+         {"nodes", cat(network_ != nullptr ? network_->getNodes().size() : 0)},
+         {"masters",
+          cat(network_ != nullptr ? network_->getMasters().size() : 0)}});
+    if (!setup_ok_) {
       log_.block("engine",
                  "Initialization skipped",
                  {{"reason", "required Grid/Network geometry is unavailable"}});
     }
   }
 
-  bool ready() const { return initialized_; }
+  bool ready() const { return setup_ok_; }
   RepairOutcome repair(const ipl::CheckRequestOverlay& request) const;
 
  private:
   static constexpr int kSnapshotHaloRows = 1;
 
   void buildPlannerData();
-  void buildInitialSnapshot();
   void logIssue(const std::string& code,
                 const std::string& message,
                 bool blocking = false);
@@ -278,10 +361,6 @@ class FillerRepairEngine::Impl final : private PlacementView
   Violation toPlannerViolation(const ipl::Violation& violation,
                                InstanceId targetInstance) const;
   Region snapshotGuard(const TargetPlace& target) const;
-  Region snapshotGuard(RowId rowId,
-                       DbCoord x,
-                       DbCoord width,
-                       DbCoord heightRows) const;
   // Grows `table` so `id` is a valid index (ids can exceed the presized
   // container counts only if the Network id spaces are not dense).
   template <typename T>
@@ -301,7 +380,6 @@ class FillerRepairEngine::Impl final : private PlacementView
   RepairConfig repair_config_;
   DebugLog log_;
   bool setup_ok_ = true;
-  bool initialized_ = false;
 };
 
 namespace {
@@ -375,8 +453,6 @@ ViolationRelation toRelation(ipl::Relationship relationship)
 
 void FillerRepairEngine::Impl::buildPlannerData()
 {
-  placement_.clear();
-  setup_ok_ = true;
   repair_config_.verbose = log_.enabled();
   if (grid_ == nullptr || network_ == nullptr) {
     logIssue("MissingDependency", "Grid and Network are required", true);
@@ -987,24 +1063,17 @@ Region FillerRepairEngine::Impl::snapshotGuard(const TargetPlace& target) const
   const DbCoord width = master != nullptr ? master->width : 0;
   const DbCoord heightRows
       = master != nullptr ? std::max<DbCoord>(master->height, 1) : 1;
-  return snapshotGuard(target.rowId, target.x, width, heightRows);
-}
-
-Region FillerRepairEngine::Impl::snapshotGuard(RowId rowId,
-                                               DbCoord x,
-                                               DbCoord width,
-                                               DbCoord heightRows) const
-{
   Region guard;
-  guard.x = XInterval{x - placement_.defaultHaloX,
-                      x + width + placement_.defaultHaloX};
+  guard.x = XInterval{target.x - placement_.defaultHaloX,
+                      target.x + width + placement_.defaultHaloX};
   const RowId minRow = placement_.rows.empty() ? 0 : placement_.rows.front();
   const RowId maxRow = placement_.rows.empty() ? 0 : placement_.rows.back();
-  guard.rowLo
-      = std::max<RowId>(minRow, rowId - static_cast<RowId>(kSnapshotHaloRows));
-  guard.rowHi = std::min<RowId>(maxRow,
-                                rowId + static_cast<RowId>(heightRows) - 1
-                                    + static_cast<RowId>(kSnapshotHaloRows));
+  guard.rowLo = std::max<RowId>(
+      minRow, target.rowId - static_cast<RowId>(kSnapshotHaloRows));
+  guard.rowHi
+      = std::min<RowId>(maxRow,
+                        target.rowId + static_cast<RowId>(heightRows) - 1
+                            + static_cast<RowId>(kSnapshotHaloRows));
   return guard;
 }
 RepairOutcome FillerRepairEngine::Impl::repair(
@@ -1017,7 +1086,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         "engine", "Repair skipped", {{"code", code}, {"reason", reason}});
   };
 
-  if (!initialized_) {
+  if (!setup_ok_) {
     skip("EngineNotReady", "required Grid/Network geometry is unavailable");
     return result;
   }
@@ -1030,14 +1099,47 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
-  const CellChangeRecord& overlay = request.overlayChanges.front();
-  const eUNL::LeafCellID* targetCell = cellChangeRecordLeafCellId(overlay);
-  if (targetCell == nullptr) {
-    skip("MissingTargetId", "first overlay change has no LeafCellID");
-    return result;
+  std::set<InstanceId> overlayInstanceIds;
+  for (const CellChangeRecord& overlay : request.overlayChanges) {
+    const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(overlay);
+    if (overlay.op_ != OpType::Delete || cellId == nullptr) {
+      skip("InvalidOverlay",
+           "every target overlay must be a Delete carrying LeafCellID");
+      return result;
+    }
+    const InstanceId id = network_->getNodeId(*cellId);
+    if (id < 0 || instance(id) == nullptr
+        || !overlayInstanceIds.insert(id).second) {
+      skip("InvalidOverlay",
+           cat("target overlay has an unknown or duplicate node ", id));
+      return result;
+    }
   }
 
-  const int targetId = network_->getNodeId(*targetCell);
+  const DbCoord targetX
+      = static_cast<DbCoord>(request.x.v) * placement_.siteWidth;
+  InstanceId targetId = -1;
+  for (const InstanceId id : overlayInstanceIds) {
+    const PlacedInstance* candidate = instance(id);
+    const MasterInfo* candidateMaster
+        = candidate != nullptr ? masterInfo(candidate->masterId) : nullptr;
+    if (candidateMaster == nullptr) {
+      continue;
+    }
+    const DbCoord heightRows = std::max<DbCoord>(candidateMaster->height, 1);
+    if (candidate->x <= targetX
+        && targetX < candidate->x + candidateMaster->width
+        && candidate->rowId <= request.y.v
+        && request.y.v < candidate->rowId + heightRows) {
+      targetId = id;
+      break;
+    }
+  }
+  if (targetId < 0) {
+    skip("MissingTargetId",
+         "no Delete overlay covers the temporary target origin");
+    return result;
+  }
   const PlacedInstance* current = instance(targetId);
   if (current == nullptr) {
     skip("UnknownTarget",
@@ -1061,9 +1163,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   target.instanceId = current->id;
   target.masterId = replacementId;
   target.rowId = request.y.v;
-  target.x = static_cast<DbCoord>(request.x.v) * placement_.siteWidth;
+  target.x = targetX;
   target.orientation = toPlannerOrient(request.orientation);
-  target.operation = OpType::Replace;
 
   const Region influence = snapshotGuard(target);
   log_.block("engine",
@@ -1107,7 +1208,14 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   FillerRepairRequest plannerRequest;
   plannerRequest.targetPlace = target;
   plannerRequest.violations = snapshot.violations;
-  internal::RepairPlanner planner(*this, oracle, repair_config_);
+  std::optional<OverlayPlacementView> overlayView;
+  const PlacementView& baseView = *this;
+  const PlacementView* plannerView = &baseView;
+  if (overlayInstanceIds.size() > 1) {
+    overlayView.emplace(baseView, overlayInstanceIds, target.instanceId);
+    plannerView = &*overlayView;
+  }
+  internal::RepairPlanner planner(*plannerView, oracle, repair_config_);
   const FillerRepairResult planned = planner.repair(plannerRequest);
   for (const Diagnostic& diagnostic : planned.diagnostics) {
     log_.block("planner",
@@ -1126,25 +1234,6 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       "Repair result",
       {{"status", "solution"}, {"filler changes", cat(result.changes.size())}});
   return result;
-}
-
-void FillerRepairEngine::Impl::buildInitialSnapshot()
-{
-  buildPlannerData();
-  for (const ipl::Diagnostic& diagnostic : checker_diagnostics_) {
-    log_.block(
-        "engine",
-        "Checker initialization note",
-        {{"status", diagnostic.status}, {"message", diagnostic.message}});
-  }
-  initialized_ = setup_ok_;
-  log_.block(
-      "engine",
-      "Initialization result",
-      {{"ready", cat(initialized_)},
-       {"nodes", cat(network_ != nullptr ? network_->getNodes().size() : 0)},
-       {"masters",
-        cat(network_ != nullptr ? network_->getMasters().size() : 0)}});
 }
 
 FillerRepairEngine::FillerRepairEngine(const ipl::ImplantLayerChecker& checker)

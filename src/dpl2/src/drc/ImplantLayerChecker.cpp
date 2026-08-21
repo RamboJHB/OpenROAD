@@ -987,28 +987,10 @@ ImplantLayerChecker::resolveRequest(
              "overlay request requires a temporary cell with a master"});
         return std::nullopt;
     }
-    if (request.overlayChanges.size() != 1) {
+    if (request.overlayChanges.empty()) {
         diagnostics.push_back(
             {"invalid_target_overlay_count",
-             "overlay request must name exactly one replaced Network node"});
-        return std::nullopt;
-    }
-    const CellChangeRecord& overlay = request.overlayChanges.front();
-    const LeafCellID* cellId = cellChangeLeafCellId(overlay);
-    if (overlay.op_ != OpType::Delete || cellId == nullptr
-        || !cellId->isValid()) {
-        diagnostics.push_back(
-            {"invalid_target_overlay",
-             "target overlay must be one Delete record carrying LeafCellID"});
-        return std::nullopt;
-    }
-    const Node* replaced = network_->getNode(*cellId);
-    if (replaced == nullptr || replaced->getMaster() == nullptr
-        || (!replaced->isStdCell() && !replaced->isFiller()
-            && replaced->getType() != Node::CELL)) {
-        diagnostics.push_back(
-            {"unknown_target_overlay",
-             "target overlay does not resolve to a standard cell or filler"});
+             "overlay request must name at least one replaced Network node"});
         return std::nullopt;
     }
     if (request.cell->getMaster()->isFiller()) {
@@ -1020,39 +1002,107 @@ ImplantLayerChecker::resolveRequest(
 
     const MasterItem* replacement
         = masterItem(request.cell->getMaster()->getId());
-    const MasterItem* original = masterItem(replaced->getMaster()->getId());
-    if (replacement == nullptr || original == nullptr) {
+    if (replacement == nullptr) {
         diagnostics.push_back(
             {"unknown_target_master",
-             "both target masters must be registered before repair starts"});
+             "the target master must be registered before repair starts"});
         return std::nullopt;
     }
-    if (replacement->width != original->width
-        || replacement->height != original->height) {
+    std::vector<const Node*> replacedNodes;
+    std::set<InstanceId> replacedNodeIds;
+    bool allFillers = true;
+    bool allStdCells = true;
+    for (const CellChangeRecord& overlay : request.overlayChanges) {
+        const LeafCellID* cellId = cellChangeLeafCellId(overlay);
+        if (overlay.op_ != OpType::Delete || cellId == nullptr
+            || !cellId->isValid()) {
+            diagnostics.push_back(
+                {"invalid_target_overlay",
+                 "every target overlay must be a Delete carrying LeafCellID"});
+            return std::nullopt;
+        }
+        const Node* replaced = network_->getNode(*cellId);
+        if (replaced == nullptr || replaced->getMaster() == nullptr
+            || (!replaced->isStdCell() && !replaced->isFiller()
+                && replaced->getType() != Node::CELL)) {
+            diagnostics.push_back(
+                {"unknown_target_overlay",
+                 "target overlay does not resolve to a standard cell or filler"});
+            return std::nullopt;
+        }
+        if (!replacedNodeIds.insert(replaced->getId()).second) {
+            diagnostics.push_back(
+                {"duplicate_target_overlay",
+                 makeMessage("duplicate target overlay ", replaced->getId())});
+            return std::nullopt;
+        }
+        if (masterItem(replaced->getMaster()->getId()) == nullptr) {
+            diagnostics.push_back(
+                {"unknown_target_master",
+                 makeMessage("overlay master is not registered for instance ",
+                             replaced->getId())});
+            return std::nullopt;
+        }
+        if (overlay.orig_lib_cell_.isValid()
+            && overlay.orig_lib_cell_
+                   != replaced->getMaster()->getDbMaster()) {
+            diagnostics.push_back(
+                {"target_original_master_mismatch",
+                 makeMessage("overlay original master disagrees with instance ",
+                             replaced->getId())});
+            return std::nullopt;
+        }
+        allFillers = allFillers && replaced->isFiller();
+        allStdCells = allStdCells
+                      && (replaced->isStdCell()
+                          || replaced->getType() == Node::CELL)
+                      && !replaced->isFiller();
+        replacedNodes.push_back(replaced);
+    }
+    const bool singleStdCell
+        = replacedNodes.size() == 1 && allStdCells;
+    if (!singleStdCell && !allFillers) {
         diagnostics.push_back(
-            {"target_footprint_mismatch",
-             "temporary and replaced cells must have identical footprints"});
+            {"mixed_target_overlay",
+             "target overlays must be one std cell or only filler cells"});
         return std::nullopt;
     }
-    if (overlay.orig_lib_cell_.isValid()
-        && overlay.orig_lib_cell_ != replaced->getMaster()->getDbMaster()) {
-        diagnostics.push_back(
-            {"target_original_master_mismatch",
-             "overlay original master disagrees with the Network node"});
-        return std::nullopt;
+    if (singleStdCell) {
+        const Node* replaced = replacedNodes.front();
+        const MasterItem* original
+            = masterItem(replaced->getMaster()->getId());
+        if (replacement->width != original->width
+            || replacement->height != original->height) {
+            diagnostics.push_back(
+                {"target_footprint_mismatch",
+                 "temporary and replaced std cells must have identical footprints"});
+            return std::nullopt;
+        }
+        if (request.x != grid_->gridX(replaced)
+            || request.y != grid_->gridSnapDownY(replaced)) {
+            diagnostics.push_back(
+                {"target_move_unsupported",
+                 "std-cell replacement must remain at the committed origin"});
+            return std::nullopt;
+        }
     }
-    if (request.x != grid_->gridX(replaced)
-        || request.y != grid_->gridSnapDownY(replaced)) {
-        diagnostics.push_back(
-            {"target_move_unsupported",
-             "filler repair accepts only an in-place one-to-one replacement"});
-        return std::nullopt;
-    }
+
     if (request.x.v < 0 || request.y.v < 0
         || request.x >= grid_->getRowSiteCount()
         || request.y >= grid_->getRowCount()) {
         diagnostics.push_back(
             {"placement_out_of_grid", "temporary target is outside the grid"});
+        return std::nullopt;
+    }
+
+    const Pixel* origin = grid_->gridPixel(request.x, request.y);
+    const Node* replaced
+        = origin != nullptr ? origin->cell : nullptr;
+    if (replaced == nullptr
+        || replacedNodeIds.find(replaced->getId()) == replacedNodeIds.end()) {
+        diagnostics.push_back(
+            {"target_overlay_origin_uncovered",
+             "a Delete overlay must cover the temporary target origin"});
         return std::nullopt;
     }
 
@@ -1064,7 +1114,8 @@ ImplantLayerChecker::resolveRequest(
     resolved.orientation = request.orientation;
     resolved.cell = request.cell;
     resolved.replaced = replaced;
-    resolved.overlayChanges = request.overlayChanges;
+    resolved.replacedNodes = std::move(replacedNodes);
+    resolved.replacedNodeIds = std::move(replacedNodeIds);
     return resolved;
 }
 
@@ -1162,16 +1213,6 @@ CheckResult ImplantLayerChecker::checkDirect(const ResolvedRequest& request) con
         return result;
     }
     std::set<InstanceId> excludedNodes = overlap.fillers;
-    excludedNodes.insert(request.instanceId);
-    for (const CellChangeRecord& change : request.overlayChanges) {
-        const LeafCellID* const cellId = cellChangeLeafCellId(change);
-        if (cellId != nullptr) {
-            const int nodeId = network_->getNodeId(*cellId);
-            if (nodeId >= 0) {
-                excludedNodes.insert(nodeId);
-            }
-        }
-    }
 
     const CheckShapes& snapshot = getSnapshot(request, excludedNodes);
     for (const CheckShape& shape : snapshot) {
@@ -1947,14 +1988,14 @@ std::vector<Violation> ImplantLayerChecker::makeViolations(
     return violations;
 }
 
-// Confirm that the proposed target covers only the one object named by the
-// request. Both isLegal and findLegal are strict one-to-one replacements.
+// Confirm that the proposed target exactly covers either one old std cell or
+// every filler named by a multi-Delete buffer insertion request.
 OverlapInfo ImplantLayerChecker::checkOverlap(
     const ResolvedRequest& request) const
 {
     OverlapInfo info;
     const MasterItem* master = masterItem(request.masterId);
-    if (grid_ == nullptr || request.replaced == nullptr || master == nullptr
+    if (grid_ == nullptr || request.replacedNodes.empty() || master == nullptr
         || siteWidth_ <= 0 || rowHeight_ <= 0) {
         info.diags = Diagnostic{"invalid_target_overlay",
                                 "cannot evaluate target footprint"};
@@ -1965,16 +2006,57 @@ OverlapInfo ImplantLayerChecker::checkOverlap(
         = std::max(1, (master->width + siteWidth_ - 1) / siteWidth_);
     const int heightRows
         = std::max(1, (master->height + rowHeight_ - 1) / rowHeight_);
+    const GridX targetXh{request.colId + widthSites};
+    const GridY targetYh{request.rowId + heightRows};
+    const auto incompleteCover = [&request]() {
+        return request.replacedNodes.size() == 1
+                   ? Diagnostic{
+                         "target_not_one_to_one",
+                         "temporary target must exactly replace one committed node"}
+                   : Diagnostic{
+                         "target_overlay_not_exact_cover",
+                         "Delete overlays must exactly cover the temporary target"};
+    };
+    for (const Node* replaced : request.replacedNodes) {
+        if (replaced == nullptr || replaced->getMaster() == nullptr) {
+            info.diags = Diagnostic{
+                "invalid_target_overlay",
+                "a deleted node has no resolved Network placement"};
+            return info;
+        }
+        const GridX replacedXl = grid_->gridX(replaced);
+        const GridY replacedYl = grid_->gridSnapDownY(replaced);
+        const GridX replacedXh = grid_->gridEndX(replaced);
+        const GridY replacedYh = grid_->gridEndY(replaced);
+        if (replacedXl < GridX{request.colId}
+            || replacedYl < GridY{request.rowId} || replacedXh > targetXh
+            || replacedYh > targetYh) {
+            info.diags = Diagnostic{
+                "target_overlay_exceeds_footprint",
+                "a deleted node extends outside the temporary target footprint"};
+            return info;
+        }
+        info.fillers.insert(replaced->getId());
+        for (GridY y = replacedYl; y < replacedYh; ++y) {
+            for (GridX x = replacedXl; x < replacedXh; ++x) {
+                const Pixel* pixel = grid_->gridPixel(x, y);
+                if (pixel == nullptr || pixel->cell != replaced) {
+                    info.diags = incompleteCover();
+                    return info;
+                }
+            }
+        }
+    }
     for (GridY y{request.rowId}; y < GridY{request.rowId + heightRows}; ++y) {
         for (GridX x{request.colId}; x < GridX{request.colId + widthSites}; ++x) {
             const Pixel* pixel = grid_->gridPixel(x, y);
             const Node* occupant = pixel != nullptr ? pixel->cell : nullptr;
             if (pixel == nullptr || !pixel->is_valid
                 || pixel->padding_reserved_by != nullptr
-                || occupant != request.replaced) {
-                info.diags = Diagnostic{
-                    "target_not_one_to_one",
-                    "temporary target must exactly replace one committed node"};
+                || occupant == nullptr
+                || info.fillers.find(occupant->getId())
+                       == info.fillers.end()) {
+                info.diags = incompleteCover();
                 return info;
             }
         }
@@ -2002,10 +2084,11 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
         }
         const InstanceId instanceId = network_->getNodeId(*cellId);
         const Node* filler = network_->getNode(instanceId);
-        if (instanceId == request.instanceId) {
+        if (request.replacedNodeIds.find(instanceId)
+            != request.replacedNodeIds.end()) {
             diagnostics.push_back(
                 {"target_cannot_be_changed_filler",
-                 "the replaced target is owned by the caller, not filler repair"});
+                 "caller-deleted target nodes cannot be changed by filler repair"});
             continue;
         }
         if (!seen.insert(instanceId).second) {
@@ -2437,7 +2520,6 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(
         return result;
     }
 
-    std::set<InstanceId> excludedNodes;
     const Node* node = request.replaced;
     if (node == nullptr || node->getMaster() == nullptr) {
         result.diagnostics.push_back(
@@ -2447,7 +2529,7 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(
         result.isLegal = false;
         return result;
     }
-    excludedNodes.insert(request.instanceId);
+    std::set<InstanceId> excludedNodes = request.replacedNodeIds;
     for (const CellChangeRecord& change : fillerChanges) {
         const LeafCellID* cellId = cellChangeLeafCellId(change);
         if (cellId != nullptr) {

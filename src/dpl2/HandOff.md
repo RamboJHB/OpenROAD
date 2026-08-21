@@ -6,9 +6,10 @@ This handoff describes the second destination-port version of fillerRepair.
 Its checker-side marker is the two repair failure logs added in
 `ImplantLayerChecker::repairOverlay()`.
 
-The module now has one target contract: a temporary standard-cell `Node` plus
-one `CellChangeRecord` Delete overlay naming the committed node it replaces.
-The result is an atomic list of surrounding filler `Replace` records.
+The module accepts a temporary standard-cell `Node` plus either one committed
+standard-cell Delete overlay, or multiple filler Delete overlays that exactly
+cover a new buffer footprint. The result is an atomic list of surrounding
+filler `Replace` records.
 
 There is no filler Add path, filler Delete output, footprint retiler, target
 movement, layout rewrite, engine `update`, external engine setter, or numeric
@@ -26,8 +27,9 @@ DePlace
   -> ImplantLayerChecker::checkPlaceWithOverlays(...)
 ```
 
-`isLegal` overlays one old standard cell. `findLegal` overlays one exact-cover
-filler. Both remain pre-commit and non-mutating.
+`isLegal` overlays one old standard cell. The checker/engine API accepts one or
+more exact-cover fillers for buffer insertion; current DePlace `findLegal`
+emits the one-filler subset. Both remain pre-commit and non-mutating.
 
 ## Files to migrate
 
@@ -35,6 +37,21 @@ Copy `src/dpl2/src/fillerRepair2/` as `src/dpl2/src/fillerRepair/`. Its runtime
 sources are synchronized with the exercised implementation, its CMake is the
 small integration form, and `test/FillerRepairPortableTest.cpp` follows the
 checker GoogleTest/helper pattern.
+
+The copy-only payload intentionally exposes just this runtime API:
+
+```cpp
+explicit FillerRepairEngine(const ImplantLayerChecker& checker);
+bool isReady() const;
+RepairOutcome repair(const CheckRequestOverlay& request) const;
+```
+
+The August 21 cleanup removed the remaining one-shot lifecycle wrappers and
+unused portable helpers. In particular, the payload has no separate
+`init`/`bindInfrastructure`/`update`/`precheck`, context setter, adapter, or
+request API predating `CheckRequestOverlay`. `PlacementView`, `RepairOracle`,
+`RepairPlanner`, and their request IDs are implementation-only planner
+boundaries, not opto integration APIs.
 
 The concrete destination touch points are:
 
@@ -48,7 +65,8 @@ The concrete destination touch points are:
 - `src/dpl2/src/dbToOpendp.cpp`: installs one Implant checker from
   `initPlacementDRC()` after importing the full master catalog and final
   fillerSetting;
-- `src/dpl2/src/Place.cpp`: exact one-filler candidate rule for findLegal;
+- `src/dpl2/src/Place.cpp`: current one-filler producer for findLegal; callers
+  may provide a complete multi-filler Delete list through the same API;
 - `src/dpl2/src/infrastructure/Objects.h`: shared `CellChangeRecord` wire, if
   the destination does not already have the same definition.
 
@@ -67,6 +85,11 @@ The minimal destination connection is:
 add_subdirectory(src/dpl2/src/fillerRepair)
 target_link_libraries(dpl2Lib PRIVATE dpl2::fillerRepair)
 ```
+
+The payload target compiles only `RepairPlanner.cpp` and
+`FillerRepairEngine.cpp`; its test target names
+`FillerRepairPortableTest.cpp` explicitly instead of globbing destination
+sources.
 
 The destination supplies its existing UDM, infrastructure, and checker include
 and link closure through `dpl2_filler_repair_deps` if needed. No fake target is
@@ -128,7 +151,7 @@ The gate compiles:
 - Confirm destination `createNetwork()` imports every library master, including
   masters without a placed instance.
 - Confirm fillerSetting is complete before `initPlacementDRC()`.
-- Confirm opto treats the single Delete record as target overlay input and
+- Confirm opto treats all Delete records as target overlay input and
   commits only the returned filler Replace records in the same transaction.
 - Establish the revision barrier used to replace the checker after commit.
 - Run a real-UDM design with both isLegal and findLegal; fake UDM is only a

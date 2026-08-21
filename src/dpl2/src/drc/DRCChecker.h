@@ -56,8 +56,8 @@ class DRCChecker
   // Two-list pre-commit variant:
   //    - cellChanges: in/out atomic repair transaction. ImplantLayer appends
   //      only surrounding filler Replace records after a complete solution;
-  //    - overlayChanges: input containing the one committed node replaced by
-  //      the temporary cell.
+  //    - overlayChanges: input containing one replaced standard cell, or all
+  //      exact-cover fillers deleted for the temporary cell.
   // A checker ignores whichever list is not part of its rule.
   virtual bool check(const Node* cell,
                      GridX x,

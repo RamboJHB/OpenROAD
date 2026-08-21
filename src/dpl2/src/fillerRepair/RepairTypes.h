@@ -164,7 +164,6 @@ struct TargetPlace
   RowId rowId = 0;
   DbCoord x = 0;
   Orient orientation = Orient::R0;
-  OpType operation = OpType::Replace;
 };
 
 enum class ViolationKind
@@ -252,7 +251,7 @@ struct FillerRepairRequest
 
 // Out: the atomic, checker-verified surrounding-filler edits that make the
 // target transaction legal, or empty. Every edit is a Replace record; the
-// one target overlay is caller-owned and never appears here.
+// Target overlays are caller-owned and never appear here.
 // `hasSolution` with no changes means there was nothing to fix.
 struct FillerRepairResult
 {

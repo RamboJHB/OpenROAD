@@ -23,7 +23,6 @@
 #include <initializer_list>
 #include <sstream>
 #include <string>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -67,33 +66,6 @@ class DebugLog
   explicit DebugLog(bool enabled = true) : enabled_(enabled) {}
 
   bool enabled() const { return enabled_; }
-  void setEnabled(bool enabled) { enabled_ = enabled; }
-
-  void msg(const char* stage, const std::string& text) const
-  {
-    if (enabled_) {
-      // No explicit flush: the transcript is on by default, and a flush per
-      // line is a syscall per line on a path that emits thousands. Normal
-      // stdio buffering already gives the behaviour each use wants -- line
-      // buffered on a terminal (interactive debugging sees each line as it
-      // happens), block buffered when redirected to a file (bulk runs pay
-      // almost nothing).
-      emit(stage, splitAndWrap(text), false);
-    }
-  }
-
-  // Deferred form for call sites inside loops: msg(stage, [&] { return
-  // cat(...); }). The plain overload above evaluates its argument at the call
-  // site, so a silenced log still pays for every cat() -- here the callable
-  // only runs when the transcript is on.
-  template <typename Fn,
-            typename = std::enable_if_t<std::is_invocable_v<const Fn&>>>
-  void msg(const char* stage, const Fn& make) const
-  {
-    if (enabled_) {
-      msg(stage, std::string(make()));
-    }
-  }
 
   // A visible phase boundary. The leading blank line prevents initialization,
   // snapshot, search-window, and result records from becoming one dense wall
@@ -279,11 +251,6 @@ class DebugLog
       wrapped.insert(wrapped.end(), pieces.begin(), pieces.end());
     }
     return wrapped;
-  }
-
-  static std::vector<std::string> splitAndWrap(const std::string& text)
-  {
-    return wrapLines(splitLogicalLines(text));
   }
 
   static size_t longestLogicalLine(const std::string& text)

@@ -3,8 +3,8 @@
 
 #include <fillerRepair/RepairPlanner.h>
 
-#include <iterator>
 #include <algorithm>
+#include <iterator>
 #include <map>
 #include <set>
 #include <tuple>

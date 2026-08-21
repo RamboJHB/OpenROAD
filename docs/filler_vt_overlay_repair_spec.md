@@ -8,16 +8,17 @@ Filler repair is a pre-commit, non-mutating search used by detailed placement.
 It tries to make one proposed standard-cell placement implant-legal by swapping
 the masters of nearby, already placed fillers.
 
-The supported target operation is exactly one in-place, same-footprint
-replacement:
+The checker boundary supports two in-place target forms:
 
 - `isLegal`: a temporary standard-cell `Node` replaces one committed standard
-  cell;
-- `findLegal`: a temporary standard-cell `Node` replaces one committed filler.
+  cell with the same footprint;
+- buffer insertion: a temporary standard-cell `Node` replaces one or more
+  committed fillers whose union exactly covers its footprint.
 
 One- and two-row target masters are supported. The target may use `R0`, `R180`,
-`MX`, or `MY`. Moving a target, changing its footprint, covering empty space,
-or replacing multiple committed nodes is rejected.
+`MX`, or `MY`. Moving an existing standard cell, covering empty space, mixing
+standard cells with filler Deletes, or deleting filler outside the target is
+rejected. This phase does not retile a partly covered footprint.
 
 Filler repair does not insert fillers, delete fillers, retile a footprint, or
 commit any database change.
@@ -36,9 +37,12 @@ struct CheckRequestOverlay {
 };
 ```
 
-`overlayChanges` must contain exactly one `OpType::Delete` record whose
-`LeafCellID` resolves to the committed Network node being replaced. The Delete
-record is overlay input only; it is not returned as repair output.
+`overlayChanges` must contain either one standard-cell `OpType::Delete`, or one
+or more filler `Delete` records. Each `LeafCellID` must be unique and resolve to
+a committed Network node. For filler Deletes, their complete footprints must
+be contained in the temporary target and their union must cover every usable
+target grid pixel exactly. Caller order is irrelevant. Delete records are
+overlay input only; they are not returned as repair output.
 
 The engine API is:
 
@@ -53,6 +57,8 @@ for surrounding filler instances. It never contains the target node and never
 contains `Add` or `Delete`. A failed repair returns an empty change list; partial
 repairs are forbidden. Setup and skipped-request reasons are written to the
 structured `[fr]` log; the engine does not expose a second diagnostic API.
+There is no second initialization, infrastructure-binding, update, precheck,
+adapter, or legacy numeric-request API.
 
 ## Integration flow
 
@@ -91,16 +97,16 @@ that checker. Individual unusable masters/nodes/candidates are logged and
 skipped. Only missing Grid/Network or invalid row/site geometry makes the
 engine unavailable; that one-shot result is shared by all checker workers.
 
-The request flow is:
+The supported request flow is:
 
 ```text
 isLegal:  temp std -> one old std Delete overlay -> surrounding filler Replace
-findLegal: temp std -> one old filler Delete overlay -> surrounding filler Replace
+buffer insertion: temp std -> N exact-cover filler Deletes -> surrounding filler Replace
 ```
 
-For `findLegal`, DePlace accepts a candidate site only when every target pixel
-belongs to the same filler and that filler's complete footprint equals the
-temporary node footprint.
+The current DePlace `findLegal` producer still emits the one-filler subset of
+this contract. A caller that gathers multiple covered fillers may pass the full
+Delete list directly through the same `PlacementDRC`/checker interface.
 
 Neither checker nor engine mutates UDM, Grid, Network, Node, or fillerSetting.
 Opto owns the target replacement and commits the returned filler replacements.
@@ -113,7 +119,9 @@ Opto owns the target replacement and commits the returned filler replacements.
 - Configured filler masters are preferred; checker-helper data falls back to
   Network masters already classified as fillers.
 - A filler swap preserves width, height, location, and orientation.
-- The target overlay node is excluded from the editable filler universe.
+- Every caller-deleted filler is excluded from snapshots and the editable
+  filler universe. A request-local filtered view is built lazily only for rows
+  reached by the planner.
 - The planner keeps adaptive-L1 window growth, ranking, subset search, cache,
   checker budgets, and baseline-delta acceptance.
 - Every proposed batch is accepted only by `checkPlaceWithOverlays`.
@@ -140,9 +148,11 @@ The repository runs four layers:
   infrastructure, checker, and engine sources.
 - a compact `fillerRepair2` GoogleTest that uses
   `ImplantLayerCheckerHelper`, invokes the checker-owned engine, and verifies
-  the returned swap without mutating Network nodes.
+  the returned swap without mutating Network nodes. It also covers unordered
+  multi-filler exact cover, missing/extra/duplicate/mixed overlays, exclusion
+  from repair candidates, and a two-row multi-filler target.
 
-Required runtime cases cover std-to-std replacement, filler-to-new-std
-replacement, rotation, two-row targets, shifted row origins, malformed or
-multi-node overlays, footprint mismatch, deterministic concurrent checker
-calls, Replace-only output, and zero database mutation.
+The combined gates cover std-to-std replacement, filler-to-new-std
+replacement, rotation, two-row targets, shifted row origins, malformed
+overlays, exact multi-filler cover, footprint mismatch, deterministic
+concurrent checker calls, Replace-only output, and zero database mutation.

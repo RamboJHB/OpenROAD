@@ -136,8 +136,8 @@ struct OverlayKey
   //     swaps:  0     1      2      3      4     5
   //     keys:  660  6 600  43 560  25 700  8 000  640
   //
-  // so 8 covers every key without ever touching the heap, with headroom. This
-  // A longer key is not a limit; it spills to `overflow`.
+  // so 8 covers every key without ever touching the heap, with headroom. A
+  // longer key is not a limit; it spills to `overflow`.
   static constexpr std::size_t kInlineSwaps = 8;
 
   DbCoord guardXl = 0;
@@ -181,7 +181,6 @@ struct OverlayKey
            && count == other.count
            && std::equal(begin(), end(), other.begin());
   }
-  bool operator!=(const OverlayKey& other) const { return !(*this == other); }
 };
 
 struct OverlayKeyHash

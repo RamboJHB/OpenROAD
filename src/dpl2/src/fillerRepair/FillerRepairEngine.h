@@ -7,9 +7,10 @@
 // feeds the pure search (RepairPlanner) through PlacementView and a
 // request-local RepairOracle.
 //
-// repair() accepts one temporary standard-cell Node plus exactly one overlay
-// record naming the same-footprint Network Node it replaces. It answers only
-// with surrounding filler Replace records and changes nothing.
+// repair() accepts one temporary standard-cell Node plus Delete overlays naming
+// either one same-footprint std cell or every filler exactly covered by a new
+// buffer. It answers only with surrounding filler Replace records and changes
+// nothing.
 // UDM, Grid and Network come out exactly as they went in; committing is the
 // caller's decision.
 

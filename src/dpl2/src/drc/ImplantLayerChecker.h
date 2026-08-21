@@ -226,7 +226,8 @@ struct OverlapInfo
 };
 
 // Public pre-commit wire. The temporary Node is the proposed std cell; the
-// single overlay record names the committed std cell/filler it replaces.
+// Delete overlays name either one committed std cell or every filler exactly
+// covered by a newly inserted buffer.
 struct CheckRequestOverlay
 {
     const Node* cell = nullptr;
@@ -326,8 +327,11 @@ private:
         ColId colId = -1;
         PhysOrientation orientation = PhysOrientationE::R0;
         const Node* cell = nullptr;
+        // Stable request-local target identity: the sole old std cell, or the
+        // deleted filler covering the target origin.
         const Node* replaced = nullptr;
-        std::vector<CellChangeRecord> overlayChanges;
+        std::vector<const Node*> replacedNodes;
+        std::set<InstanceId> replacedNodeIds;
     };
 
     // init functions

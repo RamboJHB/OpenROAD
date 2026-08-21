@@ -274,7 +274,7 @@ TEST_P(FillerRepairRuntimeE2E, FindLegalReplacesExactlyOneFiller)
   EXPECT_EQ(fixture.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairRuntimeE2E, RejectsMoreThanOneReplacedNodeAtomically)
+TEST_P(FillerRepairRuntimeE2E, RejectsDuplicateTargetOverlayAtomically)
 {
   RuntimeFixture fixture(GetParam().setup);
   ASSERT_TRUE(fixture.ready());
