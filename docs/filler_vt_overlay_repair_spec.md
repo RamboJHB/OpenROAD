@@ -140,17 +140,20 @@ revision before starting another repair phase.
 
 ## Tests
 
-The repository runs four layers:
+The repository runs five layers:
 
 - pure GoogleTest planner coverage with no UDM;
 - final-checker overlay and planner E2E through `ImplantLayerCheckerHelper`;
 - runtime E2E using the test-only fake UDM provider while compiling the real
   infrastructure, checker, and engine sources.
-- a compact `fillerRepair2` GoogleTest that uses
-  `ImplantLayerCheckerHelper`, invokes the checker-owned engine, and verifies
-  the returned swap without mutating Network nodes. It also covers unordered
-  multi-filler exact cover, missing/extra/duplicate/mixed overlays, exclusion
-  from repair candidates, and a two-row multi-filler target.
+- a `fillerRepair2` integration GoogleTest that uses
+  `ImplantLayerCheckerHelper`, invokes the checker-owned engine, and covers
+  valid and malformed single/multi-node overlays, lifecycle gating, one- and
+  two-row targets, concurrency, and zero Network mutation;
+- a `fillerRepair2` internal GoogleTest that bypasses checker/engine objects
+  and covers candidate filtering, swap construction, overlay identity, subset
+  enumeration, result correlation, planner success, failure, and protocol
+  errors through the two planner seams.
 
 The combined gates cover std-to-std replacement, filler-to-new-std
 replacement, rotation, two-row targets, shifted row origins, malformed

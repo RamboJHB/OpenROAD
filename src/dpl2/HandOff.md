@@ -35,8 +35,12 @@ emits the one-filler subset. Both remain pre-commit and non-mutating.
 
 Copy `src/dpl2/src/fillerRepair2/` as `src/dpl2/src/fillerRepair/`. Its runtime
 sources are synchronized with the exercised implementation, its CMake is the
-small integration form, and `test/FillerRepairPortableTest.cpp` follows the
-checker GoogleTest/helper pattern.
+small integration form, and its tests are split by responsibility:
+
+- `test/FillerRepairIntegrationTest.cpp` exercises the public checker/engine
+  boundary with `ImplantLayerCheckerHelper`;
+- `test/FillerRepairInternalTest.cpp` exercises planner behavior only through
+  in-memory `PlacementView` and `RepairOracle` doubles.
 
 The copy-only payload intentionally exposes just this runtime API:
 
@@ -47,7 +51,7 @@ RepairOutcome repair(const CheckRequestOverlay& request) const;
 ```
 
 The August 21 cleanup removed the remaining one-shot lifecycle wrappers and
-unused portable helpers. In particular, the payload has no separate
+unused migration helpers. In particular, the payload has no separate
 `init`/`bindInfrastructure`/`update`/`precheck`, context setter, adapter, or
 request API predating `CheckRequestOverlay`. `PlacementView`, `RepairOracle`,
 `RepairPlanner`, and their request IDs are implementation-only planner
@@ -87,9 +91,8 @@ target_link_libraries(dpl2Lib PRIVATE dpl2::fillerRepair)
 ```
 
 The payload target compiles only `RepairPlanner.cpp` and
-`FillerRepairEngine.cpp`; its test target names
-`FillerRepairPortableTest.cpp` explicitly instead of globbing destination
-sources.
+`FillerRepairEngine.cpp`; its test target explicitly names both test sources
+instead of globbing destination files.
 
 The destination supplies its existing UDM, infrastructure, and checker include
 and link closure through `dpl2_filler_repair_deps` if needed. No fake target is
@@ -136,11 +139,12 @@ The gate compiles:
 - the pure planner at C++17;
 - the runtime payload at C++20 with `-Wall -Wextra -Werror`;
 - `fillerRepair2` as a copy-only migration compile check;
-- the `fillerRepair2` helper-based checker/engine GoogleTest;
+- the `fillerRepair2` checker/engine integration GoogleTest;
+- the `fillerRepair2` internal-only planner GoogleTest;
 - destination DePlace/Place/PlacementDRC sources;
 - checker replacement and atomic failed-dispatch lifecycle tests;
 - unchanged checker golden expectations;
-- portable checker/planner E2E;
+- checker/planner E2E;
 - fake-UDM runtime E2E, including one- and two-row targets and concurrent
   checker calls.
 

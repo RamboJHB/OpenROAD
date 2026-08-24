@@ -23,7 +23,7 @@ build_dir="$dpl2_root/test/build/$build_name"
 # by default, so an unparallelised run pays one process launch per case.
 jobs="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 
-# ALL=1 builds and runs the whole suite (engine + planner + portable checker)
+# ALL=1 builds and runs the whole suite (engine + planner + checker integration)
 # instead of only the engine regression.
 if [[ "${ALL:-}" == "1" ]]; then
   build_target=(--target dpl2_filler_repair_e2e
@@ -31,7 +31,8 @@ if [[ "${ALL:-}" == "1" ]]; then
                 --target dpl2_filler_repair_checker_e2e
                 --target dpl2_implant_checker_simple_test
                 --target dpl2_filler_repair2_compile_check
-                --target dpl2_filler_repair2_portable_test
+                --target dpl2_filler_repair2_integration_test
+                --target dpl2_filler_repair2_internal_test
                 --target dpl2_placement_drc_lifecycle_test)
   # Bash 3.2 + `set -u` rejects expansion of an empty array.
   test_filter=(-R '.*')

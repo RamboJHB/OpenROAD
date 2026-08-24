@@ -320,7 +320,7 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.name;
     });
 
-TEST(FillerRepairPortableTest, CheckerRepairsTemporaryNodeWithoutMutation)
+TEST(FillerRepairIntegrationTest, CheckerRepairsTemporaryNodeWithoutMutation)
 {
   ImplantLayerCheckerHelper helper;
   helper.initialize(input());
@@ -378,7 +378,7 @@ TEST(FillerRepairPortableTest, CheckerRepairsTemporaryNodeWithoutMutation)
   EXPECT_EQ(bridge->getMaster()->getId(), oldBridgeMaster);
 }
 
-TEST(FillerRepairPortableTest,
+TEST(FillerRepairIntegrationTest,
      MultipleFillerDeletesExactCoverAndNeverBecomeRepairCandidates)
 {
   ImplantLayerCheckerHelper helper;
@@ -462,7 +462,7 @@ TEST(FillerRepairPortableTest,
   }
 }
 
-TEST(FillerRepairPortableTest, MultipleFillerDeletesMustExactlyCoverTarget)
+TEST(FillerRepairIntegrationTest, MultipleFillerDeletesMustExactlyCoverTarget)
 {
   ImplantLayerCheckerHelper helper;
   helper.initialize(multiDeleteInput());
@@ -521,7 +521,7 @@ TEST(FillerRepairPortableTest, MultipleFillerDeletesMustExactlyCoverTarget)
   EXPECT_TRUE(hasDiagnostic(result, "mixed_target_overlay"));
 }
 
-TEST(FillerRepairPortableTest, TwoRowTargetAcceptsMultipleFillerExactCover)
+TEST(FillerRepairIntegrationTest, TwoRowTargetAcceptsMultipleFillerExactCover)
 {
   ImplantLayerCheckerHelper helper;
   helper.initialize(twoRowMultiDeleteInput());
@@ -559,6 +559,196 @@ TEST(FillerRepairPortableTest, TwoRowTargetAcceptsMultipleFillerExactCover)
   EXPECT_TRUE(outcome.changes.empty());
   EXPECT_EQ(first->getMaster()->getId(), firstMaster);
   EXPECT_EQ(second->getMaster()->getId(), secondMaster);
+}
+
+TEST(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
+{
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(input());
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+
+  constexpr RowId targetRow = 1;
+  constexpr ColId targetCol = 4;
+  Network& network = *helper.getNetwork();
+  Node* replaced = network.getNode(targetRow * kColCount + targetCol);
+  ASSERT_NE(replaced, nullptr);
+  ASSERT_NE(replaced->getMaster(), nullptr);
+
+  Node temporary;
+  temporary.setId(replaced->getId());
+  temporary.setDbInst(replaced->getDbInst());
+  temporary.setMaster(network.getMaster(0));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(replaced->getWidth());
+  temporary.setHeight(replaced->getHeight());
+  temporary.setLeft(replaced->getLeft());
+  temporary.setBottom(replaced->getBottom());
+  temporary.setOrient(replaced->getOrient());
+  CheckRequestOverlay request{&temporary,
+                              GridX{targetCol},
+                              GridY{targetRow},
+                              replaced->getOrient(),
+                              {deleteRecord(*replaced)}};
+
+  request.overlayChanges.clear();
+  CheckResult result = checker.checkDirect(request);
+  EXPECT_FALSE(result.isLegal);
+  EXPECT_TRUE(hasDiagnostic(result, "invalid_target_overlay_count"));
+
+  CellChangeRecord malformed = deleteRecord(*replaced);
+  malformed.op_ = OpType::Replace;
+  request.overlayChanges = {malformed};
+  result = checker.checkDirect(request);
+  EXPECT_TRUE(hasDiagnostic(result, "invalid_target_overlay"));
+
+  malformed = deleteRecord(*replaced);
+  malformed.cell_data_ = std::string("not-a-leaf-cell");
+  request.overlayChanges = {malformed};
+  result = checker.checkDirect(request);
+  EXPECT_TRUE(hasDiagnostic(result, "invalid_target_overlay"));
+
+  malformed = deleteRecord(*replaced);
+  malformed.cell_data_ = LeafCellID(0, 99999);
+  request.overlayChanges = {malformed};
+  result = checker.checkDirect(request);
+  EXPECT_TRUE(hasDiagnostic(result, "unknown_target_overlay"));
+
+  malformed = deleteRecord(*replaced);
+  malformed.orig_lib_cell_ = network.getMaster(1)->getDbMaster();
+  request.overlayChanges = {malformed};
+  result = checker.checkDirect(request);
+  EXPECT_TRUE(hasDiagnostic(result, "target_original_master_mismatch"));
+
+  request.cell = nullptr;
+  result = checker.checkDirect(request);
+  EXPECT_TRUE(hasDiagnostic(result, "invalid_target_cell"));
+  EXPECT_EQ(replaced->getMaster()->getId(), 2);
+}
+
+TEST(FillerRepairIntegrationTest,
+     StandardCellReplacementRejectsMoveAndFootprintChange)
+{
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(multiDeleteInput());
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+
+  constexpr RowId targetRow = 1;
+  constexpr ColId targetCol = 6;
+  Network& network = *helper.getNetwork();
+  Node* replaced = network.getNode(targetRow * kColCount + targetCol);
+  ASSERT_NE(replaced, nullptr);
+  ASSERT_FALSE(replaced->isFiller());
+
+  Node temporary;
+  temporary.setId(replaced->getId());
+  temporary.setDbInst(replaced->getDbInst());
+  temporary.setType(Node::CELL);
+  temporary.setLeft(replaced->getLeft());
+  temporary.setBottom(replaced->getBottom());
+  temporary.setOrient(replaced->getOrient());
+  CheckRequestOverlay request{&temporary,
+                              GridX{targetCol},
+                              GridY{targetRow},
+                              replaced->getOrient(),
+                              {deleteRecord(*replaced)}};
+
+  temporary.setMaster(network.getMaster(6));
+  temporary.setWidth(DbuX{2 * kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  CheckResult result = checker.checkDirect(request);
+  EXPECT_TRUE(hasDiagnostic(result, "target_footprint_mismatch"));
+
+  temporary.setMaster(network.getMaster(0));
+  temporary.setWidth(DbuX{kSiteWidth});
+  request.x = GridX{targetCol + 1};
+  result = checker.checkDirect(request);
+  EXPECT_TRUE(hasDiagnostic(result, "target_move_unsupported"));
+}
+
+TEST(FillerRepairIntegrationTest, MultiFillerOverlayMustCoverTargetOrigin)
+{
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(multiDeleteInput());
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+
+  constexpr RowId targetRow = 1;
+  Network& network = *helper.getNetwork();
+  Node* first = network.getNode(targetRow * kColCount + 3);
+  Node* second = network.getNode(targetRow * kColCount + 4);
+  ASSERT_NE(first, nullptr);
+  ASSERT_NE(second, nullptr);
+
+  Node temporary;
+  temporary.setId(first->getId());
+  temporary.setDbInst(first->getDbInst());
+  temporary.setMaster(network.getMaster(6));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(DbuX{2 * kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  temporary.setLeft(DbuX{5 * kSiteWidth});
+  temporary.setBottom(DbuY{targetRow * kRowHeight});
+  temporary.setOrient(PhysOrientationE::MX);
+  const CheckRequestOverlay request{&temporary,
+                                    GridX{5},
+                                    GridY{targetRow},
+                                    PhysOrientationE::MX,
+                                    {deleteRecord(*first),
+                                     deleteRecord(*second)}};
+
+  const CheckResult result = checker.checkDirect(request);
+
+  EXPECT_FALSE(result.isLegal);
+  EXPECT_TRUE(hasDiagnostic(result, "target_overlay_origin_uncovered"));
+}
+
+TEST(FillerRepairIntegrationTest, DisabledRepairDoesNotPublishChanges)
+{
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(input());
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+  ASSERT_FALSE(checker.isFillerRepairEnabled());
+
+  constexpr RowId targetRow = 1;
+  constexpr ColId targetCol = 4;
+  Network& network = *helper.getNetwork();
+  Node* replaced = network.getNode(targetRow * kColCount + targetCol);
+  ASSERT_NE(replaced, nullptr);
+  Node temporary;
+  temporary.setId(replaced->getId());
+  temporary.setDbInst(replaced->getDbInst());
+  temporary.setMaster(network.getMaster(0));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(replaced->getWidth());
+  temporary.setHeight(replaced->getHeight());
+  temporary.setLeft(replaced->getLeft());
+  temporary.setBottom(replaced->getBottom());
+  temporary.setOrient(PhysOrientationE::MX);
+  std::vector<CellChangeRecord> overlays{deleteRecord(*replaced)};
+  FillerChanges changes;
+
+  EXPECT_FALSE(checker.check(&temporary,
+                             GridX{targetCol},
+                             GridY{targetRow},
+                             PhysOrientationE::MX,
+                             changes,
+                             overlays));
+  EXPECT_TRUE(changes.empty());
+}
+
+TEST(FillerRepairIntegrationTest, EngineWithoutGridIsUnavailable)
+{
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(input());
+  ImplantLayerChecker checker(nullptr, nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+
+  const fillerRepair::FillerRepairEngine engine(checker);
+
+  EXPECT_FALSE(engine.isReady());
 }
 
 }  // namespace

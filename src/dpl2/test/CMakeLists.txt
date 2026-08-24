@@ -167,10 +167,10 @@ target_link_libraries(
   dpl2_fr_command_compile_check PRIVATE dpl2_fr_chain_common)
 dpl2_configure_chain_target(dpl2_fr_command_compile_check strict)
 
-# The payload builds itself and its portable tests from its own CMakeLists;
+# The payload builds itself and its migration tests from its own CMakeLists;
 # we never list its files. Handing it our already-compiled infra/checker
 # objects is exactly what a destination does with DPL2_RUNTIME_LIBRARIES, so
-# the portable executables are defined once and used by both.
+# the executables are defined once and used by both.
 set(DPL2_FILLER_REPAIR_BUILD_TESTS ON)
 set(DPL2_RUNTIME_LIBRARIES dpl2_fr_chain_common)
 add_subdirectory("${DPL2_SRC}/fillerRepair" fillerRepair)
@@ -194,20 +194,47 @@ target_link_libraries(
 dpl2_configure_chain_target(dpl2_filler_repair2_compile_check strict)
 
 add_executable(
-  dpl2_filler_repair2_portable_test
-  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/test/FillerRepairPortableTest.cpp"
+  dpl2_filler_repair2_integration_test
+  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/test/FillerRepairIntegrationTest.cpp"
   "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp")
 target_include_directories(
-  dpl2_filler_repair2_portable_test
+  dpl2_filler_repair2_integration_test
   BEFORE PRIVATE "${DPL2_FR2_STAGE_ROOT}")
 target_link_libraries(
-  dpl2_filler_repair2_portable_test
+  dpl2_filler_repair2_integration_test
   PRIVATE GTest::gtest_main ZLIB::ZLIB dpl2_fr_chain_common
           dpl2_filler_repair2_compile_check)
-dpl2_configure_chain_target(dpl2_filler_repair2_portable_test strict)
+dpl2_configure_chain_target(dpl2_filler_repair2_integration_test strict)
 gtest_discover_tests(
-  dpl2_filler_repair2_portable_test
-  TEST_PREFIX "portable-fr2."
+  dpl2_filler_repair2_integration_test
+  TEST_PREFIX "fr2-integration."
+  DISCOVERY_TIMEOUT 30)
+
+# Internal-only migration test: compile the planner separately and exercise it
+# through PlacementView/RepairOracle doubles, without checker/engine objects.
+add_library(
+  dpl2_filler_repair2_internal_impl OBJECT
+  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/RepairPlanner.cpp")
+target_include_directories(
+  dpl2_filler_repair2_internal_impl
+  BEFORE PRIVATE "${DPL2_FR2_STAGE_ROOT}")
+target_link_libraries(
+  dpl2_filler_repair2_internal_impl PRIVATE dpl2_filler_repair_deps)
+dpl2_configure_chain_target(dpl2_filler_repair2_internal_impl strict)
+
+add_executable(
+  dpl2_filler_repair2_internal_test
+  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/test/FillerRepairInternalTest.cpp")
+target_include_directories(
+  dpl2_filler_repair2_internal_test
+  BEFORE PRIVATE "${DPL2_FR2_STAGE_ROOT}")
+target_link_libraries(
+  dpl2_filler_repair2_internal_test
+  PRIVATE GTest::gtest_main dpl2_filler_repair2_internal_impl)
+dpl2_configure_chain_target(dpl2_filler_repair2_internal_test strict)
+gtest_discover_tests(
+  dpl2_filler_repair2_internal_test
+  TEST_PREFIX "fr2-internal."
   DISCOVERY_TIMEOUT 30)
 
 # --- Targets defined ONCE for both UDM modes -------------------------------
