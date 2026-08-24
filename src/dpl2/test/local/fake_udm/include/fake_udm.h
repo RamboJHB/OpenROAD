@@ -804,12 +804,27 @@ class PhysCell
   PhysCell() = default;
   explicit PhysCell(const PhysCellData* data) : data_(data) {}
   bool isValid() const { return data_ != nullptr && data_->valid; }
-  // Instance name; commands resolve a user-supplied instance through it.
-  const std::string& getName() const { return data_->name; }
   const eLIB::PhysLibCell& getPhysMaster() const { return *data_->master; }
   PhysObjStatus getStatus() const { return data_->status; }
   eUTL::Point2D getOrigin() const { return data_->origin; }
   eUTL::PhysOrientation getOrient() const { return data_->orient; }
+
+ private:
+  const PhysCellData* data_ = nullptr;
+};
+
+// Logical hierarchy handle. Destination UDM exposes instance names through
+// HierManager::getLeafCell(), not through the physical placement handle.
+class LeafCell
+{
+ public:
+  LeafCell() = default;
+  explicit LeafCell(const PhysCellData* data) : data_(data) {}
+  const std::string& getName() const
+  {
+    static const std::string empty;
+    return data_ != nullptr ? data_->name : empty;
+  }
 
  private:
   const PhysCellData* data_ = nullptr;
@@ -1050,9 +1065,14 @@ class HierManager
  public:
   HierManager() = default;
   explicit HierManager(const PhysDesMgr* desMgr) : des_mgr_(desMgr) {}
-  PhysCell getLeafCell(LeafCellID id) const
+  LeafCell getLeafCell(LeafCellID id) const
   {
-    return des_mgr_ != nullptr ? des_mgr_->getPhysCell(id) : PhysCell{};
+    if (des_mgr_ == nullptr) {
+      return LeafCell{};
+    }
+    const auto found = des_mgr_->cells_.find(id);
+    return found != des_mgr_->cells_.end() ? LeafCell(&found->second)
+                                          : LeafCell{};
   }
 
  private:

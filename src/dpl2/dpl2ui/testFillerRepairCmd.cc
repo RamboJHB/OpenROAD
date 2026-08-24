@@ -12,7 +12,6 @@
 #include <iostream>
 #include <limits>
 #include <optional>
-#include <phys/physDesMgr.hh>
 #include <set>
 #include <sstream>
 #include <string>
@@ -54,20 +53,23 @@ std::vector<std::string> splitIdentifiers(std::string text)
 }
 
 Node* findNode(Network& network,
-               eUNL::PhysDesMgr& desMgr,
+               eUNL::Design& design,
                const std::string& nameOrId)
 {
   int nodeId = -1;
   if (parseNonNegativeInt(nameOrId, nodeId)) {
     return network.getNode(nodeId);
   }
+  const auto* hierMgr = design.getHierMgr();
+  if (hierMgr == nullptr) {
+    return nullptr;
+  }
   for (const auto& [id, owned] : network.getNodes()) {
     (void) id;
-    if (owned == nullptr) {
+    if (owned == nullptr || !owned->getDbInst().isValid()) {
       continue;
     }
-    const eUNL::PhysCell physical = desMgr.getPhysCell(owned->getDbInst());
-    if (physical.isValid() && physical.getName() == nameOrId) {
+    if (hierMgr->getLeafCell(owned->getDbInst()).getName() == nameOrId) {
       return owned.get();
     }
   }
@@ -149,7 +151,6 @@ bool TestFillerRepairCmd::exec()
   }
 
   DePlace* dePlace = DePlace::get();
-  eUNL::PhysDesMgr* desMgr = dePlace->getDesMgr();
   Network* network = dePlace->getNetwork();
   Grid* grid = dePlace->getGrid();
   fillerSetting* setting = dePlace->getFillerSetting();
@@ -160,8 +161,7 @@ bool TestFillerRepairCmd::exec()
             : nullptr;
   auto* checker = dynamic_cast<ipl::ImplantLayerChecker*>(checkerBase);
   eUNL::Design* design = checker != nullptr ? checker->getDesign() : nullptr;
-  if (desMgr == nullptr || network == nullptr || grid == nullptr
-      || grid->getPixelYSize() == 0) {
+  if (network == nullptr || grid == nullptr || grid->getPixelYSize() == 0) {
     std::cout << "ERROR: DePlace infrastructure is not initialized\n";
     return false;
   }
@@ -185,7 +185,7 @@ bool TestFillerRepairCmd::exec()
   std::set<int> seenNodeIds;
   overlays.reserve(instanceIds.size());
   for (const std::string& identifier : instanceIds) {
-    Node* node = findNode(*network, *desMgr, identifier);
+    Node* node = findNode(*network, *design, identifier);
     if (node == nullptr || node->getMaster() == nullptr
         || !node->getDbInst().isValid()) {
       std::cout << "ERROR: unknown or incomplete -inst value '" << identifier
