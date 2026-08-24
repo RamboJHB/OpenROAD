@@ -514,7 +514,7 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
         input.basePolar = enumValue<Layer::Polar>(basePolar);
     }
 
-    // [FRPORT] Restore filler candidates/options for test_filler_repair -load.
+    // [FRPORT] Restore filler candidates/options for dump-replay tests.
     if (version >= 4) {
         if (!(in >> section >> input.fillerSetting.present)
             || section != "filler_setting") {

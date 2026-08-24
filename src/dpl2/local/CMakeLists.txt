@@ -43,7 +43,6 @@ add_subdirectory("${DPL2_SRC}/fillerRepair" fillerRepair)
 
 add_library(dpl2_openroad_test STATIC
   OpenRoadTestWire.cpp
-  "${DPL2_ROOT}/dpl2ui/FillerRepairDumpReplay.cc"
   "${DPL2_ROOT}/dpl2ui/testFillerRepairCmd.cc")
 target_compile_features(dpl2_openroad_test PUBLIC cxx_std_20)
 target_include_directories(dpl2_openroad_test

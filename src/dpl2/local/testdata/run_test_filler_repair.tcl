@@ -7,11 +7,7 @@ read_def [file join $here filler_repair.def]
 
 dpl2_import_db
 
-# Existing real-design sweep: baseline checker gate plus one same-footprint
-# proposal per movable standard cell.
-test_filler_repair
-
-# Backward-compatible same-footprint master swap.
+# Name-based single-instance checker probe.
 test_filler_repair -inst U0 -master TH4
 
 puts "DPL2_REAL_ODB_TEST_PASS"

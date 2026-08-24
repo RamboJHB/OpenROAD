@@ -55,7 +55,5 @@ test_log="${build_dir}/dpl2-real-odb-test.log"
   cd "${repo_root}/src/dpl2/local/testdata"
   "${build_dir}/src/openroad" run_test_filler_repair.tcl
 ) | tee "${test_log}"
-grep -q "proposals=" "${test_log}"
-grep -q "invalidResults=0" "${test_log}"
-grep -q "LEGAL: node=" "${test_log}"
+grep -q "LEGAL: targetMaster=.* overlays=1" "${test_log}"
 grep -q "DPL2_REAL_ODB_TEST_PASS" "${test_log}"

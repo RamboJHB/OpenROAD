@@ -1,9 +1,12 @@
 #include <drc/ImplantLayerChecker.h>
 #include <drc/ImplantLayerCheckerHelper.h>
 #include <fillerRepair/FillerRepairEngine.h>
+#include <infrastructure/Grid.h>
 #include <gtest/gtest.h>
 
 #include <array>
+#include <limits>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -182,6 +185,140 @@ ImplantInput twoRowMultiDeleteInput()
   data.fillerSetting.fillerMasterIds = {0};
   return data;
 }
+
+enum class OverlayProbeInput
+{
+  Base,
+  MultiDelete
+};
+
+struct OverlayProbeCase
+{
+  std::string name;
+  OverlayProbeInput input;
+  std::vector<InstanceId> overlayIds;
+  MasterId targetMasterId;
+  bool accepted;
+  std::string diagnostic;
+};
+
+const std::vector<OverlayProbeCase>& overlayProbeCases()
+{
+  static const std::vector<OverlayProbeCase> cases{
+      {"single_std_to_std", OverlayProbeInput::Base, {16}, 0, true, ""},
+      {"single_filler_to_std", OverlayProbeInput::Base, {15}, 1, true, ""},
+      {"multiple_fillers_to_std",
+       OverlayProbeInput::MultiDelete,
+       {15, 16},
+       6,
+       true,
+       ""},
+      {"std_to_filler_master",
+       OverlayProbeInput::Base,
+       {16},
+       3,
+       false,
+       "target_master_is_filler"},
+      {"mixed_std_and_filler_overlays",
+       OverlayProbeInput::MultiDelete,
+       {15, 18},
+       6,
+       false,
+       "mixed_target_overlay"}};
+  return cases;
+}
+
+class FillerRepairOverlayProbeTest
+    : public ::testing::TestWithParam<OverlayProbeCase>
+{
+};
+
+TEST_P(FillerRepairOverlayProbeTest, BuildsTemporaryNodeAndCallsChecker)
+{
+  const OverlayProbeCase& testCase = GetParam();
+  SCOPED_TRACE(testCase.name);
+
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(testCase.input == OverlayProbeInput::MultiDelete
+                        ? multiDeleteInput()
+                        : input());
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+  checker.setFillerRepairEnabled(true);
+
+  Grid& grid = *helper.getGrid();
+  Network& network = *helper.getNetwork();
+  Master* targetMaster = network.getMaster(testCase.targetMasterId);
+  ASSERT_NE(targetMaster, nullptr);
+  const auto targetItem
+      = checker.getMasterItems().find(testCase.targetMasterId);
+  ASSERT_NE(targetItem, checker.getMasterItems().end());
+
+  std::vector<Node*> overlays;
+  int left = std::numeric_limits<int>::max();
+  int bottom = std::numeric_limits<int>::max();
+  for (const InstanceId id : testCase.overlayIds) {
+    Node* node = network.getNode(id);
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->getMaster(), nullptr);
+    overlays.push_back(node);
+    left = std::min(left, node->getLeft().v);
+    bottom = std::min(bottom, node->getBottom().v);
+  }
+  ASSERT_FALSE(overlays.empty());
+
+  const GridX x = grid.gridX(DbuX{left});
+  const GridY y = grid.gridSnapDownY(DbuY{bottom});
+  const Pixel* origin = grid.gridPixel(x, y);
+  ASSERT_NE(origin, nullptr);
+  ASSERT_NE(origin->cell, nullptr);
+
+  Node temporary;
+  temporary.setId(origin->cell->getId());
+  temporary.setDbInst(origin->cell->getDbInst());
+  temporary.setMaster(targetMaster);
+  temporary.setType(targetMaster->isFiller() ? Node::FILLER : Node::CELL);
+  temporary.setWidth(DbuX{targetItem->second.width});
+  temporary.setHeight(DbuY{targetItem->second.height});
+  temporary.setLeft(DbuX{left});
+  temporary.setBottom(DbuY{bottom});
+  temporary.setOrient(overlays.front()->getOrient());
+  temporary.setFixed(false);
+  temporary.setPlaced(false);
+
+  std::vector<CellChangeRecord> overlayChanges;
+  std::vector<MasterId> originalMasters;
+  overlayChanges.reserve(overlays.size());
+  originalMasters.reserve(overlays.size());
+  for (const Node* node : overlays) {
+    overlayChanges.push_back(deleteRecord(*node));
+    originalMasters.push_back(node->getMaster()->getId());
+  }
+
+  const CheckRequestOverlay request{
+      &temporary, x, y, temporary.getOrient(), overlayChanges};
+  const CheckResult direct = checker.checkDirect(request);
+  if (!testCase.diagnostic.empty()) {
+    EXPECT_TRUE(hasDiagnostic(direct, testCase.diagnostic));
+  }
+
+  FillerChanges changes;
+  EXPECT_EQ(
+      checker.check(
+          &temporary, x, y, temporary.getOrient(), changes, overlayChanges),
+      testCase.accepted);
+  for (size_t index = 0; index < overlays.size(); ++index) {
+    EXPECT_EQ(overlays[index]->getMaster()->getId(), originalMasters[index]);
+  }
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    OverlayKinds,
+    FillerRepairOverlayProbeTest,
+    ::testing::ValuesIn(overlayProbeCases()),
+    [](const ::testing::TestParamInfo<OverlayProbeCase>& info) {
+      return info.param.name;
+    });
 
 TEST(FillerRepairPortableTest, CheckerRepairsTemporaryNodeWithoutMutation)
 {

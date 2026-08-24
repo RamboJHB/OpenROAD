@@ -7,17 +7,14 @@
 
 namespace dpl2 {
 
-// Exercises the same-footprint replacement flow used by opto:
+// Exercises the checker overlay flow used by opto:
 //
-//   test_filler_repair
-//   test_filler_repair -inst <instance> -master <master>
-//   test_filler_repair -load <checker.dump.gz>
-//   test_filler_repair -load <checker.dump.gz>
-//                      -inst <node-id> -master <master-id>
+//   test_filler_repair -inst {<instance> ...} -master <master>
 //
-// With a live design, names or numeric Network ids are accepted. With -load,
-// ids must be numeric values from the checker-helper dump. The command never
-// commits the target swap or returned filler replacements.
+// Instance/master names and numeric Network ids are accepted. The instance
+// list may name one committed std cell or every filler covered by one target
+// std cell. The command builds a throw-away Node, invokes ImplantLayerChecker,
+// and never commits the target replacement or returned filler repairs.
 class TestFillerRepairCmd : public uvTCL::CciCommand
 {
  public:
@@ -28,12 +25,18 @@ class TestFillerRepairCmd : public uvTCL::CciCommand
                           false,
                           false,
                           false),
-        instOpt_(this, "inst", "instance name or Network node id", false,
-                 false, false),
-        masterOpt_(this, "master", "replacement master name or Network id",
-                   false, false, false),
-        loadOpt_(this, "load", "gzip checker-helper dump to replay", false,
-                 false, false)
+        instOpt_(this,
+                 "inst",
+                 "instance names or Network node ids",
+                 false,
+                 false,
+                 false),
+        masterOpt_(this,
+                   "master",
+                   "replacement master name or Network id",
+                   false,
+                   false,
+                   false)
   {
   }
 
@@ -42,7 +45,6 @@ class TestFillerRepairCmd : public uvTCL::CciCommand
  private:
   eUNL::CciStringOption instOpt_;
   eUNL::CciStringOption masterOpt_;
-  eUNL::CciStringOption loadOpt_;
 };
 
 }  // namespace dpl2
