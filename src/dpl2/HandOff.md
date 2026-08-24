@@ -38,7 +38,9 @@ sources are synchronized with the exercised implementation, its CMake is the
 small integration form, and its tests are split by responsibility:
 
 - `test/FillerRepairIntegrationTest.cpp` exercises the public checker/engine
-  boundary with `ImplantLayerCheckerHelper`;
+  boundary with `ImplantLayerCheckerHelper`. Its five-row fixtures assert at
+  least six cells per row and cover 50%, 75%, and 90% occupied-site
+  utilization;
 - `test/FillerRepairInternalTest.cpp` exercises planner behavior only through
   in-memory `PlacementView` and `RepairOracle` doubles.
 

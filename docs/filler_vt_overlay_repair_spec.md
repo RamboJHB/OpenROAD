@@ -149,7 +149,9 @@ The repository runs five layers:
 - a `fillerRepair2` integration GoogleTest that uses
   `ImplantLayerCheckerHelper`, invokes the checker-owned engine, and covers
   valid and malformed single/multi-node overlays, lifecycle gating, one- and
-  two-row targets, concurrency, and zero Network mutation;
+  two-row targets, concurrency, and zero Network mutation. Every migration
+  fixture has at least five rows and six cells intersecting every row; its
+  density matrix includes exact 50%, 75%, and 90% occupied-site utilization;
 - a `fillerRepair2` internal GoogleTest that bypasses checker/engine objects
   and covers candidate filtering, swap construction, overlay identity, subset
   enumeration, result correlation, planner success, failure, and protocol

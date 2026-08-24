@@ -4,6 +4,7 @@
 #include <infrastructure/Grid.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <string>
@@ -16,8 +17,19 @@ namespace {
 constexpr Dbu kSiteWidth = 10;
 constexpr Dbu kRowHeight = 100;
 constexpr Dbu kMinRule = 20;
-constexpr RowId kRowCount = 3;
-constexpr ColId kColCount = 12;
+constexpr RowId kRowCount = 5;
+constexpr ColId kColCount = 20;
+constexpr int kDefaultUtilization = 90;
+
+constexpr InstanceId nodeId(RowId row, ColId col)
+{
+  return row * kColCount + col;
+}
+
+constexpr ColId occupiedColumns(int utilization)
+{
+  return kColCount * utilization / 100;
+}
 
 ::Rect rect(Dbu xl, Dbu yl, Dbu xh, Dbu yh)
 {
@@ -101,7 +113,61 @@ bool sameChanges(const FillerChanges& left, const FillerChanges& right)
   return true;
 }
 
-ImplantInput input()
+struct FixtureStats
+{
+  int occupiedSites = 0;
+  std::vector<int> cellsByRow;
+};
+
+FixtureStats fixtureStats(const ImplantInput& input)
+{
+  FixtureStats stats;
+  stats.cellsByRow.resize(static_cast<size_t>(input.rowCount));
+  std::vector<std::vector<bool>> occupied(
+      static_cast<size_t>(input.rowCount),
+      std::vector<bool>(static_cast<size_t>(input.colCount), false));
+  for (const PlacedInst& placed : input.placedInsts) {
+    const MasterItem& item
+        = input.masters.at(static_cast<size_t>(placed.masterId));
+    const int widthInSites
+        = std::max(1, (item.width + input.siteWidth - 1) / input.siteWidth);
+    const int heightInRows
+        = std::max(1, (item.height + input.rowHeight - 1) / input.rowHeight);
+    for (int row = placed.rowId; row < placed.rowId + heightInRows; ++row) {
+      if (row < 0 || row >= input.rowCount) {
+        continue;
+      }
+      ++stats.cellsByRow[static_cast<size_t>(row)];
+      for (int col = placed.colId; col < placed.colId + widthInSites; ++col) {
+        if (col >= 0 && col < input.colCount) {
+          occupied[static_cast<size_t>(row)][static_cast<size_t>(col)] = true;
+        }
+      }
+    }
+  }
+  for (const std::vector<bool>& row : occupied) {
+    stats.occupiedSites
+        += static_cast<int>(std::count(row.begin(), row.end(), true));
+  }
+  return stats;
+}
+
+void initializeFixture(ImplantLayerCheckerHelper& helper,
+                       const ImplantInput& input,
+                       int expectedUtilization)
+{
+  EXPECT_GE(input.rowCount, 5);
+  const FixtureStats stats = fixtureStats(input);
+  EXPECT_EQ(stats.cellsByRow.size(), static_cast<size_t>(input.rowCount));
+  for (size_t row = 0; row < stats.cellsByRow.size(); ++row) {
+    EXPECT_GE(stats.cellsByRow[row], 6) << "row " << row;
+  }
+  EXPECT_EQ(100 * stats.occupiedSites,
+            expectedUtilization * input.rowCount * input.colCount);
+  helper.initialize(input);
+}
+
+ImplantInput input(int utilization = kDefaultUtilization)
 {
   ImplantInput data;
   data.layers = {{0, "F1_N", Layer::Vt::L, Layer::Polar::N},
@@ -122,12 +188,13 @@ ImplantInput input()
                   master(4, 1, true),
                   master(5, 2, true)};
   const std::array<MasterId, 6> pattern{0, 3, 1, 4, 2, 5};
+  const ColId cellCount = occupiedColumns(utilization);
   for (RowId row = 0; row < kRowCount; ++row) {
-    for (ColId col = 0; col < kColCount; ++col) {
+    for (ColId col = 0; col < cellCount; ++col) {
       const MasterId masterId
           = pattern[static_cast<size_t>(col % pattern.size())];
       data.placedInsts.push_back(
-          {row * kColCount + col,
+          {nodeId(row, col),
            masterId,
            row,
            col,
@@ -145,9 +212,9 @@ ImplantInput input()
   return data;
 }
 
-ImplantInput multiDeleteInput()
+ImplantInput multiDeleteInput(int utilization = kDefaultUtilization)
 {
-  ImplantInput data = input();
+  ImplantInput data = input(utilization);
   data.masters.push_back(master(6, 0, false, 2 * kSiteWidth));
   for (PlacedInst& placed : data.placedInsts) {
     if (placed.rowId == 1 && placed.colId == 2) {
@@ -173,11 +240,27 @@ ImplantInput twoRowMultiDeleteInput()
   data.rules = {{0, RuleSource::Width, 0, 2 * kSiteWidth},
                 {1, RuleSource::Width, 3, 2 * kSiteWidth}};
   data.masters = {twoRowMaster(0, true, kSiteWidth),
-                  twoRowMaster(1, false, 2 * kSiteWidth)};
+                  twoRowMaster(1, false, 2 * kSiteWidth),
+                  master(2, 0, false)};
   data.placedInsts = {{10, 0, 0, 2, PhysOrientationE::R0, true},
                       {11, 0, 0, 3, PhysOrientationE::R0, true}};
-  data.rowCount = 3;
-  data.colCount = 6;
+  InstanceId instance = 100;
+  for (RowId row = 0; row < kRowCount; ++row) {
+    for (ColId col = 0; col < occupiedColumns(kDefaultUtilization); ++col) {
+      if (row <= 1 && (col == 2 || col == 3)) {
+        continue;
+      }
+      data.placedInsts.push_back(
+          {instance++,
+           2,
+           row,
+           col,
+           row % 2 == 0 ? PhysOrientationE::R0 : PhysOrientationE::MX,
+           false});
+    }
+  }
+  data.rowCount = kRowCount;
+  data.colCount = kColCount;
   data.basePolar = Layer::Polar::N;
   data.rowHeight = kRowHeight;
   data.siteWidth = kSiteWidth;
@@ -186,16 +269,11 @@ ImplantInput twoRowMultiDeleteInput()
   return data;
 }
 
-enum class OverlayProbeInput
-{
-  Base,
-  MultiDelete
-};
-
 struct OverlayProbeCase
 {
   std::string name;
-  OverlayProbeInput input;
+  int utilization;
+  bool multiDelete;
   std::vector<InstanceId> overlayIds;
   MasterId targetMasterId;
   bool accepted;
@@ -205,23 +283,52 @@ struct OverlayProbeCase
 const std::vector<OverlayProbeCase>& overlayProbeCases()
 {
   static const std::vector<OverlayProbeCase> cases{
-      {"single_std_to_std", OverlayProbeInput::Base, {16}, 0, true, ""},
-      {"single_filler_to_std", OverlayProbeInput::Base, {15}, 1, true, ""},
+      {"std_to_std_50_percent",
+       50,
+       false,
+       {nodeId(1, 4)},
+       0,
+       true,
+       ""},
+      {"std_to_std_75_percent",
+       75,
+       false,
+       {nodeId(1, 4)},
+       0,
+       true,
+       ""},
+      {"std_to_std_90_percent",
+       90,
+       false,
+       {nodeId(1, 4)},
+       0,
+       true,
+       ""},
+      {"single_filler_to_std",
+       90,
+       false,
+       {nodeId(1, 3)},
+       1,
+       true,
+       ""},
       {"multiple_fillers_to_std",
-       OverlayProbeInput::MultiDelete,
-       {15, 16},
+       90,
+       true,
+       {nodeId(1, 3), nodeId(1, 4)},
        6,
        true,
        ""},
       {"std_to_filler_master",
-       OverlayProbeInput::Base,
-       {16},
+       90,
+       false,
+       {nodeId(1, 4)},
        3,
        false,
        "target_master_is_filler"},
       {"mixed_std_and_filler_overlays",
-       OverlayProbeInput::MultiDelete,
-       {15, 18},
+       90,
+       true,
+       {nodeId(1, 3), nodeId(1, 6)},
        6,
        false,
        "mixed_target_overlay"}};
@@ -239,9 +346,10 @@ TEST_P(FillerRepairOverlayProbeTest, BuildsTemporaryNodeAndCallsChecker)
   SCOPED_TRACE(testCase.name);
 
   ImplantLayerCheckerHelper helper;
-  helper.initialize(testCase.input == OverlayProbeInput::MultiDelete
-                        ? multiDeleteInput()
-                        : input());
+  const ImplantInput fixture = testCase.multiDelete
+                                   ? multiDeleteInput(testCase.utilization)
+                                   : input(testCase.utilization);
+  initializeFixture(helper, fixture, testCase.utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
   checker.setFillerRepairEnabled(true);
@@ -323,7 +431,7 @@ INSTANTIATE_TEST_SUITE_P(
 TEST(FillerRepairIntegrationTest, CheckerRepairsTemporaryNodeWithoutMutation)
 {
   ImplantLayerCheckerHelper helper;
-  helper.initialize(input());
+  initializeFixture(helper, input(), kDefaultUtilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
   checker.setFillerRepairEnabled(true);
@@ -382,7 +490,7 @@ TEST(FillerRepairIntegrationTest,
      MultipleFillerDeletesExactCoverAndNeverBecomeRepairCandidates)
 {
   ImplantLayerCheckerHelper helper;
-  helper.initialize(multiDeleteInput());
+  initializeFixture(helper, multiDeleteInput(), kDefaultUtilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
   checker.setFillerRepairEnabled(true);
@@ -465,7 +573,7 @@ TEST(FillerRepairIntegrationTest,
 TEST(FillerRepairIntegrationTest, MultipleFillerDeletesMustExactlyCoverTarget)
 {
   ImplantLayerCheckerHelper helper;
-  helper.initialize(multiDeleteInput());
+  initializeFixture(helper, multiDeleteInput(), kDefaultUtilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
 
@@ -524,7 +632,8 @@ TEST(FillerRepairIntegrationTest, MultipleFillerDeletesMustExactlyCoverTarget)
 TEST(FillerRepairIntegrationTest, TwoRowTargetAcceptsMultipleFillerExactCover)
 {
   ImplantLayerCheckerHelper helper;
-  helper.initialize(twoRowMultiDeleteInput());
+  initializeFixture(
+      helper, twoRowMultiDeleteInput(), kDefaultUtilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
   fillerRepair::FillerRepairEngine engine(checker);
@@ -564,7 +673,7 @@ TEST(FillerRepairIntegrationTest, TwoRowTargetAcceptsMultipleFillerExactCover)
 TEST(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
 {
   ImplantLayerCheckerHelper helper;
-  helper.initialize(input());
+  initializeFixture(helper, input(), kDefaultUtilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
 
@@ -630,7 +739,7 @@ TEST(FillerRepairIntegrationTest,
      StandardCellReplacementRejectsMoveAndFootprintChange)
 {
   ImplantLayerCheckerHelper helper;
-  helper.initialize(multiDeleteInput());
+  initializeFixture(helper, multiDeleteInput(), kDefaultUtilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
 
@@ -670,7 +779,7 @@ TEST(FillerRepairIntegrationTest,
 TEST(FillerRepairIntegrationTest, MultiFillerOverlayMustCoverTargetOrigin)
 {
   ImplantLayerCheckerHelper helper;
-  helper.initialize(multiDeleteInput());
+  initializeFixture(helper, multiDeleteInput(), kDefaultUtilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
 
@@ -707,7 +816,7 @@ TEST(FillerRepairIntegrationTest, MultiFillerOverlayMustCoverTargetOrigin)
 TEST(FillerRepairIntegrationTest, DisabledRepairDoesNotPublishChanges)
 {
   ImplantLayerCheckerHelper helper;
-  helper.initialize(input());
+  initializeFixture(helper, input(), kDefaultUtilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
   ASSERT_FALSE(checker.isFillerRepairEnabled());
@@ -742,7 +851,7 @@ TEST(FillerRepairIntegrationTest, DisabledRepairDoesNotPublishChanges)
 TEST(FillerRepairIntegrationTest, EngineWithoutGridIsUnavailable)
 {
   ImplantLayerCheckerHelper helper;
-  helper.initialize(input());
+  initializeFixture(helper, input(), kDefaultUtilization);
   ImplantLayerChecker checker(nullptr, nullptr, helper.getNetwork());
   helper.initChecker(checker);
 
