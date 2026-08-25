@@ -274,7 +274,7 @@ RepairConfig quietConfig()
   return config;
 }
 
-TEST(FillerRepairInternalTest, CandidateProviderFiltersIncompatibleMasters)
+void candidateProviderFiltersIncompatibleMasters()
 {
   const TestView view = makeView();
 
@@ -286,7 +286,7 @@ TEST(FillerRepairInternalTest, CandidateProviderFiltersIncompatibleMasters)
   EXPECT_FALSE(view.getUsableMasterCandidates(1).diagnostics.empty());
 }
 
-TEST(FillerRepairInternalTest, MakeSwapPreservesGeometryAndRejectsInvalidMoves)
+void makeSwapPreservesGeometryAndRejectsInvalidMoves()
 {
   const TestView view = makeView();
 
@@ -305,7 +305,7 @@ TEST(FillerRepairInternalTest, MakeSwapPreservesGeometryAndRejectsInvalidMoves)
   EXPECT_FALSE(makeSwap(view, 2, 20).has_value());
 }
 
-TEST(FillerRepairInternalTest, OverlayIdentityIgnoresOrderAndDuplicates)
+void overlayIdentityIgnoresOrderAndDuplicates()
 {
   const Region guard{{0, 8}, 0, 1};
   const Swap first{2, 20, 21, 0, {2, 4}, 0, 1};
@@ -318,7 +318,7 @@ TEST(FillerRepairInternalTest, OverlayIdentityIgnoresOrderAndDuplicates)
   EXPECT_EQ(key.size(), 2U);
 }
 
-TEST(FillerRepairInternalTest, WireConversionIsSortedAndKeepsOrientation)
+void wireConversionIsSortedAndKeepsOrientation()
 {
   TestView view = makeView();
   view.place(4, 20, 0, 6, Orient::MY);
@@ -334,7 +334,7 @@ TEST(FillerRepairInternalTest, WireConversionIsSortedAndKeepsOrientation)
   EXPECT_EQ(changes[1].orientation_, eUTL::PhysOrientationE::MY);
 }
 
-TEST(FillerRepairInternalTest, EnumerationOrdersSinglesBeforePairs)
+void enumerationOrdersSinglesBeforePairs()
 {
   const Swap a{2, 20, 21, 0, {2, 4}, 0, 1};
   const Swap b{2, 20, 22, 0, {2, 4}, 0, 2};
@@ -361,7 +361,7 @@ TEST(FillerRepairInternalTest, EnumerationOrdersSinglesBeforePairs)
   EXPECT_EQ(plan.overlays[4][1].instanceId, c.instanceId);
 }
 
-TEST(FillerRepairInternalTest, EmptySnapshotSucceedsWithoutOracleCall)
+void emptySnapshotSucceedsWithoutOracleCall()
 {
   const TestView view = makeView();
   ScriptedOracle oracle(2, 21);
@@ -377,7 +377,7 @@ TEST(FillerRepairInternalTest, EmptySnapshotSucceedsWithoutOracleCall)
   EXPECT_TRUE(hasDiagnostic(result, "EmptySnapshot"));
 }
 
-TEST(FillerRepairInternalTest, PlannerFindsCheckerApprovedSingleSwap)
+void plannerFindsCheckerApprovedSingleSwap()
 {
   const TestView view = makeView();
   const MasterId originalMaster = view.instance(2)->masterId;
@@ -394,7 +394,7 @@ TEST(FillerRepairInternalTest, PlannerFindsCheckerApprovedSingleSwap)
   EXPECT_GT(oracle.requestCount(), 0);
 }
 
-TEST(FillerRepairInternalTest, PlannerMatchesReorderedBatchResultsByRequestId)
+void plannerMatchesReorderedBatchResultsByRequestId()
 {
   const TestView view = makeView();
   ScriptedOracle oracle(2, 21, false, true);
@@ -408,7 +408,7 @@ TEST(FillerRepairInternalTest, PlannerMatchesReorderedBatchResultsByRequestId)
   EXPECT_GT(oracle.batchCount(), 0);
 }
 
-TEST(FillerRepairInternalTest, NoSolutionNeverReturnsPartialChanges)
+void noSolutionNeverReturnsPartialChanges()
 {
   const TestView view = makeView();
   ScriptedOracle oracle(2, 21, true);
@@ -421,7 +421,7 @@ TEST(FillerRepairInternalTest, NoSolutionNeverReturnsPartialChanges)
   EXPECT_TRUE(hasDiagnostic(result, "NoCleanOverlay"));
 }
 
-TEST(FillerRepairInternalTest, OracleProtocolErrorFailsClosed)
+void oracleProtocolErrorFailsClosed()
 {
   const TestView view = makeView();
   ScriptedOracle oracle(2, 21, false, false, true);
@@ -433,6 +433,55 @@ TEST(FillerRepairInternalTest, OracleProtocolErrorFailsClosed)
   EXPECT_TRUE(result.changes.empty());
   EXPECT_TRUE(hasDiagnostic(result, "BaselineGateFailed"));
 }
+
+struct InternalCase
+{
+  const char* name;
+  void (*run)();
+};
+
+const std::vector<InternalCase>& internalCases()
+{
+  static const std::vector<InternalCase> cases{
+      {"CandidateProviderFiltersIncompatibleMasters",
+       candidateProviderFiltersIncompatibleMasters},
+      {"MakeSwapPreservesGeometryAndRejectsInvalidMoves",
+       makeSwapPreservesGeometryAndRejectsInvalidMoves},
+      {"OverlayIdentityIgnoresOrderAndDuplicates",
+       overlayIdentityIgnoresOrderAndDuplicates},
+      {"WireConversionIsSortedAndKeepsOrientation",
+       wireConversionIsSortedAndKeepsOrientation},
+      {"EnumerationOrdersSinglesBeforePairs",
+       enumerationOrdersSinglesBeforePairs},
+      {"EmptySnapshotSucceedsWithoutOracleCall",
+       emptySnapshotSucceedsWithoutOracleCall},
+      {"PlannerFindsCheckerApprovedSingleSwap",
+       plannerFindsCheckerApprovedSingleSwap},
+      {"PlannerMatchesReorderedBatchResultsByRequestId",
+       plannerMatchesReorderedBatchResultsByRequestId},
+      {"NoSolutionNeverReturnsPartialChanges",
+       noSolutionNeverReturnsPartialChanges},
+      {"OracleProtocolErrorFailsClosed", oracleProtocolErrorFailsClosed}};
+  return cases;
+}
+
+class FillerRepairInternalTest
+    : public ::testing::TestWithParam<InternalCase>
+{
+};
+
+TEST_P(FillerRepairInternalTest, ReplaysInternalCase)
+{
+  GetParam().run();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    InternalCases,
+    FillerRepairInternalTest,
+    ::testing::ValuesIn(internalCases()),
+    [](const ::testing::TestParamInfo<InternalCase>& info) {
+      return info.param.name;
+    });
 
 }  // namespace
 }  // namespace dpl2::fillerRepair

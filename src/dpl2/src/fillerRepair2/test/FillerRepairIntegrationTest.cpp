@@ -228,7 +228,7 @@ ImplantInput multiDeleteInput(int utilization = kDefaultUtilization)
   return data;
 }
 
-ImplantInput twoRowMultiDeleteInput()
+ImplantInput twoRowMultiDeleteInput(int utilization = kDefaultUtilization)
 {
   ImplantInput data;
   data.layers = {{0, "F1_N", Layer::Vt::L, Layer::Polar::N},
@@ -246,7 +246,7 @@ ImplantInput twoRowMultiDeleteInput()
                       {11, 0, 0, 3, PhysOrientationE::R0, true}};
   InstanceId instance = 100;
   for (RowId row = 0; row < kRowCount; ++row) {
-    for (ColId col = 0; col < occupiedColumns(kDefaultUtilization); ++col) {
+    for (ColId col = 0; col < occupiedColumns(utilization); ++col) {
       if (row <= 1 && (col == 2 || col == 3)) {
         continue;
       }
@@ -428,10 +428,16 @@ INSTANTIATE_TEST_SUITE_P(
       return info.param.name;
     });
 
-TEST(FillerRepairIntegrationTest, CheckerRepairsTemporaryNodeWithoutMutation)
+class FillerRepairIntegrationTest : public ::testing::TestWithParam<int>
 {
+};
+
+TEST_P(FillerRepairIntegrationTest,
+       CheckerRepairsTemporaryNodeWithoutMutation)
+{
+  const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
-  initializeFixture(helper, input(), kDefaultUtilization);
+  initializeFixture(helper, input(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
   checker.setFillerRepairEnabled(true);
@@ -486,11 +492,12 @@ TEST(FillerRepairIntegrationTest, CheckerRepairsTemporaryNodeWithoutMutation)
   EXPECT_EQ(bridge->getMaster()->getId(), oldBridgeMaster);
 }
 
-TEST(FillerRepairIntegrationTest,
-     MultipleFillerDeletesExactCoverAndNeverBecomeRepairCandidates)
+TEST_P(FillerRepairIntegrationTest,
+       MultipleFillerDeletesExactCoverAndNeverBecomeRepairCandidates)
 {
+  const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
-  initializeFixture(helper, multiDeleteInput(), kDefaultUtilization);
+  initializeFixture(helper, multiDeleteInput(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
   checker.setFillerRepairEnabled(true);
@@ -570,10 +577,12 @@ TEST(FillerRepairIntegrationTest,
   }
 }
 
-TEST(FillerRepairIntegrationTest, MultipleFillerDeletesMustExactlyCoverTarget)
+TEST_P(FillerRepairIntegrationTest,
+       MultipleFillerDeletesMustExactlyCoverTarget)
 {
+  const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
-  initializeFixture(helper, multiDeleteInput(), kDefaultUtilization);
+  initializeFixture(helper, multiDeleteInput(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
 
@@ -629,11 +638,12 @@ TEST(FillerRepairIntegrationTest, MultipleFillerDeletesMustExactlyCoverTarget)
   EXPECT_TRUE(hasDiagnostic(result, "mixed_target_overlay"));
 }
 
-TEST(FillerRepairIntegrationTest, TwoRowTargetAcceptsMultipleFillerExactCover)
+TEST_P(FillerRepairIntegrationTest,
+       TwoRowTargetAcceptsMultipleFillerExactCover)
 {
+  const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
-  initializeFixture(
-      helper, twoRowMultiDeleteInput(), kDefaultUtilization);
+  initializeFixture(helper, twoRowMultiDeleteInput(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
   fillerRepair::FillerRepairEngine engine(checker);
@@ -670,10 +680,11 @@ TEST(FillerRepairIntegrationTest, TwoRowTargetAcceptsMultipleFillerExactCover)
   EXPECT_EQ(second->getMaster()->getId(), secondMaster);
 }
 
-TEST(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
+TEST_P(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
 {
+  const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
-  initializeFixture(helper, input(), kDefaultUtilization);
+  initializeFixture(helper, input(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
 
@@ -735,11 +746,12 @@ TEST(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
   EXPECT_EQ(replaced->getMaster()->getId(), 2);
 }
 
-TEST(FillerRepairIntegrationTest,
-     StandardCellReplacementRejectsMoveAndFootprintChange)
+TEST_P(FillerRepairIntegrationTest,
+       StandardCellReplacementRejectsMoveAndFootprintChange)
 {
+  const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
-  initializeFixture(helper, multiDeleteInput(), kDefaultUtilization);
+  initializeFixture(helper, multiDeleteInput(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
 
@@ -776,10 +788,12 @@ TEST(FillerRepairIntegrationTest,
   EXPECT_TRUE(hasDiagnostic(result, "target_move_unsupported"));
 }
 
-TEST(FillerRepairIntegrationTest, MultiFillerOverlayMustCoverTargetOrigin)
+TEST_P(FillerRepairIntegrationTest,
+       MultiFillerOverlayMustCoverTargetOrigin)
 {
+  const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
-  initializeFixture(helper, multiDeleteInput(), kDefaultUtilization);
+  initializeFixture(helper, multiDeleteInput(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
 
@@ -813,10 +827,11 @@ TEST(FillerRepairIntegrationTest, MultiFillerOverlayMustCoverTargetOrigin)
   EXPECT_TRUE(hasDiagnostic(result, "target_overlay_origin_uncovered"));
 }
 
-TEST(FillerRepairIntegrationTest, DisabledRepairDoesNotPublishChanges)
+TEST_P(FillerRepairIntegrationTest, DisabledRepairDoesNotPublishChanges)
 {
+  const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
-  initializeFixture(helper, input(), kDefaultUtilization);
+  initializeFixture(helper, input(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
   ASSERT_FALSE(checker.isFillerRepairEnabled());
@@ -848,10 +863,11 @@ TEST(FillerRepairIntegrationTest, DisabledRepairDoesNotPublishChanges)
   EXPECT_TRUE(changes.empty());
 }
 
-TEST(FillerRepairIntegrationTest, EngineWithoutGridIsUnavailable)
+TEST_P(FillerRepairIntegrationTest, EngineWithoutGridIsUnavailable)
 {
+  const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
-  initializeFixture(helper, input(), kDefaultUtilization);
+  initializeFixture(helper, input(utilization), utilization);
   ImplantLayerChecker checker(nullptr, nullptr, helper.getNetwork());
   helper.initChecker(checker);
 
@@ -859,6 +875,14 @@ TEST(FillerRepairIntegrationTest, EngineWithoutGridIsUnavailable)
 
   EXPECT_FALSE(engine.isReady());
 }
+
+INSTANTIATE_TEST_SUITE_P(
+    PlacementUtilizations,
+    FillerRepairIntegrationTest,
+    ::testing::Values(50, 75, kDefaultUtilization),
+    [](const ::testing::TestParamInfo<int>& info) {
+      return "Utilization" + std::to_string(info.param);
+    });
 
 }  // namespace
 }  // namespace dpl2::ipl
