@@ -165,7 +165,6 @@ struct MasterItem
     std::vector<MasterShape> shapes;      // rebuilt band shapes
     std::vector<MasterShape> rawShapes;   // original raw shapes (preserved input)
     Dbu siteHeight = 0;                   // site height from the master's site type
-    std::string siteName;
     bool isFiller = false;
     std::vector<MasterInterval> intervals;
 };
@@ -228,7 +227,7 @@ struct OverlapInfo
 // Public pre-commit wire. The temporary Node is the proposed std cell; the
 // Delete overlays name either one committed std cell or every filler exactly
 // covered by a newly inserted buffer.
-struct CheckRequestOverlay
+struct CheckRequest
 {
     const Node* cell = nullptr;
     GridX x{0};
@@ -272,8 +271,6 @@ public:
         const eUTL::PhysOrientation& orient,
         std::vector<CellChangeRecord>& cellChanges,
         std::vector<CellChangeRecord>& overlayChanges) const override;
-    bool check(const Node* cell, std::vector<CellChangeRecord>& cellChanges,
-        std::vector<CellChangeRecord>& overlayChanges) const;
 
     // Fixed before publication. Runtime callers select direct or
     // repair-capable behavior by check overload; checker helpers disable
@@ -287,9 +284,9 @@ public:
         return enableFillerRepair_.load(std::memory_order_acquire);
     }
 
-    CheckResult checkDirect(const CheckRequestOverlay& request) const;
+    CheckResult checkDirect(const CheckRequest& request) const;
     std::vector<CheckResult> checkPlaceWithOverlays(
-        const CheckRequestOverlay& request, const Rect& guardRegion,
+        const CheckRequest& request, const Rect& guardRegion,
         const std::vector<FillerChanges>& fillerChanges) const;
 
     std::vector<CheckResult> checkAllNodesDirect() const;
@@ -319,30 +316,15 @@ public:
     friend class ImplantLayerCheckerHelper;
 
 private:
-    struct ResolvedRequest
-    {
-        InstanceId instanceId = -1;
-        MasterId masterId = -1;
-        RowId rowId = -1;
-        ColId colId = -1;
-        PhysOrientation orientation = PhysOrientationE::R0;
-        const Node* cell = nullptr;
-        // Stable request-local target identity: the sole old std cell, or the
-        // deleted filler covering the target origin.
-        const Node* replaced = nullptr;
-        std::vector<const Node*> replacedNodes;
-        std::set<InstanceId> replacedNodeIds;
-    };
-
     // init functions
     bool init(PhysDesMgr* desMgr);
 
     bool hasUsableInfrastructure() const;
     const MasterItem* masterItem(MasterId masterId) const;
-    std::optional<ResolvedRequest> resolveRequest(
-        const CheckRequestOverlay& request, DiagVec& diagnostics) const;
+    DiagVec validateCheckRequest(const CheckRequest& request) const;
+    std::set<InstanceId> overlayNodeIds(const CheckRequest& request) const;
     const fillerRepair::FillerRepairEngine* fillerRepairEngine() const;
-    bool repairOverlay(const CheckRequestOverlay& request,
+    bool repairOverlay(const CheckRequest& request,
         std::vector<CellChangeRecord>& fillerChanges) const;
     void buildLayers(PhysDesMgr* desMgr);
     static void parseLayerName(const std::string& name,
@@ -363,9 +345,9 @@ private:
     bool isIntersectCoverage(const Rule& rule, const CheckShape& target,
         const CheckShape& neighbor, const CheckShapes& shapes) const;
 
-    CheckShapes getSnapshot(const ResolvedRequest& request,
+    CheckShapes getSnapshot(const CheckRequest& request,
         const std::set<InstanceId>& excludedNodes) const;
-    CheckShapes getOverlaySnapshot(const ResolvedRequest& request,
+    CheckShapes getOverlaySnapshot(const CheckRequest& request,
         const Rect& guardRegion, const FillerChanges& fillerChanges,
         bool useNewFillers, const std::set<InstanceId>& excludedNodes) const;
     CheckShapes getNodeShape(InstanceId instanceId, MasterId masterId,
@@ -379,22 +361,18 @@ private:
     std::vector<Violation> makeViolations(const std::vector<CheckOutcome>& outcomes,
         const CheckShapes& shapes) const;
 
-    CheckResult checkDirect(const ResolvedRequest& request) const;
-    std::vector<CheckResult> checkPlaceWithOverlays(
-        const ResolvedRequest& request, const Rect& guardRegion,
-        const std::vector<FillerChanges>& fillerChanges) const;
-    CheckResult checkPlaceWithOverlay(const ResolvedRequest& request,
+    CheckResult checkPlaceWithOverlay(const CheckRequest& request,
         const Rect& guardRegion, const FillerChanges& fillerChanges,
         const std::vector<Violation>& oldViolations) const;
-    CheckResult checkOverlayRegion(const ResolvedRequest& request,
+    CheckResult checkOverlayRegion(const CheckRequest& request,
         const Rect& guardRegion, const FillerChanges& fillerChanges,
         bool useNewFillers) const;
 
     CheckShapes mergeGroupShapes(const CheckShapes& rawShapes,
         bool isCandidate) const;
 
-    OverlapInfo checkOverlap(const ResolvedRequest& request) const;
-    DiagVec validateOverlayRequest(const ResolvedRequest& request,
+    OverlapInfo checkOverlap(const CheckRequest& request) const;
+    DiagVec validateOverlayRequest(const CheckRequest& request,
         const FillerChanges& fillerChanges) const;
     bool touchesInstance(const Violation& violation, InstanceId instanceId) const;
     bool containsViolation(const Violation& oldViolation,

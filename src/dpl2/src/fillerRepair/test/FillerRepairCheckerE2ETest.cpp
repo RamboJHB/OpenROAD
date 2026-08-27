@@ -47,7 +47,7 @@ TEST(ImplantLayerCheckerInitializationTest,
 {
   Grid grid;
   Network network;
-  CheckRequestOverlay request;
+  CheckRequest request;
 
   ImplantLayerChecker missingGrid(nullptr, nullptr, &network);
   EXPECT_TRUE(hasDiagnostic(missingGrid.getDiags(), "missing_grid"));
@@ -298,7 +298,6 @@ MasterItem master(MasterId masterId,
   master.width = SITE_WIDTH;
   master.height = ROW_HEIGHT;
   master.siteHeight = ROW_HEIGHT;
-  master.siteName = "core";
   master.isFiller = isFiller;
   // N-polar family layer on the bottom band, its P partner on the top band
   // (layer + 3 by construction above).
@@ -579,7 +578,6 @@ TEST(ImplantLayerCheckerHelperTest, DumpLoadPreservesFillerSetting)
             original.fillerSetting.avoidPatterns);
   ASSERT_EQ(loaded.masters.size(), original.masters.size());
   for (size_t i = 0; i < loaded.masters.size(); ++i) {
-    EXPECT_EQ(loaded.masters[i].siteName, original.masters[i].siteName);
   }
 
   ImplantLayerCheckerHelper loadedHelper;
@@ -601,7 +599,6 @@ TEST(ImplantLayerCheckerHelperTest, DumpLoadPreservesFillerSetting)
             original.fillerSetting.avoidPatterns);
   ASSERT_EQ(redumped.masters.size(), original.masters.size());
   for (size_t i = 0; i < redumped.masters.size(); ++i) {
-    EXPECT_EQ(redumped.masters[i].siteName, original.masters[i].siteName);
   }
 
   std::remove(firstPath.c_str());
@@ -703,7 +700,7 @@ LibCellID libCellId(MasterId masterId)
   return LibCellID(0, masterId);
 }
 
-CheckRequestOverlay materializeRequest(const RequestSpec& spec,
+CheckRequest materializeRequest(const RequestSpec& spec,
                                        Network& network,
                                        Node& temporary)
 {
@@ -723,7 +720,7 @@ CheckRequestOverlay materializeRequest(const RequestSpec& spec,
   temporary.setBottom(replaced->getBottom());
   temporary.setOrient(spec.orientation);
   const LibCellID oldMaster = replaced->getMaster()->getDbMaster();
-  return CheckRequestOverlay{
+  return CheckRequest{
       &temporary,
       GridX(spec.colId),
       GridY(spec.rowId),
@@ -1044,7 +1041,7 @@ class PortableCheckerOracle final : public fr::RepairOracle
         first.targetPlace.masterId,
         toCheckerOrient(first.targetPlace.orientation)};
     Node temporary;
-    const CheckRequestOverlay target = materializeRequest(
+    const CheckRequest target = materializeRequest(
         targetSpec, *checker_.getNetwork(), temporary);
     const ::Rect guardRect
         = makeRect(first.guardRegion.x.xl,
@@ -1349,10 +1346,10 @@ TEST(ImplantCheckerNullSafetyTest,
                               node->getMaster()->getId(),
                               node->getOrient()};
   Node temporary;
-  const CheckRequestOverlay request =
+  const CheckRequest request =
       materializeRequest(validSpec, *network, temporary);
 
-  CheckRequestOverlay unknownTarget = request;
+  CheckRequest unknownTarget = request;
   unknownTarget.overlayChanges.front().cell_data_
       = LeafCellID(0, 1000000);
   const CheckResult targetResult = checker.checkDirect(unknownTarget);
@@ -1364,14 +1361,14 @@ TEST(ImplantCheckerNullSafetyTest,
   unknownMasterObject.setId(1000000);
   Node unknownMasterNode;
   unknownMasterNode.setMaster(&unknownMasterObject);
-  CheckRequestOverlay unknownMaster = request;
+  CheckRequest unknownMaster = request;
   unknownMaster.cell = &unknownMasterNode;
   const CheckResult masterResult = checker.checkDirect(unknownMaster);
   EXPECT_FALSE(masterResult.isLegal);
   EXPECT_TRUE(hasDiagnostic(masterResult.diagnostics,
                             "unknown_target_master"));
 
-  CheckRequestOverlay outOfGrid = request;
+  CheckRequest outOfGrid = request;
   outOfGrid.y = GridY{-1};
   const std::vector<CheckResult> outOfGridResults =
       checker.checkPlaceWithOverlays(
@@ -1399,7 +1396,7 @@ TEST(ImplantCheckerNullSafetyTest,
   EXPECT_TRUE(hasDiagnostic(overlayResults.front().diagnostics,
                             "unknown_target_overlay"));
 
-  CheckRequestOverlay missingMasterRequest = request;
+  CheckRequest missingMasterRequest = request;
   Node missingMasterNode;
   missingMasterRequest.cell = &missingMasterNode;
   const CheckResult missingMaster = checker.checkDirect(missingMasterRequest);
@@ -1699,7 +1696,7 @@ TEST(ImplantCheckerOverlayTest,
                        libCellId(F3_FILL_MASTER),
                        PhysOrientation(PhysOrientationE::R0)}};
   Node temporary;
-  const CheckRequestOverlay target = materializeRequest(
+  const CheckRequest target = materializeRequest(
       retargeted(scn), *helper.getNetwork(), temporary);
   const std::vector<CheckResult> results = checker.checkPlaceWithOverlays(
       target, scenarioGuard, {outsideGuard});

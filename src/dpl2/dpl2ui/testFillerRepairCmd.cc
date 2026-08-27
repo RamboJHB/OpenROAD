@@ -267,7 +267,7 @@ bool TestFillerRepairCmd::exec()
             << " fillerChanges=" << changes.size() << '\n';
   printChanges(changes);
   if (!accepted) {
-    const ipl::CheckRequestOverlay request{
+    const ipl::CheckRequest request{
         &temporary, x, y, *orientation, overlayChanges};
     printRejectedRequest(checker->checkDirect(request));
   }

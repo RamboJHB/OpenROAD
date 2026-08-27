@@ -108,7 +108,7 @@ class RuntimeFixture
   bool request(frt::CellRole replacedRole,
                frt::MasterRole newMasterRole,
                dpl2::Node& temporary,
-               dpl2::ipl::CheckRequestOverlay& request,
+               dpl2::ipl::CheckRequest& request,
                std::optional<eUTL::PhysOrientation> orientation = std::nullopt)
   {
     dpl2::Node* const replaced = network().getNode(design().cell(replacedRole));
@@ -133,7 +133,7 @@ class RuntimeFixture
     temporary.setBottom(replaced->getBottom());
     temporary.setOrient(targetOrientation);
     const eLIB::LibCellID oldMaster = replaced->getMaster()->getDbMaster();
-    request = dpl2::ipl::CheckRequestOverlay{
+    request = dpl2::ipl::CheckRequest{
         &temporary,
         grid().gridX(replaced),
         grid().gridSnapDownY(replaced),
@@ -174,7 +174,7 @@ TEST_P(FillerRepairRuntimeE2E, StdCellReplacementReturnsOnlyFillerSwaps)
   dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
   ASSERT_TRUE(engine.isReady());
   dpl2::Node temporary;
-  dpl2::ipl::CheckRequestOverlay request;
+  dpl2::ipl::CheckRequest request;
   ASSERT_TRUE(fixture.request(frt::CellRole::Target,
                               frt::MasterRole::TargetNew,
                               temporary,
@@ -204,7 +204,7 @@ TEST_P(FillerRepairRuntimeE2E, CheckerEntryLazilyRunsTheSameRepair)
   RuntimeFixture fixture(GetParam().setup);
   ASSERT_TRUE(fixture.ready());
   dpl2::Node temporary;
-  dpl2::ipl::CheckRequestOverlay request;
+  dpl2::ipl::CheckRequest request;
   ASSERT_TRUE(fixture.request(frt::CellRole::Target,
                               frt::MasterRole::TargetNew,
                               temporary,
@@ -230,7 +230,7 @@ TEST_P(FillerRepairRuntimeE2E, RotationDoesNotMutateTheExistingCell)
   dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
   ASSERT_TRUE(engine.isReady());
   dpl2::Node temporary;
-  dpl2::ipl::CheckRequestOverlay request;
+  dpl2::ipl::CheckRequest request;
   ASSERT_TRUE(fixture.request(
       frt::CellRole::Target,
       frt::MasterRole::TargetOld,
@@ -253,7 +253,7 @@ TEST_P(FillerRepairRuntimeE2E, FindLegalReplacesExactlyOneFiller)
   dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
   ASSERT_TRUE(engine.isReady());
   dpl2::Node temporary;
-  dpl2::ipl::CheckRequestOverlay request;
+  dpl2::ipl::CheckRequest request;
   ASSERT_TRUE(fixture.request(frt::CellRole::TargetLeftFiller,
                               frt::MasterRole::Buffer,
                               temporary,
@@ -279,7 +279,7 @@ TEST_P(FillerRepairRuntimeE2E, RejectsDuplicateTargetOverlayAtomically)
   RuntimeFixture fixture(GetParam().setup);
   ASSERT_TRUE(fixture.ready());
   dpl2::Node temporary;
-  dpl2::ipl::CheckRequestOverlay request;
+  dpl2::ipl::CheckRequest request;
   ASSERT_TRUE(fixture.request(frt::CellRole::Target,
                               frt::MasterRole::TargetNew,
                               temporary,
@@ -309,7 +309,7 @@ TEST_P(FillerRepairRuntimeE2E, RejectsFootprintChangeWithoutRetiling)
   RuntimeFixture fixture(GetParam().setup);
   ASSERT_TRUE(fixture.ready());
   dpl2::Node temporary;
-  dpl2::ipl::CheckRequestOverlay request;
+  dpl2::ipl::CheckRequest request;
   ASSERT_TRUE(fixture.request(frt::CellRole::Target,
                               frt::MasterRole::WiderTarget,
                               temporary,
@@ -328,7 +328,7 @@ TEST_P(FillerRepairRuntimeE2E, ConcurrentCheckerCallsAreDeterministic)
   RuntimeFixture fixture(GetParam().setup);
   ASSERT_TRUE(fixture.ready());
   dpl2::Node temporary;
-  dpl2::ipl::CheckRequestOverlay request;
+  dpl2::ipl::CheckRequest request;
   ASSERT_TRUE(fixture.request(frt::CellRole::Target,
                               frt::MasterRole::TargetNew,
                               temporary,
@@ -366,7 +366,7 @@ TEST(FillerRepairRuntimeE2E, TwoRowTargetUsesTheSameOneToOneContract)
   dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
   ASSERT_TRUE(engine.isReady());
   dpl2::Node temporary;
-  dpl2::ipl::CheckRequestOverlay request;
+  dpl2::ipl::CheckRequest request;
   ASSERT_TRUE(fixture.request(
       frt::CellRole::Target,
       frt::MasterRole::TargetOldDoubleHeight,

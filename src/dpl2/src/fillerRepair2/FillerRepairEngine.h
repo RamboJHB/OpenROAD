@@ -44,7 +44,7 @@ class FillerRepairEngine
 
   // The checker already validates this request. The engine trusts its temporary
   // Node and target overlay, then returns only checker-approved filler swaps.
-  RepairOutcome repair(const ipl::CheckRequestOverlay& request) const;
+  RepairOutcome repair(const ipl::CheckRequest& request) const;
 
  private:
   class Impl;

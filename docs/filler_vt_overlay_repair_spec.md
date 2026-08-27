@@ -28,14 +28,20 @@ commit any database change.
 The public checker request is:
 
 ```cpp
-struct CheckRequestOverlay {
-  const Node* cell;                       // temporary proposed std cell
-  GridX x;
-  GridY y;
-  PhysOrientation orientation;
+struct CheckRequest {
+  const Node* cell = nullptr;             // temporary proposed std cell
+  GridX x{0};
+  GridY y{0};
+  PhysOrientation orientation = PhysOrientationE::R0;
   std::vector<CellChangeRecord> overlayChanges;
 };
 ```
+
+`x`, `y`, and `orientation` are the authoritative proposed placement. The
+checker never reads the temporary node's stored left, bottom, or orientation;
+it removes the committed nodes named by `overlayChanges` and evaluates the
+temporary node's identity/master at the request placement. Checker internals
+pass `CheckRequest` directly and have no resolved-request/context layer.
 
 `overlayChanges` must contain either one standard-cell `OpType::Delete`, or one
 or more filler `Delete` records. Each `LeafCellID` must be unique and resolve to
@@ -49,7 +55,7 @@ The engine API is:
 ```cpp
 explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
 bool isReady() const;
-RepairOutcome repair(const ipl::CheckRequestOverlay& request) const;
+RepairOutcome repair(const ipl::CheckRequest& request) const;
 ```
 
 `RepairOutcome::changes` contains only same-footprint `OpType::Replace` records
@@ -75,7 +81,9 @@ bool check(const Node* temporary,
 
 `overlayChanges` is input. `fillerChanges` is output. `PlacementDRC` evaluates
 all registered checkers against a local trial vector and publishes it only if
-all checkers pass.
+all checkers pass. The inherited Node/x/y wrapper constructs one
+`CheckRequest`; all Implant checker DRC, overlap, snapshot, and batch methods
+consume that request directly.
 
 `dbToOpendp::createNetwork()` imports the complete library master catalog.
 The final fillerSetting is already present during import, so Network classifies
@@ -114,7 +122,8 @@ Opto owns the target replacement and commits the returned filler replacements.
 ## Placement and algorithm rules
 
 - Request shape, target identity, footprint, orientation, and location are
-  validated at the checker boundary. The engine consumes `CheckRequestOverlay`
+  validated at the checker boundary. Request coordinates override any stale
+  placement fields on the temporary node. The engine consumes `CheckRequest`
   without repeating those policy checks.
 - Configured filler masters are preferred; checker-helper data falls back to
   Network masters already classified as fillers.

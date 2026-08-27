@@ -95,7 +95,7 @@ inline std::set<ViolationSignature> signatures(const CheckResult& result)
     return signatures;
 }
 
-inline CheckRequestOverlay requestFor(Network& network,
+inline CheckRequest requestFor(Network& network,
                                       const PlacedInst& placed)
 {
     Node* const node = network.getNode(placed.instanceId);
@@ -104,7 +104,7 @@ inline CheckRequestOverlay requestFor(Network& network,
         return {};
     }
     const LibCellID master = node->getMaster()->getDbMaster();
-    return CheckRequestOverlay{
+    return CheckRequest{
         node,
         GridX(placed.colId),
         GridY(placed.rowId),

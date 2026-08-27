@@ -9,7 +9,8 @@ Its checker-side marker is the two repair failure logs added in
 The module accepts a temporary standard-cell `Node` plus either one committed
 standard-cell Delete overlay, or multiple filler Delete overlays that exactly
 cover a new buffer footprint. The result is an atomic list of surrounding
-filler `Replace` records.
+filler `Replace` records. `CheckRequest::x/y/orientation` are authoritative;
+the checker does not read placement coordinates from the temporary node.
 
 There is no filler Add path, filler Delete output, footprint retiler, target
 movement, layout rewrite, engine `update`, external engine setter, or numeric
@@ -23,7 +24,7 @@ DePlace
                             fillerChanges, overlayChanges)
   -> every registered DRC checker
   -> ImplantLayerChecker::check(...)
-  -> lazy FillerRepairEngine::repair(CheckRequestOverlay)
+  -> lazy FillerRepairEngine::repair(CheckRequest)
   -> ImplantLayerChecker::checkPlaceWithOverlays(...)
 ```
 
@@ -49,20 +50,21 @@ The copy-only payload intentionally exposes just this runtime API:
 ```cpp
 explicit FillerRepairEngine(const ImplantLayerChecker& checker);
 bool isReady() const;
-RepairOutcome repair(const CheckRequestOverlay& request) const;
+RepairOutcome repair(const CheckRequest& request) const;
 ```
 
 The August 21 cleanup removed the remaining one-shot lifecycle wrappers and
 unused migration helpers. In particular, the payload has no separate
 `init`/`bindInfrastructure`/`update`/`precheck`, context setter, adapter, or
-request API predating `CheckRequestOverlay`. `PlacementView`, `RepairOracle`,
+request API predating `CheckRequest`. `PlacementView`, `RepairOracle`,
 `RepairPlanner`, and their request IDs are implementation-only planner
 boundaries, not opto integration APIs.
 
 The concrete destination touch points are:
 
 - `src/dpl2/src/drc/ImplantLayerChecker.h/.cpp`: dual-record entry,
-  `CheckRequestOverlay`, lazy engine dispatch, and overlay batch oracle;
+  direct `CheckRequest` flow with no resolved-request layer, lazy engine
+  dispatch, and overlay batch oracle. `MasterItem` does not carry a site name;
 - `src/dpl2/src/drc/DRCChecker.h`: the two-vector virtual check interface;
 - `src/dpl2/src/PlacementDRC.h/.cpp`: direct versus overlay/repair-capable
   request dispatch and atomic trial publication across every checker;

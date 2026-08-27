@@ -30,7 +30,6 @@ struct PlacementSnapshot
   {
     MasterInfo info;
     eLIB::LibCellID libCellId;
-    std::string siteName;
   };
   struct RecordRef
   {
@@ -305,7 +304,7 @@ class FillerRepairEngine::Impl final : private PlacementView
   }
 
   bool ready() const { return setup_ok_; }
-  RepairOutcome repair(const ipl::CheckRequestOverlay& request) const;
+  RepairOutcome repair(const ipl::CheckRequest& request) const;
 
  private:
   static constexpr int kSnapshotHaloRows = 1;
@@ -330,7 +329,7 @@ class FillerRepairEngine::Impl final : private PlacementView
   class BoundOracle final : public RepairOracle
   {
    public:
-    BoundOracle(const Impl& impl, const ipl::CheckRequestOverlay& target)
+    BoundOracle(const Impl& impl, const ipl::CheckRequest& target)
         : impl_(impl), target_(target)
     {
     }
@@ -348,13 +347,13 @@ class FillerRepairEngine::Impl final : private PlacementView
 
    private:
     const Impl& impl_;
-    const ipl::CheckRequestOverlay& target_;
+    const ipl::CheckRequest& target_;
   };
 
-  OracleResult checkPlaceWithOverlay(const ipl::CheckRequestOverlay& target,
+  OracleResult checkPlaceWithOverlay(const ipl::CheckRequest& target,
                                      const OracleRequest& request) const;
   std::vector<OracleResult> checkPlaceWithOverlays(
-      const ipl::CheckRequestOverlay& target,
+      const ipl::CheckRequest& target,
       const std::vector<OracleRequest>& requests) const;
 
   ::Rect toGuardRect(const Region& region) const;
@@ -460,7 +459,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
   }
 
   // Planner x is core-relative DBU and row is the Grid row index, matching the
-  // coordinates used by CheckRequestOverlay.
+  // coordinates used by CheckRequest.
   placement_.siteWidth = grid_->getSiteWidth().v;
   placement_.coreXl = grid_->getCore().getXL().getStorage();
   placement_.coreYl = grid_->getCore().getYL().getStorage();
@@ -552,8 +551,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
     }
 
     ensureSlot(placement_.masters, static_cast<size_t>(id));
-    placement_.masters[id] = PlacementSnapshot::MasterRef{
-        info, master->getDbMaster(), item.siteName};
+    placement_.masters[id]
+        = PlacementSnapshot::MasterRef{info, master->getDbMaster()};
   }
 
   // Prefer the configured filler list. Checker-helper tests have no real
@@ -955,7 +954,7 @@ CellChangeRecord FillerRepairEngine::Impl::cellChangeRecord(
 }
 
 OracleResult FillerRepairEngine::Impl::checkPlaceWithOverlay(
-    const ipl::CheckRequestOverlay& target,
+    const ipl::CheckRequest& target,
     const OracleRequest& request) const
 {
   std::vector<OracleResult> results = checkPlaceWithOverlays(target, {request});
@@ -973,7 +972,7 @@ OracleResult FillerRepairEngine::Impl::checkPlaceWithOverlay(
 }
 
 std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
-    const ipl::CheckRequestOverlay& target,
+    const ipl::CheckRequest& target,
     const std::vector<OracleRequest>& requests) const
 {
   if (requests.empty()) {
@@ -1077,7 +1076,7 @@ Region FillerRepairEngine::Impl::snapshotGuard(const TargetPlace& target) const
   return guard;
 }
 RepairOutcome FillerRepairEngine::Impl::repair(
-    const ipl::CheckRequestOverlay& request) const
+    const ipl::CheckRequest& request) const
 {
   RepairOutcome result;
   log_.section("engine", "REPAIR REQUEST");
@@ -1091,11 +1090,11 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
   if (request.cell == nullptr || request.cell->getMaster() == nullptr) {
-    skip("MissingTarget", "CheckRequestOverlay has no temporary Node/master");
+    skip("MissingTarget", "CheckRequest has no temporary Node/master");
     return result;
   }
   if (request.overlayChanges.empty()) {
-    skip("MissingOverlay", "CheckRequestOverlay has no replaced Network node");
+    skip("MissingOverlay", "CheckRequest has no replaced Network node");
     return result;
   }
 
@@ -1249,7 +1248,7 @@ bool FillerRepairEngine::isReady() const
 }
 
 RepairOutcome FillerRepairEngine::repair(
-    const ipl::CheckRequestOverlay& request) const
+    const ipl::CheckRequest& request) const
 {
   return impl_->repair(request);
 }

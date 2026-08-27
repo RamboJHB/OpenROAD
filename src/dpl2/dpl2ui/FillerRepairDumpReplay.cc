@@ -323,7 +323,7 @@ class DumpCheckerOracle final : public fr::RepairOracle
     temporary.setBottom(replaced->getBottom());
     temporary.setOrient(toCheckerOrient(first.targetPlace.orientation));
     const eLIB::LibCellID oldMaster = replaced->getMaster()->getDbMaster();
-    const ipl::CheckRequestOverlay target{
+    const ipl::CheckRequest target{
         &temporary,
         GridX(static_cast<ipl::ColId>(first.targetPlace.x
                                       / view_.siteWidth())),

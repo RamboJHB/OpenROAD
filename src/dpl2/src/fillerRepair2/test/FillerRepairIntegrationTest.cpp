@@ -46,7 +46,6 @@ MasterItem master(MasterId id,
   item.width = width;
   item.height = kRowHeight;
   item.siteHeight = kRowHeight;
-  item.siteName = "core";
   item.isFiller = filler;
   item.shapes = {{id, 2 * id, nLayer, rect(0, 0, width, kRowHeight / 2)},
                  {id,
@@ -64,7 +63,6 @@ MasterItem twoRowMaster(MasterId id, bool filler, Dbu width)
   item.width = width;
   item.height = 2 * kRowHeight;
   item.siteHeight = kRowHeight;
-  item.siteName = "core";
   item.isFiller = filler;
   item.shapes = {
       {id, 4 * id, 0, rect(0, 0, width, kRowHeight / 2)},
@@ -403,7 +401,7 @@ TEST_P(FillerRepairOverlayProbeTest, BuildsTemporaryNodeAndCallsChecker)
     originalMasters.push_back(node->getMaster()->getId());
   }
 
-  const CheckRequestOverlay request{
+  const CheckRequest request{
       &temporary, x, y, temporary.getOrient(), overlayChanges};
   const CheckResult direct = checker.checkDirect(request);
   if (!testCase.diagnostic.empty()) {
@@ -490,6 +488,46 @@ TEST_P(FillerRepairIntegrationTest,
   EXPECT_EQ(changes.front().new_lib_cell_, network.getMaster(3)->getDbMaster());
   EXPECT_EQ(replaced->getMaster()->getId(), oldTargetMaster);
   EXPECT_EQ(bridge->getMaster()->getId(), oldBridgeMaster);
+}
+
+TEST_P(FillerRepairIntegrationTest,
+       RequestCoordinatesOverrideTemporaryNodePlacement)
+{
+  const int utilization = GetParam();
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, input(utilization), utilization);
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+
+  constexpr RowId targetRow = 1;
+  constexpr ColId targetCol = 4;
+  Network& network = *helper.getNetwork();
+  Node* replaced = network.getNode(nodeId(targetRow, targetCol));
+  ASSERT_NE(replaced, nullptr);
+  ASSERT_NE(replaced->getMaster(), nullptr);
+  const MasterId originalMaster = replaced->getMaster()->getId();
+
+  Node temporary;
+  temporary.setId(replaced->getId());
+  temporary.setDbInst(replaced->getDbInst());
+  temporary.setMaster(replaced->getMaster());
+  temporary.setType(Node::CELL);
+  temporary.setWidth(replaced->getWidth());
+  temporary.setHeight(replaced->getHeight());
+  temporary.setLeft(DbuX{-1000});
+  temporary.setBottom(DbuY{-1000});
+  temporary.setOrient(PhysOrientationE::R0);
+
+  const CheckRequest request{&temporary,
+                             GridX{targetCol},
+                             GridY{targetRow},
+                             replaced->getOrient(),
+                             {deleteRecord(*replaced)}};
+  const CheckResult result = checker.checkDirect(request);
+
+  EXPECT_TRUE(result.isLegal);
+  EXPECT_TRUE(result.diagnostics.empty());
+  EXPECT_EQ(replaced->getMaster()->getId(), originalMaster);
 }
 
 TEST_P(FillerRepairIntegrationTest,
@@ -607,7 +645,7 @@ TEST_P(FillerRepairIntegrationTest,
   temporary.setBottom(DbuY{targetRow * kRowHeight});
   temporary.setOrient(PhysOrientationE::MX);
 
-  CheckRequestOverlay request{&temporary,
+  CheckRequest request{&temporary,
                               GridX{targetCol},
                               GridY{targetRow},
                               PhysOrientationE::MX,
@@ -664,7 +702,7 @@ TEST_P(FillerRepairIntegrationTest,
   temporary.setLeft(DbuX{2 * kSiteWidth});
   temporary.setBottom(DbuY{0});
   temporary.setOrient(PhysOrientationE::R0);
-  CheckRequestOverlay request{&temporary,
+  CheckRequest request{&temporary,
                               GridX{2},
                               GridY{0},
                               PhysOrientationE::R0,
@@ -705,7 +743,7 @@ TEST_P(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
   temporary.setLeft(replaced->getLeft());
   temporary.setBottom(replaced->getBottom());
   temporary.setOrient(replaced->getOrient());
-  CheckRequestOverlay request{&temporary,
+  CheckRequest request{&temporary,
                               GridX{targetCol},
                               GridY{targetRow},
                               replaced->getOrient(),
@@ -769,7 +807,7 @@ TEST_P(FillerRepairIntegrationTest,
   temporary.setLeft(replaced->getLeft());
   temporary.setBottom(replaced->getBottom());
   temporary.setOrient(replaced->getOrient());
-  CheckRequestOverlay request{&temporary,
+  CheckRequest request{&temporary,
                               GridX{targetCol},
                               GridY{targetRow},
                               replaced->getOrient(),
@@ -814,7 +852,7 @@ TEST_P(FillerRepairIntegrationTest,
   temporary.setLeft(DbuX{5 * kSiteWidth});
   temporary.setBottom(DbuY{targetRow * kRowHeight});
   temporary.setOrient(PhysOrientationE::MX);
-  const CheckRequestOverlay request{&temporary,
+  const CheckRequest request{&temporary,
                                     GridX{5},
                                     GridY{targetRow},
                                     PhysOrientationE::MX,

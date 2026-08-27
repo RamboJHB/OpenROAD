@@ -299,9 +299,9 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
     std::ostringstream buf;
     std::ostream& out = buf;
 
-    // [fillerRepair-layout] v6 adds the master site name used to validate
-    // request-local filler Add orientation. Older dumps remain readable.
-    out << "ImplantLayerCheckerDump 6\n";
+    // v7 removes the unused MasterItem site name. The loader still consumes
+    // that field from v6 dumps so existing checker captures remain readable.
+    out << "ImplantLayerCheckerDump 7\n";
     out << "row_count " << checker.grid_->getRowCount().v << "\n";
     out << "col_count " << checker.grid_->getRowSiteCount().v << "\n";
     out << "row_height " << checker.rowHeight_ << "\n";
@@ -388,8 +388,7 @@ bool ImplantLayerCheckerHelper::dump(const std::string& filePath,
         (void) masterId;
         out << master.masterId << ' ' << master.width << ' ' << master.height
             << ' ' << master.isFiller << ' ' << master.siteHeight << ' '
-            << std::quoted(master.siteName) << ' ' << master.shapes.size()
-            << "\n";
+            << master.shapes.size() << "\n";
         for (const MasterShape& shape : master.shapes) {
             out << shape.masterId << ' ' << shape.shapeId << ' ' << shape.layer
                 << ' ' << shape.rect.getXL().getStorage() << ' '
@@ -485,7 +484,7 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
     std::string tag;
     int version = 0;
     if (!(in >> tag >> version) || tag != "ImplantLayerCheckerDump"
-        || version < 1 || version > 6) {
+        || version < 1 || version > 7) {
         return ImplantInput();
     }
 
@@ -657,10 +656,11 @@ ImplantInput ImplantLayerCheckerHelper::load(const std::string& filePath)
               >> isFiller >> siteHeight)) {
             return ImplantInput();
         }
-        // [fillerRepair-layout] v1-v5 did not preserve this field. Empty keeps
-        // their historical replay behavior; v6 performs the full site check.
-        if (version >= 6 && !(in >> std::quoted(master.siteName))) {
-            return ImplantInput();
+        if (version == 6) {
+            std::string ignoredSiteName;
+            if (!(in >> std::quoted(ignoredSiteName))) {
+                return ImplantInput();
+            }
         }
         if (!(in >> shapeCount)) {
             return ImplantInput();
