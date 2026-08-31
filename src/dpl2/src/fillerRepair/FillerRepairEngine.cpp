@@ -35,8 +35,9 @@ struct PlacementSnapshot
   {
     eUNL::LeafCellID cellId;
     eLIB::LibCellID libCellId;
-    eUTL::UvDist originX;
-    eUTL::UvDist originY;
+    // Destination records use the same core-relative DBU frame as Node.
+    eUTL::UvDist x;
+    eUTL::UvDist y;
     eUTL::PhysOrientation orientation;
   };
   struct InstanceRef
@@ -48,8 +49,6 @@ struct PlacementSnapshot
   DbCoord siteWidth = 0;
   DbCoord rowHeight = 0;
   DbCoord defaultHaloX = 0;
-  DbCoord coreXl = 0;
-  DbCoord coreYl = 0;
   std::vector<RowId> rows;
   std::vector<std::optional<MasterRef>> masters;
   std::vector<std::optional<InstanceRef>> instances;
@@ -461,8 +460,6 @@ void FillerRepairEngine::Impl::buildPlannerData()
   // Planner x is core-relative DBU and row is the Grid row index, matching the
   // coordinates used by CheckRequest.
   placement_.siteWidth = grid_->getSiteWidth().v;
-  placement_.coreXl = grid_->getCore().getXL().getStorage();
-  placement_.coreYl = grid_->getCore().getYL().getStorage();
   const int rowCount = grid_->getRowCount().v;
   placement_.rows.reserve(static_cast<size_t>(std::max(rowCount, 0)));
   for (GridY y{0}; y < grid_->getRowCount(); ++y) {
@@ -677,8 +674,8 @@ void FillerRepairEngine::Impl::buildPlannerData()
         placed,
         {node->getDbInst(),
          node->getMaster()->getDbMaster(),
-         eUTL::UvDist(x + placement_.coreXl),
-         eUTL::UvDist(node->getBottom().v + placement_.coreYl),
+         eUTL::UvDist(x),
+         eUTL::UvDist(node->getBottom().v),
          node->getOrient()}};
     const DbCoord heightRows = std::max<DbCoord>(info.height, 1);
     for (DbCoord offset = 0; offset < heightRows; ++offset) {
@@ -943,8 +940,8 @@ CellChangeRecord FillerRepairEngine::Impl::cellChangeRecord(
         = placement_.instances[instanceId]->record;
     record.cell_data_ = dpl2::CellData{ref.cellId};
     record.orig_lib_cell_ = ref.libCellId;
-    record.x_ = ref.originX;
-    record.y_ = ref.originY;
+    record.x_ = ref.x;
+    record.y_ = ref.y;
     record.orientation_ = ref.orientation;
   }
   if (masterInfo(newMasterId) != nullptr) {

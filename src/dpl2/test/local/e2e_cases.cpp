@@ -36,6 +36,8 @@ bool sameChanges(const dpl2::ipl::FillerChanges& left,
   for (size_t index = 0; index < left.size(); ++index) {
     if (left[index].op_ != right[index].op_
         || left[index].cell_data_ != right[index].cell_data_
+        || left[index].x_ != right[index].x_
+        || left[index].y_ != right[index].y_
         || left[index].orig_lib_cell_ != right[index].orig_lib_cell_
         || left[index].new_lib_cell_ != right[index].new_lib_cell_
         || left[index].orientation_ != right[index].orientation_) {
@@ -196,6 +198,13 @@ TEST_P(FillerRepairRuntimeE2E, StdCellReplacementReturnsOnlyFillerSwaps)
                 .getLibCellId());
   EXPECT_NE(std::get<eUNL::LeafCellID>(outcome.changes.front().cell_data_),
             fixture.design().cell(frt::CellRole::Target));
+  const dpl2::Node* const changed = fixture.network().getNode(
+      std::get<eUNL::LeafCellID>(outcome.changes.front().cell_data_));
+  ASSERT_NE(changed, nullptr);
+  EXPECT_EQ(outcome.changes.front().x_,
+            eUTL::UvDist(changed->getLeft().v));
+  EXPECT_EQ(outcome.changes.front().y_,
+            eUTL::UvDist(changed->getBottom().v));
   EXPECT_EQ(fixture.design().snapshot(), before);
 }
 
