@@ -52,10 +52,10 @@ small integration form, and its tests are split by responsibility:
   boundary with `ImplantLayerCheckerHelper`. Its five-row fixtures assert at
   least six cells per row and cover 50%, 75%, and 90% occupied-site
   utilization;
-- `test/FillerRepairInternalTest.cpp` exercises planner behavior only through
-  in-memory `PlacementView` and `RepairOracle` doubles;
-- `test/FillerRetilerTest.cpp` exercises deterministic exact tiling,
-  no-overlap coverage, and unfillable released sets.
+- `test/FillerRepairInternalTest.cpp` exercises planner behavior through
+  in-memory `PlacementView` and `RepairOracle` doubles and also covers
+  deterministic exact tiling, no-overlap coverage, and unfillable released
+  sets.
 
 The copy-only payload intentionally exposes just this runtime API:
 
@@ -109,8 +109,8 @@ target_link_libraries(dpl2Lib PRIVATE dpl2::fillerRepair)
 ```
 
 The payload target compiles `RepairPlanner.cpp`, `FillerRetiler.cpp`, and
-`FillerRepairEngine.cpp`; its test target explicitly names all test sources
-instead of globbing destination files.
+`FillerRepairEngine.cpp`; its test target explicitly names the integration and
+internal test sources instead of globbing destination files.
 
 The destination supplies its existing UDM, infrastructure, and checker include
 and link closure through `dpl2_filler_repair_deps` if needed. No fake target is

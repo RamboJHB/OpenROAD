@@ -29,13 +29,11 @@ endif()
 
 set(DPL2_SRC_ROOT "${CMAKE_CURRENT_LIST_DIR}/../..")
 
-# Database-free planner tests. The doubles implement the two seams
-# (PlacementView, RepairOracle) without any UDM fixture or provider.
-# The planner seam doubles remain folded into RepairPlannerTest.cpp;
-# FillerRetilerTest.cpp isolates the new database-free geometry primitive.
+# Database-free internal tests. The planner seam doubles and the retiler
+# geometry cases live together in RepairPlannerTest.cpp without any UDM
+# fixture or provider.
 add_executable(dpl2_filler_repair_planner_test
-  RepairPlannerTest.cpp
-  FillerRetilerTest.cpp)
+  RepairPlannerTest.cpp)
 target_link_libraries(
   dpl2_filler_repair_planner_test
   PRIVATE GTest::gtest_main dpl2::fillerRepairPlanner)

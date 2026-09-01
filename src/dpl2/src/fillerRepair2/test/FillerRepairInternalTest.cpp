@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2026, The OpenROAD Authors
 
-// Portable, database-free planner tests -- ONE self-contained file.
+// Portable, database-free planner and retiler tests -- ONE self-contained
+// file.
 //
 // The test doubles that used to live in TestPlacementView.h,
 // SyntheticMasterCatalog.{h,cpp} and TestRepairOracle.{h,cpp} are folded in
@@ -17,11 +18,13 @@
 #include <cstring>
 #include <gtest/gtest.h>
 #include <map>
+#include <set>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
 
+#include <fillerRepair/FillerRetiler.h>
 #include <fillerRepair/PlacementView.h>
 #include <fillerRepair/RepairPlanner.h>
 #include <fillerRepair/RepairTypes.h>
@@ -1010,6 +1013,73 @@ class FillerRepairInternalTest : public ::testing::TestWithParam<Test>
 bool verbose()
 {
   return fr::debugLoggingDefault();
+}
+
+std::set<std::pair<fr::RowId, int>> coveredRetilerSites(
+    const std::vector<fr::internal::TiledFiller>& tiling,
+    const std::vector<fr::internal::FillerFootprint>& footprints)
+{
+  std::set<std::pair<fr::RowId, int>> sites;
+  for (const fr::internal::TiledFiller& tile : tiling) {
+    const auto footprint = std::find_if(
+        footprints.begin(), footprints.end(), [&](const auto& item) {
+          return item.masterId == tile.masterId;
+        });
+    EXPECT_NE(footprint, footprints.end());
+    if (footprint == footprints.end()) {
+      continue;
+    }
+    for (int row = 0; row < footprint->heightRows; ++row) {
+      for (int col = 0; col < footprint->widthSites; ++col) {
+        EXPECT_TRUE(sites.emplace(tile.rowId + row, tile.colId + col).second);
+      }
+    }
+  }
+  return sites;
+}
+
+void testRetilerPrefersDeterministicLargestExactCover()
+{
+  const std::vector<fr::internal::SiteCell> released{
+      {0, 0}, {0, 1}, {1, 0}, {1, 1}};
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {10, 1, 1}, {11, 2, 1}, {12, 2, 2}};
+  const fr::internal::RetileResult result
+      = fr::internal::enumerateRetilings(released, footprints);
+
+  ASSERT_FALSE(result.solutions.empty());
+  ASSERT_EQ(result.solutions.front().size(), 1U);
+  EXPECT_EQ(result.solutions.front().front().masterId, 12);
+  EXPECT_EQ(coveredRetilerSites(result.solutions.front(), footprints),
+            (std::set<std::pair<fr::RowId, int>>{
+                {0, 0}, {0, 1}, {1, 0}, {1, 1}}));
+}
+
+void testRetilerRejectsUnfillableReleasedArea()
+{
+  const fr::internal::RetileResult result
+      = fr::internal::enumerateRetilings({{0, 0}, {0, 1}, {0, 2}},
+                                         {{7, 2, 1}});
+
+  EXPECT_TRUE(result.solutions.empty());
+  EXPECT_FALSE(result.truncated);
+}
+
+void testRetilerNeverOverlapsOrFillsOutsideReleasedSites()
+{
+  const std::vector<fr::internal::SiteCell> released{
+      {2, 4}, {2, 5}, {2, 6}, {2, 7}};
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {3, 1, 1}, {4, 2, 1}};
+  const fr::internal::RetileResult result
+      = fr::internal::enumerateRetilings(released, footprints);
+  const std::set<std::pair<fr::RowId, int>> expected{
+      {2, 4}, {2, 5}, {2, 6}, {2, 7}};
+
+  ASSERT_FALSE(result.solutions.empty());
+  for (const auto& tiling : result.solutions) {
+    EXPECT_EQ(coveredRetilerSites(tiling, footprints), expected);
+  }
 }
 
 // --- Fixtures ---------------------------------------------------------------
@@ -5308,6 +5378,12 @@ const std::vector<Test>& internalCases()
        testOverlayKeySpillsPastTheInlineBuffer},
       {"signature_class_mismatch_implies_signature_mismatch",
        testSignatureClassMismatchImpliesSignatureMismatch},
+      {"retiler_prefers_deterministic_largest_exact_cover",
+       testRetilerPrefersDeterministicLargestExactCover},
+      {"retiler_rejects_unfillable_released_area",
+       testRetilerRejectsUnfillableReleasedArea},
+      {"retiler_never_overlaps_or_fills_outside_released_sites",
+       testRetilerNeverOverlapsOrFillsOutsideReleasedSites},
       {"planner_user_grid_mw_ms_1", testPlannerUserGridMwMs1},
   };
 

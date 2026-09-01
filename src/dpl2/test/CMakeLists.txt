@@ -226,8 +226,7 @@ dpl2_configure_chain_target(dpl2_filler_repair2_internal_impl strict)
 
 add_executable(
   dpl2_filler_repair2_internal_test
-  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/test/FillerRepairInternalTest.cpp"
-  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/test/FillerRetilerTest.cpp")
+  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/test/FillerRepairInternalTest.cpp")
 target_include_directories(
   dpl2_filler_repair2_internal_test
   BEFORE PRIVATE "${DPL2_FR2_STAGE_ROOT}")
