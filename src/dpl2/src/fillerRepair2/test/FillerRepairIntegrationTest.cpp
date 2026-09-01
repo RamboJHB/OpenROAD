@@ -511,17 +511,37 @@ TEST_P(FillerRepairIntegrationTest,
   EXPECT_FALSE(checker.check(&temporary, GridX(targetCol), GridY(targetRow),
                              PhysOrientationE::MX));
   EXPECT_TRUE(changes.empty());
-  EXPECT_TRUE(checker.check(&temporary,
-                            GridX(targetCol),
-                            GridY(targetRow),
-                            PhysOrientationE::MX,
-                            changes,
-                            overlay));
+  ::testing::internal::CaptureStdout();
+  const bool repaired = checker.check(&temporary,
+                                      GridX(targetCol),
+                                      GridY(targetRow),
+                                      PhysOrientationE::MX,
+                                      changes,
+                                      overlay);
+  const std::string repairLog = ::testing::internal::GetCapturedStdout();
+  EXPECT_TRUE(repaired);
   ASSERT_EQ(changes.size(), 1U);
   EXPECT_EQ(changes.front().op_, OpType::Replace);
   EXPECT_EQ(std::get<LeafCellID>(changes.front().cell_data_),
             bridge->getDbInst());
   EXPECT_EQ(changes.front().new_lib_cell_, network.getMaster(3)->getDbMaster());
+  EXPECT_NE(repairLog.find("REPAIR SUCCESS"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("Caller Delete overlay #1"), std::string::npos)
+      << repairLog;
+  EXPECT_NE(repairLog.find("DELETE (caller input)"), std::string::npos)
+      << repairLog;
+  EXPECT_NE(repairLog.find("Returned repair change #1"), std::string::npos)
+      << repairLog;
+  EXPECT_NE(repairLog.find("SWAP (Replace)"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("old cell id"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("old cell name"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("old master name"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("old site width"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("old orientation"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("new master id"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("new master name"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("new site width"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("new orientation"), std::string::npos) << repairLog;
   EXPECT_EQ(replaced->getMaster()->getId(), oldTargetMaster);
   EXPECT_EQ(bridge->getMaster()->getId(), oldBridgeMaster);
 }
@@ -755,12 +775,15 @@ TEST_P(FillerRepairIntegrationTest,
   EXPECT_TRUE(checker.checkDirect(request).isLegal);
   const MasterId originalMaster = wideFiller->getMaster()->getId();
   FillerChanges changes;
-  EXPECT_TRUE(checker.check(&temporary,
-                            GridX{targetCol},
-                            GridY{targetRow},
-                            PhysOrientationE::MX,
-                            changes,
-                            overlay));
+  ::testing::internal::CaptureStdout();
+  const bool repaired = checker.check(&temporary,
+                                      GridX{targetCol},
+                                      GridY{targetRow},
+                                      PhysOrientationE::MX,
+                                      changes,
+                                      overlay);
+  const std::string repairLog = ::testing::internal::GetCapturedStdout();
+  EXPECT_TRUE(repaired);
 
   ASSERT_EQ(changes.size(), 1U);
   const CellChangeRecord& addition = changes.front();
@@ -768,6 +791,21 @@ TEST_P(FillerRepairIntegrationTest,
   const std::string* name = std::get_if<std::string>(&addition.cell_data_);
   ASSERT_NE(name, nullptr);
   EXPECT_EQ(*name, "UNIT_PREFIX_FILLER_REPAIR_1_4_W10_H1_0");
+  EXPECT_NE(repairLog.find("REPAIR SUCCESS"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("Caller Delete overlay #1"), std::string::npos)
+      << repairLog;
+  EXPECT_NE(repairLog.find("DELETE (caller input)"), std::string::npos)
+      << repairLog;
+  EXPECT_NE(repairLog.find("Returned repair change #1"), std::string::npos)
+      << repairLog;
+  EXPECT_NE(repairLog.find("ADD"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("UNIT_PREFIX_FILLER_REPAIR_1_4_W10_H1_0"),
+            std::string::npos)
+      << repairLog;
+  EXPECT_NE(repairLog.find("new master id"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("new master name"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("new site width"), std::string::npos) << repairLog;
+  EXPECT_NE(repairLog.find("new orientation"), std::string::npos) << repairLog;
   EXPECT_EQ(addition.x_.getStorage(), 4 * kSiteWidth);
   EXPECT_EQ(addition.y_.getStorage(), targetRow * kRowHeight);
   EXPECT_TRUE(network.getMaster(

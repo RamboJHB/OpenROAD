@@ -23,6 +23,13 @@ authoritative, and the public request/result wire is unchanged. There is no
 target movement, engine `update`, external engine setter, or numeric request
 API.
 
+Every successful repair emits a `REPAIR SUCCESS` transcript. It first lists
+each caller-owned `Delete` overlay, then each returned `Add` or `Swap
+(Replace)` change. The records include the old/new network and DB cell IDs,
+cell names, master IDs and names, site widths, orientations, and core-relative
+origins. A newly added cell reports its configured generated name and marks
+IDs that are assigned only when the caller commits the transaction.
+
 The destination-facing call chain is:
 
 ```text

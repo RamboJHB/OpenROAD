@@ -643,6 +643,9 @@ class FillerRepairEngine::Impl final : private PlacementView
   Violation toPlannerViolation(const ipl::Violation& violation,
                                InstanceId targetInstance) const;
   Region snapshotGuard(const TargetPlace& target) const;
+  void logRepairSuccess(const ipl::CheckRequest& request,
+                        const RepairOutcome& result,
+                        const std::string& status) const;
   // Grows `table` so `id` is a valid index (ids can exceed the presized
   // container counts only if the Network id spaces are not dense).
   template <typename T>
@@ -1384,6 +1387,168 @@ Region FillerRepairEngine::Impl::snapshotGuard(const TargetPlace& target) const
                             + static_cast<RowId>(kSnapshotHaloRows));
   return guard;
 }
+
+void FillerRepairEngine::Impl::logRepairSuccess(
+    const ipl::CheckRequest& request,
+    const RepairOutcome& result,
+    const std::string& status) const
+{
+  if (!log_.enabled()) {
+    return;
+  }
+
+  const auto nodeName = [this](const Node* node) {
+    if (node == nullptr) {
+      return std::string{"<unresolved>"};
+    }
+    if (checker_.getDesign() != nullptr && node->getDbInst().isValid()) {
+      return checker_.cellName(node);
+    }
+    return std::string{"<unavailable>"};
+  };
+  const auto masterName = [this](MasterId masterId) -> std::string {
+    const Master* master
+        = masterId >= 0 ? network_->getMaster(masterId) : nullptr;
+    const eLIB::PhysLibCell* physical
+        = master != nullptr ? master->getPhysLibCell() : nullptr;
+    if (physical != nullptr) {
+      return std::string{physical->getLibCell().getName()};
+    }
+    return masterId >= 0 ? std::string{"<unavailable>"}
+                         : std::string{"<none>"};
+  };
+  const auto masterSiteWidth = [this](MasterId masterId) {
+    const MasterInfo* master = masterInfo(masterId);
+    if (master == nullptr || placement_.siteWidth <= 0) {
+      return std::string{"<unavailable>"};
+    }
+    if (master->width % placement_.siteWidth != 0) {
+      return cat(master->width,
+                 " DBU (site=",
+                 placement_.siteWidth,
+                 " DBU; not aligned)");
+    }
+    return cat(master->width / placement_.siteWidth,
+               " site(s) (",
+               master->width,
+               " DBU; site=",
+               placement_.siteWidth,
+               " DBU)");
+  };
+  const auto dbCellId = [](const eUNL::LeafCellID* cellId) {
+    return cellId != nullptr && cellId->isValid()
+               ? cat(cellId->getIndexValue())
+               : std::string{"<none>"};
+  };
+
+  const size_t addCount = std::count_if(
+      result.changes.begin(), result.changes.end(), [](const auto& change) {
+        return change.op_ == OpType::Add;
+      });
+  const size_t swapCount = std::count_if(
+      result.changes.begin(), result.changes.end(), [](const auto& change) {
+        return change.op_ == OpType::Replace;
+      });
+  log_.section("engine", "REPAIR SUCCESS");
+  log_.block("engine",
+             "Repair result",
+             {{"status", status},
+              {"caller Delete overlays", cat(request.overlayChanges.size())},
+              {"returned Add changes", cat(addCount)},
+              {"returned Swap changes", cat(swapCount)}});
+
+  for (size_t index = 0; index < request.overlayChanges.size(); ++index) {
+    const CellChangeRecord& overlay = request.overlayChanges[index];
+    const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(overlay);
+    const InstanceId instanceId
+        = cellId != nullptr ? network_->getNodeId(*cellId) : -1;
+    const Node* node = instanceId >= 0 ? network_->getNode(instanceId) : nullptr;
+    const MasterId oldMasterId
+        = node != nullptr && node->getMaster() != nullptr
+              ? node->getMaster()->getId()
+              : network_->getMasterId(overlay.orig_lib_cell_);
+    const eUTL::PhysOrientation orientation
+        = node != nullptr ? node->getOrient() : overlay.orientation_;
+    const int64_t x = node != nullptr ? node->getLeft().v
+                                      : overlay.x_.getStorage();
+    const int64_t y = node != nullptr ? node->getBottom().v
+                                      : overlay.y_.getStorage();
+    log_.block(
+        "engine",
+        cat("Caller Delete overlay #", index + 1),
+        {{"operation", "DELETE (caller input)"},
+         {"cell kind",
+          node == nullptr ? "<unresolved>"
+                          : (node->isFiller() ? "filler" : "standard cell")},
+         {"old cell id", instanceId >= 0 ? cat(instanceId) : "<unresolved>"},
+         {"old DB cell id", dbCellId(cellId)},
+         {"old cell name", nodeName(node)},
+         {"old master id",
+          oldMasterId >= 0 ? cat(oldMasterId) : "<unresolved>"},
+         {"old master name", masterName(oldMasterId)},
+         {"old site width", masterSiteWidth(oldMasterId)},
+         {"old orientation", orientationName(orientation)},
+         {"origin (core DBU)", cat('(', x, ',', y, ')')},
+         {"new state", "deleted by caller before target placement"}});
+  }
+
+  for (size_t index = 0; index < result.changes.size(); ++index) {
+    const CellChangeRecord& change = result.changes[index];
+    const bool isAdd = change.op_ == OpType::Add;
+    const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(change);
+    const InstanceId instanceId
+        = cellId != nullptr ? network_->getNodeId(*cellId) : -1;
+    const Node* oldNode
+        = instanceId >= 0 ? network_->getNode(instanceId) : nullptr;
+    const MasterId oldMasterId
+        = oldNode != nullptr && oldNode->getMaster() != nullptr
+              ? oldNode->getMaster()->getId()
+              : network_->getMasterId(change.orig_lib_cell_);
+    const MasterId newMasterId
+        = network_->getMasterId(change.new_lib_cell_);
+    const std::string* addedName
+        = std::get_if<std::string>(&change.cell_data_);
+    const std::string oldCellId
+        = isAdd ? "<none>"
+                : (instanceId >= 0 ? cat(instanceId) : "<unresolved>");
+    const std::string newCellId
+        = isAdd ? "<assigned on commit>" : oldCellId;
+    const std::string oldName = isAdd ? "<none>" : nodeName(oldNode);
+    const std::string newName
+        = isAdd ? (addedName != nullptr ? *addedName : "<invalid Add name>")
+                : oldName;
+    const std::string oldOrientation
+        = isAdd || oldNode == nullptr
+              ? (isAdd ? "<none>" : orientationName(change.orientation_))
+              : orientationName(oldNode->getOrient());
+    log_.block(
+        "engine",
+        cat("Returned repair change #", index + 1),
+        {{"operation",
+          isAdd ? "ADD" : (change.op_ == OpType::Replace
+                                 ? "SWAP (Replace)"
+                                 : "UNEXPECTED")},
+         {"old cell id", oldCellId},
+         {"old DB cell id", isAdd ? "<none>" : dbCellId(cellId)},
+         {"old cell name", oldName},
+         {"new cell id", newCellId},
+         {"new DB cell id",
+          isAdd ? "<assigned on commit>" : dbCellId(cellId)},
+         {"new cell name", newName},
+         {"old master id", isAdd ? "<none>" : cat(oldMasterId)},
+         {"old master name", isAdd ? "<none>" : masterName(oldMasterId)},
+         {"old site width",
+          isAdd ? "<none>" : masterSiteWidth(oldMasterId)},
+         {"new master id", cat(newMasterId)},
+         {"new master name", masterName(newMasterId)},
+         {"new site width", masterSiteWidth(newMasterId)},
+         {"old orientation", oldOrientation},
+         {"new orientation", orientationName(change.orientation_)},
+         {"origin (core DBU)",
+          cat('(', change.x_.getStorage(), ',', change.y_.getStorage(), ')')}});
+  }
+}
+
 RepairOutcome FillerRepairEngine::Impl::repair(
     const ipl::CheckRequest& request) const
 {
@@ -1860,10 +2025,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         if (layoutSnapshot.violations.empty()) {
           result.hasSolution = true;
           result.changes = std::move(fixed);
-          log_.block("engine",
-                     "Repair result",
-                     {{"status", "retiled solution"},
-                      {"added fillers", cat(result.changes.size())}});
+          logRepairSuccess(request, result, "retiled solution");
           return result;
         }
 
@@ -1876,10 +2038,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         if (planned.hasSolution) {
           result.hasSolution = true;
           result.changes = mergeFillerChanges(fixed, planned.changes);
-          log_.block("engine",
-                     "Repair result",
-                     {{"status", "retiled and repaired"},
-                      {"filler changes", cat(result.changes.size())}});
+          logRepairSuccess(request, result, "retiled and repaired");
           return result;
         }
         // The planner explores the alternate masters exposed by this tiling,
@@ -1913,8 +2072,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   }
   if (snapshot.violations.empty()) {
     result.hasSolution = true;
-    log_.block(
-        "engine", "Repair result", {{"status", "no filler change needed"}});
+    logRepairSuccess(request, result, "no filler change needed");
     return result;
   }
   if (!candidate_catalog_.hasPlacedCandidate()) {
@@ -1948,10 +2106,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
 
   result.hasSolution = true;
   result.changes = planned.changes;
-  log_.block(
-      "engine",
-      "Repair result",
-      {{"status", "solution"}, {"filler changes", cat(result.changes.size())}});
+  logRepairSuccess(request, result, "solution");
   return result;
 }
 
