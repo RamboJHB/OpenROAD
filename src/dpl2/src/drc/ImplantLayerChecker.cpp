@@ -890,7 +890,8 @@ bool ImplantLayerChecker::check(const Node* node,
     request.y = y;
     request.orientation = orient;
     request.overlayChanges = overlayChanges;
-    if (checkDirect(request).isLegal) {
+    const CheckResult direct = checkDirect(request);
+    if (direct.isLegal && isExactCover(request)) {
         return true;
     }
     if (!enableFillerRepair_.load(std::memory_order_acquire)) {
@@ -1033,16 +1034,6 @@ DiagVec ImplantLayerChecker::validateCheckRequest(
         return diagnostics;
     }
 
-    const Pixel* origin = grid_->gridPixel(request.x, request.y);
-    const Node* replaced
-        = origin != nullptr ? origin->cell : nullptr;
-    if (replaced == nullptr
-        || replacedNodeIds.find(replaced->getId()) == replacedNodeIds.end()) {
-        diagnostics.push_back(
-            {"target_overlay_origin_uncovered",
-             "a Delete overlay must cover the temporary target origin"});
-        return diagnostics;
-    }
     return diagnostics;
 }
 
@@ -1363,7 +1354,33 @@ CheckShapes ImplantLayerChecker::getOverlaySnapshot(
                        true);
     snapshot.insert(snapshot.end(), targetShapes.begin(), targetShapes.end());
 
+    int addIndex = 0;
     for (const CellChangeRecord& change : fillerChanges) {
+        if (change.op_ == OpType::Add) {
+            const InstanceId syntheticId = -1 - addIndex++;
+            if (!useNewFillers) {
+                continue;
+            }
+            const MasterId masterId
+                = network_->getMasterId(change.new_lib_cell_);
+            const int64_t x = change.x_.getStorage();
+            const int64_t y = change.y_.getStorage();
+            const ColId colId
+                = siteWidth_ > 0 ? static_cast<ColId>(x / siteWidth_) : 0;
+            const RowId rowId
+                = grid_->gridSnapDownY(DbuY{static_cast<int>(y)}).v;
+            const CheckShapes& fillerShapes
+                = getNodeShape(syntheticId,
+                               masterId,
+                               rowId,
+                               colId,
+                               change.orientation_,
+                               true);
+            snapshot.insert(snapshot.end(),
+                            fillerShapes.begin(),
+                            fillerShapes.end());
+            continue;
+        }
         if (change.op_ != OpType::Replace) {
             continue;
         }
@@ -1934,8 +1951,9 @@ std::vector<Violation> ImplantLayerChecker::makeViolations(
     return violations;
 }
 
-// Confirm that the proposed target exactly covers either one old std cell or
-// every filler named by a multi-Delete buffer insertion request.
+// Confirm one-to-one std-cell replacement, or validate a filler overlay whose
+// selected fillers intersect the target. Filler coverage may be partial and
+// may extend outside the target; the repair engine fills that released area.
 OverlapInfo ImplantLayerChecker::checkOverlap(
     const CheckRequest& request) const
 {
@@ -1967,15 +1985,8 @@ OverlapInfo ImplantLayerChecker::checkOverlap(
         = std::max(1, (master->height + rowHeight_ - 1) / rowHeight_);
     const GridX targetXh{request.x.v + widthSites};
     const GridY targetYh{request.y.v + heightRows};
-    const auto incompleteCover = [&replacedNodes]() {
-        return replacedNodes.size() == 1
-                   ? Diagnostic{
-                         "target_not_one_to_one",
-                         "temporary target must exactly replace one committed node"}
-                   : Diagnostic{
-                         "target_overlay_not_exact_cover",
-                         "Delete overlays must exactly cover the temporary target"};
-    };
+    const bool singleStdCell
+        = replacedNodes.size() == 1 && !replacedNodes.front()->isFiller();
     for (const Node* replaced : replacedNodes) {
         if (replaced == nullptr || replaced->getMaster() == nullptr) {
             info.diags = Diagnostic{
@@ -1987,12 +1998,20 @@ OverlapInfo ImplantLayerChecker::checkOverlap(
         const GridY replacedYl = grid_->gridSnapDownY(replaced);
         const GridX replacedXh = grid_->gridEndX(replaced);
         const GridY replacedYh = grid_->gridEndY(replaced);
-        if (replacedXl < request.x
-            || replacedYl < request.y || replacedXh > targetXh
-            || replacedYh > targetYh) {
-            info.diags = Diagnostic{
-                "target_overlay_exceeds_footprint",
-                "a deleted node extends outside the temporary target footprint"};
+        const bool intersects
+            = replacedXl < targetXh && request.x < replacedXh
+              && replacedYl < targetYh && request.y < replacedYh;
+        if ((singleStdCell
+             && (replacedXl != request.x || replacedYl != request.y
+                 || replacedXh != targetXh || replacedYh != targetYh))
+            || (!singleStdCell && !intersects)) {
+            info.diags = singleStdCell
+                             ? Diagnostic{
+                                   "target_not_one_to_one",
+                                   "temporary target must exactly replace one committed node"}
+                             : Diagnostic{
+                                   "target_overlay_does_not_intersect",
+                                   "every deleted filler must intersect the temporary target"};
             return info;
         }
         info.fillers.insert(replaced->getId());
@@ -2000,7 +2019,9 @@ OverlapInfo ImplantLayerChecker::checkOverlap(
             for (GridX x = replacedXl; x < replacedXh; ++x) {
                 const Pixel* pixel = grid_->gridPixel(x, y);
                 if (pixel == nullptr || pixel->cell != replaced) {
-                    info.diags = incompleteCover();
+                    info.diags = Diagnostic{
+                        "invalid_target_overlay_footprint",
+                        "a deleted node does not own its complete grid footprint"};
                     return info;
                 }
             }
@@ -2012,10 +2033,12 @@ OverlapInfo ImplantLayerChecker::checkOverlap(
             const Node* occupant = pixel != nullptr ? pixel->cell : nullptr;
             if (pixel == nullptr || !pixel->is_valid
                 || pixel->padding_reserved_by != nullptr
-                || occupant == nullptr
-                || info.fillers.find(occupant->getId())
-                       == info.fillers.end()) {
-                info.diags = incompleteCover();
+                || (occupant != nullptr
+                    && info.fillers.find(occupant->getId())
+                           == info.fillers.end())) {
+                info.diags = Diagnostic{
+                    "target_overlaps_unchanged_instance",
+                    "temporary target must cover legal whitespace or selected fillers only"};
                 return info;
             }
         }
@@ -2023,22 +2046,222 @@ OverlapInfo ImplantLayerChecker::checkOverlap(
     return info;
 }
 
-// Validate the planner's candidate transaction. Every candidate record must
-// be a same-footprint filler Replace and may not modify the caller's target.
+bool ImplantLayerChecker::isExactCover(const CheckRequest& request) const
+{
+    const OverlapInfo overlap = checkOverlap(request);
+    const MasterItem* master
+        = request.cell != nullptr && request.cell->getMaster() != nullptr
+              ? masterItem(request.cell->getMaster()->getId())
+              : nullptr;
+    if (overlap.diags.has_value() || grid_ == nullptr || master == nullptr
+        || overlap.fillers.empty() || siteWidth_ <= 0 || rowHeight_ <= 0) {
+        return false;
+    }
+    if (overlap.fillers.size() == 1) {
+        const Node* only = network_->getNode(*overlap.fillers.begin());
+        if (only != nullptr && !only->isFiller()) {
+            return true;
+        }
+    }
+    const int widthSites
+        = std::max(1, (master->width + siteWidth_ - 1) / siteWidth_);
+    const int heightRows
+        = std::max(1, (master->height + rowHeight_ - 1) / rowHeight_);
+    const GridX targetXh{request.x.v + widthSites};
+    const GridY targetYh{request.y.v + heightRows};
+    for (const InstanceId id : overlap.fillers) {
+        const Node* filler = network_->getNode(id);
+        if (filler == nullptr || !filler->isFiller()
+            || grid_->gridX(filler) < request.x
+            || grid_->gridSnapDownY(filler) < request.y
+            || grid_->gridEndX(filler) > targetXh
+            || grid_->gridEndY(filler) > targetYh) {
+            return false;
+        }
+    }
+    for (GridY row = request.y; row < targetYh; ++row) {
+        for (GridX col = request.x; col < targetXh; ++col) {
+            const Pixel* pixel = grid_->gridPixel(col, row);
+            if (pixel == nullptr || pixel->cell == nullptr
+                || overlap.fillers.count(pixel->cell->getId()) == 0) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// Validate a repair candidate. Existing instances may only be same-footprint
+// filler Replaces. Request-local Adds must exactly cover the sites released by
+// caller-deleted fillers outside the temporary target.
 DiagVec ImplantLayerChecker::validateOverlayRequest(
     const CheckRequest& request,
     const FillerChanges& fillerChanges) const
 {
     DiagVec diagnostics;
-    std::set<InstanceId> seen;
     const std::set<InstanceId> targetNodeIds = overlayNodeIds(request);
+    const MasterItem* targetMaster
+        = request.cell != nullptr && request.cell->getMaster() != nullptr
+              ? masterItem(request.cell->getMaster()->getId())
+              : nullptr;
+    if (grid_ == nullptr || network_ == nullptr || targetMaster == nullptr
+        || siteWidth_ <= 0 || rowHeight_ <= 0) {
+        diagnostics.push_back(
+            {"invalid_filler_change_geometry",
+             "cannot validate filler changes without grid/master geometry"});
+        return diagnostics;
+    }
+
+    using Site = std::pair<RowId, ColId>;
+    const int targetWidth
+        = std::max(1, (targetMaster->width + siteWidth_ - 1) / siteWidth_);
+    const int targetHeight
+        = std::max(1, (targetMaster->height + rowHeight_ - 1) / rowHeight_);
+    std::set<Site> targetSites;
+    for (int rowOffset = 0; rowOffset < targetHeight; ++rowOffset) {
+        for (int colOffset = 0; colOffset < targetWidth; ++colOffset) {
+            targetSites.emplace(request.y.v + rowOffset,
+                                request.x.v + colOffset);
+        }
+    }
+    std::set<Site> deletedFillerSites;
+    for (const InstanceId id : targetNodeIds) {
+        const Node* node = network_->getNode(id);
+        if (node == nullptr || node->getMaster() == nullptr
+            || !node->isFiller()) {
+            continue;
+        }
+        const GridX xl = grid_->gridX(node);
+        const GridY yl = grid_->gridSnapDownY(node);
+        const GridX xh = grid_->gridEndX(node);
+        const GridY yh = grid_->gridEndY(node);
+        for (GridY row = yl; row < yh; ++row) {
+            for (GridX col = xl; col < xh; ++col) {
+                deletedFillerSites.emplace(row.v, col.v);
+            }
+        }
+    }
+    std::set<Site> requiredAddedSites;
+    std::set_difference(deletedFillerSites.begin(),
+                        deletedFillerSites.end(),
+                        targetSites.begin(),
+                        targetSites.end(),
+                        std::inserter(requiredAddedSites,
+                                      requiredAddedSites.end()));
+
+    struct AddedPlacement
+    {
+        std::string name;
+        RowId rowId = -1;
+        ColId colId = -1;
+        int widthSites = 0;
+        int heightRows = 0;
+    };
+    std::vector<AddedPlacement> additions;
+    std::set<InstanceId> seen;
+    std::set<std::string> seenNames;
     for (const CellChangeRecord& change : fillerChanges) {
+        if (change.op_ == OpType::Add) {
+            const std::string* name
+                = std::get_if<std::string>(&change.cell_data_);
+            if (name == nullptr || name->empty()) {
+                diagnostics.push_back(
+                    {"added_cell_data_not_name",
+                     "Add record must carry a non-empty request-local name"});
+                continue;
+            }
+            if (!seenNames.insert(*name).second) {
+                diagnostics.push_back(
+                    {"duplicate_added_filler_name",
+                     "duplicate added filler name " + *name});
+                continue;
+            }
+            const MasterId newMasterId
+                = network_->getMasterId(change.new_lib_cell_);
+            const MasterItem* replacement = masterItem(newMasterId);
+            const Master* replacementMaster = network_->getMaster(newMasterId);
+            if (replacement == nullptr || replacementMaster == nullptr
+                || !replacementMaster->isFiller()) {
+                diagnostics.push_back(
+                    {"added_master_not_filler",
+                     makeMessage("added master is not filler ", newMasterId)});
+                continue;
+            }
+            const int64_t x = change.x_.getStorage();
+            const int64_t y = change.y_.getStorage();
+            if (x < 0 || y < 0 || x % siteWidth_ != 0
+                || x > std::numeric_limits<int>::max()
+                || y > std::numeric_limits<int>::max()) {
+                diagnostics.push_back(
+                    {"added_filler_not_site_aligned",
+                     "added filler " + *name + " is not site aligned"});
+                continue;
+            }
+            const ColId colId = static_cast<ColId>(x / siteWidth_);
+            const RowId rowId
+                = grid_->gridSnapDownY(DbuY{static_cast<int>(y)}).v;
+            if (rowId < 0 || rowId >= grid_->getRowCount().v
+                || grid_->gridYToDbu(GridY{rowId}).v != y) {
+                diagnostics.push_back(
+                    {"added_filler_not_row_aligned",
+                     "added filler " + *name + " is not row aligned"});
+                continue;
+            }
+            const int widthSites
+                = std::max(1,
+                           (replacement->width + siteWidth_ - 1)
+                               / siteWidth_);
+            const int heightRows
+                = std::max(1,
+                           (replacement->height + rowHeight_ - 1)
+                               / rowHeight_);
+            if (colId < 0
+                || colId + widthSites > grid_->getRowSiteCount().v
+                || rowId + heightRows > grid_->getRowCount().v) {
+                diagnostics.push_back(
+                    {"added_filler_out_of_grid",
+                     "added filler " + *name + " is outside the grid"});
+                continue;
+            }
+            const eLIB::PhysLibCell* physCell
+                = replacementMaster->getPhysLibCell();
+            const eLIB::TechSite* site
+                = physCell != nullptr ? physCell->getTechSite() : nullptr;
+            std::optional<PhysOrientation> expected;
+            if (site != nullptr) {
+                expected = grid_->getSiteOrientation(GridX{colId},
+                                                     GridY{rowId},
+                                                     site->getName());
+            } else {
+                // Portable checker fixtures have no PhysLibCell/site object.
+                // A released site is still occupied by a caller-deleted
+                // filler, whose committed orientation supplies the row frame.
+                const Pixel* released
+                    = grid_->gridPixel(GridX{colId}, GridY{rowId});
+                if (released != nullptr && released->cell != nullptr) {
+                    expected = released->cell->getOrient();
+                }
+            }
+            if (!expected.has_value()
+                || expected->getValue()
+                       != change.orientation_.getValue()) {
+                diagnostics.push_back(
+                    {"added_filler_orientation_mismatch",
+                     "added filler " + *name
+                         + " does not match row/site orientation"});
+                continue;
+            }
+            additions.push_back(
+                {*name, rowId, colId, widthSites, heightRows});
+            continue;
+        }
+
         const LeafCellID* cellId = cellChangeLeafCellId(change);
         if (change.op_ != OpType::Replace || cellId == nullptr
             || !cellId->isValid()) {
             diagnostics.push_back(
                 {"invalid_filler_change",
-                 "filler repair candidates must contain Replace records only"});
+                 "filler repair candidates may contain Add or Replace records only"});
             continue;
         }
         const InstanceId instanceId = network_->getNodeId(*cellId);
@@ -2088,6 +2311,58 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
                 {"replacement_footprint_mismatch",
                  makeMessage("replacement footprint mismatch ", instanceId)});
         }
+    }
+
+    std::set<Site> addedSites;
+    for (const AddedPlacement& addition : additions) {
+        for (int rowOffset = 0; rowOffset < addition.heightRows;
+             ++rowOffset) {
+            for (int colOffset = 0; colOffset < addition.widthSites;
+                 ++colOffset) {
+                const Site site{addition.rowId + rowOffset,
+                                addition.colId + colOffset};
+                if (targetSites.count(site) != 0) {
+                    diagnostics.push_back(
+                        {"added_filler_overlaps_target",
+                         "added filler " + addition.name
+                             + " overlaps the temporary target"});
+                    continue;
+                }
+                if (!addedSites.insert(site).second) {
+                    diagnostics.push_back(
+                        {"added_fillers_overlap",
+                         "added filler " + addition.name
+                             + " overlaps another added filler"});
+                    continue;
+                }
+                const Pixel* pixel
+                    = grid_->gridPixel(GridX{site.second},
+                                       GridY{site.first});
+                const Node* occupant = pixel != nullptr ? pixel->cell : nullptr;
+                if (pixel == nullptr || !pixel->is_valid
+                    || pixel->padding_reserved_by != nullptr) {
+                    diagnostics.push_back(
+                        {"added_filler_on_illegal_site",
+                         "added filler " + addition.name
+                             + " covers an illegal or reserved site"});
+                    continue;
+                }
+                if (occupant != nullptr
+                    && targetNodeIds.count(occupant->getId()) == 0) {
+                    diagnostics.push_back(
+                        {"added_filler_overlaps_input",
+                         makeMessage("added filler overlaps unchanged instance ",
+                                     occupant->getId())});
+                }
+            }
+        }
+    }
+    if (addedSites != requiredAddedSites) {
+        diagnostics.push_back(
+            {"added_fillers_do_not_fill_released_sites",
+             "added filler sites=" + std::to_string(addedSites.size())
+                 + " required released sites="
+                 + std::to_string(requiredAddedSites.size())});
     }
     return diagnostics;
 }
@@ -2522,6 +2797,16 @@ CheckResult ImplantLayerChecker::checkOverlayRegion(
     itvs.push_back({request.x.v * siteWidth_,
                     request.x.v * siteWidth_ + targetMaster->width});
     for (const CellChangeRecord& change : fillerChanges) {
+        if (change.op_ == OpType::Add) {
+            const MasterId masterId
+                = network_->getMasterId(change.new_lib_cell_);
+            const MasterItem* addedMaster = masterItem(masterId);
+            if (addedMaster != nullptr) {
+                const Dbu xl = static_cast<Dbu>(change.x_.getStorage());
+                itvs.push_back({xl, xl + addedMaster->width});
+            }
+            continue;
+        }
         const LeafCellID* cellId = cellChangeLeafCellId(change);
         Node* filler = cellId != nullptr ? network_->getNode(*cellId) : nullptr;
         if (filler == nullptr) {

@@ -564,9 +564,9 @@ bool DePlace::canBePlaced(const Node* cell, GridX bin_x, GridY bin_y,
   const GridY y_end
       = grid_->gridEndY(grid_->gridYToDbu(bin_y) + cell->getHeight());
 
-  // With fillerChanges, findLeg admits only a candidate that exactly replaces
-  // one same-footprint filler, then asks the overlay DRC for surrounding
-  // filler swaps. Ordinary placement paths pass nullptr.
+  // With fillerChanges, findLeg admits a target over whitespace and/or one or
+  // more intersecting fillers. The checker may return gap-filling Adds plus
+  // surrounding filler Replaces. Ordinary placement paths pass nullptr.
   return checkPixels(cell, bin_x, bin_y, x_end, y_end, fillerChanges);
 }
 
@@ -656,40 +656,49 @@ bool DePlace::checkPixels(const Node* cell,
 
   std::vector<CellChangeRecord> ccRecords;
   if (fillerChanges != nullptr) {
-    // findLegal supports exactly one temporary std cell replacing exactly one
-    // same-footprint filler. Empty space, multiple fillers, and partial filler
-    // coverage are not this API's operation.
+    // Describe every filler intersected by the temporary target as a caller-
+    // owned Delete overlay. The checker/repair engine may accept partial
+    // coverage and retile any released sites outside the target; Grid and
+    // Network remain unchanged during this probe.
     setGridLoc(const_cast<Node*>(cell), x, y);
-    Node* replacedFiller = nullptr;
+    std::vector<Node*> replacedFillers;
+    std::set<int> seenFillerIds;
     for (GridY y1 = y; y1 < y_end; ++y1) {
       for (GridX x1 = x; x1 < x_end; ++x1) {
         const Pixel* pixel = grid_->gridPixel(x1, y1);
-        if (pixel == nullptr || pixel->cell == nullptr
-            || !pixel->cell->isFiller()) {
+        if (pixel == nullptr
+            || (pixel->cell != nullptr && !pixel->cell->isFiller())) {
           return false;
         }
-        if (replacedFiller == nullptr) {
-          replacedFiller = pixel->cell;
-        } else if (replacedFiller != pixel->cell) {
-          return false;
+        if (pixel->cell != nullptr
+            && seenFillerIds.insert(pixel->cell->getId()).second) {
+          replacedFillers.push_back(pixel->cell);
         }
       }
     }
-    if (replacedFiller == nullptr || replacedFiller->getMaster() == nullptr
-        || grid_->gridX(replacedFiller) != x
-        || grid_->gridSnapDownY(replacedFiller) != y
-        || grid_->gridEndX(replacedFiller) != x_end
-        || grid_->gridEndY(replacedFiller) != y_end) {
+    if (replacedFillers.empty()) {
       return false;
     }
-    std::vector<CellChangeRecord> overlayChanges{CellChangeRecord{
-        OpType::Delete,
-        replacedFiller->getDbInst(),
-        UvDist(replacedFiller->getLeft().v),
-        UvDist(replacedFiller->getBottom().v),
-        replacedFiller->getMaster()->getDbMaster(),
-        replacedFiller->getMaster()->getDbMaster(),
-        replacedFiller->getOrient()}};
+    std::sort(replacedFillers.begin(),
+              replacedFillers.end(),
+              [](const Node* left, const Node* right) {
+                return left->getId() < right->getId();
+              });
+    std::vector<CellChangeRecord> overlayChanges;
+    overlayChanges.reserve(replacedFillers.size());
+    for (const Node* filler : replacedFillers) {
+      if (filler == nullptr || filler->getMaster() == nullptr) {
+        return false;
+      }
+      overlayChanges.push_back(
+          CellChangeRecord{OpType::Delete,
+                           filler->getDbInst(),
+                           UvDist(filler->getLeft().v),
+                           UvDist(filler->getBottom().v),
+                           filler->getMaster()->getDbMaster(),
+                           filler->getMaster()->getDbMaster(),
+                           filler->getOrient()});
+    }
     return drc_engine_->checkDRC(
         cell, x, y, orient, *fillerChanges, overlayChanges);
   }

@@ -225,8 +225,9 @@ struct OverlapInfo
 };
 
 // Public pre-commit wire. The temporary Node is the proposed std cell; the
-// Delete overlays name either one committed std cell or every filler exactly
-// covered by a newly inserted buffer.
+// Delete overlays name either one committed std cell or selected fillers that
+// intersect a newly inserted buffer. Repair may fill released sites with Add
+// records; the wire itself is unchanged.
 struct CheckRequest
 {
     const Node* cell = nullptr;
@@ -372,6 +373,7 @@ private:
         bool isCandidate) const;
 
     OverlapInfo checkOverlap(const CheckRequest& request) const;
+    bool isExactCover(const CheckRequest& request) const;
     DiagVec validateOverlayRequest(const CheckRequest& request,
         const FillerChanges& fillerChanges) const;
     bool touchesInstance(const Violation& violation, InstanceId instanceId) const;

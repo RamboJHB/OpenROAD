@@ -7,14 +7,21 @@ Its checker-side marker is the two repair failure logs added in
 `ImplantLayerChecker::repairOverlay()`.
 
 The module accepts a temporary standard-cell `Node` plus either one committed
-standard-cell Delete overlay, or multiple filler Delete overlays that exactly
-cover a new buffer footprint. The result is an atomic list of surrounding
-filler `Replace` records. `CheckRequest::x/y/orientation` are authoritative;
-the checker does not read placement coordinates from the temporary node.
+standard-cell Delete overlay, or one/multiple filler Delete overlays that
+intersect a new buffer footprint. It first classifies the filler geometry as
+exact cover. Exact cover keeps the existing swap-only path. For non-exact
+cover, the engine exactly tiles the released set
+`(deleted filler sites - target sites)` with configured filler masters, then
+runs the existing checker-guided planner so the new fillers and surrounding
+fillers may receive master swaps. An unfillable or DRC-illegal released set
+returns no solution and no partial changes.
 
-There is no filler Add path, filler Delete output, footprint retiler, target
-movement, layout rewrite, engine `update`, external engine setter, or numeric
-request API.
+The result is an atomic list of request-local filler `Add` and surrounding
+filler `Replace` records. It never contains `Delete`; those records remain
+caller-owned request overlays. `CheckRequest::x/y/orientation` are
+authoritative, and the public request/result wire is unchanged. There is no
+target movement, engine `update`, external engine setter, or numeric request
+API.
 
 The destination-facing call chain is:
 
@@ -28,9 +35,12 @@ DePlace
   -> ImplantLayerChecker::checkPlaceWithOverlays(...)
 ```
 
-`isLegal` overlays one old standard cell. The checker/engine API accepts one or
-more exact-cover fillers for buffer insertion; current DePlace `findLegal`
-emits the one-filler subset. Both remain pre-commit and non-mutating.
+`isLegal` overlays one old standard cell. DePlace `findLegal` collects every
+filler intersecting the proposed target and passes those caller-owned Delete
+records directly through `PlacementDRC`; empty target sites are allowed. The
+`test_filler_repair` command similarly resolves every `-inst` selection into a
+Delete overlay and calls the checker without first mutating Grid or Network.
+Both flows remain pre-commit and non-mutating.
 
 ## Files to migrate
 
@@ -43,7 +53,9 @@ small integration form, and its tests are split by responsibility:
   least six cells per row and cover 50%, 75%, and 90% occupied-site
   utilization;
 - `test/FillerRepairInternalTest.cpp` exercises planner behavior only through
-  in-memory `PlacementView` and `RepairOracle` doubles.
+  in-memory `PlacementView` and `RepairOracle` doubles;
+- `test/FillerRetilerTest.cpp` exercises deterministic exact tiling,
+  no-overlap coverage, and unfillable released sets.
 
 The copy-only payload intentionally exposes just this runtime API:
 
@@ -73,8 +85,10 @@ The concrete destination touch points are:
 - `src/dpl2/src/dbToOpendp.cpp`: installs one Implant checker from
   `initPlacementDRC()` after importing the full master catalog and final
   fillerSetting;
-- `src/dpl2/src/Place.cpp`: current one-filler producer for findLegal; callers
-  may provide a complete multi-filler Delete list through the same API;
+- `src/dpl2/src/Place.cpp`: collects all target-intersecting fillers for
+  findLegal and passes their Delete overlays through the existing API;
+- `src/dpl2/dpl2ui/testFillerRepairCmd.cc`: direct checker probe for selected
+  filler Deletes, with Add/Replace validation and reporting;
 - `src/dpl2/src/infrastructure/Objects.h`: shared `CellChangeRecord` wire, if
   the destination does not already have the same definition.
 
@@ -94,8 +108,8 @@ add_subdirectory(src/dpl2/src/fillerRepair)
 target_link_libraries(dpl2Lib PRIVATE dpl2::fillerRepair)
 ```
 
-The payload target compiles only `RepairPlanner.cpp` and
-`FillerRepairEngine.cpp`; its test target explicitly names both test sources
+The payload target compiles `RepairPlanner.cpp`, `FillerRetiler.cpp`, and
+`FillerRepairEngine.cpp`; its test target explicitly names all test sources
 instead of globbing destination files.
 
 The destination supplies its existing UDM, infrastructure, and checker include
@@ -111,9 +125,12 @@ Before the first parallel repair call:
 2. `initPlacementDRC()` has registered the complete checker set exactly once.
 3. Usable configured filler masters have a Network Master and `isFiller=true`;
    unusable entries are logged and skipped.
-4. Every standard-cell master opto may propose was imported by createNetwork.
-5. Grid and Network describe the same committed placement revision.
-6. No database mutation runs concurrently with checker/engine calls.
+4. Filler masters used for Add have a legal site/orientation at the released
+   site. Database-free fixtures derive this from the deleted filler occupying
+   that site; real designs use the master's TechSite.
+5. Every standard-cell master opto may propose was imported by createNetwork.
+6. Grid and Network describe the same committed placement revision.
+7. No database mutation runs concurrently with checker/engine calls.
 
 The checker and lazy engine are immutable for that revision. Publish a new
 checker revision after a committed placement mutation before beginning a new
@@ -150,7 +167,9 @@ The gate compiles:
 - unchanged checker golden expectations;
 - checker/planner E2E;
 - fake-UDM runtime E2E, including one- and two-row targets and concurrent
-  checker calls.
+  checker calls;
+- single- and multi-filler non-exact cover, exact released-site Add coverage,
+  deterministic Add output, and unfillable no-solution behavior.
 
 ## Remaining destination checks
 
@@ -159,8 +178,10 @@ The gate compiles:
 - Confirm destination `createNetwork()` imports every library master, including
   masters without a placed instance.
 - Confirm fillerSetting is complete before `initPlacementDRC()`.
-- Confirm opto treats all Delete records as target overlay input and
-  commits only the returned filler Replace records in the same transaction.
+- Confirm opto treats all Delete records as caller-owned target overlay input
+  and commits those deletions plus returned filler Add/Replace records in one
+  transaction. The generic `DePlace::commit` path still ignores `OpType::Add`,
+  so it is not yet the transaction owner for this buffer-insertion flow.
 - Establish the revision barrier used to replace the checker after commit.
 - Run a real-UDM design with both isLegal and findLegal; fake UDM is only a
   deterministic data provider, not a substitute for that final ABI/link test.

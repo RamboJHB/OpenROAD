@@ -185,6 +185,7 @@ file(COPY "${DPL2_SRC}/fillerRepair2/"
      DESTINATION "${DPL2_FR2_STAGE_ROOT}/fillerRepair")
 add_library(dpl2_filler_repair2_compile_check OBJECT
     "${DPL2_FR2_STAGE_ROOT}/fillerRepair/RepairPlanner.cpp"
+    "${DPL2_FR2_STAGE_ROOT}/fillerRepair/FillerRetiler.cpp"
     "${DPL2_FR2_STAGE_ROOT}/fillerRepair/FillerRepairEngine.cpp")
 target_include_directories(
   dpl2_filler_repair2_compile_check
@@ -214,7 +215,8 @@ gtest_discover_tests(
 # through PlacementView/RepairOracle doubles, without checker/engine objects.
 add_library(
   dpl2_filler_repair2_internal_impl OBJECT
-  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/RepairPlanner.cpp")
+  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/RepairPlanner.cpp"
+  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/FillerRetiler.cpp")
 target_include_directories(
   dpl2_filler_repair2_internal_impl
   BEFORE PRIVATE "${DPL2_FR2_STAGE_ROOT}")
@@ -224,7 +226,8 @@ dpl2_configure_chain_target(dpl2_filler_repair2_internal_impl strict)
 
 add_executable(
   dpl2_filler_repair2_internal_test
-  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/test/FillerRepairInternalTest.cpp")
+  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/test/FillerRepairInternalTest.cpp"
+  "${DPL2_FR2_STAGE_ROOT}/fillerRepair/test/FillerRetilerTest.cpp")
 target_include_directories(
   dpl2_filler_repair2_internal_test
   BEFORE PRIVATE "${DPL2_FR2_STAGE_ROOT}")

@@ -3,6 +3,7 @@
 
 add_library(dpl2_filler_repair OBJECT
   RepairPlanner.cpp
+  FillerRetiler.cpp
   FillerRepairEngine.cpp)
 add_library(dpl2::fillerRepair ALIAS dpl2_filler_repair)
 

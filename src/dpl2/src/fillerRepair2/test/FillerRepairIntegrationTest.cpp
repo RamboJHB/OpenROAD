@@ -102,6 +102,8 @@ bool sameChanges(const FillerChanges& left, const FillerChanges& right)
   for (size_t index = 0; index < left.size(); ++index) {
     if (left[index].op_ != right[index].op_
         || left[index].cell_data_ != right[index].cell_data_
+        || left[index].x_ != right[index].x_
+        || left[index].y_ != right[index].y_
         || left[index].orig_lib_cell_ != right[index].orig_lib_cell_
         || left[index].new_lib_cell_ != right[index].new_lib_cell_
         || left[index].orientation_ != right[index].orientation_) {
@@ -221,6 +223,39 @@ ImplantInput multiDeleteInput(int utilization = kDefaultUtilization)
     } else if (placed.rowId == 1 && placed.colId == 4) {
       placed.masterId = 5;
       placed.isFiller = true;
+    }
+  }
+  return data;
+}
+
+ImplantInput nonExactInput(int utilization,
+                           bool includeUnitWidthFillers = true)
+{
+  ImplantInput data = input(utilization);
+  data.rules.clear();  // isolate layout-transaction behavior from implant DRC
+  data.masters.push_back(master(6, 0, true, 2 * kSiteWidth));
+  data.masters.push_back(master(7, 0, false, 2 * kSiteWidth));
+  data.placedInsts.erase(
+      std::remove_if(data.placedInsts.begin(),
+                     data.placedInsts.end(),
+                     [](const PlacedInst& placed) {
+                       return placed.rowId == 1
+                              && (placed.colId == 3 || placed.colId == 4);
+                     }),
+      data.placedInsts.end());
+  data.placedInsts.push_back(
+      {nodeId(1, 3), 6, 1, 3, PhysOrientationE::MX, true});
+  data.fillerSetting.fillerMasterIds
+      = includeUnitWidthFillers ? std::vector<MasterId>{3, 4, 5, 6}
+                                : std::vector<MasterId>{6};
+  if (!includeUnitWidthFillers) {
+    for (MasterId id = 3; id <= 5; ++id) {
+      data.masters[static_cast<size_t>(id)].isFiller = false;
+    }
+    for (PlacedInst& placed : data.placedInsts) {
+      if (placed.masterId >= 3 && placed.masterId <= 5) {
+        placed.isFiller = false;
+      }
     }
   }
   return data;
@@ -616,7 +651,7 @@ TEST_P(FillerRepairIntegrationTest,
 }
 
 TEST_P(FillerRepairIntegrationTest,
-       MultipleFillerDeletesMustExactlyCoverTarget)
+       MultipleFillerDeletesValidateCoverageAndIntersection)
 {
   const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
@@ -652,14 +687,14 @@ TEST_P(FillerRepairIntegrationTest,
                               {deleteRecord(*first)}};
   CheckResult result = checker.checkDirect(request);
   EXPECT_FALSE(result.isLegal);
-  EXPECT_TRUE(hasDiagnostic(result, "target_not_one_to_one"));
+  EXPECT_TRUE(hasDiagnostic(result, "target_overlaps_unchanged_instance"));
 
   request.overlayChanges = {deleteRecord(*first),
                             deleteRecord(*second),
                             deleteRecord(*outside)};
   result = checker.checkDirect(request);
   EXPECT_FALSE(result.isLegal);
-  EXPECT_TRUE(hasDiagnostic(result, "target_overlay_exceeds_footprint"));
+  EXPECT_TRUE(hasDiagnostic(result, "target_overlay_does_not_intersect"));
 
   request.overlayChanges = {deleteRecord(*first), deleteRecord(*first)};
   result = checker.checkDirect(request);
@@ -674,6 +709,152 @@ TEST_P(FillerRepairIntegrationTest,
   result = checker.checkDirect(request);
   EXPECT_FALSE(result.isLegal);
   EXPECT_TRUE(hasDiagnostic(result, "mixed_target_overlay"));
+}
+
+TEST_P(FillerRepairIntegrationTest,
+       NonExactSingleFillerAddsReleasedSiteWithoutDeleteOutput)
+{
+  const int utilization = GetParam();
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, nonExactInput(utilization), utilization);
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+  checker.setFillerRepairEnabled(true);
+
+  constexpr RowId targetRow = 1;
+  constexpr ColId targetCol = 3;
+  Network& network = *helper.getNetwork();
+  Node* wideFiller = network.getNode(nodeId(targetRow, targetCol));
+  ASSERT_NE(wideFiller, nullptr);
+  ASSERT_TRUE(wideFiller->isFiller());
+  ASSERT_EQ(wideFiller->getWidth().v, 2 * kSiteWidth);
+
+  Node temporary;
+  temporary.setId(wideFiller->getId());
+  temporary.setDbInst(wideFiller->getDbInst());
+  temporary.setMaster(network.getMaster(0));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(DbuX{kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  temporary.setLeft(DbuX{targetCol * kSiteWidth});
+  temporary.setBottom(DbuY{targetRow * kRowHeight});
+  temporary.setOrient(PhysOrientationE::MX);
+  std::vector<CellChangeRecord> overlay{deleteRecord(*wideFiller)};
+  const CheckRequest request{&temporary,
+                             GridX{targetCol},
+                             GridY{targetRow},
+                             PhysOrientationE::MX,
+                             overlay};
+
+  // With no implant rules the target-only snapshot is legal. Non-exact
+  // geometry must still dispatch repair instead of returning early.
+  EXPECT_TRUE(checker.checkDirect(request).isLegal);
+  const MasterId originalMaster = wideFiller->getMaster()->getId();
+  FillerChanges changes;
+  EXPECT_TRUE(checker.check(&temporary,
+                            GridX{targetCol},
+                            GridY{targetRow},
+                            PhysOrientationE::MX,
+                            changes,
+                            overlay));
+
+  ASSERT_EQ(changes.size(), 1U);
+  const CellChangeRecord& addition = changes.front();
+  EXPECT_EQ(addition.op_, OpType::Add);
+  const std::string* name = std::get_if<std::string>(&addition.cell_data_);
+  ASSERT_NE(name, nullptr);
+  EXPECT_FALSE(name->empty());
+  EXPECT_EQ(addition.x_.getStorage(), 4 * kSiteWidth);
+  EXPECT_EQ(addition.y_.getStorage(), targetRow * kRowHeight);
+  EXPECT_TRUE(network.getMaster(
+                  network.getMasterId(addition.new_lib_cell_))->isFiller());
+  EXPECT_EQ(wideFiller->getMaster()->getId(), originalMaster);
+  EXPECT_TRUE(std::none_of(changes.begin(), changes.end(), [](const auto& item) {
+    return item.op_ == OpType::Delete;
+  }));
+}
+
+TEST_P(FillerRepairIntegrationTest,
+       NonExactMultipleFillersAddOnlyTheReleasedDifference)
+{
+  const int utilization = GetParam();
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, nonExactInput(utilization), utilization);
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+  checker.setFillerRepairEnabled(true);
+
+  constexpr RowId targetRow = 1;
+  Network& network = *helper.getNetwork();
+  Node* wideFiller = network.getNode(nodeId(targetRow, 3));
+  Node* rightFiller = network.getNode(nodeId(targetRow, 5));
+  ASSERT_NE(wideFiller, nullptr);
+  ASSERT_NE(rightFiller, nullptr);
+  ASSERT_TRUE(wideFiller->isFiller());
+  ASSERT_TRUE(rightFiller->isFiller());
+
+  Node temporary;
+  temporary.setId(wideFiller->getId());
+  temporary.setDbInst(wideFiller->getDbInst());
+  temporary.setMaster(network.getMaster(7));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(DbuX{2 * kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  temporary.setLeft(DbuX{4 * kSiteWidth});
+  temporary.setBottom(DbuY{targetRow * kRowHeight});
+  temporary.setOrient(PhysOrientationE::MX);
+  std::vector<CellChangeRecord> overlay{deleteRecord(*rightFiller),
+                                        deleteRecord(*wideFiller)};
+  FillerChanges changes;
+
+  ASSERT_TRUE(checker.check(&temporary,
+                            GridX{4},
+                            GridY{targetRow},
+                            PhysOrientationE::MX,
+                            changes,
+                            overlay));
+  ASSERT_EQ(changes.size(), 1U);
+  EXPECT_EQ(changes.front().op_, OpType::Add);
+  EXPECT_EQ(changes.front().x_.getStorage(), 3 * kSiteWidth);
+  EXPECT_EQ(changes.front().y_.getStorage(), targetRow * kRowHeight);
+}
+
+TEST_P(FillerRepairIntegrationTest,
+       NonExactUnfillableReleasedSiteReturnsNoSolution)
+{
+  const int utilization = GetParam();
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(
+      helper, nonExactInput(utilization, false), utilization);
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+  checker.setFillerRepairEnabled(true);
+
+  constexpr RowId targetRow = 1;
+  constexpr ColId targetCol = 3;
+  Network& network = *helper.getNetwork();
+  Node* wideFiller = network.getNode(nodeId(targetRow, targetCol));
+  ASSERT_NE(wideFiller, nullptr);
+  Node temporary;
+  temporary.setId(wideFiller->getId());
+  temporary.setDbInst(wideFiller->getDbInst());
+  temporary.setMaster(network.getMaster(0));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(DbuX{kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  temporary.setLeft(DbuX{targetCol * kSiteWidth});
+  temporary.setBottom(DbuY{targetRow * kRowHeight});
+  temporary.setOrient(PhysOrientationE::MX);
+  std::vector<CellChangeRecord> overlay{deleteRecord(*wideFiller)};
+  FillerChanges changes;
+
+  EXPECT_FALSE(checker.check(&temporary,
+                             GridX{targetCol},
+                             GridY{targetRow},
+                             PhysOrientationE::MX,
+                             changes,
+                             overlay));
+  EXPECT_TRUE(changes.empty());
 }
 
 TEST_P(FillerRepairIntegrationTest,
@@ -827,7 +1008,7 @@ TEST_P(FillerRepairIntegrationTest,
 }
 
 TEST_P(FillerRepairIntegrationTest,
-       MultiFillerOverlayMustCoverTargetOrigin)
+       MultiFillerOverlayRejectsFillersUnrelatedToTarget)
 {
   const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
@@ -862,7 +1043,7 @@ TEST_P(FillerRepairIntegrationTest,
   const CheckResult result = checker.checkDirect(request);
 
   EXPECT_FALSE(result.isLegal);
-  EXPECT_TRUE(hasDiagnostic(result, "target_overlay_origin_uncovered"));
+  EXPECT_TRUE(hasDiagnostic(result, "target_overlay_does_not_intersect"));
 }
 
 TEST_P(FillerRepairIntegrationTest, DisabledRepairDoesNotPublishChanges)

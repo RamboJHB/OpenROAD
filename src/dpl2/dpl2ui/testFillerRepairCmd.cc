@@ -97,6 +97,11 @@ bool validFillerChanges(const std::vector<CellChangeRecord>& changes,
       changes.begin(),
       changes.end(),
       [&setting](const CellChangeRecord& change) {
+        if (change.op_ == OpType::Add) {
+          const auto* name = std::get_if<std::string>(&change.cell_data_);
+          return name != nullptr && !name->empty()
+                 && setting.isFillerCell(change.new_lib_cell_);
+        }
         return change.op_ == OpType::Replace
                && std::holds_alternative<eUNL::LeafCellID>(change.cell_data_)
                && setting.isFillerCell(change.orig_lib_cell_)
@@ -107,6 +112,15 @@ bool validFillerChanges(const std::vector<CellChangeRecord>& changes,
 void printChanges(const std::vector<CellChangeRecord>& changes)
 {
   for (const CellChangeRecord& change : changes) {
+    if (change.op_ == OpType::Add) {
+      const auto* name = std::get_if<std::string>(&change.cell_data_);
+      std::cout << "    add=" << (name != nullptr ? *name : "<invalid>")
+                << " master=" << change.new_lib_cell_.getIndexValue()
+                << " origin=(" << change.x_.getStorage() << ','
+                << change.y_.getStorage() << ") orient="
+                << static_cast<int>(change.orientation_.getValue()) << '\n';
+      continue;
+    }
     const auto* id = std::get_if<eUNL::LeafCellID>(&change.cell_data_);
     std::cout << "    filler=" << (id != nullptr ? id->getIndexValue() : -1)
               << " master=" << change.orig_lib_cell_.getIndexValue() << " -> "
@@ -258,7 +272,7 @@ bool TestFillerRepairCmd::exec()
       = checker->check(&temporary, x, y, *orientation, changes, overlayChanges);
   if (!changes.empty()
       && (setting == nullptr || !validFillerChanges(changes, *setting))) {
-    std::cout << "ERROR: repair returned a non-Replace/non-filler record\n";
+    std::cout << "ERROR: repair returned an invalid Add/Replace filler record\n";
     return false;
   }
   std::cout << (accepted ? "LEGAL" : "NO REPAIR")

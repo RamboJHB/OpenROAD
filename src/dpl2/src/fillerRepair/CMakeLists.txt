@@ -97,7 +97,8 @@ endfunction()
 # dependency on the runtime boundary or on a newer standard than a
 # destination's own placer may use.
 add_library(dpl2_filler_repair_planner OBJECT
-  RepairPlanner.cpp)
+  RepairPlanner.cpp
+  FillerRetiler.cpp)
 dpl2_filler_repair_configure(dpl2_filler_repair_planner 17)
 add_library(dpl2::fillerRepairPlanner ALIAS dpl2_filler_repair_planner)
 
@@ -107,6 +108,7 @@ add_library(dpl2::fillerRepairPlanner ALIAS dpl2_filler_repair_planner)
 # rely on.
 add_library(dpl2_filler_repair OBJECT
   RepairPlanner.cpp
+  FillerRetiler.cpp
   FillerRepairEngine.cpp)
 dpl2_filler_repair_configure(dpl2_filler_repair 20)
 add_library(dpl2::fillerRepair ALIAS dpl2_filler_repair)

@@ -8,9 +8,10 @@
 // request-local RepairOracle.
 //
 // repair() accepts one temporary standard-cell Node plus Delete overlays naming
-// either one same-footprint std cell or every filler exactly covered by a new
-// buffer. It answers only with surrounding filler Replace records and changes
-// nothing.
+// either one same-footprint std cell or selected fillers intersecting a new
+// buffer. Exact-cover requests retain the swap-only path. Non-exact requests
+// may return request-local filler Add records for released sites plus
+// surrounding filler Replaces. It never returns Deletes and changes nothing.
 // UDM, Grid and Network come out exactly as they went in; committing is the
 // caller's decision.
 
@@ -43,7 +44,8 @@ class FillerRepairEngine
   bool isReady() const;
 
   // The checker already validates this request. The engine trusts its temporary
-  // Node and target overlay, then returns only checker-approved filler swaps.
+  // Node and target overlay, then returns only checker-approved filler Adds
+  // and/or Replaces.
   RepairOutcome repair(const ipl::CheckRequest& request) const;
 
  private:
