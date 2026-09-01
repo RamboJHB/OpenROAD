@@ -2,6 +2,7 @@
 #include <drc/ImplantLayerCheckerHelper.h>
 #include <fillerRepair/FillerRepairEngine.h>
 #include <infrastructure/Grid.h>
+#include <infrastructure/fillerSetting.h>
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -724,6 +725,9 @@ TEST_P(FillerRepairIntegrationTest,
   constexpr RowId targetRow = 1;
   constexpr ColId targetCol = 3;
   Network& network = *helper.getNetwork();
+  fillerSetting fillerOptions(nullptr);
+  fillerOptions.setPrefix("UNIT_PREFIX");
+  network.setFillerSetting(&fillerOptions);
   Node* wideFiller = network.getNode(nodeId(targetRow, targetCol));
   ASSERT_NE(wideFiller, nullptr);
   ASSERT_TRUE(wideFiller->isFiller());
@@ -763,7 +767,7 @@ TEST_P(FillerRepairIntegrationTest,
   EXPECT_EQ(addition.op_, OpType::Add);
   const std::string* name = std::get_if<std::string>(&addition.cell_data_);
   ASSERT_NE(name, nullptr);
-  EXPECT_FALSE(name->empty());
+  EXPECT_EQ(*name, "UNIT_PREFIX_FILLER_REPAIR_1_4_W10_H1_0");
   EXPECT_EQ(addition.x_.getStorage(), 4 * kSiteWidth);
   EXPECT_EQ(addition.y_.getStorage(), targetRow * kRowHeight);
   EXPECT_TRUE(network.getMaster(

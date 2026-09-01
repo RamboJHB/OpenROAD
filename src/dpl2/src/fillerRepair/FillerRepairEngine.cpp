@@ -1627,6 +1627,15 @@ RepairOutcome FillerRepairEngine::Impl::repair(
 
   BoundOracle oracle(*this, request);
   if (!releasedSites.empty()) {
+    std::string addedFillerNamePrefix = "FILLER_REPAIR_";
+    if (const fillerSetting* setting = network_->getFillerSetting();
+        setting != nullptr && !setting->getPrefix().empty()) {
+      addedFillerNamePrefix = setting->getPrefix();
+      if (addedFillerNamePrefix.back() != '_') {
+        addedFillerNamePrefix.push_back('_');
+      }
+      addedFillerNamePrefix += "FILLER_REPAIR_";
+    }
     std::vector<internal::FillerFootprint> footprints;
     std::unordered_map<MasterId, eLIB::LibCellID> masterLibCells;
     for (const MasterId masterId : placement_.fillerMasterIds) {
@@ -1749,7 +1758,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         std::rotate(options.begin(), chosenOption, chosenOption + 1);
 
         const std::string name
-            = cat("FILLER_REPAIR_",
+            = cat(addedFillerNamePrefix,
                   tile.rowId,
                   '_',
                   tile.colId,
