@@ -60,6 +60,9 @@ void DePlace::initEdgeTypeTable()
 
 void DePlace::initPlacementDRC()
 {
+  // [FRPORT] Finalize the shared Master/Node classification before the
+  // checker snapshots it. This is a setup-only mutation before worker checks.
+  network_->updateFillerClassification(*filler_setting_);
   drc_engine_ = std::make_unique<PlacementDRC>(grid_.get());
 
 // Register all DRC checkers into the extensible framework.

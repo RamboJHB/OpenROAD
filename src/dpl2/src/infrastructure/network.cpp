@@ -315,6 +315,25 @@ Master* Network::addMaster(const PhysLibCell& db_master,
   }
   return master;
 }
+
+void Network::updateFillerClassification(
+    const fillerSetting& filler_setting)
+{
+  for (auto& [id, master] : masters_) {
+    (void) id;
+    if (master != nullptr) {
+      master->setFiller(
+          filler_setting.isFillerCell(master->getDbMaster()));
+    }
+  }
+  for (auto& [id, node] : nodes_) {
+    (void) id;
+    if (node == nullptr || node->getMaster() == nullptr) {
+      continue;
+    }
+    node->setType(node->getMaster()->isFiller() ? Node::FILLER : Node::CELL);
+  }
+}
 //////////////////////////////////////////////////////////////////////////////////////////
 //////////////////////////////////////////////////////////////////////////////////////////
 Node* Network::getNode(LeafCellID cellId)

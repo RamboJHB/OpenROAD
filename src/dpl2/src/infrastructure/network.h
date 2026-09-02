@@ -69,6 +69,10 @@ class Network
                     const Grid* grid,
                     const EdgeTypeTable* edge_types);
 
+  // [FRPORT] Setup-only classification barrier. Call after the Network and
+  // final fillerSetting are complete, but before constructing DRC checkers.
+  void updateFillerClassification(const fillerSetting& filler_setting);
+
   void addPin(const eLIB::PhysLibPort* libport, Master* master);
 
   void addNode(std::unique_ptr<Node> n) {

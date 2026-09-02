@@ -96,6 +96,7 @@ class RuntimeFixture
         return;
       }
     }
+    network->updateFillerClassification(*setting_);
     checker_ = std::make_unique<dpl2::ipl::ImplantLayerChecker>(
         grid, design_->design(), network);
     ready_ = true;
@@ -407,6 +408,52 @@ TEST(FillerRepairRuntimeE2E, MissingFillerConfigurationDoesNotBlockInitializatio
   dpl2::fillerRepair::FillerRepairEngine engine(checker);
 
   EXPECT_TRUE(engine.isReady());
+}
+
+TEST(FillerRepairRuntimeE2E,
+     FinalFillerSettingRefreshesEveryMasterAndNodeClassification)
+{
+  auto provider = frt::makeE2ETestProvider();
+  ASSERT_NE(provider, nullptr);
+  auto design = provider->createDesign({});
+  ASSERT_NE(design, nullptr);
+  auto infrastructure = provider->createInfrastructure(*design, {});
+  ASSERT_NE(infrastructure, nullptr);
+  dpl2::Network* const network = infrastructure->network();
+  ASSERT_NE(network, nullptr);
+
+  dpl2::fillerSetting setting(design->design());
+  setting.addFillerCell(kFillerMasters);
+  network->setFillerSetting(&setting);
+
+  // Simulate stale import-time flags in both directions.
+  for (auto& [id, master] : network->getMasters()) {
+    (void) id;
+    ASSERT_NE(master, nullptr);
+    master->setFiller(!setting.isFillerCell(master->getDbMaster()));
+  }
+  for (auto& [id, node] : network->getNodes()) {
+    (void) id;
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->getMaster(), nullptr);
+    node->setType(node->getMaster()->isFiller() ? dpl2::Node::FILLER
+                                                 : dpl2::Node::CELL);
+  }
+
+  network->updateFillerClassification(setting);
+
+  for (const auto& [id, master] : network->getMasters()) {
+    (void) id;
+    ASSERT_NE(master, nullptr);
+    EXPECT_EQ(master->isFiller(),
+              setting.isFillerCell(master->getDbMaster()));
+  }
+  for (const auto& [id, node] : network->getNodes()) {
+    (void) id;
+    ASSERT_NE(node, nullptr);
+    ASSERT_NE(node->getMaster(), nullptr);
+    EXPECT_EQ(node->isFiller(), node->getMaster()->isFiller());
+  }
 }
 
 INSTANTIATE_TEST_SUITE_P(

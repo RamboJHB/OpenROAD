@@ -265,6 +265,7 @@ void DePlace::createNetwork()
 
 void DePlace::initPlacementDRC()
 {
+  network_->updateFillerClassification(*filler_setting_);
   drc_engine_ = std::make_unique<PlacementDRC>(grid_.get());
   drc_engine_->addChecker(
       DRCCheckerType::ImplantLayer,

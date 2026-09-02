@@ -129,7 +129,10 @@ Before the first parallel repair call:
 
 1. DePlace has finished Grid, Network, Design, and fillerSetting setup before
    `initPlacementDRC()`.
-2. `initPlacementDRC()` has registered the complete checker set exactly once.
+2. `initPlacementDRC()` calls `Network::updateFillerClassification()` once,
+   then registers the complete checker set exactly once. This setup barrier
+   makes every Master and Node follow the final fillerSetting before checker
+   metadata is frozen.
 3. Usable configured filler masters have a Network Master and `isFiller=true`;
    unusable entries are logged and skipped.
 4. Filler masters used for Add have a legal site/orientation at the released
