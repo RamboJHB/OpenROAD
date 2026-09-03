@@ -81,6 +81,7 @@ void DePlace::initPlacementDRC()
   drc_engine_->addChecker(
       DRCCheckerType::ImplantLayer,
       std::make_unique<ipl::ImplantLayerChecker>(grid_.get(), design_, network_.get()));
+  published_filler_revision_ = filler_setting_->getRevision();
   // drc_engine_->addChecker(DRCCheckerType::FixedMask,
   //     std::make_unique<FixedMaskChecker>(grid_.get(), design_, desMgr_));
 }

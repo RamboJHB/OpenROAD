@@ -7,6 +7,8 @@
 #include <boost/geometry/geometries/point_xy.hpp>
 #include <boost/geometry/geometry.hpp>
 #include <boost/geometry/index/rtree.hpp>
+#include <cstdint>
+#include <limits>
 
 // UDM
 #include <phys/fpManager.hh>
@@ -136,6 +138,11 @@ class DePlace {
   bool isLegal(LeafCellID instId, LibCellID masterId,
       std::vector<CellChangeRecord>& ccRecords);
   bool commit(const std::vector<CellChangeRecord>& ccRecords);
+  // Publish the current set_filler_option revision to Network/checkers.
+  // Safe to call repeatedly; rebuilding occurs only when the revision changed.
+  bool finalizeFillerConfiguration();
+  // Plan an atomic Add-only transaction. On failure, ccRecords is unchanged.
+  bool planFillerInsertion(std::vector<CellChangeRecord>& ccRecords);
   Rect getBoundingBox(const Rect& operableRect);
   PhysDesMgr* getDesMgr() {return desMgr_;};
   Grid* getGrid() {return grid_.get();};
@@ -145,6 +152,10 @@ class DePlace {
   PlacementDRC* getPlacementDRC() {return drc_engine_.get();};
   Rect getCoreArea();
   fillerSetting* getFillerSetting() { return filler_setting_.get();};
+  uint64_t getPublishedFillerRevision() const
+  {
+    return published_filler_revision_;
+  }
  private:
   using bgPoint
       = boost::geometry::model::d2::point_xy<int,
@@ -257,6 +268,7 @@ class DePlace {
 
   // filler cell config
   std::unique_ptr<fillerSetting> filler_setting_;
+  uint64_t published_filler_revision_ = std::numeric_limits<uint64_t>::max();
 
   // Placement tracking
   std::vector<Node*> placement_failures_;

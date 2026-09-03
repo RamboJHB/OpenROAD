@@ -907,6 +907,187 @@ bool ImplantLayerChecker::check(const Node* node,
     return true;
 }
 
+CheckResult ImplantLayerChecker::checkFillerInsertion(
+    const FillerChanges& additions) const
+{
+  CheckResult result;
+  result.diagnostics = diagnostics_;
+  const size_t initializationDiagnosticCount = result.diagnostics.size();
+  if (!hasUsableInfrastructure()) {
+    result.diagnostics.push_back(
+        {"invalid_filler_insertion_infrastructure",
+         "filler insertion requires initialized Grid and Network data"});
+    return result;
+  }
+  if (additions.empty()) {
+    result.isLegal = true;
+    return result;
+  }
+
+  using Site = std::pair<RowId, ColId>;
+  std::set<Site> addedSites;
+  std::set<std::string> names;
+  std::set<InstanceId> additionIds;
+  CheckShapes snapshot;
+  std::vector<XInterval> targetIntervals;
+
+  for (const auto& [nodeId, nodeOwner] : network_->getNodes()) {
+    const Node* node = nodeOwner.get();
+    if (node == nullptr || node->getMaster() == nullptr || !node->isPlaced()) {
+      continue;
+    }
+    const std::pair<GridX, GridY> coordinate = grid_->gridXY(node);
+    const CheckShapes shapes = getNodeShape(nodeId,
+                                            node->getMaster()->getId(),
+                                            coordinate.second.v,
+                                            coordinate.first.v,
+                                            node->getOrient(),
+                                            false);
+    snapshot.insert(snapshot.end(), shapes.begin(), shapes.end());
+  }
+
+  int addIndex = 0;
+  for (const CellChangeRecord& addition : additions) {
+    const std::string* name = std::get_if<std::string>(&addition.cell_data_);
+    if (addition.op_ != OpType::Add || name == nullptr || name->empty()) {
+      result.diagnostics.push_back(
+          {"invalid_filler_insertion_record",
+           "filler insertion accepts Add records carrying names only"});
+      continue;
+    }
+    if (addition.orig_lib_cell_.isValid()) {
+      result.diagnostics.push_back(
+          {"added_filler_has_original_master",
+           "initial filler Add records must not name an original master"});
+      continue;
+    }
+    if (!names.insert(*name).second) {
+      result.diagnostics.push_back({"duplicate_added_filler_name",
+                                    "duplicate added filler name " + *name});
+      continue;
+    }
+    const MasterId masterId = network_->getMasterId(addition.new_lib_cell_);
+    const Master* master = network_->getMaster(masterId);
+    const MasterItem* item = masterItem(masterId);
+    if (master == nullptr || item == nullptr || !master->isFiller()
+        || item->width <= 0 || item->height <= 0 || siteWidth_ <= 0) {
+      result.diagnostics.push_back(
+          {"added_master_not_filler",
+           makeMessage("added master is not a registered filler ", masterId)});
+      continue;
+    }
+    const int64_t x = addition.x_.getStorage();
+    const int64_t y = addition.y_.getStorage();
+    if (x < 0 || y < 0 || x % siteWidth_ != 0
+        || x > std::numeric_limits<int>::max()
+        || y > std::numeric_limits<int>::max()
+        || y + item->height > std::numeric_limits<int>::max()) {
+      result.diagnostics.push_back(
+          {"added_filler_not_site_aligned",
+           "added filler " + *name + " is not site aligned"});
+      continue;
+    }
+    const ColId col = static_cast<ColId>(x / siteWidth_);
+    const RowId row = grid_->gridSnapDownY(DbuY{static_cast<int>(y)}).v;
+    if (row < 0 || row >= grid_->getRowCount().v
+        || grid_->gridYToDbu(GridY{row}).v != y
+        || item->width % siteWidth_ != 0) {
+      result.diagnostics.push_back(
+          {"added_filler_not_row_aligned",
+           "added filler " + *name + " is not row aligned"});
+      continue;
+    }
+    const int widthSites = item->width / siteWidth_;
+    const GridY rowEnd
+        = grid_->gridEndY(DbuY{static_cast<int>(y + item->height)});
+    if (col < 0 || col + widthSites > grid_->getRowSiteCount().v
+        || rowEnd <= GridY{row} || rowEnd > grid_->getRowCount()
+        || grid_->gridYToDbu(rowEnd).v != y + item->height) {
+      result.diagnostics.push_back(
+          {"added_filler_out_of_grid",
+           "added filler " + *name + " is outside the row grid"});
+      continue;
+    }
+    const eLIB::PhysLibCell* physical = master->getPhysLibCell();
+    const eLIB::TechSite* site
+        = physical != nullptr ? physical->getTechSite() : nullptr;
+    const std::optional<PhysOrientation> expected
+        = site != nullptr ? grid_->getSiteOrientation(
+                                GridX{col}, GridY{row}, site->getName())
+                          : std::optional<PhysOrientation>{};
+    if (!expected.has_value()
+        || expected->getValue() != addition.orientation_.getValue()) {
+      result.diagnostics.push_back(
+          {"added_filler_orientation_mismatch",
+           "added filler " + *name
+               + " does not match its anchor row orientation"});
+      continue;
+    }
+
+    bool geometryValid = true;
+    for (GridY currentRow{row}; currentRow < rowEnd; ++currentRow) {
+      for (GridX currentCol{col}; currentCol < GridX{col + widthSites};
+           ++currentCol) {
+        const Pixel* pixel = grid_->gridPixel(currentCol, currentRow);
+        const Site candidate{currentRow.v, currentCol.v};
+        if (pixel == nullptr || !pixel->is_valid || pixel->cell != nullptr
+            || pixel->padding_reserved_by != nullptr
+            || !addedSites.insert(candidate).second) {
+          geometryValid = false;
+        }
+      }
+    }
+    if (!geometryValid) {
+      result.diagnostics.push_back(
+          {"added_filler_site_unavailable",
+           "added filler " + *name
+               + " overlaps an unavailable or duplicate site"});
+      continue;
+    }
+
+    const InstanceId syntheticId = -1 - addIndex++;
+    additionIds.insert(syntheticId);
+    const CheckShapes shapes = getNodeShape(
+        syntheticId, masterId, row, col, addition.orientation_, true);
+    snapshot.insert(snapshot.end(), shapes.begin(), shapes.end());
+    targetIntervals.push_back(
+        {static_cast<Dbu>(x), static_cast<Dbu>(x + item->width)});
+  }
+
+  if (result.diagnostics.size() != initializationDiagnosticCount
+      || additionIds.size() != additions.size()) {
+    return result;
+  }
+  for (const CheckShape& shape : snapshot) {
+    if (shape.isCandidate && !slotPolarityOk(shape)) {
+      result.diagnostics.push_back(
+          {"row_slot_polarity_mismatch",
+           makeMessage("instance ", shape.ownerInstanceIds.front())});
+      return result;
+    }
+  }
+
+  const CheckShapes shapes = mergeShapes(snapshot);
+  std::vector<CheckOutcome> outcomes;
+  for (const Rule* rule : sortedRules_) {
+    const std::vector<CheckOutcome> partial
+        = evalRule(*rule, shapes, targetIntervals);
+    outcomes.insert(outcomes.end(), partial.begin(), partial.end());
+  }
+  const std::vector<Violation> violations = makeViolations(outcomes, shapes);
+  for (const Violation& violation : violations) {
+    const bool touchesAddition = std::any_of(
+        violation.instances.begin(),
+        violation.instances.end(),
+        [&additionIds](InstanceId id) { return additionIds.count(id) != 0; });
+    if (touchesAddition) {
+      result.violations.push_back(violation);
+    }
+  }
+  result.isLegal = result.violations.empty();
+  return result;
+}
+
 const MasterItem* ImplantLayerChecker::masterItem(MasterId masterId) const
 {
     const auto found = masterItems_.find(masterId);

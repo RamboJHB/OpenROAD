@@ -290,6 +290,11 @@ public:
         const CheckRequest& request, const Rect& guardRegion,
         const std::vector<FillerChanges>& fillerChanges) const;
 
+    // Validate an initial, Add-only filler transaction against the committed
+    // placement snapshot. Existing violations that do not touch a proposed
+    // filler are ignored. No Grid, Network, or UDM state is changed.
+    CheckResult checkFillerInsertion(const FillerChanges& additions) const;
+
     std::vector<CheckResult> checkAllNodesDirect() const;
     std::vector<Violation> getUniqueViolations(
         const std::vector<Violation>& violations);

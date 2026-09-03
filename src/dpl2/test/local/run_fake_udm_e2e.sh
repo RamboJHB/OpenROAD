@@ -33,7 +33,9 @@ if [[ "${ALL:-}" == "1" ]]; then
                 --target dpl2_filler_repair2_compile_check
                 --target dpl2_filler_repair2_integration_test
                 --target dpl2_filler_repair2_internal_test
-                --target dpl2_placement_drc_lifecycle_test)
+                --target dpl2_placement_drc_lifecycle_test
+                --target dpl2_filler_insertion_planner_test
+                --target dpl2_filler_insertion_runtime_test)
   # Bash 3.2 + `set -u` rejects expansion of an empty array.
   test_filter=(-R '.*')
 else

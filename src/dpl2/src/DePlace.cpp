@@ -2,11 +2,14 @@
 // Copyright (c) 2018-2025, The OpenROAD Authors
 
 #include <dpl2/DePlace.h>
+#include <fillerInsertion/FillerInsertionEngine.h>
 #include <infrastructure/Grid.h>
 #include <infrastructure/network.h>
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
 #include <PlacementDRC.h>
+
+#include <utility>
 
 namespace dpl2 {
 
@@ -210,6 +213,47 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
     }
 
   }
+  return true;
+}
+
+/**
+ * @brief Compute the bounding box of an operable region.
+ *
+ * Currently a stub — returns an empty/default Rect.
+ * TODO: Implement actual bounding-box computation over @p operableRect.
+ *
+ * @param operableRect  Input region to compute the bounding box for.
+ * @return The bounding box as a Rect.
+ */
+bool DePlace::finalizeFillerConfiguration()
+{
+  if (filler_setting_ == nullptr || network_ == nullptr || grid_ == nullptr
+      || design_ == nullptr) {
+    return false;
+  }
+  if (published_filler_revision_ == filler_setting_->getRevision()
+      && drc_engine_ != nullptr) {
+    return true;
+  }
+  network_->updateFillerClassification(*filler_setting_);
+  initPlacementDRC();
+  return drc_engine_ != nullptr
+         && published_filler_revision_ == filler_setting_->getRevision();
+}
+
+bool DePlace::planFillerInsertion(std::vector<CellChangeRecord>& ccRecords)
+{
+  if (!finalizeFillerConfiguration()) {
+    return false;
+  }
+  fillerInsertion::InsertionOutcome outcome
+      = fillerInsertion::FillerInsertionEngine(
+            *grid_, *network_, *filler_setting_, drc_engine_.get())
+            .plan();
+  if (!outcome.hasSolution) {
+    return false;
+  }
+  ccRecords = std::move(outcome.changes);
   return true;
 }
 

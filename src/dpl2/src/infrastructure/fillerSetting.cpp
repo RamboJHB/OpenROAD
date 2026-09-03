@@ -3,6 +3,7 @@
 #include <iterator>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 namespace dpl2 {
 
@@ -13,6 +14,38 @@ fillerSetting::fillerSetting(eUNL::Design* design)
     this->check_drc_ = true;
     this->fit_space_ = true;
     this->prefix_ = "ECOFILLER";
+}
+
+void fillerSetting::setFollowOrder(bool value)
+{
+    if (follow_order_ != value) {
+        follow_order_ = value;
+        ++revision_;
+    }
+}
+
+void fillerSetting::setCheckDRC(bool value)
+{
+    if (check_drc_ != value) {
+        check_drc_ = value;
+        ++revision_;
+    }
+}
+
+void fillerSetting::setFitSpace(bool value)
+{
+    if (fit_space_ != value) {
+        fit_space_ = value;
+        ++revision_;
+    }
+}
+
+void fillerSetting::setPrefix(std::string value)
+{
+    if (prefix_ != value) {
+        prefix_ = std::move(value);
+        ++revision_;
+    }
 }
 
 void
@@ -36,6 +69,7 @@ fillerSetting::addFillerCell(std::string fillerCellName)
         const eLIB::LibCellID id = pell.getLibCellId();
         if (std::find(core_.begin(), core_.end(), id) == core_.end()) {
             core_.push_back(id);
+            ++revision_;
         }
     }
 }
@@ -48,16 +82,44 @@ fillerSetting::addAvoidPattern(std::string avoidPattern)
         std::istream_iterator<std::string>(iss),
         std::istream_iterator<std::string>()
     };
+    std::vector<std::pair<int, int>> parsedPatterns;
+    parsedPatterns.reserve(nameVec.size());
     for (const auto& cellName : nameVec) {
         size_t pos = cellName.find(':');
-        if (pos == std::string::npos) {
-            // throw std::invalid_argument("String does not contain ':'");
+        if (pos == std::string::npos || pos == 0 || pos + 1 == cellName.size()
+            || cellName.find(':', pos + 1) != std::string::npos) {
+            throw std::invalid_argument(
+                "avoid pattern must use <width>:<width>: " + cellName);
         }
-        int first = std::stoi(cellName.substr(0, pos));
-        int second = std::stoi(cellName.substr(pos + 1));
 
-        this->avoid_pattern_[{first, second}] = true;
-        this->avoid_pattern_[{second, first}] = true;
+        auto parseWidth = [&cellName](const std::string& text) {
+            std::size_t consumed = 0;
+            int value = 0;
+            try {
+                value = std::stoi(text, &consumed);
+            } catch (const std::exception&) {
+                throw std::invalid_argument(
+                    "invalid avoid pattern width: " + cellName);
+            }
+            if (consumed != text.size() || value <= 0) {
+                throw std::invalid_argument(
+                    "invalid avoid pattern width: " + cellName);
+            }
+            return value;
+        };
+        const int first = parseWidth(cellName.substr(0, pos));
+        const int second = parseWidth(cellName.substr(pos + 1));
+        parsedPatterns.emplace_back(first, second);
+    }
+
+    for (const auto& [first, second] : parsedPatterns) {
+        const bool changed = !avoid_pattern_[{first, second}]
+                             || !avoid_pattern_[{second, first}];
+        avoid_pattern_[{first, second}] = true;
+        avoid_pattern_[{second, first}] = true;
+        if (changed) {
+            ++revision_;
+        }
     }
 }
 

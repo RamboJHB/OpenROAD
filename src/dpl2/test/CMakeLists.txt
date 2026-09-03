@@ -142,6 +142,22 @@ add_library(dpl2_fr_chain_common OBJECT
     "${DPL2_SRC}/drc/ImplantLayerChecker.cpp")
 dpl2_configure_chain_target(dpl2_fr_chain_common delivered)
 
+# Initial filler insertion is kept outside the historical repair payload. The
+# planner target proves the search remains database-free; the runtime target is
+# compiled against the same delivered Grid/Network/checker boundary as dpl2.
+add_library(dpl2_filler_insertion_planner OBJECT
+    "${DPL2_SRC}/fillerInsertion/FillerInsertionPlanner.cpp")
+target_include_directories(
+  dpl2_filler_insertion_planner PRIVATE "${DPL2_SRC}")
+dpl2_configure_test(dpl2_filler_insertion_planner 17 strict)
+
+add_library(dpl2_filler_insertion_runtime OBJECT
+    "${DPL2_SRC}/fillerInsertion/FillerInsertionPlanner.cpp"
+    "${DPL2_SRC}/fillerInsertion/FillerInsertionEngine.cpp")
+target_link_libraries(
+  dpl2_filler_insertion_runtime PRIVATE dpl2_fr_chain_common)
+dpl2_configure_chain_target(dpl2_filler_insertion_runtime strict)
+
 # Compile the destination ownership/call chain against the same UDM switch.
 # The destination dbToOpendp.cpp calls the install helper compiled through
 # DePlace.cpp; its other checker headers are intentionally not faked here.
@@ -303,12 +319,40 @@ gtest_discover_tests(
   TEST_PREFIX "placement-drc."
   DISCOVERY_TIMEOUT 30)
 
+add_executable(
+  dpl2_filler_insertion_planner_test
+  "${DPL2_SRC}/fillerInsertion/test/FillerInsertionPlannerTest.cpp")
+target_include_directories(
+  dpl2_filler_insertion_planner_test PRIVATE "${DPL2_SRC}")
+target_link_libraries(
+  dpl2_filler_insertion_planner_test PRIVATE
+  GTest::gtest_main dpl2_filler_insertion_planner)
+dpl2_configure_test(dpl2_filler_insertion_planner_test 17 strict)
+gtest_discover_tests(
+  dpl2_filler_insertion_planner_test
+  TEST_PREFIX "filler-insertion-planner."
+  DISCOVERY_TIMEOUT 30)
+
 # --- Fake-UDM only ---------------------------------------------------------
 # The historical engine regression is the one target that cannot be built
 # against a real UDM: its data comes from FakeUdmE2ETestProvider, which
 # constructs fake-UDM objects directly. Everything it links is otherwise the
 # same runtime chain.
 if(DPL2_TEST_USE_FAKE_UDM)
+  add_executable(
+    dpl2_filler_insertion_runtime_test
+    "${CMAKE_CURRENT_LIST_DIR}/local/filler_insertion_runtime_test.cpp")
+  target_link_libraries(
+    dpl2_filler_insertion_runtime_test PRIVATE
+    GTest::gtest_main dpl2_fr_chain_common dpl2::fillerRepair
+    dpl2_filler_insertion_runtime dpl2_fr_deplace_compile_check
+    dpl2_filler_repair_compile_check)
+  dpl2_configure_chain_target(dpl2_filler_insertion_runtime_test strict)
+  gtest_discover_tests(
+    dpl2_filler_insertion_runtime_test
+    TEST_PREFIX "filler-insertion-runtime."
+    DISCOVERY_TIMEOUT 30)
+
   add_executable(
     dpl2_filler_repair_e2e
     "${CMAKE_CURRENT_LIST_DIR}/local/e2e_cases.cpp"

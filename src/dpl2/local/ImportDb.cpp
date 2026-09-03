@@ -270,6 +270,7 @@ void DePlace::initPlacementDRC()
   drc_engine_->addChecker(
       DRCCheckerType::ImplantLayer,
       std::make_unique<ipl::ImplantLayerChecker>(grid_.get(), design_, network_.get()));
+  published_filler_revision_ = filler_setting_->getRevision();
 }
 
 namespace local {
@@ -296,6 +297,10 @@ bool importOpenRoadDb(odb::dbDatabase* database,
     }
   } catch (const std::exception& error) {
     out << "ERROR: filler configuration failed: " << error.what() << '\n';
+    return false;
+  }
+  if (!deplace->finalizeFillerConfiguration()) {
+    out << "ERROR: filler configuration publication failed\n";
     return false;
   }
   out << "dpl2 grid: " << deplace->getGrid()->getRowCount().v << " x "

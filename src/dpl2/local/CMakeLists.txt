@@ -22,6 +22,8 @@ add_library(dpl2_local_runtime STATIC
   "${DPL2_SRC}/drc/util.cpp"
   "${DPL2_SRC}/drc/ImplantLayerChecker.cpp"
   "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp"
+  "${DPL2_SRC}/fillerInsertion/FillerInsertionPlanner.cpp"
+  "${DPL2_SRC}/fillerInsertion/FillerInsertionEngine.cpp"
   ImportDb.cpp)
 
 target_compile_features(dpl2_local_runtime PUBLIC cxx_std_20)
