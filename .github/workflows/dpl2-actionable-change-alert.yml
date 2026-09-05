@@ -13,7 +13,7 @@ on:
 permissions:
   contents: read
   issues: write
-  pull-requests: read
+  pull-requests: write
 
 jobs:
   alert:
@@ -69,7 +69,7 @@ jobs:
           fi
           if git diff --quiet -w "$base" "$head" -- src/dpl2; then
             echo "actionable=false" >> "$GITHUB_OUTPUT"
-            echo 'Only whitespace changed under `src/dpl2`; no alert was created.' >> "$GITHUB_STEP_SUMMARY"
+            echo 'Only whitespace changed under `src/dpl2`; no alert was posted.' >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
@@ -90,7 +90,6 @@ jobs:
 
           short="${head:0:12}"
           subject="$(git log -1 --format=%s "$head" | tr '\n' ' ' | sed 's/[[:space:]]*$//' | cut -c1-90)"
-          title="[dpl2 alert][${priority}] ${short}: ${subject:-dpl2 change}"
           stats="$(git diff --shortstat -M "$base" "$head" -- src/dpl2 | xargs)"
 
           {
@@ -99,6 +98,7 @@ jobs:
             echo
             echo "# dpl2 actionable change — ${priority}"
             echo
+            echo "- **Change:** ${subject:-dpl2 change}"
             echo "- **Source:** ${source}"
             echo "- **Range:** [\`${base:0:12}..${head:0:12}\`](${compare_url})"
             echo "- **Scope:** \`src/dpl2/**\` on \`${target_branch}\`"
@@ -159,39 +159,52 @@ jobs:
             echo "- [ ] Review the complete comparison: ${compare_url}"
             echo
             echo '---'
-            echo 'Generated deterministically from the Git diff; changed dpl2 code is not built or executed.'
+            echo 'Generated deterministically from the Git diff; changed dpl2 code is not built or executed by this monitor.'
           } | tee dpl2-actionable-alert.md >> "$GITHUB_STEP_SUMMARY"
 
           {
             echo "actionable=true"
-            echo "key=${short}"
-            echo "title<<__TITLE__"
-            echo "$title"
-            echo "__TITLE__"
+            echo "alert_sha=${head}"
+            echo "short_sha=${short}"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Create assigned GitHub alert issue
+      - name: Post to the dpl2 alert feed
         if: >-
           steps.assess.outputs.actionable == 'true' &&
           (github.event_name != 'pull_request' ||
            github.event.pull_request.head.repo.full_name == github.repository)
         env:
           GH_TOKEN: ${{ github.token }}
-          ALERT_KEY: ${{ steps.assess.outputs.key }}
-          ALERT_TITLE: ${{ steps.assess.outputs.title }}
+          ALERT_SHA: ${{ steps.assess.outputs.alert_sha }}
+          FEED_PR: "8"
         shell: bash
         run: |
           set -euo pipefail
-          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state all \
-            --search "$ALERT_KEY in:title" --json number --jq '.[0].number // empty')"
-          [[ -z "$existing" ]] || { echo "Alert #$existing already covers $ALERT_KEY."; exit 0; }
 
-          url="$(gh issue create --repo "$GITHUB_REPOSITORY" \
-            --title "$ALERT_TITLE" --body-file dpl2-actionable-alert.md)"
-          number="${url##*/}"
-          gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --add-assignee RamboJHB \
-            >/dev/null 2>&1 || echo '::warning::Alert created, but assignment failed.'
-          echo "Created $url"
+          state="$(gh pr view "$FEED_PR" --repo "$GITHUB_REPOSITORY" --json state --jq '.state')"
+          if [[ "$state" != "OPEN" ]]; then
+            echo "::error::dpl2 alert feed PR #${FEED_PR} is not open."
+            exit 1
+          fi
+
+          marker="dpl2-actionable-alert:${ALERT_SHA}"
+          existing="$(
+            gh api --paginate \
+              -H 'Accept: application/vnd.github+json' \
+              "repos/${GITHUB_REPOSITORY}/issues/${FEED_PR}/comments?per_page=100" \
+              --jq ".[] | select(.body | contains(\"${marker}\")) | .id" \
+              | sed -n '1p'
+          )"
+
+          if [[ -n "$existing" ]]; then
+            echo "Alert for ${ALERT_SHA} already exists as comment ${existing}."
+            exit 0
+          fi
+
+          gh pr comment "$FEED_PR" \
+            --repo "$GITHUB_REPOSITORY" \
+            --body-file dpl2-actionable-alert.md
+          echo "Posted dpl2 alert for ${ALERT_SHA} to PR #${FEED_PR}."
 
       - name: Note fork PR token limitation
         if: >-
@@ -199,4 +212,4 @@ jobs:
           github.event_name == 'pull_request' &&
           github.event.pull_request.head.repo.full_name != github.repository
         run: |
-          echo '> Fork PR tokens are read-only; the assigned issue will be created on merge/push to the target branch.' >> "$GITHUB_STEP_SUMMARY"
+          echo '> Fork PR tokens are read-only; the feed comment will be created when the change is merged or pushed to the target branch.' >> "$GITHUB_STEP_SUMMARY"
