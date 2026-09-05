@@ -1,0 +1,202 @@
+name: dpl2 actionable change alerts
+
+on:
+  push:
+    branches: ["claude/wizardly-carson-secahu"]
+    paths: ["src/dpl2/**"]
+  pull_request:
+    branches: ["claude/wizardly-carson-secahu"]
+    paths: ["src/dpl2/**"]
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+  pull-requests: read
+
+jobs:
+  alert:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Summarize actionable dpl2 impact
+        id: assess
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          target_branch="claude/wizardly-carson-secahu"
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base="$(jq -r '.pull_request.base.sha' "$GITHUB_EVENT_PATH")"
+            head="$(jq -r '.pull_request.head.sha' "$GITHUB_EVENT_PATH")"
+            number="$(jq -r '.pull_request.number' "$GITHUB_EVENT_PATH")"
+            head_ref="$(jq -r '.pull_request.head.ref' "$GITHUB_EVENT_PATH")"
+            base_ref="$(jq -r '.pull_request.base.ref' "$GITHUB_EVENT_PATH")"
+            source="pull request #${number} from \`${head_ref}\` into \`${base_ref}\`"
+            compare_url="$(jq -r '.pull_request.html_url' "$GITHUB_EVENT_PATH")/files"
+          elif [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            base="$(jq -r '.before' "$GITHUB_EVENT_PATH")"
+            head="$(jq -r '.after' "$GITHUB_EVENT_PATH")"
+            branch="${GITHUB_REF#refs/heads/}"
+            source="push to \`${branch}\`"
+            compare_url="$(jq -r '.compare // empty' "$GITHUB_EVENT_PATH")"
+          else
+            head="$(git rev-parse HEAD)"
+            base="$(git rev-parse HEAD^ 2>/dev/null || printf '%s' "$head")"
+            source="manual workflow dispatch"
+            compare_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${base}...${head}"
+          fi
+
+          if [[ -z "$base" || "$base" =~ ^0+$ ]]; then
+            base="$(git rev-parse "${head}^" 2>/dev/null || printf '%s' "$head")"
+          fi
+          [[ -n "$compare_url" ]] || \
+            compare_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${base}...${head}"
+
+          git cat-file -e "${base}^{commit}" 2>/dev/null || git fetch --no-tags --depth=1 origin "$base"
+          git cat-file -e "${head}^{commit}" 2>/dev/null || git fetch --no-tags --depth=1 origin "$head"
+
+          mapfile -t changes < <(git diff --name-status -M "$base" "$head" -- src/dpl2)
+          if (( ${#changes[@]} == 0 )); then
+            echo "actionable=false" >> "$GITHUB_OUTPUT"
+            echo 'No `src/dpl2` changes were found.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if git diff --quiet -w "$base" "$head" -- src/dpl2; then
+            echo "actionable=false" >> "$GITHUB_OUTPUT"
+            echo 'Only whitespace changed under `src/dpl2`; no alert was created.' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          paths="$(printf '%s\n' "${changes[@]}" | cut -f2- | tr '\t' '\n')"
+          handoff=false; agents=false; api=false; build=false
+          lifecycle=false; runtime=false; tests=false; local_harness=false
+          grep -Eiq '^src/dpl2/HandOff\.md$' <<<"$paths" && handoff=true
+          grep -Eiq '^src/dpl2/(.*/)?AGENTS\.md$' <<<"$paths" && agents=true
+          grep -Eiq '(^src/dpl2/include/|\.(h|hh|hpp|hxx)$)' <<<"$paths" && api=true
+          grep -Eiq '(^|/)(CMakeLists\.txt|[^/]+\.cmake)$' <<<"$paths" && build=true
+          grep -Eiq '(/drc/|/infrastructure/|PlacementDRC|DePlace|dbToOpendp|fillerRepair|CellChangeRecord)' <<<"$paths" && lifecycle=true
+          grep -Eiq '\.(c|cc|cpp|cxx)$' <<<"$paths" && runtime=true
+          grep -Eiq '(/test/|/tests/|test[^/]*\.(c|cc|cpp|cxx|tcl|py)$)' <<<"$paths" && tests=true
+          grep -Eiq '/local/' <<<"$paths" && local_harness=true
+
+          priority=MEDIUM
+          if $handoff || $agents || $api || $build || $lifecycle; then priority=HIGH; fi
+
+          short="${head:0:12}"
+          subject="$(git log -1 --format=%s "$head" | tr '\n' ' ' | sed 's/[[:space:]]*$//' | cut -c1-90)"
+          title="[dpl2 alert][${priority}] ${short}: ${subject:-dpl2 change}"
+          stats="$(git diff --shortstat -M "$base" "$head" -- src/dpl2 | xargs)"
+
+          {
+            echo "<!-- dpl2-actionable-alert:${head} -->"
+            echo "@RamboJHB"
+            echo
+            echo "# dpl2 actionable change — ${priority}"
+            echo
+            echo "- **Source:** ${source}"
+            echo "- **Range:** [\`${base:0:12}..${head:0:12}\`](${compare_url})"
+            echo "- **Scope:** \`src/dpl2/**\` on \`${target_branch}\`"
+            echo "- **Diff size:** ${stats:-substantive change detected}"
+            echo
+            echo "## What changed"
+            echo
+            $handoff && echo '- `src/dpl2/HandOff.md` changed: migration state, preconditions, verification, or remaining destination work may have shifted.'
+            $agents && echo '- A dpl2 `AGENTS.md` was created, removed, renamed, or edited.'
+            $lifecycle && echo '- DRC, filler-repair, placement, or shared infrastructure lifecycle code changed.'
+            $api && echo '- Header/include surfaces changed, so callers or fixtures may need updates.'
+            $build && echo '- CMake or build integration changed.'
+            $runtime && echo '- Runtime implementation changed.'
+            $tests && echo '- Test or validation coverage changed.'
+            echo
+            echo "**Commits:**"
+            git log --format='- [`%h`]('${GITHUB_SERVER_URL}'/'${GITHUB_REPOSITORY}'/commit/%H) %s' "${base}..${head}" -- src/dpl2 | sed -n '1,8p'
+            echo
+            echo "**Changed files:**"
+            echo
+            echo '| Status | Path |'
+            echo '|---|---|'
+            printf '%s\n' "${changes[@]}" | awk -F '\t' 'NR <= 40 {
+              status=$1; path=$2; if (NF >= 3) path=$2 " → " $3;
+              gsub(/\|/, "\\|", path); printf "| `%s` | `%s` |\n", status, path
+            }'
+            echo
+            echo "**Noteworthy changed lines:**"
+            echo
+            echo '```diff'
+            git diff --unified=0 --no-color -M "$base" "$head" -- src/dpl2 \
+              | grep -E '^[+-][^+-]' \
+              | grep -Ei '(must|should|precondition|remaining|todo|fixme|api|cmake|test|checker|filler|repair|drc|commit|transaction|concurrent|barrier|classification|overlay|atomic|delete|replace|add)' \
+              | head -12 || true
+            echo '```'
+            echo
+            echo "## Why it matters"
+            echo
+            $handoff && echo '- `HandOff.md` is the migration source of truth; stale assumptions can cause duplicate work, missed preconditions, or the wrong payload to be ported.'
+            $agents && echo '- `AGENTS.md` changes alter the local implementation or validation instructions for subsequent dpl2 edits.'
+            $lifecycle && echo '- Initialization ordering and immutable checker snapshots are correctness boundaries for filler classification and parallel repair.'
+            $api && echo '- Interface changes can break destination call sites, request/result contracts, or test doubles.'
+            $build && echo '- Build changes can alter dependency closure, language mode, or which repair/test sources are compiled.'
+            $runtime && echo '- Runtime changes may affect atomic Add/Replace output, overlay ownership, tiling determinism, or no-partial-change failure behavior.'
+            $tests && echo '- Test changes may encode a new contract or expose a regression the destination integration must satisfy.'
+            $local_harness && echo '- Files under `local/` are validation wiring rather than migration payload and should not be copied by default.'
+            echo
+            echo "## Implementation / follow-up"
+            echo
+            $handoff && echo '- [ ] Re-read `HandOff.md`, especially **Current state**, **Preconditions**, **Verification**, and **Remaining destination checks**.'
+            $agents && echo '- [ ] Read every changed dpl2 `AGENTS.md` before editing files in its directory scope.'
+            $lifecycle && echo '- [ ] Verify setup remains: complete Grid/Network/fillerSetting, refresh filler classification, then publish DRC checkers before workers run.'
+            $api && echo '- [ ] Update affected call sites, adapters, fixtures, and destination wire mappings; perform a clean rebuild.'
+            $build && echo '- [ ] Re-run CMake configure/build and verify target linkage and source inclusion.'
+            if $runtime || $tests || $lifecycle; then
+              echo '- [ ] Run the dpl2 CTest and ASAN gates from `HandOff.md`, then a real-UDM `isLegal`/`findLegal` integration check.'
+            fi
+            echo "- [ ] Review the complete comparison: ${compare_url}"
+            echo
+            echo '---'
+            echo 'Generated deterministically from the Git diff; changed dpl2 code is not built or executed.'
+          } | tee dpl2-actionable-alert.md >> "$GITHUB_STEP_SUMMARY"
+
+          {
+            echo "actionable=true"
+            echo "key=${short}"
+            echo "title<<__TITLE__"
+            echo "$title"
+            echo "__TITLE__"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Create assigned GitHub alert issue
+        if: >-
+          steps.assess.outputs.actionable == 'true' &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ALERT_KEY: ${{ steps.assess.outputs.key }}
+          ALERT_TITLE: ${{ steps.assess.outputs.title }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          existing="$(gh issue list --repo "$GITHUB_REPOSITORY" --state all \
+            --search "$ALERT_KEY in:title" --json number --jq '.[0].number // empty')"
+          [[ -z "$existing" ]] || { echo "Alert #$existing already covers $ALERT_KEY."; exit 0; }
+
+          url="$(gh issue create --repo "$GITHUB_REPOSITORY" \
+            --title "$ALERT_TITLE" --body-file dpl2-actionable-alert.md)"
+          number="${url##*/}"
+          gh issue edit "$number" --repo "$GITHUB_REPOSITORY" --add-assignee RamboJHB \
+            >/dev/null 2>&1 || echo '::warning::Alert created, but assignment failed.'
+          echo "Created $url"
+
+      - name: Note fork PR token limitation
+        if: >-
+          steps.assess.outputs.actionable == 'true' &&
+          github.event_name == 'pull_request' &&
+          github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo '> Fork PR tokens are read-only; the assigned issue will be created on merge/push to the target branch.' >> "$GITHUB_STEP_SUMMARY"
