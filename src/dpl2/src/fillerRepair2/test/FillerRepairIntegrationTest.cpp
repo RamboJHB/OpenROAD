@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1122,6 +1123,238 @@ TEST_P(FillerRepairIntegrationTest, DisabledRepairDoesNotPublishChanges)
                              changes,
                              overlays));
   EXPECT_TRUE(changes.empty());
+}
+
+TEST_P(FillerRepairIntegrationTest, ReusedCheckerReadsCommittedSwaps)
+{
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, input(GetParam()), GetParam());
+  Network& network = *helper.getNetwork();
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, &network);
+  helper.initChecker(checker);
+  checker.setFillerRepairEnabled(true);
+  Node* target = network.getNode(nodeId(1, 4));
+  Node* bridge = network.getNode(nodeId(1, 5));
+  ASSERT_NE(target, nullptr);
+  ASSERT_NE(bridge, nullptr);
+  Node temporary;
+  temporary.setId(target->getId());
+  temporary.setDbInst(target->getDbInst());
+  temporary.setMaster(network.getMaster(0));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(target->getWidth());
+  temporary.setHeight(target->getHeight());
+  temporary.setLeft(target->getLeft());
+  temporary.setBottom(target->getBottom());
+  temporary.setOrient(target->getOrient());
+  FillerChanges first;
+  std::vector<CellChangeRecord> overlays{deleteRecord(*target)};
+  ASSERT_TRUE(checker.check(&temporary, GridX{4}, GridY{1},
+                            temporary.getOrient(), first, overlays));
+  ASSERT_EQ(first.size(), 1U);
+  ASSERT_EQ(first.front().new_lib_cell_, network.getMaster(3)->getDbMaster());
+
+  // Simulate the caller's commit barrier. Same-size swaps keep Grid occupancy.
+  target->setMaster(temporary.getMaster());
+  bridge->setMaster(network.getMaster(3));
+  temporary.setMaster(network.getMaster(2));
+  FillerChanges second;
+  overlays = {deleteRecord(*target)};
+  ASSERT_TRUE(checker.check(&temporary, GridX{4}, GridY{1},
+                            temporary.getOrient(), second, overlays));
+  ASSERT_EQ(second.size(), 1U);
+  EXPECT_EQ(second.front().op_, OpType::Replace);
+  EXPECT_EQ(std::get<LeafCellID>(second.front().cell_data_), bridge->getDbInst());
+  EXPECT_EQ(second.front().orig_lib_cell_, network.getMaster(3)->getDbMaster());
+  EXPECT_EQ(second.front().new_lib_cell_, network.getMaster(5)->getDbMaster());
+  EXPECT_EQ(bridge->getMaster()->getId(), 3);  // Repair itself is still read-only.
+}
+
+TEST_P(FillerRepairIntegrationTest, ReusedEngineReadsMovedPlacement)
+{
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, input(GetParam()), GetParam());
+  Grid& grid = *helper.getGrid();
+  Network& network = *helper.getNetwork();
+  ImplantLayerChecker checker(&grid, nullptr, &network);
+  helper.initChecker(checker);
+  fillerRepair::FillerRepairEngine engine(checker);
+  Node* target = network.getNode(nodeId(1, 4));
+  Node* bridge = network.getNode(nodeId(1, 5));
+  ASSERT_NE(target, nullptr);
+  ASSERT_NE(bridge, nullptr);
+  Node temporary;
+  temporary.setId(target->getId());
+  temporary.setDbInst(target->getDbInst());
+  temporary.setMaster(network.getMaster(0));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(target->getWidth());
+  temporary.setHeight(target->getHeight());
+  temporary.setLeft(target->getLeft());
+  temporary.setBottom(target->getBottom());
+  temporary.setOrient(target->getOrient());
+  CheckRequest request{&temporary, GridX{4}, GridY{1}, temporary.getOrient(),
+                       {deleteRecord(*target)}};
+  const auto first = engine.repair(request);
+  ASSERT_TRUE(first.hasSolution);
+  ASSERT_EQ(first.changes.size(), 1U);
+
+  // Move the placement between calls: translate X, exchange two rows, and
+  // mirror X. Keep Grid occupancy and Network coordinates synchronized.
+  for (RowId row = 0; row < kRowCount; ++row) {
+    for (ColId col = 0; col < kColCount; ++col) {
+      grid.gridPixel(GridX{col}, GridY{row})->cell = nullptr;
+    }
+  }
+  for (auto& [id, node] : network.getNodes()) {
+    (void) id;
+    const RowId oldRow = grid.gridSnapDownY(node.get()).v;
+    const RowId row = oldRow == 1 ? 2 : oldRow == 2 ? 1 : oldRow;
+    node->setLeft(DbuX{node->getLeft().v + 2 * kSiteWidth});
+    node->setBottom(DbuY{row * kRowHeight});
+    node->setOrient(row % 2 == 0 ? PhysOrientationE::MY
+                                : PhysOrientationE::R180);
+    grid.gridPixel(grid.gridX(node.get()), GridY{row})->cell = node.get();
+  }
+  temporary.setLeft(target->getLeft());
+  temporary.setBottom(target->getBottom());
+  temporary.setOrient(target->getOrient());
+  request = {&temporary, GridX{6}, GridY{2}, temporary.getOrient(),
+             {deleteRecord(*target)}};
+  const auto second = engine.repair(request);
+  ASSERT_TRUE(second.hasSolution);
+  ASSERT_EQ(second.changes.size(), 1U);
+  EXPECT_EQ(std::get<LeafCellID>(second.changes.front().cell_data_),
+            bridge->getDbInst());
+  EXPECT_EQ(second.changes.front().x_.getStorage(), 7 * kSiteWidth);
+  EXPECT_EQ(second.changes.front().y_.getStorage(), 2 * kRowHeight);
+  EXPECT_EQ(second.changes.front().orientation_, PhysOrientationE::MY);
+  const fillerRepair::FillerRepairEngine fresh(checker);
+  EXPECT_TRUE(sameChanges(second.changes, fresh.repair(request).changes));
+  std::array<fillerRepair::RepairOutcome, 4> parallel;
+  std::array<std::thread, 4> workers;
+  for (size_t i = 0; i < workers.size(); ++i) {
+    workers[i] = std::thread([&engine, &request, &parallel, i] {
+      parallel[i] = engine.repair(request);
+    });
+  }
+  for (std::thread& worker : workers) {
+    worker.join();
+  }
+  for (const auto& outcome : parallel) {
+    EXPECT_TRUE(outcome.hasSolution);
+    EXPECT_TRUE(sameChanges(outcome.changes, second.changes));
+  }
+}
+
+TEST_P(FillerRepairIntegrationTest, ReusedEngineReadsCommittedAddAndDelete)
+{
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, nonExactInput(GetParam()), GetParam());
+  Grid& grid = *helper.getGrid();
+  Network& network = *helper.getNetwork();
+  ImplantLayerChecker checker(&grid, nullptr, &network);
+  helper.initChecker(checker);
+  const fillerRepair::FillerRepairEngine engine(checker);
+  Node* wide = network.getNode(nodeId(1, 3));
+  ASSERT_NE(wide, nullptr);
+  const CellChangeRecord removed = deleteRecord(*wide);
+  Node temporary;
+  temporary.setId(wide->getId());
+  temporary.setDbInst(wide->getDbInst());
+  temporary.setMaster(network.getMaster(0));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(DbuX{kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  temporary.setLeft(wide->getLeft());
+  temporary.setBottom(wide->getBottom());
+  temporary.setOrient(wide->getOrient());
+  CheckRequest request{&temporary, GridX{3}, GridY{1}, temporary.getOrient(),
+                       {removed}};
+  const auto first = engine.repair(request);
+  ASSERT_TRUE(first.hasSolution);
+  ASSERT_EQ(first.changes.size(), 1U);
+  ASSERT_EQ(first.changes.front().op_, OpType::Add);
+
+  // Commit the target and generated filler with fresh sparse Network ids and
+  // distinct DB ids; synthetic overlay ids must not survive into the next call.
+  grid.gridPixel(GridX{3}, GridY{1})->cell = nullptr;
+  grid.gridPixel(GridX{4}, GridY{1})->cell = nullptr;
+  network.deleteNode(wide);
+  for (int offset = 0; offset < 2; ++offset) {
+    auto node = std::make_unique<Node>();
+    node->setId(1000 + offset);
+    node->setDbInst(LeafCellID(0, 2000 + offset));
+    node->setMaster(network.getMaster(
+        offset == 0 ? 0
+                    : network.getMasterId(first.changes.front().new_lib_cell_)));
+    node->setType(offset == 0 ? Node::CELL : Node::FILLER);
+    node->setWidth(DbuX{kSiteWidth});
+    node->setHeight(DbuY{kRowHeight});
+    node->setLeft(DbuX{(3 + offset) * kSiteWidth});
+    node->setBottom(DbuY{kRowHeight});
+    node->setOrient(temporary.getOrient());
+    node->setPlaced(true);
+    grid.gridPixel(GridX{3 + offset}, GridY{1})->cell = node.get();
+    network.addNode(std::move(node));
+  }
+  EXPECT_FALSE(engine.repair(request).hasSolution);  // Old Delete is stale.
+  Node* added = network.getNode(1001);
+  ASSERT_NE(added, nullptr);
+  temporary.setId(added->getId());
+  temporary.setDbInst(added->getDbInst());
+  temporary.setLeft(added->getLeft());
+  request = {&temporary, GridX{4}, GridY{1}, temporary.getOrient(),
+             {deleteRecord(*added)}};
+  ASSERT_TRUE(checker.checkDirect(request).isLegal);
+  const auto second = engine.repair(request);
+  EXPECT_TRUE(second.hasSolution);
+  EXPECT_TRUE(second.changes.empty());
+  EXPECT_EQ(network.getNodeId(added->getDbInst()), 1001);
+}
+
+TEST_P(FillerRepairIntegrationTest, EngineDoesNotCacheAbsenceOfPlacedFillers)
+{
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, input(GetParam()), GetParam());
+  Network& network = *helper.getNetwork();
+  std::vector<Node*> fillers;
+  for (auto& [id, node] : network.getNodes()) {
+    (void) id;
+    if (node->isFiller()) {
+      fillers.push_back(node.get());
+      node->setMaster(network.getMaster(node->getMaster()->getId() - 3));
+      node->setType(Node::CELL);
+    }
+  }
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, &network);
+  helper.initChecker(checker);
+  const fillerRepair::FillerRepairEngine engine(checker);
+  Node* target = network.getNode(nodeId(1, 4));
+  ASSERT_NE(target, nullptr);
+  Node temporary;
+  temporary.setId(target->getId());
+  temporary.setDbInst(target->getDbInst());
+  temporary.setMaster(target->getMaster());
+  temporary.setType(Node::CELL);
+  temporary.setWidth(target->getWidth());
+  temporary.setHeight(target->getHeight());
+  temporary.setLeft(target->getLeft());
+  temporary.setBottom(target->getBottom());
+  temporary.setOrient(target->getOrient());
+  CheckRequest request{&temporary, GridX{4}, GridY{1}, temporary.getOrient(),
+                       {deleteRecord(*target)}};
+  ASSERT_TRUE(engine.repair(request).hasSolution);
+  for (Node* filler : fillers) {
+    filler->setMaster(network.getMaster(filler->getMaster()->getId() + 3));
+    filler->setType(Node::FILLER);
+  }
+  temporary.setMaster(network.getMaster(0));
+  const auto result = engine.repair(request);
+  EXPECT_TRUE(result.hasSolution);
+  ASSERT_EQ(result.changes.size(), 1U);
+  EXPECT_EQ(result.changes.front().new_lib_cell_,
+            network.getMaster(3)->getDbMaster());
 }
 
 TEST_P(FillerRepairIntegrationTest, EngineWithoutGridIsUnavailable)

@@ -25,36 +25,20 @@ namespace fillerRepair {
 
 namespace {
 
-// Immutable planner-facing placement snapshot built once with the engine.
-struct PlacementSnapshot
+// Immutable master and grid geometry shared across repair calls.
+// Placed instances live only in the caller-owned Grid/Network.
+struct PlacementMetadata
 {
   struct MasterRef
   {
     MasterInfo info;
     eLIB::LibCellID libCellId;
   };
-  struct RecordRef
-  {
-    eUNL::LeafCellID cellId;
-    eLIB::LibCellID libCellId;
-    // Destination records use the same core-relative DBU frame as Node.
-    eUTL::UvDist x;
-    eUTL::UvDist y;
-    eUTL::PhysOrientation orientation;
-  };
-  struct InstanceRef
-  {
-    PlacedInstance placed;
-    RecordRef record;
-  };
-
   DbCoord siteWidth = 0;
   DbCoord rowHeight = 0;
   DbCoord defaultHaloX = 0;
   std::vector<RowId> rows;
   std::vector<std::optional<MasterRef>> masters;
-  std::vector<std::optional<InstanceRef>> instances;
-  std::vector<std::vector<PlacedInstance>> byRow;
   std::vector<MasterId> fillerMasterIds;
 };
 
@@ -76,11 +60,10 @@ struct CandidateStats
 class FillerCandidateCatalog
 {
  public:
-  void build(const PlacementSnapshot& placement, const DebugLog& log)
+  void build(const PlacementMetadata& placement, const DebugLog& log)
   {
     candidatesByMaster_.clear();
     statsByMaster_.clear();
-    hasPlacedCandidate_ = false;
     aggregate_ = CandidateStats{};
     candidatesByMaster_.resize(placement.masters.size());
     statsByMaster_.resize(placement.masters.size());
@@ -137,20 +120,12 @@ class FillerCandidateCatalog
       }
     }
 
-    for (const auto& slot : placement.instances) {
-      if (slot.has_value() && slot->placed.isFiller
-          && !candidates(slot->placed.masterId).empty()) {
-        hasPlacedCandidate_ = true;
-        break;
-      }
-    }
     log.block(
         "candidate",
         "Candidate compatibility catalog",
         {{"configured masters", cat(placement.fillerMasterIds.size())},
          {"master-pair checks", cat(aggregate_.checked)},
          {"compatible pairs", cat(aggregate_.compatible)},
-         {"placed candidate", cat(hasPlacedCandidate_)},
          {"reject: not filler", cat(aggregate_.notFiller)},
          {"reject: unknown VT", cat(aggregate_.unknownVt)},
          {"reject: same VT", cat(aggregate_.sameVt)},
@@ -177,18 +152,17 @@ class FillerCandidateCatalog
                : nullptr;
   }
 
-  bool hasPlacedCandidate() const { return hasPlacedCandidate_; }
+  bool hasCompatibleCandidate() const { return aggregate_.compatible != 0; }
   const CandidateStats& aggregateStats() const { return aggregate_; }
 
  private:
   std::vector<std::vector<MasterId>> candidatesByMaster_;
   std::vector<CandidateStats> statsByMaster_;
   CandidateStats aggregate_;
-  bool hasPlacedCandidate_ = false;
 };
 
 // Per-request view that removes caller-deleted fillers from every hot row
-// query without mutating the engine's shared immutable snapshot. The anchor
+// query without mutating the current Grid/Network. The anchor
 // remains addressable for the planner's target metadata check, but it is not
 // an editable row member.
 class OverlayPlacementView final : public PlacementView
@@ -365,25 +339,10 @@ class LayoutPlacementView final : public PlacementView
                          target_.orientation,
                          false}
   {
-    for (const RowId rowId : base_.rows()) {
-      std::vector<PlacedInstance>& row = by_row_[rowId];
-      for (const PlacedInstance& placed : base_.instancesInRow(rowId)) {
-        if (removed_.count(placed.id) == 0) {
-          row.push_back(placed);
-        }
-      }
-    }
     appendToRows(target_instance_, masterInfo(target_.masterId));
     for (const LayoutAddition& addition : additions_) {
       synthetic_.emplace(addition.instanceId, addition.placed);
       appendToRows(addition.placed, masterInfo(addition.placed.masterId));
-    }
-    for (auto& [rowId, row] : by_row_) {
-      (void) rowId;
-      std::sort(row.begin(), row.end(), [](const PlacedInstance& left,
-                                           const PlacedInstance& right) {
-        return left.x != right.x ? left.x < right.x : left.id < right.id;
-      });
     }
   }
 
@@ -392,8 +351,25 @@ class LayoutPlacementView final : public PlacementView
   const std::vector<PlacedInstance>& instancesInRow(
       RowId rowId) const override
   {
-    const auto found = by_row_.find(rowId);
-    return found != by_row_.end() ? found->second : emptyInstances();
+    const auto found = cached_rows_.find(rowId);
+    if (found != cached_rows_.end()) {
+      return found->second;
+    }
+    std::vector<PlacedInstance>& row = cached_rows_[rowId];
+    for (const PlacedInstance& placed : base_.instancesInRow(rowId)) {
+      if (removed_.count(placed.id) == 0) {
+        row.push_back(placed);
+      }
+    }
+    const auto additions = by_row_.find(rowId);
+    if (additions != by_row_.end()) {
+      row.insert(row.end(), additions->second.begin(), additions->second.end());
+    }
+    std::sort(row.begin(), row.end(), [](const PlacedInstance& left,
+                                        const PlacedInstance& right) {
+      return left.x != right.x ? left.x < right.x : left.id < right.id;
+    });
+    return row;
   }
   const PlacedInstance* instance(InstanceId id) const override
   {
@@ -486,6 +462,7 @@ class LayoutPlacementView final : public PlacementView
   PlacedInstance target_instance_;
   std::unordered_map<InstanceId, PlacedInstance> synthetic_;
   std::map<RowId, std::vector<PlacedInstance>> by_row_;
+  mutable std::map<RowId, std::vector<PlacedInstance>> cached_rows_;
 };
 
 // Prefix every swap candidate with the fixed Add records for its tiling, then
@@ -554,7 +531,7 @@ class LayoutOracle final : public RepairOracle
 
 }  // namespace
 
-class FillerRepairEngine::Impl final : private PlacementView
+class FillerRepairEngine::Impl final
 {
  public:
   explicit Impl(const ipl::ImplantLayerChecker& checker, bool debugLogging)
@@ -596,52 +573,81 @@ class FillerRepairEngine::Impl final : private PlacementView
   void logIssue(const std::string& code,
                 const std::string& message,
                 bool blocking = false);
-  const std::vector<RowId>& rows() const override { return placement_.rows; }
-  DbCoord siteWidth() const override { return placement_.siteWidth; }
-  const std::vector<PlacedInstance>& instancesInRow(RowId rowId) const override;
-  const PlacedInstance* instance(InstanceId id) const override;
-  const MasterInfo* masterInfo(MasterId id) const override;
-  MasterCandidateResult getUsableMasterCandidates(
-      InstanceId fillerInstanceId) const override;
-  const std::vector<MasterId>& fillerMasterIds() const override
+  const MasterInfo* masterInfo(MasterId id) const;
+
+  // A thin, request-owned adapter. Only queried nodes/rows are materialized,
+  // keeping planner references stable without retaining a placement revision.
+  // Grid/Network must remain unchanged until this repair call returns.
+  class RequestPlacementView final : public PlacementView
   {
-    return placement_.fillerMasterIds;
-  }
-  CellChangeRecord cellChangeRecord(InstanceId instanceId,
-                                    MasterId newMasterId) const override;
+   public:
+    explicit RequestPlacementView(const Impl& impl) : impl_(impl) {}
+    const std::vector<RowId>& rows() const override
+    {
+      return impl_.placement_.rows;
+    }
+    DbCoord siteWidth() const override { return impl_.placement_.siteWidth; }
+    const std::vector<PlacedInstance>& instancesInRow(
+        RowId rowId) const override;
+    const PlacedInstance* instance(InstanceId id) const override;
+    const MasterInfo* masterInfo(MasterId id) const override
+    {
+      return impl_.masterInfo(id);
+    }
+    MasterCandidateResult getUsableMasterCandidates(
+        InstanceId fillerInstanceId) const override;
+    const std::vector<MasterId>& fillerMasterIds() const override
+    {
+      return impl_.placement_.fillerMasterIds;
+    }
+    CellChangeRecord cellChangeRecord(InstanceId instanceId,
+                                      MasterId newMasterId) const override;
+
+   private:
+    const Impl& impl_;
+    mutable std::map<InstanceId, PlacedInstance> instances_;
+    mutable std::map<RowId, std::vector<PlacedInstance>> by_row_;
+  };
+
   class BoundOracle final : public RepairOracle
   {
    public:
-    BoundOracle(const Impl& impl, const ipl::CheckRequest& target)
-        : impl_(impl), target_(target)
+    BoundOracle(const Impl& impl,
+                const ipl::CheckRequest& target,
+                const PlacementView& view)
+        : impl_(impl), target_(target), view_(view)
     {
     }
 
     OracleResult checkPlaceWithOverlay(const OracleRequest& request) override
     {
-      return impl_.checkPlaceWithOverlay(target_, request);
+      return impl_.checkPlaceWithOverlay(target_, request, view_);
     }
 
     std::vector<OracleResult> checkPlaceWithOverlays(
         const std::vector<OracleRequest>& requests) override
     {
-      return impl_.checkPlaceWithOverlays(target_, requests);
+      return impl_.checkPlaceWithOverlays(target_, requests, view_);
     }
 
    private:
     const Impl& impl_;
     const ipl::CheckRequest& target_;
+    const PlacementView& view_;
   };
 
   OracleResult checkPlaceWithOverlay(const ipl::CheckRequest& target,
-                                     const OracleRequest& request) const;
+                                     const OracleRequest& request,
+                                     const PlacementView& view) const;
   std::vector<OracleResult> checkPlaceWithOverlays(
       const ipl::CheckRequest& target,
-      const std::vector<OracleRequest>& requests) const;
+      const std::vector<OracleRequest>& requests,
+      const PlacementView& view) const;
 
   ::Rect toGuardRect(const Region& region) const;
   Violation toPlannerViolation(const ipl::Violation& violation,
-                               InstanceId targetInstance) const;
+                               InstanceId targetInstance,
+                               const PlacementView& view) const;
   Region snapshotGuard(const TargetPlace& target) const;
   void logRepairSuccess(const ipl::CheckRequest& request,
                         const RepairOutcome& result,
@@ -660,7 +666,7 @@ class FillerRepairEngine::Impl final : private PlacementView
   Grid* grid_ = nullptr;
   Network* network_ = nullptr;
   std::vector<ipl::Diagnostic> checker_diagnostics_;
-  PlacementSnapshot placement_;
+  PlacementMetadata placement_;
   FillerCandidateCatalog candidate_catalog_;
   RepairConfig repair_config_;
   DebugLog log_;
@@ -764,7 +770,6 @@ void FillerRepairEngine::Impl::buildPlannerData()
     placement_.rowHeight
         = grid_->gridYToDbu(GridY{1}).v - grid_->gridYToDbu(GridY{0}).v;
   }
-  placement_.byRow.resize(placement_.rows.size());
   if (placement_.siteWidth <= 0 || placement_.rowHeight <= 0
       || placement_.rows.empty()) {
     logIssue("MissingRowGeometry",
@@ -844,7 +849,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
 
     ensureSlot(placement_.masters, static_cast<size_t>(id));
     placement_.masters[id]
-        = PlacementSnapshot::MasterRef{info, master->getDbMaster()};
+        = PlacementMetadata::MasterRef{info, master->getDbMaster()};
   }
 
   // Prefer the configured filler list. Checker-helper tests have no real
@@ -910,90 +915,10 @@ void FillerRepairEngine::Impl::buildPlannerData()
         "no usable filler master; requests needing repair will be skipped");
   }
 
-  placement_.instances.reserve(network_->getNodes().size());
-  for (const auto& [networkNodeIndex, nodePtr] : network_->getNodes()) {
-    const Node* node = nodePtr.get();
-    if (node == nullptr) {
-      logIssue("NullNetworkNode",
-               cat("Network node slot ", networkNodeIndex, " is null"));
-      continue;
-    }
-    if (node->getMaster() == nullptr) {
-      logIssue("MissingNodeMaster",
-               cat("Network node ", node->getId(), " has no master"));
-      continue;
-    }
-    if (!node->isPlaced() && !node->isFixed()) {
-      continue;
-    }
-    const RowId rowId = static_cast<RowId>(grid_->gridSnapDownY(node).v);
-    if (rowId < 0 || rowId >= static_cast<RowId>(placement_.rows.size())) {
-      logIssue("NodeOutsideGrid",
-               cat("Network node ", node->getId(), " maps to row ", rowId));
-      continue;
-    }
-    const MasterId masterId = static_cast<MasterId>(node->getMaster()->getId());
-    if (masterInfo(masterId) == nullptr) {
-      logIssue("MissingNodeMasterMetadata",
-               cat("Network node ",
-                   node->getId(),
-                   " references skipped master ",
-                   masterId));
-      continue;
-    }
-    const MasterInfo& info
-        = placement_.masters[static_cast<size_t>(masterId)]->info;
-    const InstanceId id = static_cast<InstanceId>(node->getId());
-    if (id < 0) {
-      logIssue("InvalidNetworkNodeId",
-               cat("Network node slot ", networkNodeIndex, " has id ", id));
-      continue;
-    }
-    const DbCoord x = node->getLeft().v;
-    PlacedInstance placed{id,
-                          masterId,
-                          rowId,
-                          x,
-                          toPlannerOrient(node->getOrient()),
-                          node->isFiller()};
-    if (placed.isFiller && info.vt == kUnknownVt) {
-      logIssue("FillerWithoutVt",
-               cat("placed filler ",
-                   id,
-                   " uses master ",
-                   masterId,
-                   " without implant VT metadata"));
-    }
-    ensureSlot(placement_.instances, static_cast<size_t>(id));
-    placement_.instances[id] = PlacementSnapshot::InstanceRef{
-        placed,
-        {node->getDbInst(),
-         node->getMaster()->getDbMaster(),
-         eUTL::UvDist(x),
-         eUTL::UvDist(node->getBottom().v),
-         node->getOrient()}};
-    const DbCoord heightRows = std::max<DbCoord>(info.height, 1);
-    for (DbCoord offset = 0; offset < heightRows; ++offset) {
-      const RowId row = rowId + static_cast<RowId>(offset);
-      if (row >= static_cast<RowId>(placement_.byRow.size()))
-        break;
-      PlacedInstance rowCopy = placed;
-      rowCopy.rowId = row;
-      placement_.byRow[row].push_back(rowCopy);
-    }
-  }
-  for (std::vector<PlacedInstance>& list : placement_.byRow) {
-    std::sort(list.begin(),
-              list.end(),
-              [](const PlacedInstance& a, const PlacedInstance& b) {
-                return a.x != b.x ? a.x < b.x : a.id < b.id;
-              });
-  }
-
   candidate_catalog_.build(placement_, log_);
-  if (!candidate_catalog_.hasPlacedCandidate()) {
+  if (!candidate_catalog_.hasCompatibleCandidate()) {
     logIssue("NoCompatibleFillerCandidate",
-             "no placed filler has a compatible replacement master");
+             "no filler master has a compatible replacement master");
   }
 
   // The initial target snapshot only needs enough horizontal context for the
@@ -1041,19 +966,14 @@ void FillerRepairEngine::Impl::buildPlannerData()
          {"default halo X", cat(placement_.defaultHaloX)}});
   }
 
-  const auto placedCount
-      = std::count_if(placement_.instances.begin(),
-                      placement_.instances.end(),
-                      [](const auto& slot) { return slot.has_value(); });
   const auto masterCount
       = std::count_if(placement_.masters.begin(),
                       placement_.masters.end(),
                       [](const auto& slot) { return slot.has_value(); });
   log_.block(
       "engine",
-      "Placement view",
-      {{"nodes", cat(placedCount)},
-       {"masters", cat(masterCount)},
+      "Shared repair metadata",
+      {{"masters", cat(masterCount)},
        {"configured filler masters", cat(placement_.fillerMasterIds.size())},
        {"site width", cat(placement_.siteWidth)},
        {"default halo X", cat(placement_.defaultHaloX)}});
@@ -1070,20 +990,69 @@ void FillerRepairEngine::Impl::logIssue(const std::string& code,
              {{"code", code}, {"message", message}});
 }
 
-const std::vector<PlacedInstance>& FillerRepairEngine::Impl::instancesInRow(
+const std::vector<PlacedInstance>&
+FillerRepairEngine::Impl::RequestPlacementView::instancesInRow(
     RowId rowId) const
 {
-  return rowId >= 0 && static_cast<size_t>(rowId) < placement_.byRow.size()
-             ? placement_.byRow[rowId]
-             : emptyInstances();
+  if (rowId < 0 || rowId >= impl_.grid_->getRowCount().v) {
+    return emptyInstances();
+  }
+  const auto cached = by_row_.find(rowId);
+  if (cached != by_row_.end()) {
+    return cached->second;
+  }
+  std::vector<PlacedInstance>& row = by_row_[rowId];
+  std::set<InstanceId> collected;
+  for (int col = 0; col < impl_.grid_->getRowSiteCount().v; ++col) {
+    const Pixel* pixel = impl_.grid_->gridPixel(GridX{col}, GridY{rowId});
+    if (pixel == nullptr || pixel->cell == nullptr) {
+      continue;
+    }
+    const InstanceId id = pixel->cell->getId();
+    if (!collected.insert(id).second) {
+      continue;
+    }
+    if (const PlacedInstance* placed = instance(id)) {
+      PlacedInstance copy = *placed;
+      // Multi-height instances are members of every occupied row.
+      copy.rowId = rowId;
+      row.push_back(copy);
+    }
+  }
+  std::sort(row.begin(), row.end(), [](const PlacedInstance& left,
+                                      const PlacedInstance& right) {
+    return left.x != right.x ? left.x < right.x : left.id < right.id;
+  });
+  return row;
 }
 
-const PlacedInstance* FillerRepairEngine::Impl::instance(InstanceId id) const
+const PlacedInstance*
+FillerRepairEngine::Impl::RequestPlacementView::instance(InstanceId id) const
 {
-  return id >= 0 && static_cast<size_t>(id) < placement_.instances.size()
-                 && placement_.instances[id].has_value()
-             ? &placement_.instances[id]->placed
-             : nullptr;
+  const auto cached = instances_.find(id);
+  if (cached != instances_.end()) {
+    return &cached->second;
+  }
+  const Node* node = id >= 0 ? impl_.network_->getNode(id) : nullptr;
+  if (node == nullptr || node->getMaster() == nullptr
+      || (!node->isPlaced() && !node->isFixed())) {
+    return nullptr;
+  }
+  const MasterId masterId = node->getMaster()->getId();
+  const RowId rowId = impl_.grid_->gridSnapDownY(node).v;
+  if (masterInfo(masterId) == nullptr || rowId < 0
+      || rowId >= impl_.grid_->getRowCount().v) {
+    return nullptr;
+  }
+  return &instances_
+              .emplace(id,
+                       PlacedInstance{id,
+                                      masterId,
+                                      rowId,
+                                      node->getLeft().v,
+                                      toPlannerOrient(node->getOrient()),
+                                      node->isFiller()})
+              .first->second;
 }
 
 const MasterInfo* FillerRepairEngine::Impl::masterInfo(MasterId id) const
@@ -1094,7 +1063,8 @@ const MasterInfo* FillerRepairEngine::Impl::masterInfo(MasterId id) const
              : nullptr;
 }
 
-MasterCandidateResult FillerRepairEngine::Impl::getUsableMasterCandidates(
+MasterCandidateResult
+FillerRepairEngine::Impl::RequestPlacementView::getUsableMasterCandidates(
     InstanceId fillerInstanceId) const
 {
   MasterCandidateResult result;
@@ -1122,12 +1092,13 @@ MasterCandidateResult FillerRepairEngine::Impl::getUsableMasterCandidates(
     return result;
   }
 
-  result.candidates = candidate_catalog_.candidates(placed->masterId);
+  result.candidates = impl_.candidate_catalog_.candidates(placed->masterId);
   if (!result.candidates.empty()) {
     return result;
   }
 
-  const CandidateStats* stats = candidate_catalog_.stats(placed->masterId);
+  const CandidateStats* stats
+      = impl_.candidate_catalog_.stats(placed->masterId);
   result.diagnostics.push_back(makeDiag(
       Severity::Info,
       "NoCompatibleFillerMaster",
@@ -1177,7 +1148,8 @@ MasterCandidateResult FillerRepairEngine::Impl::getUsableMasterCandidates(
 
 Violation FillerRepairEngine::Impl::toPlannerViolation(
     const ipl::Violation& v,
-    InstanceId targetInstance) const
+    InstanceId targetInstance,
+    const PlacementView& view) const
 {
   Violation out;
   out.ruleId = v.ruleId;
@@ -1200,7 +1172,7 @@ Violation FillerRepairEngine::Impl::toPlannerViolation(
     ViolationParticipant p;
     p.instanceId = static_cast<InstanceId>(id);
     p.isTarget = p.instanceId == targetInstance;
-    if (const PlacedInstance* inst = instance(p.instanceId)) {
+    if (const PlacedInstance* inst = view.instance(p.instanceId)) {
       p.masterId = inst->masterId;
       p.rowId = inst->rowId;
       const MasterInfo* master = masterInfo(inst->masterId);
@@ -1215,7 +1187,7 @@ Violation FillerRepairEngine::Impl::toPlannerViolation(
 
 // Convert planner ids to the shared pre-commit change record. Orientation is
 // preserved because the checker uses it to choose the implant band.
-CellChangeRecord FillerRepairEngine::Impl::cellChangeRecord(
+CellChangeRecord FillerRepairEngine::Impl::RequestPlacementView::cellChangeRecord(
     InstanceId instanceId,
     MasterId newMasterId) const
 {
@@ -1226,30 +1198,29 @@ CellChangeRecord FillerRepairEngine::Impl::cellChangeRecord(
                           eLIB::LibCellID(0, 0),
                           eLIB::LibCellID(0, 0),
                           eUTL::PhysOrientation(eUTL::PhysOrientationE::R0)};
-  const bool haveRef
-      = instanceId >= 0
-        && static_cast<size_t>(instanceId) < placement_.instances.size()
-        && placement_.instances[instanceId].has_value();
-  if (haveRef) {
-    const PlacementSnapshot::RecordRef& ref
-        = placement_.instances[instanceId]->record;
-    record.cell_data_ = dpl2::CellData{ref.cellId};
-    record.orig_lib_cell_ = ref.libCellId;
-    record.x_ = ref.x;
-    record.y_ = ref.y;
-    record.orientation_ = ref.orientation;
+  const Node* node
+      = instance(instanceId) != nullptr ? impl_.network_->getNode(instanceId)
+                                        : nullptr;
+  if (node != nullptr) {
+    record.cell_data_ = dpl2::CellData{node->getDbInst()};
+    record.orig_lib_cell_ = node->getMaster()->getDbMaster();
+    record.x_ = eUTL::UvDist(node->getLeft().v);
+    record.y_ = eUTL::UvDist(node->getBottom().v);
+    record.orientation_ = node->getOrient();
   }
   if (masterInfo(newMasterId) != nullptr) {
-    record.new_lib_cell_ = placement_.masters[newMasterId]->libCellId;
+    record.new_lib_cell_ = impl_.placement_.masters[newMasterId]->libCellId;
   }
   return record;
 }
 
 OracleResult FillerRepairEngine::Impl::checkPlaceWithOverlay(
     const ipl::CheckRequest& target,
-    const OracleRequest& request) const
+    const OracleRequest& request,
+    const PlacementView& view) const
 {
-  std::vector<OracleResult> results = checkPlaceWithOverlays(target, {request});
+  std::vector<OracleResult> results
+      = checkPlaceWithOverlays(target, {request}, view);
   if (results.size() == 1) {
     return std::move(results.front());
   }
@@ -1265,7 +1236,8 @@ OracleResult FillerRepairEngine::Impl::checkPlaceWithOverlay(
 
 std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     const ipl::CheckRequest& target,
-    const std::vector<OracleRequest>& requests) const
+    const std::vector<OracleRequest>& requests,
+    const PlacementView& view) const
 {
   if (requests.empty()) {
     return {};
@@ -1332,7 +1304,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     out.violations.reserve(checked.violations.size());
     for (const ipl::Violation& violation : checked.violations) {
       Violation converted
-          = toPlannerViolation(violation, first.targetPlace.instanceId);
+          = toPlannerViolation(violation, first.targetPlace.instanceId, view);
       const InstanceId checkerTargetId
           = target.cell != nullptr ? target.cell->getId() : -1;
       for (ViolationParticipant& participant : converted.participants) {
@@ -1572,6 +1544,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
+  const RequestPlacementView view(*this);
   std::set<InstanceId> overlayInstanceIds;
   for (const CellChangeRecord& overlay : request.overlayChanges) {
     const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(overlay);
@@ -1581,7 +1554,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       return result;
     }
     const InstanceId id = network_->getNodeId(*cellId);
-    if (id < 0 || instance(id) == nullptr
+    if (id < 0 || view.instance(id) == nullptr
         || !overlayInstanceIds.insert(id).second) {
       skip("InvalidOverlay",
            cat("target overlay has an unknown or duplicate node ", id));
@@ -1594,14 +1567,14 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   InstanceId targetId = -1;
   const InstanceId requestedId = request.cell->getId();
   if (overlayInstanceIds.count(requestedId) != 0
-      && instance(requestedId) != nullptr) {
+      && view.instance(requestedId) != nullptr) {
     targetId = requestedId;
   }
   for (const InstanceId id : overlayInstanceIds) {
     if (targetId >= 0) {
       break;
     }
-    const PlacedInstance* candidate = instance(id);
+    const PlacedInstance* candidate = view.instance(id);
     const MasterInfo* candidateMaster
         = candidate != nullptr ? masterInfo(candidate->masterId) : nullptr;
     if (candidateMaster == nullptr) {
@@ -1624,12 +1597,12 @@ RepairOutcome FillerRepairEngine::Impl::repair(
          "temporary target has no anchor among the Delete overlays");
     return result;
   }
-  const PlacedInstance* current = instance(targetId);
+  const PlacedInstance* current = view.instance(targetId);
   if (current == nullptr) {
     skip("UnknownTarget",
          cat("overlay target ",
              targetId,
-             " is absent from the repair snapshot"));
+             " is absent from the current placement"));
     return result;
   }
 
@@ -1654,8 +1627,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   const bool allFillerOverlays
       = std::all_of(overlayInstanceIds.begin(),
                     overlayInstanceIds.end(),
-                    [this](InstanceId id) {
-                      const PlacedInstance* placed = instance(id);
+                    [&view](InstanceId id) {
+                      const PlacedInstance* placed = view.instance(id);
                       return placed != nullptr && placed->isFiller;
                     });
   std::set<internal::SiteCell> releasedSites;
@@ -1691,7 +1664,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       }
     }
     for (const InstanceId id : overlayInstanceIds) {
-      const PlacedInstance* filler = instance(id);
+      const PlacedInstance* filler = view.instance(id);
       const MasterInfo* master
           = filler != nullptr ? masterInfo(filler->masterId) : nullptr;
       if (filler == nullptr || master == nullptr || !master->isFiller
@@ -1790,7 +1763,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
               {"released sites", cat(releasedSites.size())},
               {"guard", show(influence)}});
 
-  BoundOracle oracle(*this, request);
+  BoundOracle oracle(*this, request, view);
   if (!releasedSites.empty()) {
     std::string addedFillerNamePrefix = "FILLER_REPAIR_";
     if (const fillerSetting* setting = network_->getFillerSetting();
@@ -1994,7 +1967,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         }
 
         LayoutPlacementView layoutView(
-            *this,
+            view,
             target,
             overlayInstanceIds,
             seededAdditions,
@@ -2075,7 +2048,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     logRepairSuccess(request, result, "no filler change needed");
     return result;
   }
-  if (!candidate_catalog_.hasPlacedCandidate()) {
+  if (!candidate_catalog_.hasCompatibleCandidate()) {
     const CandidateStats& stats = candidate_catalog_.aggregateStats();
     skip("NoCompatibleFillerCandidate",
          cat("checked=", stats.checked, " compatible=", stats.compatible));
@@ -2086,7 +2059,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   plannerRequest.targetPlace = target;
   plannerRequest.violations = snapshot.violations;
   std::optional<OverlayPlacementView> overlayView;
-  const PlacementView& baseView = *this;
+  const PlacementView& baseView = view;
   const PlacementView* plannerView = &baseView;
   if (overlayInstanceIds.size() > 1) {
     overlayView.emplace(baseView, overlayInstanceIds, target.instanceId);

@@ -9,9 +9,11 @@
 // masters could replace this filler?" -- and it is read-only. Nothing here
 // changes the design; committing an answer is the caller's job.
 //
-// Threading: runtime views are immutable after engine initialization or are
-// private to one repair call, so concurrent repair readers are supported.
-// Test doubles must provide the same stable-reference behavior when shared.
+// Threading: runtime placement views and their lazy node/row caches are private
+// to one repair call; master metadata is shared and immutable. Concurrent repair
+// readers are supported only while Grid/Network are not being modified.
+// Returned references stay stable for the view's lifetime. Test doubles must
+// provide the same stable-reference behavior when shared.
 
 #pragma once
 

@@ -142,14 +142,24 @@ Before the first parallel repair call:
 6. Grid and Network describe the same committed placement revision.
 7. No database mutation runs concurrently with checker/engine calls.
 
-The checker and lazy engine are immutable for that revision. Publish a new
-checker revision after a committed placement mutation before beginning a new
-repair phase.
+Master geometry, VT metadata, master compatibility, rules, and grid geometry
+are immutable setup data. Rules remain checker-owned; the lazy engine caches
+master/geometry metadata and compatibility tables. Rebuild checker/engine if
+those setup inputs change, not after ordinary placement commits.
 
-The engine does not require Design or PhysDesMgr. It builds planner metadata
-from checker `MasterItem` records and Network nodes. Only missing Grid/Network
-or invalid row/site geometry blocks initialization; other bad records and
-requests fail with empty changes and structured `[fr]` logs.
+Each repair reads placed instances, current masters, coordinates, orientation,
+and DB ids from the current Grid/Network. `PlacementView` remains the planner's
+query interface, backed by request-local lazy node/row caches for stable
+references; no placed-instance snapshot survives a repair call. Caller commits
+must synchronize DB, Grid occupancy, and Network (including Add/Delete lookup
+maps) before subsequent calls. Concurrent read-only repairs remain supported,
+but commit and repair must not overlap.
+
+The engine does not require Design or PhysDesMgr. It builds shared metadata
+from checker `MasterItem` records and queries current Network nodes as needed.
+Only missing Grid/Network or invalid row/site geometry blocks initialization;
+other bad records and requests fail with empty changes and structured
+`[fr]` logs.
 
 ## Verification
 
@@ -174,6 +184,8 @@ The gate compiles:
 - the `fillerRepair2` internal-only planner GoogleTest;
 - destination DePlace/Place/PlacementDRC sources;
 - checker replacement and atomic failed-dispatch lifecycle tests;
+- reused-engine placement lifecycle tests (committed Swap/Add/Delete, sparse
+  DB/Network ids, moved/oriented instances, and fillers appearing after setup);
 - unchanged checker golden expectations;
 - checker/planner E2E;
 - fake-UDM runtime E2E, including one- and two-row targets and concurrent

@@ -3,9 +3,9 @@
 
 // The runtime half of filler repair: everything that touches the database.
 //
-// It borrows the caller-owned checker, freezes one placement revision, and
-// feeds the pure search (RepairPlanner) through PlacementView and a
-// request-local RepairOracle.
+// It borrows the caller-owned checker and caches master/geometry metadata.
+// Each repair reads current Grid/Network placement through a request-local
+// PlacementView and feeds the pure search through a request-local RepairOracle.
 //
 // repair() accepts one temporary standard-cell Node plus Delete overlays naming
 // either one same-footprint std cell or selected fillers intersecting a new
@@ -34,7 +34,8 @@ class FillerRepairEngine
 {
  public:
   // The checker exposes the Grid and Network initialized by DePlace and must
-  // outlive the engine. Construction builds the immutable repair snapshot.
+  // outlive the engine. Construction caches master/VT/compatibility metadata,
+  // not placed instances. Masters, rules and grid geometry must stay unchanged.
   explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
   ~FillerRepairEngine();
 
@@ -46,6 +47,8 @@ class FillerRepairEngine
   // The checker already validates this request. The engine trusts its temporary
   // Node and target overlay, then returns only checker-approved filler Adds
   // and/or Replaces.
+  // Placement commits must update Grid and Network before the next repair;
+  // neither may be mutated during repair (concurrent read-only repairs are OK).
   RepairOutcome repair(const ipl::CheckRequest& request) const;
 
  private:
