@@ -46,8 +46,8 @@ struct PlannerConfig
   bool fit_space = true;
   std::size_t max_search_states = 250000;
   std::size_t max_search_depth = 4096;
-  // Widths are in sites. Pairs are directional.
-  std::set<std::pair<int, int>> forbidden_width_abutments;
+  // FillerFootprint::master_index pairs. Pairs are directional.
+  std::set<std::pair<int, int>> forbidden_master_abutments;
 };
 
 enum class PlannerStatus

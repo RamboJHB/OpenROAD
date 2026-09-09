@@ -115,18 +115,18 @@ TEST(FillerPlacementInternalTest, SearchBudgetFailsClosed)
   EXPECT_TRUE(result.fillers.empty());
 }
 
-TEST(FillerPlacementInternalTest, ForbiddenAbutmentChangesChoice)
+TEST(FillerPlacementInternalTest, ForbiddenMasterAbutmentChangesChoice)
 {
   const SiteGrid grid = fullGrid(1, 4);
   PlannerConfig config;
-  config.forbidden_width_abutments.insert({2, 2});
+  config.forbidden_master_abutments.insert({41, 41});
 
   const PlannerResult result
-      = planFillers(grid, {{2, 2, 1, {}}, {1, 1, 1, {}}}, config);
+      = planFillers(grid, {{41, 2, 1, {}}, {17, 1, 1, {}}}, config);
 
   EXPECT_EQ(result.status, PlannerStatus::complete);
   EXPECT_EQ(result.fillers,
-            (std::vector<TiledFiller>{{2, 0, 0}, {1, 0, 2}, {1, 0, 3}}));
+            (std::vector<TiledFiller>{{41, 0, 0}, {17, 0, 2}, {17, 0, 3}}));
 }
 
 TEST(FillerPlacementInternalTest, InvalidInputAndZeroBudgetFailClosed)

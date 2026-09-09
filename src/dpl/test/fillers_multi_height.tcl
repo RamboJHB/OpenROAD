@@ -2,9 +2,7 @@ source "helpers.tcl"
 read_lef multi_height_fillers.lef
 read_def fillers_multi_height.def
 
-set_filler_option -prefix "MH_" -follow_order true -fit_space true \
-  {FILLER_X2_H2 FILLER_X1}
-filler_placement
+filler_placement -prefix "MH_" {FILLER_X2_H2 FILLER_X1}
 
 set placements {}
 foreach inst [[ord::get_db_block] getInsts] {

@@ -34,6 +34,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -42,6 +43,11 @@
 #include "FillerPlacementInternal.h"
 #include "dpl/Opendp.h"
 #include "utl/Logger.h"
+
+#ifdef DPL2_FILLER_SETTING_AVAILABLE
+#include <dpl2/DePlace.h>
+#include <infrastructure/fillerSetting.h>
+#endif
 
 namespace dpl {
 
@@ -68,43 +74,116 @@ string fillerName(const string& prefix,
   return prefix + to_string(filler.row) + "_" + to_string(filler.column);
 }
 
+#ifdef DPL2_FILLER_SETTING_AVAILABLE
+string insertionPrefix(const string& configured)
+{
+  string prefix = configured.empty() ? "FILLER" : configured;
+  if (prefix.back() != '_') {
+    prefix.push_back('_');
+  }
+  return prefix + "INSERT_";
+}
+
+dbMaster* findUniqueMaster(dbDatabase* db, const string& name)
+{
+  dbMaster* match = nullptr;
+  for (dbLib* library : db->getLibs()) {
+    if (dbMaster* master = library->findMaster(name.c_str())) {
+      if (match != nullptr && match != master) {
+        return nullptr;
+      }
+      match = master;
+    }
+  }
+  return match;
+}
+#endif
+
 }  // namespace
+
+struct Opendp::FillerPlacementRequest
+{
+  dbMasterSeq masters;
+  string prefix;
+  bool follow_order = true;
+  bool fit_space = true;
+  std::set<std::pair<dbMaster*, dbMaster*>> forbidden_master_abutments;
+};
 
 void Opendp::fillerPlacement(dbMasterSeq* filler_masters, const char* prefix)
 {
-  FillerPlacementOptions options;
+  FillerPlacementRequest request;
   if (filler_masters != nullptr) {
-    options.masters = *filler_masters;
+    request.masters = *filler_masters;
   }
-  options.prefix = prefix == nullptr ? "FILLER_" : prefix;
+  request.prefix = prefix == nullptr ? "FILLER_" : prefix;
   // Preserve the historical command behavior: geometry, not caller order,
   // determines the preferred legacy filler sequence.
-  options.follow_order = false;
-  options.fit_space = true;
-  fillerPlacement(options);
+  request.follow_order = false;
+  request.fit_space = true;
+  fillerPlacement(request);
 }
 
 void Opendp::fillerPlacement()
 {
-  fillerPlacement(filler_options_);
-}
-
-void Opendp::setFillerPlacementOptions(dbMasterSeq* filler_masters,
-                                       const char* prefix,
-                                       bool follow_order,
-                                       bool fit_space)
-{
-  FillerPlacementOptions options;
-  if (filler_masters != nullptr) {
-    options.masters = *filler_masters;
+#ifdef DPL2_FILLER_SETTING_AVAILABLE
+  dpl2::DePlace* deplace = dpl2::DePlace::get();
+  if (deplace == nullptr || deplace->getFillerSetting() == nullptr) {
+    logger_->error(DPL, 42, "dpl2 filler_setting is not initialized.");
   }
-  options.prefix = prefix == nullptr ? "ECOFILLER_" : prefix;
-  options.follow_order = follow_order;
-  options.fit_space = fit_space;
-  filler_options_ = std::move(options);
+  fillerPlacement(*deplace->getFillerSetting());
+#else
+  logger_->error(DPL,
+                 41,
+                 "this build has no dpl2 filler_setting integration; pass "
+                 "filler masters to filler_placement explicitly.");
+#endif
 }
 
-void Opendp::fillerPlacement(const FillerPlacementOptions& options)
+void Opendp::fillerPlacement(const dpl2::fillerSetting& setting)
+{
+#ifdef DPL2_FILLER_SETTING_AVAILABLE
+  FillerPlacementRequest request;
+  request.prefix = insertionPrefix(setting.getPrefix());
+  request.follow_order = setting.getFollowOrder();
+  request.fit_space = setting.getFitSpace();
+
+  std::map<int, dbMaster*> masters_by_dpl2_id;
+  for (const eLIB::PhysLibCell* physical : setting.getFillerPhysCells()) {
+    if (physical == nullptr) {
+      continue;
+    }
+    const string name = physical->getLibCell().getName();
+    dbMaster* master = findUniqueMaster(db_, name);
+    if (master == nullptr) {
+      logger_->error(DPL,
+                     43,
+                     "dpl2 filler_setting master {} does not uniquely resolve "
+                     "to an OpenDB master.",
+                     name);
+    }
+    request.masters.push_back(master);
+    masters_by_dpl2_id[physical->getLibCellId().getIndexValue()] = master;
+  }
+  for (const auto& [master_ids, avoid] : setting.getAvoidPattern()) {
+    const auto left = masters_by_dpl2_id.find(master_ids.first);
+    const auto right = masters_by_dpl2_id.find(master_ids.second);
+    if (avoid && left != masters_by_dpl2_id.end()
+        && right != masters_by_dpl2_id.end()) {
+      request.forbidden_master_abutments.insert({left->second, right->second});
+    }
+  }
+  fillerPlacement(request);
+#else
+  (void) setting;
+  logger_->error(DPL,
+                 51,
+                 "this build has no dpl2 filler_setting integration; pass "
+                 "filler masters to filler_placement explicitly.");
+#endif
+}
+
+void Opendp::fillerPlacement(const FillerPlacementRequest& request)
 {
   // Refresh occupancy before every insertion.  This keeps repeated calls and
   // database edits made by other commands from planning over stale grid data.
@@ -115,8 +194,8 @@ void Opendp::fillerPlacement(const FillerPlacementOptions& options)
 
   vector<RuntimeMaster> masters;
   std::set<dbMaster*> seen_masters;
-  masters.reserve(options.masters.size());
-  for (dbMaster* master : options.masters) {
+  masters.reserve(request.masters.size());
+  for (dbMaster* master : request.masters) {
     if (master == nullptr || !seen_masters.insert(master).second) {
       continue;
     }
@@ -141,11 +220,10 @@ void Opendp::fillerPlacement(const FillerPlacementOptions& options)
     masters.push_back({master, width / site_width_, height / row_height_});
   }
   if (masters.empty()) {
-    logger_->error(
-        DPL, 41, "no filler masters configured; use set_filler_option first.");
+    logger_->error(DPL, 44, "no filler masters are configured for insertion.");
   }
 
-  if (!options.follow_order) {
+  if (!request.follow_order) {
     std::stable_sort(
         masters.begin(),
         masters.end(),
@@ -188,20 +266,33 @@ void Opendp::fillerPlacement(const FillerPlacementOptions& options)
   }
 
   filler_internal::PlannerConfig config;
-  config.fit_space = options.fit_space;
+  config.fit_space = request.fit_space;
+  std::map<dbMaster*, int> master_indices;
+  for (int index = 0; index < static_cast<int>(masters.size()); ++index) {
+    master_indices[masters[index].master] = index;
+  }
+  for (const auto& [left, right] : request.forbidden_master_abutments) {
+    const auto left_index = master_indices.find(left);
+    const auto right_index = master_indices.find(right);
+    if (left_index != master_indices.end()
+        && right_index != master_indices.end()) {
+      config.forbidden_master_abutments.insert(
+          {left_index->second, right_index->second});
+    }
+  }
   const filler_internal::PlannerResult plan
       = filler_internal::planFillers(site_grid, footprints, config);
   if (plan.status == filler_internal::PlannerStatus::invalid_input) {
-    logger_->error(DPL, 42, "invalid filler insertion planner input.");
+    logger_->error(DPL, 45, "invalid filler insertion planner input.");
   }
   if (plan.status == filler_internal::PlannerStatus::budget_exceeded) {
     logger_->error(DPL,
-                   43,
+                   46,
                    "filler insertion search exceeded its deterministic "
                    "budget; no fillers were placed.");
   }
   if (plan.status == filler_internal::PlannerStatus::impossible
-      && options.fit_space) {
+      && request.fit_space) {
     for (int row = 0; row < row_count_; ++row) {
       int column = 0;
       while (column < row_site_count_) {
@@ -237,11 +328,11 @@ void Opendp::fillerPlacement(const FillerPlacementOptions& options)
 
   std::set<string> names;
   for (const filler_internal::TiledFiller& filler : plan.fillers) {
-    const string name = fillerName(options.prefix, filler);
+    const string name = fillerName(request.prefix, filler);
     if (!names.insert(name).second
         || block_->findInst(name.c_str()) != nullptr) {
       logger_->error(DPL,
-                     44,
+                     47,
                      "filler instance name {} already exists; no fillers were "
                      "placed.",
                      name);
@@ -252,7 +343,7 @@ void Opendp::fillerPlacement(const FillerPlacementOptions& options)
   created.reserve(plan.fillers.size());
   for (const filler_internal::TiledFiller& filler : plan.fillers) {
     const RuntimeMaster& master = masters[filler.master_index];
-    const string name = fillerName(options.prefix, filler);
+    const string name = fillerName(request.prefix, filler);
     dbInst* inst = dbInst::create(block_,
                                   master.master,
                                   name.c_str(),
@@ -262,7 +353,7 @@ void Opendp::fillerPlacement(const FillerPlacementOptions& options)
         dbInst::destroy(created_inst);
       }
       logger_->error(DPL,
-                     45,
+                     48,
                      "failed to create filler instance {}; rolled back {} "
                      "instances.",
                      name,
@@ -281,7 +372,7 @@ void Opendp::fillerPlacement(const FillerPlacementOptions& options)
   have_fillers_ = have_fillers_ || !created.empty();
   if (plan.status == filler_internal::PlannerStatus::partial) {
     logger_->warn(DPL,
-                  46,
+                  49,
                   "Left {} legal sites unfilled because fit_space is false.",
                   plan.fillable_sites - plan.covered_sites);
   }

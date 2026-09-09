@@ -53,6 +53,10 @@ namespace utl {
 class Logger;
 }
 
+namespace dpl2 {
+class fillerSetting;
+}
+
 namespace dpl {
 
 using std::map;
@@ -85,14 +89,6 @@ class DplObserver;
 
 using Grid = Pixel**;
 using dbMasterSeq = vector<dbMaster*>;
-
-struct FillerPlacementOptions
-{
-  dbMasterSeq masters;
-  string prefix = "ECOFILLER_";
-  bool follow_order = true;
-  bool fit_space = true;
-};
 
 using InstPaddingMap = map<dbInst*, pair<int, int>>;
 using MasterPaddingMap = map<dbMaster*, pair<int, int>>;
@@ -202,10 +198,7 @@ class Opendp
   void checkPlacement(bool verbose);
   void fillerPlacement(dbMasterSeq* filler_masters, const char* prefix);
   void fillerPlacement();
-  void setFillerPlacementOptions(dbMasterSeq* filler_masters,
-                                 const char* prefix,
-                                 bool follow_order,
-                                 bool fit_space);
+  void fillerPlacement(const dpl2::fillerSetting& setting);
   void removeFillers();
   int64_t hpwl() const;
   int64_t hpwl(dbNet* net) const;
@@ -367,7 +360,8 @@ class Opendp
   int padRight(const Cell* cell) const;
   int disp(const Cell* cell) const;
   // Place fillers
-  void fillerPlacement(const FillerPlacementOptions& options);
+  struct FillerPlacementRequest;
+  void fillerPlacement(const FillerPlacementRequest& request);
   void setGridCells();
   bool isFiller(odb::dbInst* db_inst);
   bool isOneSiteCell(odb::dbMaster* db_master) const;
@@ -413,7 +407,6 @@ class Opendp
   Cell dummy_cell_;
 
   // Filler placement.
-  FillerPlacementOptions filler_options_;
   int filler_count_ = 0;
   bool have_fillers_ = false;
   bool have_one_site_cells_ = false;

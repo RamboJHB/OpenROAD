@@ -64,6 +64,17 @@ target_include_directories(dpl_lib
     include
 )
 
+if(BUILD_DPL2_LOCAL_TEST)
+  target_compile_definitions(dpl_lib PRIVATE
+    DPL2_FILLER_SETTING_AVAILABLE)
+  target_link_libraries(dpl_lib PRIVATE dpl2_local_runtime)
+  # dpl2_local_runtime and fillerRepair have a circular static dependency.
+  # Propagating the object payload keeps every dpl_lib consumer link-order
+  # independent in the local integration build.
+  target_sources(dpl_lib INTERFACE
+    $<TARGET_OBJECTS:dpl2_filler_repair>)
+endif()
+
 swig_lib(NAME         dpl
          NAMESPACE    dpl
          I_FILE       src/Opendp.i

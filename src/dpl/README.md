@@ -17,8 +17,6 @@ set_placement_padding -global|-instances insts|-masters masters
                       [-left pad_left] [-right pad_right]
 detailed_placement [-max_displacement disp|{disp_x disp_y}]
 check_placement [-verbose]
-set_filler_option [-prefix prefix] [-follow_order boolean]
-                  [-fit_space boolean] filler_masters
 filler_placement [-prefix prefix] [filler_masters]
 remove_fillers
 optimize_mirroring
@@ -51,14 +49,16 @@ match, e.g., `FILLCELL_X1 FILLCELL_X16 FILLCELL_X2 FILLCELL_X32 FILLCELL_X4
 FILLCELL_X8`. To specify a different naming prefix from `FILLER_`, use
 `-prefix <new prefix>`.
 
-`set_filler_option` stores a filler configuration for a subsequent
-no-argument `filler_placement` call. `-follow_order true` makes configured
-master order authoritative; `false` uses deterministic area, height, and width
-ordering. `-fit_space true` requires every legal empty site to be covered and
-creates no instances if exact tiling fails. `false` permits a deterministic
-partial packing. The configured path defaults to prefix `ECOFILLER_`,
-`follow_order true`, and `fit_space true`. Calling `set_filler_option` again
-replaces the previous configuration.
+With no `filler_masters` argument, `filler_placement` reads dpl2's existing
+`fillerSetting`, which is configured by dpl2 `set_filler_option`; DPL does not
+define or store a second filler-options command. The configured masters,
+`FollowOrder`, `FitSpace`, `Prefix`, and avoid patterns drive insertion.
+`FollowOrder=false` uses deterministic area, height, width, and name ordering.
+`FitSpace=true` requires every legal empty site to be covered and creates no
+instances if exact tiling fails; `false` permits deterministic partial packing.
+The setting prefix is normalized and suffixed with `INSERT_` for generated
+instance names. dpl2 `CheckDRC` remains owned by the dpl2 checker path rather
+than classic DPL's OpenDB commit.
 
 ## Example scripts
 

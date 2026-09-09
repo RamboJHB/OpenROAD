@@ -93,9 +93,9 @@ class Planner
            || footprint.allowed_origins[anchor] != 0;
   }
 
-  bool forbidden(int left_width, int right_width) const
+  bool forbidden(int left_master, int right_master) const
   {
-    return config_.forbidden_width_abutments.count({left_width, right_width})
+    return config_.forbidden_master_abutments.count({left_master, right_master})
            != 0;
   }
 
@@ -120,8 +120,8 @@ class Planner
         const int left_owner = owner_[index(current_row, column - 1)];
         if (left_owner >= 0
             && forbidden(footprints_[placements_[left_owner].footprint_index]
-                             .width_sites,
-                         footprint.width_sites)) {
+                             .master_index,
+                         footprint.master_index)) {
           return false;
         }
       }
@@ -129,9 +129,9 @@ class Planner
         const int right_owner
             = owner_[index(current_row, column + footprint.width_sites)];
         if (right_owner >= 0
-            && forbidden(footprint.width_sites,
+            && forbidden(footprint.master_index,
                          footprints_[placements_[right_owner].footprint_index]
-                             .width_sites)) {
+                             .master_index)) {
           return false;
         }
       }

@@ -20,6 +20,12 @@ target_link_libraries(dpl_test
     dpl_lib
 )
 
+if(BUILD_DPL2_LOCAL_TEST)
+  target_compile_definitions(dpl_test PRIVATE
+    DPL2_FILLER_SETTING_AVAILABLE)
+  target_link_libraries(dpl_test dpl2_local_runtime)
+endif()
+
 gtest_discover_tests(dpl_test
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
 )
