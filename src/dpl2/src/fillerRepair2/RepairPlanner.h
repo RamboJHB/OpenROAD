@@ -39,11 +39,17 @@
 
 #pragma once
 
+#include <fillerRepair/Debug.h>
+#include <fillerRepair/PlacementView.h>
+#include <fillerRepair/RepairOracle.h>
+#include <fillerRepair/RepairTypes.h>
+
 #include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <tuple>
@@ -51,17 +57,19 @@
 #include <utility>
 #include <vector>
 
-#include <fillerRepair/Debug.h>
-#include <fillerRepair/PlacementView.h>
-#include <fillerRepair/RepairOracle.h>
-#include <fillerRepair/RepairTypes.h>
-
 namespace dpl2::fillerRepair {
 
 // Every search knob, in one place, so the transcript can print the exact
 // configuration a run used.
 //
-// Reaching a budget ends the search without returning a partial answer.
+// [PORT-TUNE] Every default below was chosen against a SYNTHETIC oracle that
+// answers instantly. At runtime each checker call is real DRC work, so the
+// budgets are really "how much DRC time may one repair cost", and only your
+// hardware can answer that. Before touching any of them, get the two numbers
+// the transcript already prints on a real design -- `checker requests=` and
+// the wall time of one repair() -- and change one knob at a time. They are
+// safe as shipped: reaching a budget only ever ends the search early, it
+// never produces a wrong answer.
 struct RepairConfig
 {
   // Checker calls one window may spend, the baseline request included.
@@ -72,7 +80,8 @@ struct RepairConfig
   // filled design does. Hitting either budget ends the search as *truncated*:
   // never a wrong answer, only a bounded give-up. <= 0 disables this one.
   int checkerCallBudgetPerRepair = 2048;
-  // Candidates per checker batch. They run in parallel over one region scan.
+  // Candidates per checker batch. The checker shares baseline work but still
+  // validates each candidate. Tune only against real checker timings.
   int batchSize = 32;
   // How many fillers one candidate may change at once. Only bites on windows
   // too large to enumerate exhaustively.
@@ -88,8 +97,24 @@ struct RepairConfig
   // How many times the window may grow before giving up. Without it a
   // no-solution case keeps growing until the rows run out, paying a window
   // budget each time. Also truncation, never a wrong answer.
+  //
+  // [PORT-TUNE] 32 is a safety valve, not a tuned value. What it should be is
+  // "how far from the target could a usable filler plausibly be" on your
+  // designs. The transcript names the level each answer came from
+  // ("grown xN"), so a histogram of that over a real run tells you directly.
   int maxAdaptiveLevels = 32;
+  // Authoritative horizontal rule reach, in DBU. Runtime supplies the whole
+  // checker rule deck; portable tests may use their reported rule distances.
+  DbCoord ruleDistance = 0;
   bool verbose = true;            // [fr] transcript; FR_VERBOSE=0 silences
+
+  bool valid() const
+  {
+    return checkerCallBudgetPerWindow > 0 && batchSize > 0 && maxSubsetSize > 0
+           && memberCapSize2 >= 0 && memberCapSize3 >= 0 && memberCapSize4 >= 0
+           && adaptiveStepFillers > 0 && maxAdaptiveLevels >= 0
+           && ruleDistance >= 0;
+  }
 };
 
 // --- Swap: one filler changes master ---------------------------------------
@@ -105,6 +130,7 @@ struct Swap
   XInterval span;
   VtId oldVt = kUnknownVt;
   VtId newVt = kUnknownVt;
+  RowId heightRows = 1;
 };
 
 using Overlay = std::vector<Swap>;
@@ -136,8 +162,10 @@ struct OverlayKey
   //     swaps:  0     1      2      3      4     5
   //     keys:  660  6 600  43 560  25 700  8 000  640
   //
-  // so 8 covers every key without ever touching the heap, with headroom. A
-  // longer key is not a limit; it spills to `overflow`.
+  // so 8 covers every key without ever touching the heap, with headroom. This
+  // is a local fact about the enumerator, not something a destination needs
+  // to revisit -- and a longer key is not a limit anyway, it just spills to
+  // `overflow`. Only raising `maxSubsetSize` would move it.
   static constexpr std::size_t kInlineSwaps = 8;
 
   DbCoord guardXl = 0;
@@ -161,7 +189,8 @@ struct OverlayKey
   const Entry* begin() const { return data(); }
   const Entry* end() const { return data() + count; }
 
-  // Grows to `n` entries; the caller then writes them through data().
+  // Preserve entries when crossing either storage boundary, including the
+  // shrink performed after canonicalization removes duplicate swaps.
   void resize(std::size_t n)
   {
     if (n > kInlineSwaps) {
@@ -170,6 +199,8 @@ struct OverlayKey
         std::copy(inlineSwaps.begin(), inlineSwaps.begin() + count,
                   overflow.begin());
       }
+    } else if (count > kInlineSwaps) {
+      std::copy_n(overflow.begin(), n, inlineSwaps.begin());
     }
     count = n;
   }
@@ -181,6 +212,7 @@ struct OverlayKey
            && count == other.count
            && std::equal(begin(), end(), other.begin());
   }
+  bool operator!=(const OverlayKey& other) const { return !(*this == other); }
 };
 
 struct OverlayKeyHash
@@ -329,6 +361,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                   const std::vector<Violation>& blocking,
                                   const PlacementView& view,
                                   int fillersPerRow,
+                                  DbCoord ruleDistance,
                                   const DebugLog& log);
 
 // --- which moves to try first -----------------------------------------------
@@ -364,25 +397,15 @@ struct EnumerationPlan
 // up to `maxSubsetSize`, with the member caps keeping a wide window from
 // exploding.
 //
-// `freshFillers` is what makes growth cheap. When the window grows but the
-// guard does not move, most combinations are ones the previous level already
-// put to the checker -- and their answer cannot have changed:
-//
-//   the window only ever GROWS, so a violation in the halo can move inside it
-//   (still blocking) but nothing that blocked can stop blocking; and a
-//   candidate that had been clean would have ended the search back then.
-//
-// So a level only needs the combinations touching a filler it just gained.
-// This is not a heuristic prune -- the skipped ones still count as covered,
-// so a level that skips them is still `complete`. Pass it empty for the
-// starting window, and for any level where the guard moved: a new guard is a
-// different question, so every candidate is new again.
-EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
-                                  const RepairConfig& config,
-                                  int budget,
-                                  const DebugLog& log,
-                                  const std::vector<InstanceId>& freshFillers
-                                  = {});
+// A growing window may skip a candidate only if the same guard/overlay was
+// actually checked. The oracle cache owns that knowledge; neither instance
+// ordering nor prior enumeration bounds are evidence of a checker answer.
+EnumerationPlan enumerateOverlays(
+    const std::vector<FillerDomain>& ranked,
+    const RepairConfig& config,
+    int budget,
+    const DebugLog& log,
+    const std::function<bool(const Overlay&)>& wasChecked = {});
 
 // --- asking the checker, and reading its answer -----------------------------
 
@@ -434,6 +457,7 @@ class OracleGate
     Overlay cleanOverlay;
     bool protocolError = false;
     bool budgetExhausted = false;
+    bool checkerError = false;
     // Best non-clean candidate, also used to steer which side to grow.
     bool hasBest = false;
     Overlay bestOverlay;
@@ -450,6 +474,22 @@ class OracleGate
   int requestsSent() const { return requests_sent_; }
   int batchesSent() const { return batches_sent_; }
   int cacheHits() const { return cache_hits_; }
+  bool wasChecked(const Region& guard, const Overlay& overlay) const
+  {
+    const auto found = cache_.find(overlayKey(guard, overlay));
+    if (found == cache_.end()) {
+      return false;
+    }
+    const OracleResult& result = found->second;
+    return result.status != OracleStatus::CheckerError
+           && (result.status != OracleStatus::Checked
+               || result.isLegal == result.violations.empty())
+           && std::none_of(result.diagnostics.begin(),
+                           result.diagnostics.end(),
+                           [](const Diagnostic& diagnostic) {
+                             return diagnostic.severity == Severity::Fatal;
+                           });
+  }
   const std::vector<Diagnostic>& diagnostics() const { return diagnostics_; }
 
  private:

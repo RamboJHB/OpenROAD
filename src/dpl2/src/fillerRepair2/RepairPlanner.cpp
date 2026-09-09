@@ -4,7 +4,7 @@
 #include <fillerRepair/RepairPlanner.h>
 
 #include <algorithm>
-#include <iterator>
+#include <limits>
 #include <map>
 #include <set>
 #include <tuple>
@@ -59,6 +59,7 @@ std::optional<Swap> makeSwap(const PlacementView& view,
   swap.span = XInterval{inst->x, inst->x + oldMaster->width};
   swap.oldVt = oldMaster->vt;
   swap.newVt = newMaster->vt;
+  swap.heightRows = std::max<DbCoord>(1, oldMaster->height);
   return swap;
 }
 
@@ -569,7 +570,7 @@ bool isRelatedToOverlay(const Violation& violation,
     // adjacent rows).
     bool rowNear = violation.rowIds.empty();  // no row info -> conservative
     for (const RowId row : violation.rowIds) {
-      if (row >= swap.rowId - 1 && row <= swap.rowId + 1) {
+      if (row >= swap.rowId - 1 && row <= swap.rowId + swap.heightRows) {
         rowNear = true;
         break;
       }
@@ -660,6 +661,7 @@ RepairWindow finalizeWindow(int level,
                             XInterval x,
                             DbCoord anchorX,
                             const PlacementView& view,
+                            DbCoord ruleDistance,
                             const DebugLog& log)
 {
   RepairWindow window;
@@ -686,13 +688,26 @@ RepairWindow finalizeWindow(int level,
   }
   window.bridgeFillers.assign(bridge.begin(), bridge.end());
 
-  // Inter-row rules reach one boundary, so two guard rows cover violations an
-  // edit can create just outside the repair window.
+  std::set<RowId> occupiedRows(rowSet);
+  for (const PlacedInstance* inst : editableInsts) {
+    const Region footprint = instanceFootprint(view, *inst);
+    for (const RowId row : clampRows(view, footprint.rowLo, footprint.rowHi)) {
+      occupiedRows.insert(row);
+    }
+    window.x.xl = std::min(window.x.xl, footprint.x.xl);
+    window.x.xh = std::max(window.x.xh, footprint.x.xh);
+  }
+  window.rows.assign(occupiedRows.begin(), occupiedRows.end());
+
+  // Current implant rules couple adjacent rows. Keep two context rows and at
+  // least the whole rule reach horizontally, then quantize outwards so cache
+  // reuse cannot reduce the checker's required context.
   const std::vector<RowId> guardRows =
       clampRows(view, window.rows.front() - 2, window.rows.back() + 2);
-  XInterval guardX = x;
+  XInterval guardX{window.x.xl - ruleDistance, window.x.xh + ruleDistance};
   for (const RowId rowId : guardRows) {
-    for (const PlacedInstance& inst : instancesInRing(view, rowId, x, 2)) {
+    for (const PlacedInstance& inst :
+         instancesInRing(view, rowId, window.x, 2)) {
       const XInterval span = instanceSpan(view, inst);
       guardX.xl = std::min(guardX.xl, span.xl);
       guardX.xh = std::max(guardX.xh, span.xh);
@@ -732,7 +747,13 @@ RepairWindow buildWindow(const TargetPlace& anchor,
   const DbCoord anchorWidth = anchorMaster != nullptr ? anchorMaster->width : 0;
   const XInterval anchorSpan{anchor.x, anchor.x + anchorWidth};
 
-  std::set<RowId> rowSet{anchor.rowId};
+  const RowId anchorTop
+      = anchor.rowId
+        + (anchorMaster != nullptr ? std::max<DbCoord>(1, anchorMaster->height)
+                                   : 1)
+        - 1;
+  const auto anchorRows = clampRows(view, anchor.rowId, anchorTop);
+  std::set<RowId> rowSet(anchorRows.begin(), anchorRows.end());
   std::set<InstanceId> editable;
   std::set<InstanceId> bridge;
   XInterval x = anchorSpan;
@@ -773,7 +794,7 @@ RepairWindow buildWindow(const TargetPlace& anchor,
   // widened by one rule distance. They join even outside the footprint.
   const XInterval bridgeSpan{anchorSpan.xl - ruleDistance,
                              anchorSpan.xh + ruleDistance};
-  for (const RowId rowId : clampRows(view, anchor.rowId - 1, anchor.rowId + 1)) {
+  for (const RowId rowId : clampRows(view, anchor.rowId - 1, anchorTop + 1)) {
     // Only instances overlapping bridgeSpan can qualify: the row==anchor
     // touch cases (span touches an anchor edge) and the coupled-row overlap
     // case both lie inside [anchorSpan +/- ruleDistance]. Binary-search that
@@ -787,18 +808,19 @@ RepairWindow buildWindow(const TargetPlace& anchor,
         continue;
       }
       const XInterval span = instanceSpan(view, inst);
-      const bool touchesAnchor = rowId == anchor.rowId
-                                 && (span.xh == anchorSpan.xl
-                                     || span.xl == anchorSpan.xh);
-      const bool underOrOverAnchor = rowId != anchor.rowId
-                                     && span.overlaps(bridgeSpan);
+      const bool inAnchorRow = rowId >= anchor.rowId && rowId <= anchorTop;
+      const bool touchesAnchor
+          = inAnchorRow
+            && (span.xh == anchorSpan.xl || span.xl == anchorSpan.xh);
+      const bool underOrOverAnchor = !inAnchorRow && span.overlaps(bridgeSpan);
       if (touchesAnchor || underOrOverAnchor) {
         include(inst, /*isBridge=*/true);
       }
     }
   }
 
-  return finalizeWindow(0, rowSet, editable, bridge, x, anchor.x, view, log);
+  return finalizeWindow(
+      0, rowSet, editable, bridge, x, anchor.x, view, ruleDistance, log);
 }
 
 RepairWindow expandWindowAdaptive(const RepairWindow& current,
@@ -806,6 +828,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                                   const std::vector<Violation>& blocking,
                                   const PlacementView& view,
                                   int fillersPerRow,
+                                  DbCoord ruleDistance,
                                   const DebugLog& log)
 {
   std::set<RowId> rowSet(current.rows.begin(), current.rows.end());
@@ -866,14 +889,21 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
       DbCoord leftFrontier = current.x.xl;
       DbCoord rightFrontier = current.x.xh;
       bool hasSeed = false;
-      if (rowId == anchor.rowId) {
+      const RowId anchorHeight
+          = anchorMaster != nullptr ? std::max<DbCoord>(1, anchorMaster->height)
+                                    : 1;
+      if (rowId >= anchor.rowId && rowId < anchor.rowId + anchorHeight) {
         leftFrontier = anchorSpan.xl;
         rightFrontier = anchorSpan.xh;
         hasSeed = true;
       }
       for (const InstanceId id : current.editableFillers) {
         const PlacedInstance* inst = view.instance(id);
-        if (inst == nullptr || inst->rowId != rowId) {
+        if (inst == nullptr) {
+          continue;
+        }
+        const Region footprint = instanceFootprint(view, *inst);
+        if (rowId < footprint.rowLo || rowId > footprint.rowHi) {
           continue;
         }
         const XInterval span = instanceSpan(view, *inst);
@@ -967,6 +997,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
                         x,
                         anchor.x,
                         view,
+                        ruleDistance,
                         log);
 }
 
@@ -986,7 +1017,8 @@ namespace {
 // band boundary, so it gets one. Ties go to the lower VT id, for determinism.
 VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
 {
-  const XInterval span = instanceSpan(view, inst);
+  const Region footprint = instanceFootprint(view, inst);
+  const XInterval span = footprint.x;
   std::map<VtId, int> votes;
 
   // Only the immediate x-neighbors matter, so binary-search to inst's span
@@ -998,8 +1030,8 @@ VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
   // Same-row x-adjacent neighbors (touching an edge) each cast two band votes.
   // A toucher does not overlap span (it meets an edge), so it sits just
   // outside the overlap range -- widen by one instance on each side.
-  {
-    const std::vector<PlacedInstance>& all = view.instancesInRow(inst.rowId);
+  for (RowId row = footprint.rowLo; row <= footprint.rowHi; ++row) {
+    const std::vector<PlacedInstance>& all = view.instancesInRow(row);
     const int lo = firstRightEdgeAfter(view, all, span.xl);
     const int hi = firstStartAtOrAfter(all, span.xh);
     const int from = std::max(0, lo - 1);
@@ -1019,13 +1051,16 @@ VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
       }
     }
   }
-  // Rows +-1 neighbors that overlap span each cast one band vote. The overlap
+  // Neighbors outside the bottom/top edges each cast one band vote. The overlap
   // range is exactly [firstRightEdgeAfter(xl), firstStartAtOrAfter(xh)).
-  for (const RowId rowId : {inst.rowId - 1, inst.rowId + 1}) {
+  for (const RowId rowId : {footprint.rowLo - 1, footprint.rowHi + 1}) {
     const std::vector<PlacedInstance>& all = view.instancesInRow(rowId);
     const int lo = firstRightEdgeAfter(view, all, span.xl);
     const int hi = firstStartAtOrAfter(all, span.xh);
     for (int i = lo; i < hi; ++i) {
+      if (all[i].id == inst.id) {
+        continue;
+      }
       const MasterInfo* master = view.masterInfo(all[i].masterId);
       if (master == nullptr) {
         continue;
@@ -1201,21 +1236,23 @@ long long fullSpaceSize(const std::vector<FillerDomain>& ranked, long long cap)
 {
   long long size = 1;
   for (const FillerDomain& domain : ranked) {
-    size *= 1 + static_cast<long long>(domain.options.size());
-    if (size > cap + 1) {
+    const auto factor = 1 + static_cast<long long>(domain.options.size());
+    if (size > (cap + 1) / factor) {
       return cap + 2;  // anything above cap means "does not fit"
     }
+    size *= factor;
   }
   return size - 1;  // exclude the empty subset
 }
 
 }  // namespace
 
-EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
-                                  const RepairConfig& config,
-                                  int budget,
-                                  const DebugLog& log,
-                                  const std::vector<InstanceId>& freshFillers)
+EnumerationPlan enumerateOverlays(
+    const std::vector<FillerDomain>& ranked,
+    const RepairConfig& config,
+    int budget,
+    const DebugLog& log,
+    const std::function<bool(const Overlay&)>& wasChecked)
 {
   EnumerationPlan plan;
   if (ranked.empty() || budget <= 0) {
@@ -1227,37 +1264,22 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   }
   log.section("enumerate", "OVERLAY ENUMERATION");
 
-  // Rank-indexed mirror of `freshFillers`, so the leaf test is one array read
-  // rather than a search. See the header for why skipping the rest is exact.
-  const bool incremental = !freshFillers.empty();
-  std::vector<char> rankIsFresh;
-  if (incremental) {
-    rankIsFresh.assign(ranked.size(), 0);
-    for (size_t i = 0; i < ranked.size(); ++i) {
-      rankIsFresh[i] = std::binary_search(freshFillers.begin(),
-                                          freshFillers.end(),
-                                          ranked[i].instanceId)
-                           ? 1
-                           : 0;
-    }
-  }
-
   const int fillerTotal = static_cast<int>(ranked.size());
   size_t optionTotal = 0;
   for (const FillerDomain& domain : ranked) {
     optionTotal += domain.options.size();
   }
 
-  const long long space = fullSpaceSize(ranked, budget);
-  plan.complete = space <= budget;
+  const long long space
+      = fullSpaceSize(ranked, std::numeric_limits<int>::max());
+  const bool exhaustive = space <= budget;
 
-  const int maxSize = plan.complete
-                          ? fillerTotal
-                          : std::min(config.maxSubsetSize, fillerTotal);
+  const int maxSize
+      = exhaustive ? fillerTotal : std::min(config.maxSubsetSize, fillerTotal);
   // Member cap counts FILLERS: size-s subsets draw from the first
   // N_s ranked fillers, each contributing its full domain.
   const auto memberCap = [&](int size) -> int {
-    if (plan.complete || size == 1) {
+    if (exhaustive || size == 1) {
       return fillerTotal;
     }
     const int cap = size == 2   ? config.memberCapSize2
@@ -1273,8 +1295,7 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
   plan.overlays.reserve(static_cast<size_t>(
       std::min<long long>(space, static_cast<long long>(budget))));
   bool budgetHit = false;
-  int comboFresh = 0;      // fresh members in `combo`, maintained incrementally
-  long long skippedAsAsked = 0;  // candidates the previous level already asked
+  long long checkedCount = 0;
   std::vector<std::vector<std::string>> subsetRows;
 
   // Both recursions pass themselves as `self` rather than going through
@@ -1289,6 +1310,10 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
       return;
     }
     if (k == combo.size()) {
+      if (wasChecked && wasChecked(current)) {
+        ++checkedCount;
+        return;
+      }
       plan.overlays.push_back(current);
       if (static_cast<int>(plan.overlays.size()) >= budget) {
         budgetHit = true;
@@ -1312,32 +1337,12 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
       return;
     }
     if (static_cast<int>(combo.size()) == size) {
-      // Already emitted -- and answered -- at the previous level: its whole
-      // Cartesian product is skipped, so no key is built and no oracle
-      // question is repeated.
-      if (incremental && comboFresh == 0) {
-        // Count what its Cartesian product WOULD have been: those candidates
-        // are covered (by the previous level), so completeness accounting
-        // must not treat the level as truncated.
-        long long product = 1;
-        for (const int rank : combo) {
-          product *= static_cast<long long>(ranked[rank].options.size());
-        }
-        skippedAsAsked += product;
-        return;
-      }
       emitProducts(emitProducts, 0);
       return;
     }
     for (int i = from; i < cap; ++i) {
       combo.push_back(i);
-      if (incremental) {
-        comboFresh += rankIsFresh[i];
-      }
       self(self, size, i + 1, cap);
-      if (incremental) {
-        comboFresh -= rankIsFresh[i];
-      }
       combo.pop_back();
       if (budgetHit) {
         return;
@@ -1358,21 +1363,13 @@ EnumerationPlan enumerateOverlays(const std::vector<FillerDomain>& ranked,
                             budgetHit ? "budget reached" : "ready"});
     }
   }
-  // Reaching the budget on the final element is still a complete search.
-  // Derive completeness from what was actually emitted so space == budget
-  // cannot be mislabeled as truncated. Incrementally skipped candidates count
-  // as covered: the previous level asked them under this same guard and the
-  // answer was not clean, which cannot change (see the header).
+  // Only actual cache entries count as covered. Enumeration limits never do.
   plan.complete
-      = space <= budget
-        && static_cast<long long>(plan.overlays.size()) + skippedAsAsked
-               == space;
-
-  if (incremental) {
+      = static_cast<long long>(plan.overlays.size()) + checkedCount == space;
+  if (log.enabled() && checkedCount != 0) {
     log.block("enumerate",
-              "Incremental enumeration",
-              {{"fresh fillers", cat(freshFillers.size(), '/', fillerTotal)},
-               {"previously answered candidates", cat(skippedAsAsked)}});
+              "Checked candidates skipped",
+              {{"candidates", cat(checkedCount)}});
   }
   log.table("enumerate",
             "Subset enumeration",
@@ -1695,7 +1692,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
   return summary;
 }
 
-// Everything not already cached in this chunk goes out as one checker batch.
+// Uncached candidates go to one checker batch; cache hits consume no budget.
 bool OracleGate::resolve(const Overlay* chunk,
                          const OverlayKey* chunkKeys,
                          std::size_t count,
@@ -1823,6 +1820,13 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
                                             int& budget)
 {
   SearchResult sr;
+  if (!config_.valid()) {
+    diagnostics_.push_back(makeDiag(Severity::Fatal,
+                                    "InvalidRepairConfig",
+                                    "invalid search bounds or batch size"));
+    sr.protocolError = true;
+    return sr;
+  }
   log_.section("gate", "CANDIDATE SEARCH");
   log_.block("gate",
              "Search input",
@@ -1861,6 +1865,14 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
         continue;
       }
       const DeltaSummary summary = classify(*answer, candidates[i], window);
+      sr.checkerError
+          |= summary.inconsistent
+             || answer->status == OracleStatus::CheckerError
+             || std::any_of(answer->diagnostics.begin(),
+                            answer->diagnostics.end(),
+                            [](const Diagnostic& diagnostic) {
+                              return diagnostic.severity == Severity::Fatal;
+                            });
       if (summary.clean) {
         sr.foundClean = true;
         sr.cleanOverlay = candidates[i];
@@ -1983,6 +1995,14 @@ FillerRepairResult RepairPlanner::repair(
     ~ActiveGuard() { flag.store(false, std::memory_order_release); }
   } activeGuard{repair_active_};
 
+  if (!config_.valid()) {
+    result.diagnostics.push_back(
+        makeDiag(Severity::Fatal,
+                 "InvalidRepairConfig",
+                 "invalid search bounds or batch size"));
+    return result;
+  }
+
   const std::vector<RowId>& viewRows = view_.rows();
   if (viewRows.empty() || view_.siteWidth() <= 0) {
     result.diagnostics.push_back(makeDiag(
@@ -2065,8 +2085,9 @@ FillerRepairResult RepairPlanner::repair(
   const std::vector<NormalizedViolation> violations =
       normalizeViolations(request, log_);
 
-  const DbCoord ruleDistance =
-      estimateRuleDistance(request.violations, view_.siteWidth());
+  const DbCoord ruleDistance
+      = std::max(config_.ruleDistance,
+                 estimateRuleDistance(request.violations, view_.siteWidth()));
   log_.block("planner",
              "L0 window input",
              {{"normalized violations", cat(violations.size())},
@@ -2090,14 +2111,6 @@ FillerRepairResult RepairPlanner::repair(
                                     view_,
                                     ruleDistance,
                                     log_);
-
-  // Previous level's search question, so enumeration can be incremental: the
-  // guard is quantized and therefore repeats across most levels, and under a
-  // repeated guard every combination without a newly editable filler is one
-  // the previous level already asked. See enumerateOverlays in the header.
-  Region searchedGuard;
-  std::vector<InstanceId> searchedEditable;
-  bool haveSearchedLevel = false;
 
   for (;;) {
     const std::string label = windowLabel(window);
@@ -2135,6 +2148,8 @@ FillerRepairResult RepairPlanner::repair(
                 {"bridge fillers", cat(window.bridgeFillers.size())}});
 
     if (window.editableFillers.empty()) {
+      currentDefinitive = true;
+      lastSearchedDefinitive = true;
       result.diagnostics.push_back(makeDiag(
           Severity::Warning, "NoEditableFiller",
           cat("window ", label, " ", show(window.area()),
@@ -2146,6 +2161,14 @@ FillerRepairResult RepairPlanner::repair(
                                 generated.diagnostics.begin(),
                                 generated.diagnostics.end());
       if (generated.swaps.empty()) {
+        currentDefinitive
+            = std::none_of(generated.diagnostics.begin(),
+                           generated.diagnostics.end(),
+                           [](const Diagnostic& diagnostic) {
+                             return diagnostic.severity == Severity::Error
+                                    || diagnostic.severity == Severity::Fatal;
+                           });
+        lastSearchedDefinitive = currentDefinitive;
         result.diagnostics.push_back(makeDiag(
             Severity::Warning, "NoSwapGenerated",
             cat("window ", label, ": no usable swap")));
@@ -2181,21 +2204,10 @@ FillerRepairResult RepairPlanner::repair(
           return result;
         }
 
-        // Incremental only when the quantized guard did not move: a new guard
-        // makes every candidate a new checker question again.
-        std::vector<InstanceId> freshFillers;
-        if (haveSearchedLevel && window.guardRegion == searchedGuard) {
-          std::set_difference(window.editableFillers.begin(),
-                              window.editableFillers.end(),
-                              searchedEditable.begin(),
-                              searchedEditable.end(),
-                              std::back_inserter(freshFillers));
-        }
-        const EnumerationPlan plan =
-            enumerateOverlays(ranked, config_, budget, log_, freshFillers);
-        searchedGuard = window.guardRegion;
-        searchedEditable = window.editableFillers;
-        haveSearchedLevel = true;
+        const EnumerationPlan plan = enumerateOverlays(
+            ranked, config_, budget, log_, [&](const Overlay& overlay) {
+              return gate.wasChecked(window.guardRegion, overlay);
+            });
         OracleGate::SearchResult sr =
             gate.search(plan.overlays, window, window.guardRegion, budget);
         if (sr.protocolError) {
@@ -2243,7 +2255,14 @@ FillerRepairResult RepairPlanner::repair(
                       {"related in halo",
                        cat(best.bestSummary.relatedInHalo)}});
         }
-        currentDefinitive = plan.complete && !sr.budgetExhausted;
+        currentDefinitive
+            = plan.complete && !sr.budgetExhausted && !sr.checkerError;
+        if (sr.checkerError) {
+          result.diagnostics.push_back(makeDiag(
+              Severity::Error,
+              "CheckerEvaluationFailed",
+              "some candidates could not be checked; search is incomplete"));
+        }
         lastSearchedDefinitive = currentDefinitive;
         if (sr.hasBest && !sr.bestSummary.blockingViolations.empty()) {
           blockingForExpansion = sr.bestSummary.blockingViolations;
@@ -2283,13 +2302,14 @@ FillerRepairResult RepairPlanner::repair(
       lastSearchedDefinitive = false;
       break;
     }
-    const RepairWindow expanded = expandWindowAdaptive(
-        window,
-        request.targetPlace,
-        blockingForExpansion,
-        view_,
-        config_.adaptiveStepFillers,
-        log_);
+    const RepairWindow expanded
+        = expandWindowAdaptive(window,
+                               request.targetPlace,
+                               blockingForExpansion,
+                               view_,
+                               config_.adaptiveStepFillers,
+                               ruleDistance,
+                               log_);
     if (expanded.editableFillers == window.editableFillers) {
       result.diagnostics.push_back(makeDiag(
           Severity::Info, "ExpansionCutoff",
@@ -2306,6 +2326,7 @@ FillerRepairResult RepairPlanner::repair(
 
   // No clean overlay anywhere: empty changes, explain why.
   result.hasSolution = false;
+  result.searchComplete = lastSearchedDefinitive;
   result.diagnostics.push_back(makeDiag(
       Severity::Error, "NoCleanOverlay",
       cat("no baseline-delta clean overlay found; ",

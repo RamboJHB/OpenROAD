@@ -113,6 +113,20 @@ inline XInterval instanceSpan(const PlacementView& view, const PlacedInstance& i
   return XInterval{inst.x, inst.x + width};
 }
 
+// Use the canonical instance: row buckets may identify an occupied row rather
+// than the instance's bottom row. Geometry must include the entire instance.
+inline Region instanceFootprint(const PlacementView& view,
+                                const PlacedInstance& inst)
+{
+  const PlacedInstance* canonical = view.instance(inst.id);
+  const PlacedInstance& placed = canonical != nullptr ? *canonical : inst;
+  const MasterInfo* master = view.masterInfo(placed.masterId);
+  const RowId height
+      = master != nullptr ? std::max<DbCoord>(1, master->height) : 1;
+  return Region{
+      instanceSpan(view, placed), placed.rowId, placed.rowId + height - 1};
+}
+
 // A row can hold thousands of instances; only a handful near the target are
 // relevant. The snapshot is sorted and non-overlapping, so right edges are
 // monotonic and the searches below can jump directly to the relevant range.

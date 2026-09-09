@@ -1,14 +1,15 @@
 #include <drc/ImplantLayerChecker.h>
 #include <drc/ImplantLayerCheckerHelper.h>
 #include <fillerRepair/FillerRepairEngine.h>
+#include <gtest/gtest.h>
 #include <infrastructure/Grid.h>
 #include <infrastructure/fillerSetting.h>
-#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <array>
 #include <limits>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -1355,6 +1356,242 @@ TEST_P(FillerRepairIntegrationTest, EngineDoesNotCacheAbsenceOfPlacedFillers)
   ASSERT_EQ(result.changes.size(), 1U);
   EXPECT_EQ(result.changes.front().new_lib_cell_,
             network.getMaster(3)->getDbMaster());
+}
+
+TEST_P(FillerRepairIntegrationTest, NonExactRepairReturnsVerifiedAddAndSwap)
+{
+  const int utilization = GetParam();
+  auto data = nonExactInput(utilization);
+  int ruleId = 0;
+  for (int layer = 0; layer < 6; ++layer) {
+    // The new F2 target plus its added neighbor cover only two sites. The
+    // three-site rule forces a swap of the surviving filler on its right.
+    data.rules.emplace_back(ruleId++,
+                            RuleSource::Width,
+                            layer,
+                            (layer == 1 || layer == 4 ? 3 : 2) * kSiteWidth);
+    data.rules.emplace_back(
+        ruleId++, RuleSource::Spacing, layer, 2 * kSiteWidth);
+  }
+  data.masters[6] = master(6, 2, true, 2 * kSiteWidth);
+  for (auto& placed : data.placedInsts) {
+    if (placed.masterId != 6) {
+      placed.masterId = placed.isFiller ? 3 : 0;
+      if (placed.rowId == 1 && placed.colId == 5) {
+        placed.masterId = 5;
+      }
+    }
+  }
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, data, utilization);
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+  Network& network = *helper.getNetwork();
+  const Node* removed = network.getNode(nodeId(1, 3));
+  ASSERT_NE(removed, nullptr);
+  Node temporary;
+  temporary.setId(removed->getId());
+  temporary.setDbInst(removed->getDbInst());
+  temporary.setMaster(network.getMaster(1));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(DbuX{kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  temporary.setLeft(DbuX{4 * kSiteWidth});
+  temporary.setBottom(DbuY{kRowHeight});
+  temporary.setOrient(PhysOrientationE::MX);
+  const CheckRequest request{&temporary,
+                             GridX{4},
+                             GridY{1},
+                             PhysOrientationE::MX,
+                             {deleteRecord(*removed)}};
+  const auto fullGuard
+      = rect(0, 0, kColCount * kSiteWidth, kRowCount * kRowHeight - 1);
+  const CellChangeRecord seed{OpType::Add,
+                              std::string("SEED_FILLER"),
+                              UvDist(3 * kSiteWidth),
+                              UvDist(kRowHeight),
+                              eLIB::LibCellID(0, 0),
+                              network.getMaster(4)->getDbMaster(),
+                              PhysOrientationE::MX};
+  const auto seedCheck
+      = checker.checkPlaceWithOverlays(request, fullGuard, {{seed}});
+  ASSERT_EQ(seedCheck.size(), 1u);
+  ASSERT_FALSE(seedCheck.front().isLegal);
+  ASSERT_FALSE(seedCheck.front().violations.empty());
+  fillerRepair::FillerRepairEngine engine(checker);
+  const auto result = engine.repair(request);
+  ASSERT_TRUE(result.hasSolution);
+  EXPECT_EQ(std::count_if(result.changes.begin(),
+                          result.changes.end(),
+                          [](const auto& c) { return c.op_ == OpType::Add; }),
+            1);
+  EXPECT_GT(
+      std::count_if(result.changes.begin(),
+                    result.changes.end(),
+                    [](const auto& c) { return c.op_ == OpType::Replace; }),
+      0);
+  EXPECT_TRUE(std::none_of(
+      result.changes.begin(), result.changes.end(), [](const auto& c) {
+        return c.op_ == OpType::Delete;
+      }));
+  const auto checked
+      = checker.checkPlaceWithOverlays(request, fullGuard, {result.changes});
+  ASSERT_EQ(checked.size(), 1u);
+  EXPECT_TRUE(checked.front().isLegal);
+  EXPECT_EQ(removed->getMaster()->getId(), 6);
+  EXPECT_EQ(network.getNode(nodeId(1, 5))->getMaster()->getId(), 5);
+}
+
+TEST_P(FillerRepairIntegrationTest, RetilingCanChangeTheSeedAddMasterInPlace)
+{
+  const int utilization = GetParam();
+  auto data = nonExactInput(utilization);
+  data.rules = input(utilization).rules;
+  data.masters[6] = master(6, 2, true, 3 * kSiteWidth);
+  data.masters[7] = master(7, 1, false, 2 * kSiteWidth);
+  data.placedInsts.erase(std::remove_if(data.placedInsts.begin(),
+                                        data.placedInsts.end(),
+                                        [](const auto& p) {
+                                          return p.rowId == 1 && p.colId == 5;
+                                        }),
+                         data.placedInsts.end());
+  for (auto& placed : data.placedInsts) {
+    if (placed.masterId != 6) {
+      placed.masterId = placed.isFiller ? 3 : 0;
+      if (placed.rowId == 1 && placed.colId < 2) {
+        placed.masterId = placed.isFiller ? 4 : 1;
+      } else if (placed.rowId == 1 && placed.colId == 2) {
+        placed.masterId = 2;
+      }
+    }
+  }
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, data, utilization);
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+  Network& network = *helper.getNetwork();
+  const Node* removed = network.getNode(nodeId(1, 3));
+  ASSERT_NE(removed, nullptr);
+  Node temporary;
+  temporary.setId(removed->getId());
+  temporary.setDbInst(removed->getDbInst());
+  temporary.setMaster(network.getMaster(7));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(DbuX{2 * kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  temporary.setLeft(DbuX{4 * kSiteWidth});
+  temporary.setBottom(DbuY{kRowHeight});
+  temporary.setOrient(PhysOrientationE::MX);
+  const CheckRequest request{&temporary,
+                             GridX{4},
+                             GridY{1},
+                             PhysOrientationE::MX,
+                             {deleteRecord(*removed)}};
+  const auto fullGuard
+      = rect(0, 0, kColCount * kSiteWidth, kRowCount * kRowHeight - 1);
+  const CellChangeRecord seed{OpType::Add,
+                              std::string("SEED_FILLER"),
+                              UvDist(3 * kSiteWidth),
+                              UvDist(kRowHeight),
+                              eLIB::LibCellID(0, 0),
+                              network.getMaster(4)->getDbMaster(),
+                              PhysOrientationE::MX};
+  const auto seedCheck
+      = checker.checkPlaceWithOverlays(request, fullGuard, {{seed}});
+  ASSERT_EQ(seedCheck.size(), 1u);
+  ASSERT_FALSE(seedCheck.front().isLegal);
+  ASSERT_FALSE(seedCheck.front().violations.empty());
+  fillerRepair::FillerRepairEngine engine(checker);
+  const auto result = engine.repair(request);
+  ASSERT_TRUE(result.hasSolution);
+  ASSERT_EQ(result.changes.size(), 1u);
+  const auto& addition = result.changes.front();
+  EXPECT_EQ(addition.op_, OpType::Add);
+  EXPECT_EQ(addition.new_lib_cell_, network.getMaster(5)->getDbMaster());
+  EXPECT_EQ(addition.x_.getStorage(), 3 * kSiteWidth);
+  EXPECT_EQ(addition.orientation_, PhysOrientationE::MX);
+  const auto* name = std::get_if<std::string>(&addition.cell_data_);
+  ASSERT_NE(name, nullptr);
+  EXPECT_EQ(*name, "FILLER_REPAIR_1_3_W10_H1_0");
+  const auto checked
+      = checker.checkPlaceWithOverlays(request, fullGuard, {result.changes});
+  ASSERT_EQ(checked.size(), 1u);
+  EXPECT_TRUE(checked.front().isLegal);
+  EXPECT_EQ(removed->getMaster()->getId(), 6);
+}
+
+TEST(FillerRepairBudgetTest, NonExactRepairSharesOneCheckerBudget)
+{
+  auto data = nonExactInput(kDefaultUtilization);
+  data.masters[6] = master(6, 0, true, 4 * kSiteWidth);
+  for (int vt = 0; vt < 3; ++vt) {
+    data.masters.push_back(master(8 + vt, vt, true, 2 * kSiteWidth));
+    data.fillerSetting.fillerMasterIds.push_back(8 + vt);
+  }
+  data.placedInsts.erase(
+      std::remove_if(data.placedInsts.begin(),
+                     data.placedInsts.end(),
+                     [](const auto& p) {
+                       return p.rowId == 1 && (p.colId == 5 || p.colId == 6);
+                     }),
+      data.placedInsts.end());
+  for (auto& placed : data.placedInsts) {
+    if (placed.masterId != 6) {
+      placed.masterId = placed.isFiller ? 3 : 0;
+    }
+  }
+  int ruleId = 0;
+  for (int layer = 0; layer < 6; ++layer) {
+    data.rules.emplace_back(ruleId++, RuleSource::Width, layer, 6 * kSiteWidth);
+    data.rules.emplace_back(
+        ruleId++, RuleSource::Spacing, layer, 2 * kSiteWidth);
+  }
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, data, kDefaultUtilization);
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+  Network& network = *helper.getNetwork();
+  const Node* removed = network.getNode(nodeId(1, 3));
+  ASSERT_NE(removed, nullptr);
+  Node temporary;
+  temporary.setId(removed->getId());
+  temporary.setDbInst(removed->getDbInst());
+  temporary.setMaster(network.getMaster(1));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(DbuX{kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  temporary.setLeft(DbuX{4 * kSiteWidth});
+  temporary.setBottom(DbuY{kRowHeight});
+  temporary.setOrient(PhysOrientationE::MX);
+  const CheckRequest request{&temporary,
+                             GridX{4},
+                             GridY{1},
+                             PhysOrientationE::MX,
+                             {deleteRecord(*removed)}};
+  fillerRepair::FillerRepairEngine engine(checker);
+  ::testing::internal::CaptureStdout();
+  const auto result = engine.repair(request);
+  const auto log = ::testing::internal::GetCapturedStdout();
+  EXPECT_FALSE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_NE(log.find("RepairBudgetExhausted"), std::string::npos);
+  std::istringstream lines(log);
+  std::string line;
+  int previous = 0;
+  while (std::getline(lines, line)) {
+    if (line.find("repair checker requests") != std::string::npos) {
+      const int count = std::stoi(line.substr(line.find(':') + 1));
+      EXPECT_GT(count, previous);
+      EXPECT_LE(count, 2048);
+      previous = count;
+    }
+  }
+  EXPECT_EQ(previous, 2048);  // includes layout snapshots and all planner calls
+  for (const auto& placed : data.placedInsts) {
+    ASSERT_NE(network.getNode(placed.instanceId), nullptr);
+    EXPECT_EQ(network.getNode(placed.instanceId)->getMaster()->getId(),
+              placed.masterId);
+  }
 }
 
 TEST_P(FillerRepairIntegrationTest, EngineWithoutGridIsUnavailable)

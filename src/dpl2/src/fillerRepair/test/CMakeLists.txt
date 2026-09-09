@@ -42,7 +42,8 @@ target_compile_options(
 gtest_discover_tests(
   dpl2_filler_repair_planner_test
   TEST_PREFIX "planner."
-  DISCOVERY_TIMEOUT 30)
+  DISCOVERY_TIMEOUT 30
+  PROPERTIES ENVIRONMENT "FR_VERBOSE=1")
 
 # Real-checker E2E. Prefer the destination's own infrastructure/checker
 # targets; with none supplied, compile the sibling sources as a fallback so
@@ -85,4 +86,5 @@ target_include_directories(
 gtest_discover_tests(
   dpl2_filler_repair_checker_e2e
   TEST_PREFIX "portable-e2e."
-  DISCOVERY_TIMEOUT 30)
+  DISCOVERY_TIMEOUT 30
+  PROPERTIES ENVIRONMENT "FR_VERBOSE=1")

@@ -163,6 +163,32 @@ other bad records and requests fail with empty changes and structured
 
 ## Verification
 
+The 2026-09-09 maintenance pass keeps the public engine/checker wire unchanged:
+
+- One private request-bound oracle replaces the BoundOracle/LayoutOracle chain.
+  It merges fixed Adds with candidates and converts participants once. Caller
+  Deletes stay in the original request; same-name Add changes replace in place.
+- The default 2048 checker-candidate limit now covers the whole repair, including
+  layout snapshots, all tilings/seeds, and planner baselines. Cache hits do not
+  consume it. Geometry-search caps remain separate; incomplete search and checker
+  failures are logged distinctly from an exhausted candidate domain.
+- Adaptive enumeration skips only candidates actually answered in the same
+  oracle context. Spatial instance order is not used as an ID-sorted set, and a
+  truncated level cannot hide an unasked old combination in a later level.
+- Guards include complete editable footprints and the checker's maximum rule
+  reach. Multi-row ranking/frontiers use the same footprint convention.
+- Invalid search bounds are rejected, and canonical overlay keys retain their
+  entries when duplicate removal crosses the small-buffer boundary.
+- Static master-size groups replace repeated full master-list scans and copied
+  master-ID maps during retiling. Current placement remains request-local.
+- The CMake gate compares the shared implementation files with fillerRepair2,
+  refreshes its staged sources on edits, and explicitly enables test transcripts
+  even when the invoking shell sets FR_VERBOSE=0.
+
+Validation on 2026-09-09: normal and ASan builds both passed all 381 CTest
+cases with external FR_VERBOSE=0; normal took 41.15 seconds and ASan took
+121.63 seconds. These are harness results, not a real-design performance claim.
+
 Run from `src/dpl2/test`:
 
 ```bash
@@ -191,7 +217,13 @@ The gate compiles:
 - fake-UDM runtime E2E, including one- and two-row targets and concurrent
   checker calls;
 - single- and multi-filler non-exact cover, exact released-site Add coverage,
-  deterministic Add output, and unfillable no-solution behavior.
+  deterministic Add output, and unfillable no-solution behavior;
+- Add-plus-Swap repairs and same-name Add master changes, each with an illegal
+  seed precondition and a final real-checker verification;
+- the whole-repair 2048 checker-candidate limit, with no partial result or
+  placement mutation on exhaustion;
+- unordered/synthetic IDs, truncated-level candidate coverage, large rule reach,
+  multi-row external neighbors, invalid configuration, and key shrink boundaries.
 
 ## Remaining destination checks
 
@@ -204,6 +236,7 @@ The gate compiles:
   and commits those deletions plus returned filler Add/Replace records in one
   transaction. The generic `DePlace::commit` path still ignores `OpType::Add`,
   so it is not yet the transaction owner for this buffer-insertion flow.
-- Establish the revision barrier used to replace the checker after commit.
+- Establish a commit/read barrier that keeps DB/Grid/Network synchronized;
+  ordinary commits do not require checker replacement, but static setup changes do.
 - Run a real-UDM design with both isLegal and findLegal; fake UDM is only a
   deterministic data provider, not a substitute for that final ABI/link test.

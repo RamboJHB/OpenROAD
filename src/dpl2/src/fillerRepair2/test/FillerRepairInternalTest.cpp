@@ -2059,9 +2059,14 @@ void testGuardQuantizationContainsWindowAndIsStable()
     guards.insert({window.guardRegion.x.xl, window.guardRegion.x.xh});
     ++levels;
 
-    const fr::RepairWindow next = fr::expandWindowAdaptive(
-        window, request.targetPlace, {original}, design, 1,
-        fr::DebugLog(verbose()));
+    const fr::RepairWindow next
+        = fr::expandWindowAdaptive(window,
+                                   request.targetPlace,
+                                   {original},
+                                   design,
+                                   1,
+                                   1,
+                                   fr::DebugLog(verbose()));
     if (next.editableFillers == window.editableFillers) {
       break;  // expansion cutoff
     }
@@ -2124,7 +2129,9 @@ void testWindowAtDesignEdges()
                                          fr::DebugLog(verbose()));
   EXPECT_EQ(topWindow.guardRegion.rowLo, 0);
   EXPECT_EQ(topWindow.guardRegion.rowHi, 2);
-  EXPECT_TRUE(topWindow.guardRegion.x.xh <= 8);
+  // The view has no right-core boundary; guard context can extend into empty
+  // space, but must never be clipped inside the required rule reach.
+  EXPECT_GE(topWindow.guardRegion.x.xh, topWindow.x.xh + 1);
 }
 
 void testWindowAdaptiveAddsKOnBlockingSide()
@@ -2144,7 +2151,7 @@ void testWindowAdaptiveAddsKOnBlockingSide()
   // Blocking lies closer to L0's left edge. One adaptive step grows left by
   // K=2 fillers per relevant row, not to the fixed/row boundary.
   const auto window = fr::expandWindowAdaptive(
-      l0, request.targetPlace, {v}, design, 2, fr::DebugLog(verbose()));
+      l0, request.targetPlace, {v}, design, 2, 1, fr::DebugLog(verbose()));
   EXPECT_TRUE(window.x == (fr::XInterval{0, 16}));
   EXPECT_TRUE(window.containsEditable(100));  // row0: only one filler before boundary
   EXPECT_TRUE(window.containsEditable(201));  // row1: second filler added
@@ -2172,13 +2179,14 @@ void testWindowAdaptiveAddsKOnBlockingSide()
       fr::ViolationRelation::IntraRow,
       {0},
       {3, 4});
-  const fr::RepairWindow fallbackWindow = fr::expandWindowAdaptive(
-      seed,
-      fallbackAnchor,
-      {leftBlocking},
-      fallback,
-      1,
-      fr::DebugLog(verbose()));
+  const fr::RepairWindow fallbackWindow
+      = fr::expandWindowAdaptive(seed,
+                                 fallbackAnchor,
+                                 {leftBlocking},
+                                 fallback,
+                                 1,
+                                 1,
+                                 fr::DebugLog(verbose()));
   EXPECT_TRUE(fallbackWindow.containsEditable(302));
   EXPECT_TRUE(!fallbackWindow.containsEditable(303));
 }
@@ -2218,13 +2226,14 @@ void testWindowAdaptiveCoupledRowsAndFixedBoundary()
       fr::normalizeViolations(request, fr::DebugLog(verbose()));
   const fr::RepairWindow l0 = fr::buildWindow(
       request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
-  const fr::RepairWindow expanded = fr::expandWindowAdaptive(
-      l0,
-      request.targetPlace,
-      {original},
-      design,
-      1,
-      fr::DebugLog(verbose()));
+  const fr::RepairWindow expanded
+      = fr::expandWindowAdaptive(l0,
+                                 request.targetPlace,
+                                 {original},
+                                 design,
+                                 1,
+                                 1,
+                                 fr::DebugLog(verbose()));
 
   EXPECT_TRUE(expanded.containsEditable(203));  // anchor row, first right filler
   EXPECT_TRUE(expanded.containsEditable(303));  // coupled row +1
@@ -4582,6 +4591,8 @@ void testGateStatusNotCheckedCarriesOn()
   const auto sr = gate.search({bad, clean}, window, window.guardRegion, budget);
   EXPECT_TRUE(sr.foundClean);
   EXPECT_EQ(sr.cleanOverlay[0].instanceId, 501);
+  EXPECT_FALSE(sr.checkerError);
+  EXPECT_TRUE(gate.wasChecked(window.guardRegion, bad));
 }
 
 void testGateFatalDiagMakesUnusable()
@@ -4617,6 +4628,8 @@ void testGateFatalDiagMakesUnusable()
   EXPECT_TRUE(!sr.foundClean);
   EXPECT_TRUE(sr.hasBest);
   EXPECT_TRUE(!sr.bestSummary.usable);
+  EXPECT_TRUE(sr.checkerError);
+  EXPECT_FALSE(gate.wasChecked(window.guardRegion, overlay));
 }
 
 void testGateNewViolationNoRowsGoesHalo()
@@ -4919,14 +4932,10 @@ void testEnumerateSize3CapAndProducts()
   EXPECT_EQ(plan.overlays.back()[2].newMasterId, fillerMaster(2, kVt3));
 }
 
-// --- incremental enumeration ------------------------------------------------
-//
-// Adaptive levels reuse the quantized guard, so most levels re-ask what the
-// previous one already answered. `freshFillers` removes exactly those, and
-// nothing else: a combination is emitted iff it contains a filler the level
-// just gained.
+// --- Cache-aware enumeration -----------------------------------------------
+// Only actual answers may be skipped; limits and instance order imply nothing.
 
-void testEnumerateIncrementalSkipsAlreadyAskedCombinations()
+void testEnumerateSkipsCheckedOverlays()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 8)
@@ -4950,7 +4959,16 @@ void testEnumerateIncrementalSkipsAlreadyAskedCombinations()
   // 802 is the only filler this level gained: exactly the subsets containing
   // it survive -- {802}, {800,802}, {801,802}, {800,801,802} = 4.
   const auto incremental = fr::enumerateOverlays(
-      domains, config, 100, fr::DebugLog(verbose()), {802});
+      domains,
+      config,
+      100,
+      fr::DebugLog(verbose()),
+      [](const fr::Overlay& overlay) {
+        return std::none_of(
+            overlay.begin(), overlay.end(), [](const fr::Swap& s) {
+              return s.instanceId == 802;
+            });
+      });
   EXPECT_EQ(incremental.overlays.size(), 4u);
   for (const fr::Overlay& overlay : incremental.overlays) {
     EXPECT_TRUE(std::any_of(overlay.begin(),
@@ -4974,7 +4992,7 @@ void testEnumerateIncrementalSkipsAlreadyAskedCombinations()
   EXPECT_EQ(f, incremental.overlays.size());
 }
 
-void testEnumerateIncrementalWithNoFreshFillerEmitsNothing()
+void testEnumerateAllCheckedEmitsNothing()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 4).place(800, fillerMaster(2, kVt1), 0, 0);
@@ -4982,22 +5000,17 @@ void testEnumerateIncrementalWithNoFreshFillerEmitsNothing()
       makeDomain(design, 800, {fillerMaster(2, kVt2), fillerMaster(2, kVt3)}),
   };
   fr::RepairConfig config;
-  // A fresh id that is not in the window: every combination was already
-  // asked, so there is no new question to put to the checker.
+  // Both overlays have already been checked, so no budget is needed for them.
   const auto plan = fr::enumerateOverlays(
-      domains, config, 100, fr::DebugLog(verbose()), {999});
+      domains, config, 100, fr::DebugLog(verbose()), [](const fr::Overlay&) {
+        return true;
+      });
   EXPECT_TRUE(plan.overlays.empty());
   EXPECT_TRUE(plan.complete);
 }
 
-// The whole point of the incremental filter. The answer cache always kept
-// REPEATS off the checker, so oracle traffic alone cannot show whether the
-// search is re-asking: the tell is how many resolutions the cache had to
-// absorb. On a row wide enough for the quantized guard to sit still across
-// many levels, escalation used to re-enumerate the same low-index subsets at
-// every level and hand the cache thousands of hits; enumerating only the
-// combinations that touch a newly editable filler removes them at the source,
-// so the window budget buys questions the search has not asked yet.
+// Actual cache membership filters repeats before they consume enumeration
+// capacity; truncated levels still get to ask previously unvisited subsets.
 void testAdaptiveEscalationDoesNotReEnumerateAnsweredCandidates()
 {
   // Wide enough that the quantized guard STAYS PUT for several consecutive
@@ -5250,6 +5263,191 @@ void testPlannerUserGridMwMs1()
   EXPECT_EQ(fr::cellChangeRecordInstanceId(result2.changes[0]), 2012);
 }
 
+TEST(RepairPlanner, overlay_key_dedup_crosses_inline_boundary)
+{
+  const fr::Region guard{{0, 20}, 0, 0};
+  fr::Swap a;
+  a.instanceId = 10;
+  a.newMasterId = 2;
+  fr::Swap b = a;
+  b.instanceId = 20;
+  for (const size_t size : {size_t{8}, size_t{9}, size_t{11}}) {
+    const auto canonical = fr::overlayKey(guard, {a});
+    const auto repeated = fr::overlayKey(guard, fr::Overlay(size, a));
+    EXPECT_EQ(repeated, canonical);
+    EXPECT_EQ(fr::OverlayKeyHash{}(repeated), fr::OverlayKeyHash{}(canonical));
+    EXPECT_NE(repeated, fr::overlayKey(guard, fr::Overlay(size, b)));
+  }
+}
+
+TEST(RepairPlanner, cached_membership_is_independent_of_id_order)
+{
+  std::vector<fr::FillerDomain> domains;
+  for (const int id : {100, 2, 80, -5}) {
+    fr::Swap swap;
+    swap.instanceId = id;
+    swap.newMasterId = 2;
+    domains.push_back({id, {swap}});
+  }
+  const auto plan = fr::enumerateOverlays(
+      domains,
+      fr::RepairConfig{},
+      100,
+      fr::DebugLog(false),
+      [](const fr::Overlay& overlay) {
+        return std::all_of(
+            overlay.begin(), overlay.end(), [](const fr::Swap& s) {
+              return s.instanceId == 2 || s.instanceId == 80;
+            });
+      });
+  std::set<int> singles;
+  for (const auto& overlay : plan.overlays) {
+    if (overlay.size() == 1) {
+      singles.insert(overlay.front().instanceId);
+    }
+  }
+  EXPECT_EQ(singles, (std::set<int>{-5, 100}));
+  EXPECT_TRUE(plan.complete);
+}
+
+TEST(RepairPlanner, truncated_level_does_not_hide_unasked_old_pair)
+{
+  for (const auto& ids : {std::pair<int, int>{101, 7}, {7, 101}}) {
+    auto design = makeLibrary();
+    design.addMaster(9000, 1, 1, true, kVt1)
+        .addRow(0, 0, 17)
+        .place(501, cellMaster(kVt1), 0, 0)
+        .place(ids.first, fillerMaster(2, kVt1), 0, 4)
+        .place(500, cellMaster(kVt2), 0, 6)
+        .place(ids.second, fillerMaster(2, kVt1), 0, 10)
+        .place(3, 9000, 0, 12)
+        .place(502, cellMaster(kVt1), 0, 13)
+        .setFillerMasterIds(
+            {fillerMaster(2, kVt1), fillerMaster(2, kVt2), 9000});
+    const auto original = makeViolation(1,
+                                        fr::ViolationKind::MinWidth,
+                                        fr::ViolationRelation::IntraRow,
+                                        {0},
+                                        {4, 12});
+    fr::FillerRepairRequest request{anchorPlace(design, 500), {original}};
+    RequiredChangesChecker checker;
+    checker.originals = request.violations;
+    for (const int id : {ids.first, ids.second}) {
+      checker.required.push_back(
+          design.cellChangeRecord(id, fillerMaster(2, kVt2)));
+    }
+    fr::RepairConfig config;
+    config.verbose = false;
+    config.checkerCallBudgetPerWindow = 3;
+    fr::internal::RepairPlanner planner(design, checker, config);
+    const auto result = planner.repair(request);
+    ASSERT_TRUE(result.hasSolution);
+    EXPECT_EQ(result.changes.size(), 2u);
+    EXPECT_EQ(checker.requestCount(), 4);  // baseline, two singles, old pair
+  }
+}
+
+TEST(RepairPlanner, invalid_search_configuration_fails_without_checker_calls)
+{
+  auto scenario = makeScenarioA();
+  for (const int batch : {0, -1}) {
+    fr::RepairConfig config;
+    config.verbose = false;
+    config.batchSize = batch;
+    RequiredChangesChecker checker;
+    fr::internal::RepairPlanner planner(scenario.design, checker, config);
+    const auto result = planner.repair(scenario.request);
+    EXPECT_FALSE(result.hasSolution);
+    ASSERT_FALSE(result.diagnostics.empty());
+    EXPECT_EQ(result.diagnostics.front().code, "InvalidRepairConfig");
+
+    const fr::DebugLog log(false);
+    fr::OracleGate gate(scenario.design,
+                        checker,
+                        scenario.request.targetPlace,
+                        scenario.request.violations,
+                        1,
+                        1,
+                        config,
+                        log);
+    fr::RepairWindow window;
+    int budget = 10;
+    EXPECT_TRUE(gate.search({fr::Overlay{}}, window, window.guardRegion, budget)
+                    .protocolError);
+    EXPECT_EQ(budget, 10);
+    EXPECT_EQ(checker.requestCount(), 0);
+  }
+}
+
+TEST(RepairPlanner, guard_keeps_rule_reach_and_multiline_footprint)
+{
+  fr::TestPlacementView design;
+  design.addMaster(0, 1, 1, false, 1).addMaster(1, 1, 2, true, 1);
+  for (int row = 0; row < 6; ++row) {
+    design.addRow(row, 0, 100);
+    for (int x = 0; x < 100; ++x) {
+      if (row == 3 && x == 51) {
+        continue;
+      }
+      design.place(row * 100 + x, row == 2 && x == 51 ? 1 : 0, row, x);
+    }
+  }
+  auto violation = makeViolation(1,
+                                 fr::ViolationKind::MinWidth,
+                                 fr::ViolationRelation::IntraRow,
+                                 {2},
+                                 {51, 52});
+  violation.participants = {{251, 1, 2, {51, 52}, true, false}};
+  const fr::FillerRepairRequest request{anchorPlace(design, 250), {violation}};
+  const fr::DebugLog log(false);
+  const auto normalized = fr::normalizeViolations(request, log);
+  const auto initial
+      = fr::buildWindow(request.targetPlace, normalized, design, 10, log);
+  const auto grown = fr::expandWindowAdaptive(
+      initial, request.targetPlace, {violation}, design, 1, 10, log);
+  for (const auto& window : {initial, grown}) {
+    EXPECT_LE(window.guardRegion.x.xl, window.x.xl - 10);
+    EXPECT_GE(window.guardRegion.x.xh, window.x.xh + 10);
+    EXPECT_LE(window.area().rowLo, 3);
+    EXPECT_GE(window.area().rowHi, 3);
+    EXPECT_GE(window.guardRegion.rowHi, 4);
+  }
+}
+
+TEST(RepairPlanner, multiline_neighbors_vote_only_at_external_edges)
+{
+  fr::TestPlacementView design;
+  design.addMaster(0, 1, 1, false, 4)
+      .addMaster(1, 2, 2, true, 1)
+      .addMaster(2, 2, 2, true, 2)
+      .addMaster(3, 2, 2, true, 3)
+      .addMaster(4, 2, 1, false, 3)
+      .addRow(0, 0, 20)
+      .addRow(1, 0, 20)
+      .addRow(2, 0, 20)
+      .place(99, 0, 0, 10)
+      .place(100, 1, 0, 4)
+      .place(101, 4, 2, 4);
+  const fr::Overlay swaps{*fr::makeSwap(design, 100, 2),
+                          *fr::makeSwap(design, 100, 3)};
+  fr::RepairWindow window;
+  window.rows = {0, 1};
+  window.x = {4, 6};
+  window.editableFillers = {100};
+  const auto ranked = fr::rankFillers(
+      swaps, anchorPlace(design, 99), {}, window, design, fr::DebugLog(false));
+  ASSERT_EQ(ranked.size(), 1u);
+  EXPECT_EQ(ranked.front().options.front().newMasterId, 3);
+  auto violation = makeViolation(1,
+                                 fr::ViolationKind::MinWidth,
+                                 fr::ViolationRelation::InterRow,
+                                 {2},
+                                 {4, 6});
+  EXPECT_TRUE(fr::isRelatedToOverlay(violation, {swaps.front()}, 1));
+  violation.rowIds = {3};
+  EXPECT_FALSE(fr::isRelatedToOverlay(violation, {swaps.front()}, 1));
+}
+
 const std::vector<Test>& internalCases()
 {
   static const std::vector<Test> tests = {
@@ -5290,7 +5488,8 @@ const std::vector<Test>& internalCases()
       {"window_adaptive_coupled_rows_and_fixed_boundary",
        testWindowAdaptiveCoupledRowsAndFixedBoundary},
       {"guard_region_two_cell_ring", testGuardRegionTwoCellRing},
-      {"planner_no_editable_filler_zero_calls", testPlannerNoEditableFillerZeroCalls},
+      {"planner_no_editable_filler_zero_calls",
+       testPlannerNoEditableFillerZeroCalls},
       {"planner_reentrant_repair_refused", testPlannerReentrantRepairRefused},
       {"swap_generator_basic", testSwapGeneratorBasic},
       {"swap_generator_no_usable_master", testSwapGeneratorNoUsableMaster},
@@ -5307,9 +5506,9 @@ const std::vector<Test>& internalCases()
        testCandidatesPolarityOnlyFilterDiagnosed},
       {"placement_view_caches_follow_mutation",
        testTestPlacementViewCachesFollowMutation},
-      {"synthetic_bottom_polarity_derived",
-       testSyntheticBottomPolarityDerived},
-      {"enumeration_order_and_completeness", testEnumerationOrderAndCompleteness},
+      {"synthetic_bottom_polarity_derived", testSyntheticBottomPolarityDerived},
+      {"enumeration_order_and_completeness",
+       testEnumerationOrderAndCompleteness},
       {"enumeration_filler_domain_not_crowded_out",
        testEnumerationFillerDomainNotCrowdedOut},
       {"planner_solves_single_swap", testPlannerSolvesSingleSwap},
@@ -5327,9 +5526,11 @@ const std::vector<Test>& internalCases()
       {"planner_determinism_full_transcript",
        testPlannerDeterminismFullTranscript},
       {"planner_never_edits_guard_only", testPlannerNeverEditsGuardOnly},
-      {"gate_delta_classification_branches", testGateDeltaClassificationBranches},
+      {"gate_delta_classification_branches",
+       testGateDeltaClassificationBranches},
       {"gate_rejects_unexplained_illegal", testGateRejectsUnexplainedIllegal},
-      {"gate_baseline_mismatch_aborts_search", testGateBaselineMismatchAbortsSearch},
+      {"gate_baseline_mismatch_aborts_search",
+       testGateBaselineMismatchAbortsSearch},
       {"gate_multiset_new_violation_not_absorbed",
        testGateMultisetNewViolationNotAbsorbed},
       {"gate_per_violation_rule_distance", testGatePerViolationRuleDistance},
@@ -5360,18 +5561,20 @@ const std::vector<Test>& internalCases()
       {"gate_single_wrong_echo_on_baseline", testGateSingleWrongEchoOnBaseline},
       {"gate_status_not_checked_carries_on", testGateStatusNotCheckedCarriesOn},
       {"gate_fatal_diag_makes_unusable", testGateFatalDiagMakesUnusable},
-      {"gate_new_violation_no_rows_goes_halo", testGateNewViolationNoRowsGoesHalo},
+      {"gate_new_violation_no_rows_goes_halo",
+       testGateNewViolationNoRowsGoesHalo},
       {"signature_field_mismatch_each", testSignatureFieldMismatchEach},
       {"signature_xwindow_tolerance_edges", testSignatureXwindowToleranceEdges},
-      {"relatedness_row_and_distance_edges", testRelatednessRowAndDistanceEdges},
+      {"relatedness_row_and_distance_edges",
+       testRelatednessRowAndDistanceEdges},
       {"rule_distance_fallback", testRuleDistanceFallback},
-      {"enumerate_complete_budget_boundary", testEnumerateCompleteBudgetBoundary},
+      {"enumerate_complete_budget_boundary",
+       testEnumerateCompleteBudgetBoundary},
       {"enumerate_overflow_clamp", testEnumerateOverflowClamp},
       {"enumerate_size3_cap_and_products", testEnumerateSize3CapAndProducts},
-      {"enumerate_incremental_skips_already_asked",
-       testEnumerateIncrementalSkipsAlreadyAskedCombinations},
-      {"enumerate_incremental_no_fresh_filler_emits_nothing",
-       testEnumerateIncrementalWithNoFreshFillerEmitsNothing},
+      {"enumerate_skips_checked_overlays", testEnumerateSkipsCheckedOverlays},
+      {"enumerate_all_checked_emits_nothing",
+       testEnumerateAllCheckedEmitsNothing},
       {"adaptive_escalation_does_not_reenumerate_answered",
        testAdaptiveEscalationDoesNotReEnumerateAnsweredCandidates},
       {"overlay_key_spills_past_inline_buffer",

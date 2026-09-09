@@ -258,6 +258,9 @@ struct FillerRepairResult
   bool hasSolution = false;
   ipl::FillerChanges changes;
   std::vector<Diagnostic> diagnostics;
+  // Only meaningful for an unsuccessful search: the final reachable window's
+  // domain was fully checked, not cut short by a budget, cap or checker error.
+  bool searchComplete = false;
 };
 
 }  // namespace dpl2::fillerRepair

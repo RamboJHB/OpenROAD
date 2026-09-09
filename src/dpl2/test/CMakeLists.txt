@@ -178,11 +178,26 @@ add_subdirectory("${DPL2_SRC}/fillerRepair" fillerRepair)
 # Compile the copy-only migration payload under its destination directory
 # name. This prevents fillerRepair2 from drifting behind the exercised source
 # while keeping it out of runtime linkage and test behavior.
+foreach(shared_file IN ITEMS FillerRepairEngine.cpp FillerRepairEngine.h
+                             RepairPlanner.cpp RepairPlanner.h PlacementView.h)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E compare_files
+            "${DPL2_SRC}/fillerRepair/${shared_file}"
+            "${DPL2_SRC}/fillerRepair2/${shared_file}"
+    RESULT_VARIABLE differs)
+  if(NOT differs EQUAL 0)
+    message(FATAL_ERROR "fillerRepair2 is out of sync: ${shared_file}")
+  endif()
+endforeach()
 set(DPL2_FR2_STAGE_ROOT
     "${CMAKE_CURRENT_BINARY_DIR}/fillerRepair2-stage")
 file(MAKE_DIRECTORY "${DPL2_FR2_STAGE_ROOT}/fillerRepair")
-file(COPY "${DPL2_SRC}/fillerRepair2/"
-     DESTINATION "${DPL2_FR2_STAGE_ROOT}/fillerRepair")
+file(GLOB_RECURSE fr2_files CONFIGURE_DEPENDS
+     RELATIVE "${DPL2_SRC}/fillerRepair2" "${DPL2_SRC}/fillerRepair2/*")
+foreach(fr2_file IN LISTS fr2_files)
+  configure_file("${DPL2_SRC}/fillerRepair2/${fr2_file}"
+                 "${DPL2_FR2_STAGE_ROOT}/fillerRepair/${fr2_file}" COPYONLY)
+endforeach()
 add_library(dpl2_filler_repair2_compile_check OBJECT
     "${DPL2_FR2_STAGE_ROOT}/fillerRepair/RepairPlanner.cpp"
     "${DPL2_FR2_STAGE_ROOT}/fillerRepair/FillerRetiler.cpp"
@@ -209,7 +224,8 @@ dpl2_configure_chain_target(dpl2_filler_repair2_integration_test strict)
 gtest_discover_tests(
   dpl2_filler_repair2_integration_test
   TEST_PREFIX "fr2-integration."
-  DISCOVERY_TIMEOUT 30)
+  DISCOVERY_TIMEOUT 30
+  PROPERTIES ENVIRONMENT "FR_VERBOSE=1")
 
 # Internal-only migration test: compile the planner separately and exercise it
 # through PlacementView/RepairOracle doubles, without checker/engine objects.
@@ -237,7 +253,8 @@ dpl2_configure_chain_target(dpl2_filler_repair2_internal_test strict)
 gtest_discover_tests(
   dpl2_filler_repair2_internal_test
   TEST_PREFIX "fr2-internal."
-  DISCOVERY_TIMEOUT 30)
+  DISCOVERY_TIMEOUT 30
+  PROPERTIES ENVIRONMENT "FR_VERBOSE=1")
 
 # --- Targets defined ONCE for both UDM modes -------------------------------
 #
@@ -288,7 +305,8 @@ gtest_discover_tests(
   dpl2_implant_checker_simple_test
   TEST_PREFIX "checker-simple."
   NO_PRETTY_VALUES
-  DISCOVERY_TIMEOUT 30)
+  DISCOVERY_TIMEOUT 30
+  PROPERTIES ENVIRONMENT "FR_VERBOSE=1")
 
 add_executable(
   dpl2_placement_drc_lifecycle_test
@@ -301,7 +319,8 @@ dpl2_configure_chain_target(dpl2_placement_drc_lifecycle_test strict)
 gtest_discover_tests(
   dpl2_placement_drc_lifecycle_test
   TEST_PREFIX "placement-drc."
-  DISCOVERY_TIMEOUT 30)
+  DISCOVERY_TIMEOUT 30
+  PROPERTIES ENVIRONMENT "FR_VERBOSE=1")
 
 # --- Fake-UDM only ---------------------------------------------------------
 # The historical engine regression is the one target that cannot be built
@@ -321,5 +340,6 @@ if(DPL2_TEST_USE_FAKE_UDM)
     dpl2_filler_repair_e2e
     TEST_PREFIX "e2e."
     NO_PRETTY_VALUES
-    DISCOVERY_TIMEOUT 30)
+    DISCOVERY_TIMEOUT 30
+    PROPERTIES ENVIRONMENT "FR_VERBOSE=1")
 endif()

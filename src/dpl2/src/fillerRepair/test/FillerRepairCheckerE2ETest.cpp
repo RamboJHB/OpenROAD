@@ -1819,12 +1819,14 @@ TEST(FillerRepairWindowTest, AdaptiveStepGrowsTheEditableUniverse)
   ASSERT_FALSE(baseline.violations.empty());
   const WindowProbe probe = probeWindow(fixture, scn, baseline.violations);
   const fr::DebugLog log(false);
-  const fr::RepairWindow grown = fr::expandWindowAdaptive(probe.window,
-                                                          plannerTarget(scn),
-                                                          baseline.violations,
-                                                          fixture.view(),
-                                                          2,
-                                                          log);
+  const fr::RepairWindow grown = fr::expandWindowAdaptive(
+      probe.window,
+      plannerTarget(scn),
+      baseline.violations,
+      fixture.view(),
+      2,
+      fr::estimateRuleDistance(baseline.violations, SITE_WIDTH),
+      log);
   EXPECT_GT(grown.editableFillers.size(), probe.window.editableFillers.size());
   EXPECT_LE(grown.x.xl, probe.window.x.xl);
   EXPECT_GE(grown.x.xh, probe.window.x.xh);

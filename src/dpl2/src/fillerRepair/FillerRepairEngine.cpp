@@ -40,6 +40,8 @@ struct PlacementMetadata
   std::vector<RowId> rows;
   std::vector<std::optional<MasterRef>> masters;
   std::vector<MasterId> fillerMasterIds;
+  std::map<std::pair<DbCoord, DbCoord>, std::vector<MasterId>>
+      retileMastersBySize;
 };
 
 struct CandidateStats
@@ -290,7 +292,11 @@ bool advanceLayoutAssignment(
 ipl::FillerChanges mergeFillerChanges(const ipl::FillerChanges& fixed,
                                       const ipl::FillerChanges& variable)
 {
+  if (fixed.empty()) {
+    return variable;
+  }
   ipl::FillerChanges merged = fixed;
+  merged.reserve(fixed.size() + variable.size());
   for (const CellChangeRecord& change : variable) {
     const std::string* name
         = change.op_ == OpType::Add
@@ -321,17 +327,16 @@ ipl::FillerChanges mergeFillerChanges(const ipl::FillerChanges& fixed,
 class LayoutPlacementView final : public PlacementView
 {
  public:
-  LayoutPlacementView(
-      const PlacementView& base,
-      TargetPlace target,
-      std::set<InstanceId> removed,
-      std::vector<LayoutAddition> additions,
-      std::unordered_map<MasterId, eLIB::LibCellID> masterLibCells)
+  LayoutPlacementView(const PlacementView& base,
+                      TargetPlace target,
+                      std::set<InstanceId> removed,
+                      std::vector<LayoutAddition> additions,
+                      const PlacementMetadata& metadata)
       : base_(base),
         target_(target),
         removed_(std::move(removed)),
         additions_(std::move(additions)),
-        master_lib_cells_(std::move(masterLibCells)),
+        metadata_(metadata),
         target_instance_{target_.instanceId,
                          target_.masterId,
                          target_.rowId,
@@ -425,19 +430,17 @@ class LayoutPlacementView final : public PlacementView
     if (addition == additions_.end()) {
       return invalidCellChangeRecord();
     }
-    const auto option = std::find_if(
-        addition->masterOptions.begin(),
-        addition->masterOptions.end(),
-        [newMasterId](const auto& item) {
-          return item.masterId == newMasterId;
-        });
-    const auto libCell = master_lib_cells_.find(newMasterId);
+    const auto option = std::find_if(addition->masterOptions.begin(),
+                                     addition->masterOptions.end(),
+                                     [newMasterId](const auto& item) {
+                                       return item.masterId == newMasterId;
+                                     });
     if (option == addition->masterOptions.end()
-        || libCell == master_lib_cells_.end()) {
+        || masterInfo(newMasterId) == nullptr) {
       return invalidCellChangeRecord();
     }
     CellChangeRecord record = addition->record;
-    record.new_lib_cell_ = libCell->second;
+    record.new_lib_cell_ = metadata_.masters[newMasterId]->libCellId;
     record.orientation_ = option->orientation;
     return record;
   }
@@ -458,75 +461,11 @@ class LayoutPlacementView final : public PlacementView
   TargetPlace target_;
   std::set<InstanceId> removed_;
   std::vector<LayoutAddition> additions_;
-  std::unordered_map<MasterId, eLIB::LibCellID> master_lib_cells_;
+  const PlacementMetadata& metadata_;
   PlacedInstance target_instance_;
   std::unordered_map<InstanceId, PlacedInstance> synthetic_;
   std::map<RowId, std::vector<PlacedInstance>> by_row_;
   mutable std::map<RowId, std::vector<PlacedInstance>> cached_rows_;
-};
-
-// Prefix every swap candidate with the fixed Add records for its tiling, then
-// repair negative synthetic participant metadata for the planner.
-class LayoutOracle final : public RepairOracle
-{
- public:
-  LayoutOracle(RepairOracle& base,
-               const LayoutPlacementView& view,
-               ipl::FillerChanges fixed)
-      : base_(base), view_(view), fixed_(std::move(fixed))
-  {
-  }
-
-  OracleResult checkPlaceWithOverlay(const OracleRequest& request) override
-  {
-    std::vector<OracleResult> results = checkPlaceWithOverlays({request});
-    if (results.size() == 1) {
-      return std::move(results.front());
-    }
-    OracleResult failed;
-    failed.requestId = request.requestId;
-    failed.status = OracleStatus::CheckerError;
-    failed.diagnostics.push_back(makeDiag(
-        Severity::Fatal,
-        "CheckerProtocolError",
-        "checker returned the wrong result count for a layout overlay"));
-    return failed;
-  }
-
-  std::vector<OracleResult> checkPlaceWithOverlays(
-      const std::vector<OracleRequest>& requests) override
-  {
-    std::vector<OracleRequest> merged = requests;
-    for (OracleRequest& request : merged) {
-      request.fillerChanges
-          = mergeFillerChanges(fixed_, request.fillerChanges);
-    }
-    std::vector<OracleResult> results = base_.checkPlaceWithOverlays(merged);
-    for (OracleResult& result : results) {
-      for (Violation& violation : result.violations) {
-        for (ViolationParticipant& participant : violation.participants) {
-          const PlacedInstance* placed
-              = view_.instance(participant.instanceId);
-          if (placed == nullptr) {
-            continue;
-          }
-          const MasterInfo* master = view_.masterInfo(placed->masterId);
-          participant.masterId = placed->masterId;
-          participant.rowId = placed->rowId;
-          participant.xRange
-              = XInterval{placed->x,
-                          placed->x + (master != nullptr ? master->width : 0)};
-          participant.isFiller = placed->isFiller;
-        }
-      }
-    }
-    return results;
-  }
-
- private:
-  RepairOracle& base_;
-  const LayoutPlacementView& view_;
-  ipl::FillerChanges fixed_;
 };
 
 }  // namespace
@@ -609,40 +548,36 @@ class FillerRepairEngine::Impl final
     mutable std::map<RowId, std::vector<PlacedInstance>> by_row_;
   };
 
-  class BoundOracle final : public RepairOracle
+  // One adapter for exact and retiled requests. Fixed Adds and the effective
+  // view belong to this search; only the check count spans all searches in a
+  // repair. Neither placement nor layout state is retained by the engine.
+  class RequestOracle final : public RepairOracle
   {
    public:
-    BoundOracle(const Impl& impl,
-                const ipl::CheckRequest& target,
-                const PlacementView& view)
-        : impl_(impl), target_(target), view_(view)
+    RequestOracle(const Impl& impl,
+                  const ipl::CheckRequest& target,
+                  const PlacementView& view,
+                  int& requestsSent,
+                  ipl::FillerChanges fixed = {})
+        : impl_(impl),
+          target_(target),
+          view_(view),
+          requests_sent_(requestsSent),
+          fixed_(std::move(fixed))
     {
     }
 
-    OracleResult checkPlaceWithOverlay(const OracleRequest& request) override
-    {
-      return impl_.checkPlaceWithOverlay(target_, request, view_);
-    }
-
+    OracleResult checkPlaceWithOverlay(const OracleRequest& request) override;
     std::vector<OracleResult> checkPlaceWithOverlays(
-        const std::vector<OracleRequest>& requests) override
-    {
-      return impl_.checkPlaceWithOverlays(target_, requests, view_);
-    }
+        const std::vector<OracleRequest>& requests) override;
 
    private:
     const Impl& impl_;
     const ipl::CheckRequest& target_;
     const PlacementView& view_;
+    int& requests_sent_;
+    const ipl::FillerChanges fixed_;
   };
-
-  OracleResult checkPlaceWithOverlay(const ipl::CheckRequest& target,
-                                     const OracleRequest& request,
-                                     const PlacementView& view) const;
-  std::vector<OracleResult> checkPlaceWithOverlays(
-      const ipl::CheckRequest& target,
-      const std::vector<OracleRequest>& requests,
-      const PlacementView& view) const;
 
   ::Rect toGuardRect(const Region& region) const;
   Violation toPlannerViolation(const ipl::Violation& violation,
@@ -780,6 +715,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
                  " rowHeight=",
                  placement_.rowHeight),
              true);
+    return;
   }
 
   const auto heightInRows = [this](DbCoord height) {
@@ -921,27 +857,20 @@ void FillerRepairEngine::Impl::buildPlannerData()
              "no filler master has a compatible replacement master");
   }
 
-  // The initial target snapshot only needs enough horizontal context for the
-  // checker's rules and the replacement-filler universe. Repair-window guards
-  // are sized later from the actual two-cell instance ring, so using the
-  // widest placed master here is both redundant and pathological when that
-  // master is a hard macro.
-  //
-  // ONE source decides rule reach: the checker. `getMaxRuleValue()` is
-  // literally how far, in sites, its own scan looks. Anything narrower cuts a
-  // run off at the edge of the snapshot, and the checker then reports a
-  // min-width violation that does not exist in the design.
-  //
-  // We deliberately do NOT compute reach ourselves from TechLayer width and
-  // spacing. That was the same number derived twice, and the two answers drift:
-  // the checker builds LEF58 rules whose minValue can exceed both raw values.
-  // It already cost us that bug once. And the converse is free -- an implant
-  // width the checker never turned into a rule is a width it never scans for.
+  // Both initial and adaptive guards use the checker's whole rule deck.
+  // Master footprint size can widen the initial context; a hard macro must
+  // not determine the guard of an unrelated local filler repair.
   {
     DbCoord maxFillerWidth = 0;
     MasterId maxFillerMaster = -1;
     for (const MasterId id : placement_.fillerMasterIds) {
       const MasterInfo* master = masterInfo(id);
+      if (master != nullptr && master->isFiller && master->width > 0
+          && master->width % placement_.siteWidth == 0 && master->height >= 1
+          && master->height <= 2) {
+        placement_.retileMastersBySize[{master->width, master->height}]
+            .push_back(id);
+      }
       if (master != nullptr && master->width > maxFillerWidth) {
         maxFillerWidth = master->width;
         maxFillerMaster = id;
@@ -954,6 +883,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
 
     const bool fillerWidthWins = maxFillerWidth > checkerReach;
     placement_.defaultHaloX = std::max(checkerReach, maxFillerWidth);
+    repair_config_.ruleDistance = checkerReach;
     log_.block(
         "engine",
         "Default halo source",
@@ -1214,13 +1144,10 @@ CellChangeRecord FillerRepairEngine::Impl::RequestPlacementView::cellChangeRecor
   return record;
 }
 
-OracleResult FillerRepairEngine::Impl::checkPlaceWithOverlay(
-    const ipl::CheckRequest& target,
-    const OracleRequest& request,
-    const PlacementView& view) const
+OracleResult FillerRepairEngine::Impl::RequestOracle::checkPlaceWithOverlay(
+    const OracleRequest& request)
 {
-  std::vector<OracleResult> results
-      = checkPlaceWithOverlays(target, {request}, view);
+  std::vector<OracleResult> results = checkPlaceWithOverlays({request});
   if (results.size() == 1) {
     return std::move(results.front());
   }
@@ -1234,41 +1161,58 @@ OracleResult FillerRepairEngine::Impl::checkPlaceWithOverlay(
   return failure;
 }
 
-std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
-    const ipl::CheckRequest& target,
-    const std::vector<OracleRequest>& requests,
-    const PlacementView& view) const
+std::vector<OracleResult>
+FillerRepairEngine::Impl::RequestOracle::checkPlaceWithOverlays(
+    const std::vector<OracleRequest>& requests)
 {
   if (requests.empty()) {
     return {};
   }
 
+  const int limit = impl_.repair_config_.checkerCallBudgetPerRepair;
+  if (limit > 0
+      && requests.size()
+             > static_cast<size_t>(std::max(0, limit - requests_sent_))) {
+    std::vector<OracleResult> rejected(requests.size());
+    for (size_t i = 0; i < requests.size(); ++i) {
+      rejected[i].requestId = requests[i].requestId;
+      rejected[i].status = OracleStatus::CheckerError;
+      rejected[i].diagnostics.push_back(
+          makeDiag(Severity::Error,
+                   "RepairBudgetExhausted",
+                   "the whole repair has no budget for this checker batch"));
+    }
+    return rejected;
+  }
+
   const OracleRequest& first = requests.front();
-  const ::Rect guard = toGuardRect(first.guardRegion);
+  const ::Rect guard = impl_.toGuardRect(first.guardRegion);
   std::vector<ipl::FillerChanges> changes;
   changes.reserve(requests.size());
   for (const OracleRequest& request : requests) {
-    changes.push_back(request.fillerChanges);
+    changes.push_back(mergeFillerChanges(fixed_, request.fillerChanges));
   }
 
+  requests_sent_ += static_cast<int>(requests.size());
   const std::vector<ipl::CheckResult> raw
-      = checker_.checkPlaceWithOverlays(target, guard, changes);
-  log_.block(
-      "engine",
-      "Overlay batch",
-      {{"candidates", cat(changes.size())}, {"results", cat(raw.size())}});
+      = impl_.checker_.checkPlaceWithOverlays(target_, guard, changes);
+  impl_.log_.block("engine",
+                   "Overlay batch",
+                   {{"candidates", cat(changes.size())},
+                    {"results", cat(raw.size())},
+                    {"repair checker requests", cat(requests_sent_)}});
 
   // Results correlate by input order. A cardinality mismatch cannot be safely
   // recovered because it would associate checker answers with wrong changes.
   if (raw.size() != requests.size()) {
-    log_.block("engine",
-               "Overlay batch protocol error",
-               {{"expected results", cat(requests.size())},
-                {"received results", cat(raw.size())}});
+    impl_.log_.block("engine",
+                     "Overlay batch protocol error",
+                     {{"expected results", cat(requests.size())},
+                      {"received results", cat(raw.size())}});
     return std::vector<OracleResult>(raw.size());
   }
 
-  const auto& initDiags = checker_diagnostics_;
+  const auto& initDiags = impl_.checker_diagnostics_;
   const auto requestDiagOffset
       = [&initDiags](const std::vector<ipl::Diagnostic>& diagnostics) {
           size_t offset = 0;
@@ -1303,10 +1247,10 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
     }
     out.violations.reserve(checked.violations.size());
     for (const ipl::Violation& violation : checked.violations) {
-      Violation converted
-          = toPlannerViolation(violation, first.targetPlace.instanceId, view);
+      Violation converted = impl_.toPlannerViolation(
+          violation, first.targetPlace.instanceId, view_);
       const InstanceId checkerTargetId
-          = target.cell != nullptr ? target.cell->getId() : -1;
+          = target_.cell != nullptr ? target_.cell->getId() : -1;
       for (ViolationParticipant& participant : converted.participants) {
         if (participant.instanceId != checkerTargetId) {
           continue;
@@ -1316,7 +1260,7 @@ std::vector<OracleResult> FillerRepairEngine::Impl::checkPlaceWithOverlays(
         participant.masterId = first.targetPlace.masterId;
         participant.rowId = first.targetPlace.rowId;
         const MasterInfo* targetMaster
-            = masterInfo(first.targetPlace.masterId);
+            = impl_.masterInfo(first.targetPlace.masterId);
         participant.xRange
             = XInterval{first.targetPlace.x,
                         first.targetPlace.x
@@ -1525,10 +1469,36 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     const ipl::CheckRequest& request) const
 {
   RepairOutcome result;
+  int checkerRequests = 0;
+  const auto budgetExhausted = [&] {
+    return repair_config_.checkerCallBudgetPerRepair > 0
+           && checkerRequests >= repair_config_.checkerCallBudgetPerRepair;
+  };
+  const auto plannerConfig = [&] {
+    RepairConfig config = repair_config_;
+    if (config.checkerCallBudgetPerRepair > 0) {
+      config.checkerCallBudgetPerRepair -= checkerRequests;
+    }
+    return config;
+  };
+  const auto logPlannerResult = [&](const FillerRepairResult& planned) {
+    bool failed = false;
+    for (const Diagnostic& diagnostic : planned.diagnostics) {
+      log_.block("planner",
+                 "Planner result",
+                 {{"code", diagnostic.code}, {"message", diagnostic.message}});
+      failed |= diagnostic.severity == Severity::Fatal
+                || diagnostic.code == "CheckerEvaluationFailed";
+    }
+    return failed;
+  };
   log_.section("engine", "REPAIR REQUEST");
-  const auto skip = [this](const std::string& code, const std::string& reason) {
-    log_.block(
-        "engine", "Repair skipped", {{"code", code}, {"reason", reason}});
+  const auto skip = [&](const std::string& code, const std::string& reason) {
+    log_.block("engine",
+               "Repair skipped",
+               {{"code", code},
+                {"reason", reason},
+                {"checker requests", cat(checkerRequests)}});
   };
 
   if (!setup_ok_) {
@@ -1763,7 +1733,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
               {"released sites", cat(releasedSites.size())},
               {"guard", show(influence)}});
 
-  BoundOracle oracle(*this, request, view);
+  RequestOracle oracle(*this, request, view, checkerRequests);
   if (!releasedSites.empty()) {
     std::string addedFillerNamePrefix = "FILLER_REPAIR_";
     if (const fillerSetting* setting = network_->getFillerSetting();
@@ -1775,21 +1745,11 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       addedFillerNamePrefix += "FILLER_REPAIR_";
     }
     std::vector<internal::FillerFootprint> footprints;
-    std::unordered_map<MasterId, eLIB::LibCellID> masterLibCells;
-    for (const MasterId masterId : placement_.fillerMasterIds) {
-      const MasterInfo* master = masterInfo(masterId);
-      if (master == nullptr || !master->isFiller || master->width <= 0
-          || master->width % placement_.siteWidth != 0
-          || master->height < 1 || master->height > 2) {
-        continue;
-      }
-      footprints.push_back(
-          internal::FillerFootprint{
-              masterId,
-              static_cast<int>(master->width / placement_.siteWidth),
-              static_cast<int>(master->height)});
-      masterLibCells.emplace(masterId,
-                             placement_.masters[masterId]->libCellId);
+    for (const auto& [size, masters] : placement_.retileMastersBySize) {
+      footprints.push_back(internal::FillerFootprint{
+          masters.front(),
+          static_cast<int>(size.first / placement_.siteWidth),
+          static_cast<int>(size.second)});
     }
     if (footprints.empty()) {
       skip("NoRetilingFillerMaster",
@@ -1816,8 +1776,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       return result;
     }
 
-    int layoutAssignmentsChecked = 0;
-    bool layoutAssignmentsTruncated = false;
+    bool searchTruncated = tilings.truncated;
     for (const std::vector<internal::TiledFiller>& tiling :
          tilings.solutions) {
       std::vector<LayoutAddition> additions;
@@ -1833,7 +1792,9 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         MasterId chosen = -1;
         int matchingFootprints = 0;
         int orientedFootprints = 0;
-        for (const MasterId candidate : placement_.fillerMasterIds) {
+        const auto& sameSize = placement_.retileMastersBySize.at(
+            {footprintMaster->width, footprintMaster->height});
+        for (const MasterId candidate : sameSize) {
           const MasterInfo* master = masterInfo(candidate);
           const Master* networkMaster = network_->getMaster(candidate);
           const eLIB::PhysLibCell* physCell
@@ -1842,9 +1803,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
           const eLIB::TechSite* site
               = physCell != nullptr ? physCell->getTechSite() : nullptr;
           if (master == nullptr || networkMaster == nullptr
-              || !networkMaster->isFiller()
-              || master->width != footprintMaster->width
-              || master->height != footprintMaster->height) {
+              || !networkMaster->isFiller()) {
             continue;
           }
           ++matchingFootprints;
@@ -1938,41 +1897,27 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       std::vector<size_t> assignment(additions.size(), 0);
       bool haveAssignment = true;
       while (haveAssignment) {
-        if (repair_config_.checkerCallBudgetPerRepair > 0
-            && layoutAssignmentsChecked
-                   >= repair_config_.checkerCallBudgetPerRepair) {
-          layoutAssignmentsTruncated = true;
+        if (budgetExhausted()) {
+          searchTruncated = true;
           break;
         }
-        ++layoutAssignmentsChecked;
         std::vector<LayoutAddition> seededAdditions = additions;
         ipl::FillerChanges fixed;
         for (size_t index = 0; index < seededAdditions.size(); ++index) {
           LayoutAddition& addition = seededAdditions[index];
           const LayoutMasterOption& option
               = addition.masterOptions[assignment[index]];
-          const auto libCell = masterLibCells.find(option.masterId);
-          if (libCell == masterLibCells.end()) {
-            usable = false;
-            break;
-          }
           addition.placed.masterId = option.masterId;
           addition.placed.orientation = toPlannerOrient(option.orientation);
-          addition.record.new_lib_cell_ = libCell->second;
+          addition.record.new_lib_cell_
+              = placement_.masters[option.masterId]->libCellId;
           addition.record.orientation_ = option.orientation;
           fixed.push_back(addition.record);
         }
-        if (!usable) {
-          break;
-        }
-
         LayoutPlacementView layoutView(
-            view,
-            target,
-            overlayInstanceIds,
-            seededAdditions,
-            masterLibCells);
-        LayoutOracle layoutOracle(oracle, layoutView, fixed);
+            view, target, overlayInstanceIds, seededAdditions, placement_);
+        RequestOracle layoutOracle(
+            *this, request, layoutView, checkerRequests, fixed);
         OracleRequest layoutSnapshotRequest;
         layoutSnapshotRequest.requestId = 0;
         layoutSnapshotRequest.targetPlace = target;
@@ -1991,6 +1936,10 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                        {{"code", diagnostic.code},
                         {"message", diagnostic.message}});
           }
+          if (layoutSnapshot.status == OracleStatus::CheckerError) {
+            skip("CheckerFailed", "checker could not evaluate the retiling");
+            return result;
+          }
           haveAssignment
               = advanceLayoutAssignment(assignment, additions);
           continue;
@@ -2005,26 +1954,36 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         FillerRepairRequest plannerRequest;
         plannerRequest.targetPlace = target;
         plannerRequest.violations = layoutSnapshot.violations;
+        if (budgetExhausted()) {
+          searchTruncated = true;
+          break;
+        }
         internal::RepairPlanner planner(
-            layoutView, layoutOracle, repair_config_);
+            layoutView, layoutOracle, plannerConfig());
         const FillerRepairResult planned = planner.repair(plannerRequest);
+        const bool plannerFailed = logPlannerResult(planned);
         if (planned.hasSolution) {
           result.hasSolution = true;
           result.changes = mergeFillerChanges(fixed, planned.changes);
           logRepairSuccess(request, result, "retiled and repaired");
           return result;
         }
-        // The planner explores the alternate masters exposed by this tiling,
-        // so another seed assignment cannot add a new swap state.
-        break;
+        if (plannerFailed) {
+          skip("PlannerFailed", "planner rejected the checker/search context");
+          return result;
+        }
+        searchTruncated |= !planned.searchComplete;
+        // A bounded planner search does not cover all Add assignments. These
+        // uncommitted choices may be reseeded while the shared budget permits.
+        haveAssignment = advanceLayoutAssignment(assignment, additions);
       }
-      if (layoutAssignmentsTruncated) {
+      if (budgetExhausted()) {
         break;
       }
     }
-    skip(layoutAssignmentsTruncated
-             ? "RetilingMasterAssignmentBudgetExceeded"
-             : "NoLegalRetiling",
+    skip(budgetExhausted() ? "RepairBudgetExhausted"
+                           : (searchTruncated ? "RetilingSearchTruncated"
+                                              : "NoLegalRetiling"),
          "no exact-cover filler layout passed the implant checker");
     return result;
   }
@@ -2065,15 +2024,20 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     overlayView.emplace(baseView, overlayInstanceIds, target.instanceId);
     plannerView = &*overlayView;
   }
-  internal::RepairPlanner planner(*plannerView, oracle, repair_config_);
-  const FillerRepairResult planned = planner.repair(plannerRequest);
-  for (const Diagnostic& diagnostic : planned.diagnostics) {
-    log_.block("planner",
-               "Planner result",
-               {{"code", diagnostic.code}, {"message", diagnostic.message}});
+  if (budgetExhausted()) {
+    skip("RepairBudgetExhausted",
+         "snapshot consumed the remaining checker budget");
+    return result;
   }
+  internal::RepairPlanner planner(*plannerView, oracle, plannerConfig());
+  const FillerRepairResult planned = planner.repair(plannerRequest);
+  const bool plannerFailed = logPlannerResult(planned);
   if (!planned.hasSolution) {
-    skip("NoSolution", "planner exhausted its repair search");
+    skip(plannerFailed            ? "PlannerFailed"
+         : budgetExhausted()      ? "RepairBudgetExhausted"
+         : planned.searchComplete ? "NoSolution"
+                                  : "SearchIncomplete",
+         "planner found no legal filler overlay");
     return result;
   }
 
