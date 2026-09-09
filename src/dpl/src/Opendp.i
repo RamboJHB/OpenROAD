@@ -152,6 +152,24 @@ filler_placement_cmd(dpl::dbMasterSeq *filler_masters,
 }
 
 void
+set_filler_option_cmd(dpl::dbMasterSeq *filler_masters,
+                      const char* prefix,
+                      bool follow_order,
+                      bool fit_space)
+{
+  dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->setFillerPlacementOptions(
+      filler_masters, prefix, follow_order, fit_space);
+}
+
+void
+filler_placement_from_options_cmd()
+{
+  dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();
+  opendp->fillerPlacement();
+}
+
+void
 remove_fillers_cmd()
 {
   dpl::Opendp *opendp = ord::OpenRoad::openRoad()->getOpendp();

@@ -113,7 +113,31 @@ proc set_placement_padding { args } {
   }
 }
 
-sta::define_cmd_args "filler_placement" { [-prefix prefix] filler_masters }
+sta::define_cmd_args "set_filler_option" {[-prefix prefix] [-follow_order boolean] [-fit_space boolean] filler_masters}
+
+proc set_filler_option { args } {
+  sta::parse_key_args "set_filler_option" args \
+    keys {-prefix -follow_order -fit_space} flags {}
+
+  set prefix "ECOFILLER_"
+  if { [info exists keys(-prefix)] } {
+    set prefix $keys(-prefix)
+  }
+  set follow_order true
+  if { [info exists keys(-follow_order)] } {
+    set follow_order [dpl::filler_boolean "-follow_order" $keys(-follow_order)]
+  }
+  set fit_space true
+  if { [info exists keys(-fit_space)] } {
+    set fit_space [dpl::filler_boolean "-fit_space" $keys(-fit_space)]
+  }
+
+  sta::check_argc_eq1 "set_filler_option" $args
+  set filler_masters [dpl::get_masters_arg "filler_masters" [lindex $args 0]]
+  dpl::set_filler_option_cmd $filler_masters $prefix $follow_order $fit_space
+}
+
+sta::define_cmd_args "filler_placement" {[-prefix prefix] [filler_masters]}
 
 proc filler_placement { args } {
   sta::parse_key_args "filler_placement" args \
@@ -124,9 +148,16 @@ proc filler_placement { args } {
     set prefix $keys(-prefix)
   }
   
-  sta::check_argc_eq1 "filler_placement" $args
-  set filler_masters [dpl::get_masters_arg "filler_masters" [lindex $args 0]]
-  dpl::filler_placement_cmd $filler_masters $prefix
+  sta::check_argc_eq0or1 "filler_placement" $args
+  if { [llength $args] == 0 } {
+    if { [info exists keys(-prefix)] } {
+      utl::error "DPL" 48 "-prefix without filler_masters belongs on set_filler_option."
+    }
+    dpl::filler_placement_from_options_cmd
+  } else {
+    set filler_masters [dpl::get_masters_arg "filler_masters" [lindex $args 0]]
+    dpl::filler_placement_cmd $filler_masters $prefix
+  }
 }
 
 sta::define_cmd_args "remove_fillers" {}
@@ -155,6 +186,13 @@ proc optimize_mirroring { args } {
 }
 
 namespace eval dpl {
+
+proc filler_boolean { option value } {
+  if { ![string is boolean -strict $value] } {
+    utl::error "DPL" 47 "$option must be a boolean."
+  }
+  return [expr {$value ? 1 : 0}]
+}
 
 # min_displacement is the smallest displacement to draw
 # measured as a multiple of row_height.

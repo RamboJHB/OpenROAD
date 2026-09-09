@@ -46,6 +46,7 @@ add_library(dpl_lib
   src/CheckPlacement.cpp
   src/Place.cpp
   src/FillerPlacement.cpp
+  src/FillerPlacementInternal.cpp
   src/OptMirror.cpp
 )
 

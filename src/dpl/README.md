@@ -17,7 +17,9 @@ set_placement_padding -global|-instances insts|-masters masters
                       [-left pad_left] [-right pad_right]
 detailed_placement [-max_displacement disp|{disp_x disp_y}]
 check_placement [-verbose]
-filler_placement [-prefix prefix] filler_masters
+set_filler_option [-prefix prefix] [-follow_order boolean]
+                  [-fit_space boolean] filler_masters
+filler_placement [-prefix prefix] [filler_masters]
 remove_fillers
 optimize_mirroring
 ```
@@ -42,11 +44,21 @@ The `optimize_mirroring` command mirrors instances about the Y axis in
 a weak attempt to reduce total wirelength (HPWL).
 
 The `filler_placement` command fills gaps between detail-placed instances
-to connect the power and ground rails in the rows. `filler_masters` is a
-list of master/macro names to use for filling the gaps. Wildcard matching
-is supported, so `FILL*` will match, e.g., `FILLCELL_X1 FILLCELL_X16 FILLCELL_X2
-FILLCELL_X32 FILLCELL_X4 FILLCELL_X8`.  To specify a different naming prefix
-from `FILLER_` use `-prefix <new prefix>`.
+to connect the power and ground rails in the rows. One-row and multi-row
+filler masters are supported. `filler_masters` is a list of master/macro names
+to use for filling the gaps. Wildcard matching is supported, so `FILL*` will
+match, e.g., `FILLCELL_X1 FILLCELL_X16 FILLCELL_X2 FILLCELL_X32 FILLCELL_X4
+FILLCELL_X8`. To specify a different naming prefix from `FILLER_`, use
+`-prefix <new prefix>`.
+
+`set_filler_option` stores a filler configuration for a subsequent
+no-argument `filler_placement` call. `-follow_order true` makes configured
+master order authoritative; `false` uses deterministic area, height, and width
+ordering. `-fit_space true` requires every legal empty site to be covered and
+creates no instances if exact tiling fails. `false` permits a deterministic
+partial packing. The configured path defaults to prefix `ECOFILLER_`,
+`follow_order true`, and `fit_space true`. Calling `set_filler_option` again
+replaces the previous configuration.
 
 ## Example scripts
 

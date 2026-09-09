@@ -85,8 +85,14 @@ class DplObserver;
 
 using Grid = Pixel**;
 using dbMasterSeq = vector<dbMaster*>;
-// gap -> sequence of masters to fill the gap
-using GapFillers = vector<dbMasterSeq>;
+
+struct FillerPlacementOptions
+{
+  dbMasterSeq masters;
+  string prefix = "ECOFILLER_";
+  bool follow_order = true;
+  bool fit_space = true;
+};
 
 using InstPaddingMap = map<dbInst*, pair<int, int>>;
 using MasterPaddingMap = map<dbMaster*, pair<int, int>>;
@@ -195,6 +201,11 @@ class Opendp
   // Return error count.
   void checkPlacement(bool verbose);
   void fillerPlacement(dbMasterSeq* filler_masters, const char* prefix);
+  void fillerPlacement();
+  void setFillerPlacementOptions(dbMasterSeq* filler_masters,
+                                 const char* prefix,
+                                 bool follow_order,
+                                 bool fit_space);
   void removeFillers();
   int64_t hpwl() const;
   int64_t hpwl(dbNet* net) const;
@@ -356,11 +367,8 @@ class Opendp
   int padRight(const Cell* cell) const;
   int disp(const Cell* cell) const;
   // Place fillers
+  void fillerPlacement(const FillerPlacementOptions& options);
   void setGridCells();
-  dbMasterSeq& gapFillers(int gap, dbMasterSeq* filler_masters);
-  void placeRowFillers(int row,
-                       const char* prefix,
-                       dbMasterSeq* filler_masters);
   bool isFiller(odb::dbInst* db_inst);
   bool isOneSiteCell(odb::dbMaster* db_master) const;
   const char* gridInstName(int row, int col);
@@ -405,8 +413,7 @@ class Opendp
   Cell dummy_cell_;
 
   // Filler placement.
-  // gap (in sites) -> seq of masters
-  GapFillers gap_fillers_;
+  FillerPlacementOptions filler_options_;
   int filler_count_ = 0;
   bool have_fillers_ = false;
   bool have_one_site_cells_ = false;

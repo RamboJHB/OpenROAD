@@ -1,0 +1,7 @@
+[INFO ODB-0222] Reading LEF file: multi_height_fillers.lef
+[INFO ODB-0225]     Created 2 library cells
+[INFO ODB-0226] Finished LEF file:  multi_height_fillers.lef
+[INFO ODB-0128] Design: fillers_multi_height_exact_failure
+[ERROR DPL-0002] could not fill gap of size 3 at 0,0 dbu between core_left and core_right
+DPL-0002
+instances after exact failure: 0

@@ -6,7 +6,13 @@
 
 include("openroad")
 
-add_executable(dpl_test dpl_test.cc)
+add_executable(dpl_test
+  dpl_test.cc
+  FillerPlacementOpenDbTest.cpp
+  FillerPlacementInternalTest.cpp
+)
+
+target_include_directories(dpl_test PRIVATE ../src)
 
 target_link_libraries(dpl_test 
     gtest 
