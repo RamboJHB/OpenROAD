@@ -20,6 +20,9 @@ public:
 
     // setter
     void addFillerCell(std::string fillerCellName);
+    // Whitespace-separated positive site-width pairs, e.g. "1:2 1:1".
+    // Each pair forbids horizontal filler abutment in both directions, not a
+    // ratio. Invalid input throws without installing any part of that input.
     void addAvoidPattern(std::string avoidPattern);
 
     // [FRPORT] Engine initialization and DePlace master registration consume
@@ -34,9 +37,9 @@ public:
     }
     eUNL::Design* getDesign() const { return design_; }
 
-    bool needAvoidAbut(std::pair<int, int> twoLibCell) const;
+    bool needAvoidAbut(std::pair<int, int> siteWidths) const;
 
-private:
+   private:
     bool follow_order_;
     bool check_drc_;
     bool fit_space_;

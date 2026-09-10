@@ -12,22 +12,23 @@
 // Layout: the two seam doubles, then the synthetic master catalog, then the
 // oracle double, then the cases.
 
+#include <fillerRepair/FillerRetiler.h>
+#include <fillerRepair/PlacementView.h>
+#include <fillerRepair/RepairPlanner.h>
+#include <fillerRepair/RepairTypes.h>
+#include <gtest/gtest.h>
+
 #include <algorithm>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <gtest/gtest.h>
 #include <map>
 #include <set>
 #include <string>
 #include <tuple>
 #include <utility>
 #include <vector>
-
-#include <fillerRepair/FillerRetiler.h>
-#include <fillerRepair/PlacementView.h>
-#include <fillerRepair/RepairPlanner.h>
-#include <fillerRepair/RepairTypes.h>
 
 // ==========================================================================
 // Test double: PlacementView (seam 1)
@@ -1136,7 +1137,11 @@ TEST(FillerRetiler, PreferenceAndLegalityAreAppliedBeforeTheSolutionCap)
   fr::internal::RetileConfig config;
   config.maxSolutions = 1;
   const auto ordered = fr::internal::enumerateRetilings(
-      sites, footprints, config, [](const fr::internal::TiledFiller& tile) {
+      sites,
+      footprints,
+      config,
+      [](const fr::internal::TiledFiller& tile,
+         const std::vector<fr::internal::TiledFiller>&) {
         return std::optional<int>{tile.masterId == 10 ? 1 : 2};
       });
   ASSERT_EQ(ordered.solutions.size(), 1u);
@@ -1146,7 +1151,8 @@ TEST(FillerRetiler, PreferenceAndLegalityAreAppliedBeforeTheSolutionCap)
       sites,
       footprints,
       config,
-      [](const fr::internal::TiledFiller& tile) -> std::optional<int> {
+      [](const fr::internal::TiledFiller& tile,
+         const std::vector<fr::internal::TiledFiller>&) -> std::optional<int> {
         return tile.masterId != 10 ? std::optional<int>{0} : std::nullopt;
       });
   ASSERT_EQ(filtered.solutions.size(), 1u);
@@ -1155,6 +1161,40 @@ TEST(FillerRetiler, PreferenceAndLegalityAreAppliedBeforeTheSolutionCap)
 }
 
 // --- Fixtures ---------------------------------------------------------------
+
+TEST(FillerRetiler, PrefixConstraintsBacktrackBeforeTheSolutionCap)
+{
+  fr::internal::RetileConfig config;
+  config.maxSolutions = 1;
+  bool rejectedMixedWidths = false;
+  const auto result = fr::internal::enumerateRetilings(
+      {{0, 0}, {0, 1}, {0, 2}},
+      {{1, 1, 1}, {2, 2, 1}},
+      config,
+      [&](const fr::internal::TiledFiller& tile,
+          const std::vector<fr::internal::TiledFiller>& partial)
+          -> std::optional<int> {
+        if (!partial.empty() && partial.back().masterId != tile.masterId) {
+          rejectedMixedWidths = true;
+          return std::nullopt;
+        }
+        return 0;
+      });
+  EXPECT_TRUE(rejectedMixedWidths);
+  ASSERT_EQ(result.solutions.size(), 1u);
+  ASSERT_EQ(result.solutions.front().size(), 3u);
+  for (const auto& tile : result.solutions.front()) {
+    EXPECT_EQ(tile.masterId, 1);
+  }
+}
+
+TEST(FillerRetiler, OversizedUnusedFootprintsAreRejectedBeforeAllocation)
+{
+  const auto result = fr::internal::enumerateRetilings(
+      {{0, 0}, {0, 1}}, {{1, 1, 1}, {2, INT_MAX, INT_MAX}});
+  ASSERT_EQ(result.solutions.size(), 1u);
+  EXPECT_EQ(result.solutions.front().size(), 2u);
+}
 
 // Master id scheme: filler = width*10 + vt (e.g. 42 = width-4 VT2);
 // std cell = 900 + vt, width 4. VTs are {1, 2, 3}. Site width 1.

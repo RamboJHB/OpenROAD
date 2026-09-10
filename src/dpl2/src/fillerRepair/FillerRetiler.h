@@ -62,12 +62,15 @@ struct RetileResult
 
 // The optional callback rejects a tile with nullopt, or ranks its available
 // masters at this position (lower first). Called synchronously before a tiling
-// consumes a solution slot; ties keep the largest-footprint-first order.
+// consumes a solution slot; ties keep the largest-footprint-first order. The
+// second argument is the current partial tiling, before adding this tile.
 RetileResult enumerateRetilings(
     std::vector<SiteCell> emptySites,
     std::vector<FillerFootprint> footprints,
     RetileConfig config = {},
-    const std::function<std::optional<int>(const TiledFiller&)>& preference
+    const std::function<std::optional<int>(const TiledFiller&,
+                                           const std::vector<TiledFiller>&)>&
+        preference
     = {});
 
 }  // namespace dpl2::fillerRepair::internal

@@ -1,5 +1,7 @@
 #include "fillerSetting.h"
+
 #include <algorithm>
+#include <charconv>
 #include <iterator>
 #include <sstream>
 #include <stdexcept>
@@ -44,27 +46,37 @@ void
 fillerSetting::addAvoidPattern(std::string avoidPattern)
 {
     std::istringstream iss(avoidPattern);
-    std::vector<std::string> nameVec{
-        std::istream_iterator<std::string>(iss),
-        std::istream_iterator<std::string>()
+    std::map<std::pair<int, int>, bool> parsed;
+    std::string token;
+    const auto width = [](const std::string& value) {
+      int sites = 0;
+      const auto [end, error]
+          = std::from_chars(value.data(), value.data() + value.size(), sites);
+      if (error != std::errc{} || end != value.data() + value.size()
+          || sites <= 0
+          || value.find_first_not_of("0123456789") != std::string::npos) {
+        throw std::invalid_argument(
+            "avoid pattern widths must be positive site counts: " + value);
+      }
+      return sites;
     };
-    for (const auto& cellName : nameVec) {
-        size_t pos = cellName.find(':');
-        if (pos == std::string::npos) {
-            // throw std::invalid_argument("String does not contain ':'");
-        }
-        int first = std::stoi(cellName.substr(0, pos));
-        int second = std::stoi(cellName.substr(pos + 1));
-
-        this->avoid_pattern_[{first, second}] = true;
-        this->avoid_pattern_[{second, first}] = true;
+    while (iss >> token) {
+      const size_t pos = token.find(':');
+      if (pos == std::string::npos
+          || token.find(':', pos + 1) != std::string::npos) {
+        throw std::invalid_argument("expected site-width pair a:b: " + token);
+      }
+      const int first = width(token.substr(0, pos));
+      const int second = width(token.substr(pos + 1));
+      parsed[{first, second}] = true;
+      parsed[{second, first}] = true;
     }
+    avoid_pattern_.insert(parsed.begin(), parsed.end());
 }
 
-bool
-fillerSetting::needAvoidAbut(std::pair<int, int> twoLibCell) const
+bool fillerSetting::needAvoidAbut(std::pair<int, int> siteWidths) const
 {
-    return avoid_pattern_.find(twoLibCell) != avoid_pattern_.end();
+  return avoid_pattern_.find(siteWidths) != avoid_pattern_.end();
 }
 
 // [FRPORT] Resolve the configured IDs to physical masters for engine init.

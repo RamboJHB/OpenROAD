@@ -23,7 +23,9 @@ class ExactCoverSearch
       std::vector<SiteCell> sites,
       std::vector<FillerFootprint> footprints,
       RetileConfig config,
-      const std::function<std::optional<int>(const TiledFiller&)>& preference)
+      const std::function<std::optional<int>(const TiledFiller&,
+                                             const std::vector<TiledFiller>&)>&
+          preference)
       : sites_(std::move(sites)),
         footprints_(std::move(footprints)),
         config_(config),
@@ -102,7 +104,8 @@ class ExactCoverSearch
       }
 
       const TiledFiller tile{footprint.masterId, anchor.rowId, anchor.colId};
-      const auto rank = preference_ ? preference_(tile) : std::optional<int>{0};
+      const auto rank
+          = preference_ ? preference_(tile, current_) : std::optional<int>{0};
       if (!rank.has_value()) {
         continue;
       }
@@ -134,7 +137,9 @@ class ExactCoverSearch
   std::vector<SiteCell> sites_;
   std::vector<FillerFootprint> footprints_;
   RetileConfig config_;
-  const std::function<std::optional<int>(const TiledFiller&)>& preference_;
+  const std::function<std::optional<int>(const TiledFiller&,
+                                         const std::vector<TiledFiller>&)>&
+      preference_;
   std::unordered_map<uint64_t, std::size_t> index_by_site_;
   std::vector<bool> covered_;
   std::vector<TiledFiller> current_;
@@ -147,35 +152,44 @@ RetileResult enumerateRetilings(
     std::vector<SiteCell> emptySites,
     std::vector<FillerFootprint> footprints,
     RetileConfig config,
-    const std::function<std::optional<int>(const TiledFiller&)>& preference)
+    const std::function<std::optional<int>(const TiledFiller&,
+                                           const std::vector<TiledFiller>&)>&
+        preference)
 {
   std::sort(emptySites.begin(), emptySites.end());
   emptySites.erase(std::unique(emptySites.begin(), emptySites.end()),
                    emptySites.end());
   footprints.erase(
-      std::remove_if(footprints.begin(),
-                     footprints.end(),
-                     [](const FillerFootprint& footprint) {
-                       return footprint.widthSites <= 0
-                              || footprint.heightRows <= 0;
-                     }),
+      std::remove_if(
+          footprints.begin(),
+          footprints.end(),
+          [&](const FillerFootprint& footprint) {
+            return footprint.widthSites <= 0
+                   || footprint.heightRows <= 0
+                   // Reject impossible sizes before reserving a
+                   // candidate's site vector, not after allocation.
+                   || uint64_t{static_cast<unsigned>(footprint.widthSites)}
+                              * static_cast<unsigned>(footprint.heightRows)
+                          > emptySites.size();
+          }),
       footprints.end());
-  std::sort(footprints.begin(),
-            footprints.end(),
-            [](const FillerFootprint& left, const FillerFootprint& right) {
-              const int leftArea = left.widthSites * left.heightRows;
-              const int rightArea = right.widthSites * right.heightRows;
-              if (leftArea != rightArea) {
-                return leftArea > rightArea;
-              }
-              if (left.heightRows != right.heightRows) {
-                return left.heightRows > right.heightRows;
-              }
-              if (left.widthSites != right.widthSites) {
-                return left.widthSites > right.widthSites;
-              }
-              return left.masterId < right.masterId;
-            });
+  std::sort(
+      footprints.begin(),
+      footprints.end(),
+      [](const FillerFootprint& left, const FillerFootprint& right) {
+        const int64_t leftArea = int64_t{left.widthSites} * left.heightRows;
+        const int64_t rightArea = int64_t{right.widthSites} * right.heightRows;
+        if (leftArea != rightArea) {
+          return leftArea > rightArea;
+        }
+        if (left.heightRows != right.heightRows) {
+          return left.heightRows > right.heightRows;
+        }
+        if (left.widthSites != right.widthSites) {
+          return left.widthSites > right.widthSites;
+        }
+        return left.masterId < right.masterId;
+      });
   footprints.erase(
       std::unique(footprints.begin(),
                   footprints.end(),

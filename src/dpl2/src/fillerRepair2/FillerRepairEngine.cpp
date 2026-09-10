@@ -39,6 +39,7 @@ struct PlacementMetadata
   DbCoord rowHeight = 0;
   DbCoord defaultHaloX = 0;
   bool followFillerOrder = false;
+  std::set<std::pair<int, int>> avoidedWidthPairs;
   std::vector<RowId> rows;
   std::vector<std::optional<MasterRef>> masters;
   std::vector<MasterId> fillerMasterIds;
@@ -798,6 +799,11 @@ void FillerRepairEngine::Impl::buildPlannerData()
     std::string source = "Network filler flags";
     if (const fillerSetting* setting = network_->getFillerSetting()) {
       placement_.followFillerOrder = setting->getFollowOrder();
+      for (const auto& [widths, avoid] : setting->getAvoidPattern()) {
+        if (avoid) {
+          placement_.avoidedWidthPairs.insert(widths);
+        }
+      }
       const auto& configuredCells = setting->getFillerCells();
       if (!configuredCells.empty()) {
         source = "fillerSetting";
@@ -1831,12 +1837,61 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       }
       return options;
     };
+    size_t avoidedTiles = 0;
     const auto tilePreference
-        = [&](const internal::TiledFiller& tile) -> std::optional<int> {
+        = [&](const internal::TiledFiller& tile,
+              const std::vector<internal::TiledFiller>& partial)
+        -> std::optional<int> {
       const auto& options = optionsFor(tile);
       if (options.empty()) {
         return std::nullopt;
       }
+      if (!placement_.avoidedWidthPairs.empty()) {
+        const MasterInfo& footprint = *masterInfo(tile.masterId);
+        const int width
+            = static_cast<int>(footprint.width / placement_.siteWidth);
+        const auto avoids = [&](int otherWidth) {
+          return placement_.avoidedWidthPairs.count({width, otherWidth}) != 0;
+        };
+        // Only horizontal abutment in at least one occupied row counts. The
+        // caller's deleted fillers are still painted, but are not neighbours
+        // of the final layout. Standard cells never participate in this rule.
+        for (int row = tile.rowId; row < tile.rowId + footprint.height; ++row) {
+          for (const int col : {tile.colId - 1, tile.colId + width}) {
+            const Pixel* pixel = grid_->gridPixel(GridX{col}, GridY{row});
+            const Node* neighbour = pixel != nullptr ? pixel->cell : nullptr;
+            if (neighbour == nullptr || !neighbour->isFiller()
+                || overlayInstanceIds.count(neighbour->getId()) != 0) {
+              continue;
+            }
+            const DbCoord neighbourWidth = neighbour->getWidth().v;
+            if (neighbourWidth <= 0
+                || neighbourWidth % placement_.siteWidth != 0
+                || avoids(
+                    static_cast<int>(neighbourWidth / placement_.siteWidth))) {
+              ++avoidedTiles;
+              return std::nullopt;
+            }
+          }
+        }
+        for (const auto& other : partial) {
+          const MasterInfo& otherMaster = *masterInfo(other.masterId);
+          const int otherWidth
+              = static_cast<int>(otherMaster.width / placement_.siteWidth);
+          const bool overlappingRows
+              = tile.rowId < other.rowId + otherMaster.height
+                && other.rowId < tile.rowId + footprint.height;
+          const bool touchingSides = tile.colId + width == other.colId
+                                     || other.colId + otherWidth == tile.colId;
+          if (overlappingRows && touchingSides && avoids(otherWidth)) {
+            ++avoidedTiles;
+            return std::nullopt;
+          }
+        }
+      }
+      // All later Add master choices and surrounding swaps preserve width
+      // and height, so neither follow-order ranking nor VT repair can undo
+      // this geometry-only policy. No duplicate final-checker rule is needed.
       return masterInfo(options.front().masterId)->addOrder;
     };
 
@@ -1852,12 +1907,14 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                 {"released sites", cat(releasedSites.size())},
                 {"tilings", cat(tilings.solutions.size())},
                 {"search states", cat(tilings.searchStates)},
+                {"avoid pattern rejections", cat(avoidedTiles)},
                 {"truncated", cat(tilings.truncated)}});
     if (tilings.solutions.empty()) {
-      skip(tilings.truncated ? "RetilingBudgetExceeded"
-                             : "ReleasedAreaNotTileable",
-           "configured filler footprints cannot exactly cover the released "
-           "sites");
+      skip(
+          tilings.truncated ? "RetilingBudgetExceeded"
+                            : "ReleasedAreaNotTileable",
+          "no exact tiling satisfies configured filler sizes, site/orientation "
+          "and avoid-pattern constraints");
       return result;
     }
 

@@ -331,6 +331,7 @@ gtest_discover_tests(
 if(DPL2_TEST_USE_FAKE_UDM)
   add_executable(dpl2_commit_test
     "${CMAKE_CURRENT_LIST_DIR}/local/commit_test.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/local/filler_option_test.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/local/FakeUdmE2ETestProvider.cpp")
   target_include_directories(dpl2_commit_test PRIVATE
     "${CMAKE_CURRENT_LIST_DIR}/../dpl2ui"

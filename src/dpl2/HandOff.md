@@ -176,7 +176,8 @@ The 2026-09-10 follow-up adds ordered gap filling and the local commit path:
   corner insertion, disconnected gaps and larger-but-incomplete overlays.
   Search caps still apply; accepted output is exact and non-overlapping, but
   an existing solution is not guaranteed to be found within those caps.
-- `avoid pattern` is deliberately deferred, not silently enforced or inferred.
+- The subsequent avoid-pattern pass enforces configured absolute site-width
+  pairs for new filler Adds (details below).
 - The existing `DePlace::commit` now handles Add, Replace and Delete in one
   batch. It preflights IDs, names, masters, geometry, occupancy, reservations
   and operation feasibility before mutation. Rejections leave DB/Network/Grid
@@ -208,6 +209,50 @@ cases (25.72 seconds and 84.01 seconds respectively), including 12 executable
 commit/command tests. Local `ImportDb.cpp` also passed a C++20 syntax-only
 compile against the repository OpenDB and fake-UDM headers. This does not
 validate real UDM linkage, source-ODB writeback or real-net connectivity.
+
+### Absolute-width avoid patterns (2026-09-10)
+
+- `1:2` means a 1-site filler abutting a 2-site filler, in either direction.
+  It is not a ratio, master ID or DBU pair; it does not forbid `2:4`.
+  Abutment means horizontal side contact in at least one shared row. Every
+  occupied row of a multi-row filler participates; vertical-only and corner
+  contacts do not. Standard cells are not members of these pairs.
+- Existing `fillerSetting::addAvoidPattern` parses positive integer pairs
+  separated by whitespace. Missing/extra colons, suffixes, signed/nonpositive
+  widths and integer overflow are rejected. Invalid input installs no partial
+  pairs and leaves earlier settings intact. Successful calls remain additive.
+- The existing retiler callback receives the partial tiling. It rejects
+  forbidden Add/Add and Add/existing-filler boundaries before they consume a
+  tiling solution slot, then backtracks to alternate layouts. Caller Delete
+  fillers are ignored even while their old pixels remain painted. Existing
+  neighbour widths come from the current Grid/Network, not an old snapshot.
+- Follow-order ranking applies among allowed choices. Subsequent Add-master
+  choices and surrounding swaps preserve footprint dimensions, so they cannot
+  invalidate this geometry policy. No new engine/checker API, transaction wire
+  or duplicate final-checker rule was introduced.
+- Exact-cover repair and old/old filler pairs are unchanged: FR does not delete
+  or resize existing neighbours to eliminate pre-existing width patterns.
+  Avoid patterns, master lists and follow order are setup metadata; configure
+  them before constructing the checker/engine, or rebuild after changing them.
+- Review also fixed oversized unusable footprints being allocated before fit
+  rejection and changed area comparisons to 64-bit arithmetic. Regression
+  tests cover malformed configuration, non-unit DBU/site conversion, both
+  boundary directions, same-width pairs, backtracking in both ordering modes,
+  multi-row boundaries, deleted/vertical/corner neighbours, exact-cover policy
+  scope and engine reuse after an actual commit.
+
+Review: no blocking correctness issue found in this Add-policy path. Search
+remains bounded (16 tilings, 100000 geometric search states and 2048 checker
+candidates), so failure after truncation is not proof that no legal placement
+exists. For large gaps, a per-row partial-tiling boundary index could replace
+the current linear scan of prior Adds; this is a performance opportunity, not
+a second policy API. The local-only UDM/writeback and commit exception limits
+above still apply.
+
+Validation: normal and ASan builds passed all 412 CTest cases (26.70 seconds
+and 69.91 seconds respectively), including 10 new real-engine policy cases
+and 2 new retiler internal cases. Both migration-copy builds and the existing
+command/commit regressions remain in this gate; `git diff --check` is clean.
 
 The 2026-09-09 maintenance pass keeps the public engine/checker wire unchanged:
 
