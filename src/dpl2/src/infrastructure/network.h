@@ -2,16 +2,17 @@
 // Copyright (c) 2021-2025, The OpenROAD Authors
 
 #pragma once
-#include <string>
-#include <map>
-#include <memory>
-#include <unordered_map>
-#include <utility>
-
 #include <Coordinates.h>
 #include <Objects.h>
 #include <architecture.h>
 #include <dpl2/DePlace.h>
+
+#include <algorithm>
+#include <map>
+#include <memory>
+#include <string>
+#include <unordered_map>
+#include <utility>
 
 namespace dpl2 {
 
@@ -79,6 +80,8 @@ class Network
     // Respect an id already assigned by the caller (used by tests); otherwise
     // fall back to a fresh id from the monotonic counter.
     const int id = n->getId() >= 0 ? n->getId() : next_node_id_++;
+    n->setId(id);
+    next_node_id_ = std::max(next_node_id_, id + 1);
     const LeafCellID instId = n->getDbInst();
     if (instId.isValid()) {
       inst_to_node_idx_[instId] = id;

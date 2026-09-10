@@ -19,12 +19,15 @@ uint64_t siteKey(RowId rowId, int colId)
 class ExactCoverSearch
 {
  public:
-  ExactCoverSearch(std::vector<SiteCell> sites,
-                   std::vector<FillerFootprint> footprints,
-                   RetileConfig config)
+  ExactCoverSearch(
+      std::vector<SiteCell> sites,
+      std::vector<FillerFootprint> footprints,
+      RetileConfig config,
+      const std::function<std::optional<int>(const TiledFiller&)>& preference)
       : sites_(std::move(sites)),
         footprints_(std::move(footprints)),
         config_(config),
+        preference_(preference),
         covered_(sites_.size(), false)
   {
     for (std::size_t index = 0; index < sites_.size(); ++index) {
@@ -69,6 +72,13 @@ class ExactCoverSearch
     }
 
     const SiteCell anchor = sites_[first];
+    struct Choice
+    {
+      TiledFiller tile;
+      std::vector<std::size_t> cells;
+      int preference;
+    };
+    std::vector<Choice> choices;
     for (const FillerFootprint& footprint : footprints_) {
       std::vector<std::size_t> cells;
       cells.reserve(static_cast<std::size_t>(footprint.widthSites)
@@ -91,14 +101,26 @@ class ExactCoverSearch
         continue;
       }
 
-      for (const std::size_t cell : cells) {
+      const TiledFiller tile{footprint.masterId, anchor.rowId, anchor.colId};
+      const auto rank = preference_ ? preference_(tile) : std::optional<int>{0};
+      if (!rank.has_value()) {
+        continue;
+      }
+      choices.push_back({tile, std::move(cells), *rank});
+    }
+    std::stable_sort(
+        choices.begin(), choices.end(), [](const auto& a, const auto& b) {
+          return a.preference < b.preference;
+        });
+
+    for (const Choice& choice : choices) {
+      for (const std::size_t cell : choice.cells) {
         covered_[cell] = true;
       }
-      current_.push_back(
-          TiledFiller{footprint.masterId, anchor.rowId, anchor.colId});
-      search(coveredCount + cells.size());
+      current_.push_back(choice.tile);
+      search(coveredCount + choice.cells.size());
       current_.pop_back();
-      for (const std::size_t cell : cells) {
+      for (const std::size_t cell : choice.cells) {
         covered_[cell] = false;
       }
       if (result_.solutions.size() >= config_.maxSolutions
@@ -112,6 +134,7 @@ class ExactCoverSearch
   std::vector<SiteCell> sites_;
   std::vector<FillerFootprint> footprints_;
   RetileConfig config_;
+  const std::function<std::optional<int>(const TiledFiller&)>& preference_;
   std::unordered_map<uint64_t, std::size_t> index_by_site_;
   std::vector<bool> covered_;
   std::vector<TiledFiller> current_;
@@ -120,9 +143,11 @@ class ExactCoverSearch
 
 }  // namespace
 
-RetileResult enumerateRetilings(std::vector<SiteCell> emptySites,
-                                std::vector<FillerFootprint> footprints,
-                                RetileConfig config)
+RetileResult enumerateRetilings(
+    std::vector<SiteCell> emptySites,
+    std::vector<FillerFootprint> footprints,
+    RetileConfig config,
+    const std::function<std::optional<int>(const TiledFiller&)>& preference)
 {
   std::sort(emptySites.begin(), emptySites.end());
   emptySites.erase(std::unique(emptySites.begin(), emptySites.end()),
@@ -161,7 +186,7 @@ RetileResult enumerateRetilings(std::vector<SiteCell> emptySites,
                   }),
       footprints.end());
   return ExactCoverSearch(
-             std::move(emptySites), std::move(footprints), config)
+             std::move(emptySites), std::move(footprints), config, preference)
       .run();
 }
 

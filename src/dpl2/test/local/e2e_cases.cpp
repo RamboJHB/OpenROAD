@@ -15,6 +15,7 @@
 #include <array>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -56,7 +57,9 @@ const dpl2::EdgeTypeTable& noEdgeTypes()
 class RuntimeFixture
 {
  public:
-  explicit RuntimeFixture(const frt::DesignSetup& setup = {})
+  explicit RuntimeFixture(const frt::DesignSetup& setup = {},
+                          const char* fillerMasters = kFillerMasters,
+                          bool followOrder = true)
       : provider_(frt::makeE2ETestProvider())
   {
     if (provider_ == nullptr) {
@@ -71,7 +74,8 @@ class RuntimeFixture
       return;
     }
     setting_ = std::make_unique<dpl2::fillerSetting>(design_->design());
-    setting_->addFillerCell(kFillerMasters);
+    setting_->addFillerCell(fillerMasters);
+    setting_->setFollowOrder(followOrder);
     dpl2::Network* const network = infrastructure_->network();
     dpl2::Grid* const grid = infrastructure_->grid();
     network->setFillerSetting(setting_.get());
@@ -160,11 +164,121 @@ class RuntimeFixture
   bool ready_ = false;
 };
 
+TEST(FillerRepairGapTest, SingleRowTargetRetilesEveryCornerOfTwoRowFiller)
+{
+  frt::DesignSetup setup;
+  setup.doubleHeightRepairLayout = true;
+  setup.implantRuleWidth = 1;
+  for (const int row : {2, 3}) {
+    for (const int col : {6, 7}) {
+      SCOPED_TRACE(::testing::Message() << "row=" << row << " col=" << col);
+      RuntimeFixture fixture(setup);
+      ASSERT_TRUE(fixture.ready());
+      dpl2::Node temporary;
+      dpl2::ipl::CheckRequest request;
+      ASSERT_TRUE(fixture.request(frt::CellRole::TargetLeftFiller,
+                                  frt::MasterRole::NarrowBuffer,
+                                  temporary,
+                                  request));
+      request.x = dpl2::GridX{col};
+      request.y = dpl2::GridY{row};
+      const auto orientation = fixture.grid().getSiteOrientation(
+          request.x,
+          request.y,
+          fixture.design()
+              .master(frt::MasterRole::NarrowBuffer)
+              .getTechSite()
+              ->getName());
+      ASSERT_TRUE(orientation.has_value());
+      request.orientation = *orientation;
+      // Request coordinates, not the bound deleted Node's original origin,
+      // are authoritative for a target inserted in its upper/right part.
+      dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
+      const auto before = fixture.design().snapshot();
+      const auto outcome = engine.repair(request);
+      ASSERT_TRUE(outcome.hasSolution);
+      std::set<std::pair<int, int>> gaps{{2, 6}, {2, 7}, {3, 6}, {3, 7}};
+      gaps.erase({row, col});
+      for (const auto& change : outcome.changes) {
+        if (change.op_ != dpl2::OpType::Add) {
+          EXPECT_EQ(change.op_, dpl2::OpType::Replace);
+          continue;
+        }
+        const auto* added = fixture.network().getMaster(change.new_lib_cell_);
+        ASSERT_NE(added, nullptr);
+        const auto* master = added->getPhysLibCell();
+        ASSERT_NE(master, nullptr);
+        const int x = change.x_.getStorage() / frt::kSiteWidth;
+        const int y = change.y_.getStorage() / frt::kRowHeight;
+        const int width = master->getWidth().getStorage() / frt::kSiteWidth;
+        const int height = master->getHeight().getStorage() / frt::kRowHeight;
+        for (int r = y; r < y + height; ++r) {
+          for (int c = x; c < x + width; ++c) {
+            EXPECT_EQ(gaps.erase({r, c}), 1u);
+          }
+        }
+      }
+      EXPECT_TRUE(gaps.empty());
+      const auto checked = fixture.checker().checkPlaceWithOverlays(
+          request,
+          eUTL::Rect(eUTL::UvDist(0),
+                     eUTL::UvDist(0),
+                     eUTL::UvDist(frt::kRowSites * frt::kSiteWidth),
+                     eUTL::UvDist(frt::kStandardRows * frt::kRowHeight - 1)),
+          {outcome.changes});
+      ASSERT_EQ(checked.size(), 1u);
+      EXPECT_TRUE(checked.front().isLegal);
+      EXPECT_EQ(fixture.design().snapshot(), before);
+    }
+  }
+}
+
 struct LayoutCase
 {
   const char* name;
   frt::DesignSetup setup;
 };
+
+TEST(FillerRepairOptionTest, AddedMasterFollowsConfiguredOrderWhenEnabled)
+{
+  frt::DesignSetup setup;
+  setup.implantRuleWidth = 1;
+  for (const bool followOrder : {true, false}) {
+    RuntimeFixture fixture(setup, "FS1 FL2 FH2 FS2 FH1 FL2D FH1D", followOrder);
+    ASSERT_TRUE(fixture.ready());
+    dpl2::Node temporary;
+    dpl2::ipl::CheckRequest request;
+    ASSERT_TRUE(fixture.request(frt::CellRole::Row0TailFiller,
+                                frt::MasterRole::NarrowBuffer,
+                                temporary,
+                                request));
+    dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
+    const auto outcome = engine.repair(request);
+    ASSERT_TRUE(outcome.hasSolution);
+    ASSERT_EQ(outcome.changes.size(), 1u);
+    EXPECT_EQ(outcome.changes.front().op_, dpl2::OpType::Add);
+    const auto module = fixture.design().design()->getLibAcc().findModule(
+        followOrder ? "FS1" : "FH1");
+    const auto* expected
+        = fixture.design().design()->getLibAcc().getLibCell(module);
+    ASSERT_NE(expected, nullptr);
+    EXPECT_EQ(outcome.changes.front().new_lib_cell_,
+              fixture.design()
+                  .design()
+                  ->getLibAcc()
+                  .getPhysLibCell(expected->getId())
+                  .getLibCellId());
+    const auto checked = fixture.checker().checkPlaceWithOverlays(
+        request,
+        eUTL::Rect(eUTL::UvDist(0),
+                   eUTL::UvDist(0),
+                   eUTL::UvDist(frt::kRowSites * frt::kSiteWidth),
+                   eUTL::UvDist(frt::kStandardRows * frt::kRowHeight - 1)),
+        {outcome.changes});
+    ASSERT_EQ(checked.size(), 1u);
+    EXPECT_TRUE(checked.front().isLegal);
+  }
+}
 
 class FillerRepairRuntimeE2E : public ::testing::TestWithParam<LayoutCase>
 {

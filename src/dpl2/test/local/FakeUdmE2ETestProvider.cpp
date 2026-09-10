@@ -216,6 +216,12 @@ void buildDesign(fake_udm::DesignDb& db, const DesignSetup& setup)
   fake_udm::DesignDb::addShape(
       narrowBuffer, 3, kRowHeight / 2, kRowHeight);
 
+  eLIB::PhysLibCell& singleSiteThirdVt
+      = db.addMaster("FS1", 19, 1, kRowHeight, true);
+  fake_udm::DesignDb::addShape(singleSiteThirdVt, 4, 0, kRowHeight / 2);
+  fake_udm::DesignDb::addShape(
+      singleSiteThirdVt, 5, kRowHeight / 2, kRowHeight);
+
   int rowIndexOffset = 0;
   if (setup.padRowFirst) {
     db.desMgr().addRow(setup.padRowOriginX,

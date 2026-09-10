@@ -1082,6 +1082,78 @@ void testRetilerNeverOverlapsOrFillsOutsideReleasedSites()
   }
 }
 
+TEST(FillerRetiler, AllTwoByFourGapMasksMatchIndependentReachability)
+{
+  // Includes disconnected gaps, stairs, holes and full-row strips. Compute
+  // tileable masks independently by adding every possible disjoint rectangle.
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {10, 2, 1}, {11, 3, 1}, {12, 1, 2}, {13, 2, 2}};
+  std::vector<unsigned> rectangles;
+  for (const auto& footprint : footprints) {
+    for (int row = 0; row + footprint.heightRows <= 2; ++row) {
+      for (int col = 0; col + footprint.widthSites <= 4; ++col) {
+        unsigned mask = 0;
+        for (int r = row; r < row + footprint.heightRows; ++r) {
+          for (int c = col; c < col + footprint.widthSites; ++c) {
+            mask |= 1u << (4 * r + c);
+          }
+        }
+        rectangles.push_back(mask);
+      }
+    }
+  }
+  std::array<bool, 256> reachable{};
+  reachable[0] = true;
+  for (unsigned mask = 0; mask < reachable.size(); ++mask) {
+    if (reachable[mask]) {
+      for (const unsigned rectangle : rectangles) {
+        if ((mask & rectangle) == 0) {
+          reachable[mask | rectangle] = true;
+        }
+      }
+    }
+    std::vector<fr::internal::SiteCell> sites;
+    std::set<std::pair<fr::RowId, int>> expected;
+    for (int bit = 0; bit < 8; ++bit) {
+      if ((mask & (1u << bit)) != 0) {
+        sites.push_back({bit / 4, bit % 4});
+        expected.emplace(bit / 4, bit % 4);
+      }
+    }
+    const auto result = fr::internal::enumerateRetilings(sites, footprints);
+    EXPECT_EQ(!result.solutions.empty(), reachable[mask]) << "mask=" << mask;
+    for (const auto& tiling : result.solutions) {
+      EXPECT_EQ(coveredRetilerSites(tiling, footprints), expected);
+    }
+  }
+}
+
+TEST(FillerRetiler, PreferenceAndLegalityAreAppliedBeforeTheSolutionCap)
+{
+  const std::vector<fr::internal::SiteCell> sites{{0, 0}, {0, 1}};
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {10, 1, 1}, {11, 2, 1}, {12, 1, 1}};
+  fr::internal::RetileConfig config;
+  config.maxSolutions = 1;
+  const auto ordered = fr::internal::enumerateRetilings(
+      sites, footprints, config, [](const fr::internal::TiledFiller& tile) {
+        return std::optional<int>{tile.masterId == 10 ? 1 : 2};
+      });
+  ASSERT_EQ(ordered.solutions.size(), 1u);
+  ASSERT_EQ(ordered.solutions.front().size(), 2u);
+  EXPECT_EQ(ordered.solutions.front().front().masterId, 10);
+  const auto filtered = fr::internal::enumerateRetilings(
+      sites,
+      footprints,
+      config,
+      [](const fr::internal::TiledFiller& tile) -> std::optional<int> {
+        return tile.masterId != 10 ? std::optional<int>{0} : std::nullopt;
+      });
+  ASSERT_EQ(filtered.solutions.size(), 1u);
+  ASSERT_EQ(filtered.solutions.front().size(), 1u);
+  EXPECT_EQ(filtered.solutions.front().front().masterId, 11);
+}
+
 // --- Fixtures ---------------------------------------------------------------
 
 // Master id scheme: filler = width*10 + vt (e.g. 42 = width-4 VT2);

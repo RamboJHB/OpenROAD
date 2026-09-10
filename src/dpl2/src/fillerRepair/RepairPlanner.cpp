@@ -1147,18 +1147,25 @@ std::vector<FillerDomain> rankFillers(
     const PlacedInstance* filler = view.instance(id);
     const VtId majorityVt =
         filler != nullptr ? neighborMajorityVt(view, *filler) : kUnknownVt;
+    const bool isAddition
+        = view.cellChangeRecord(id, domain.options.front().newMasterId).op_
+          == OpType::Add;
     const auto optionKey = [&](const Swap& s) {
+      const MasterInfo* master = view.masterInfo(s.newMasterId);
+      const int addOrder
+          = isAddition && master != nullptr ? master->addOrder : 0;
       const bool third = s.newVt != anchorVt && s.newVt != majorityVt;
       const int anchorVote = s.newVt == anchorVt ? 0 : 1;
       const int majorityVote = s.newVt == majorityVt ? 0 : 1;
-      return std::make_tuple(third, anchorVote, majorityVote, s.newMasterId);
+      return std::make_tuple(
+          addOrder, third, anchorVote, majorityVote, s.newMasterId);
     };
     std::stable_sort(domain.options.begin(), domain.options.end(),
                      [&](const Swap& a, const Swap& b) {
                        return optionKey(a) < optionKey(b);
                      });
     for (const Swap& s : domain.options) {
-      demoted += std::get<0>(optionKey(s)) ? 1 : 0;
+      demoted += std::get<1>(optionKey(s)) ? 1 : 0;
     }
     ranked.push_back(std::move(domain));
   }

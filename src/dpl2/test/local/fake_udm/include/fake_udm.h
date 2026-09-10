@@ -5,7 +5,9 @@
 // infrastructure (Network/Grid/fillerSetting), the final
 // ipl::ImplantLayerChecker, and the fillerRepair runtime engine (including
 // the test-only fixture that wires supplied Grid/Network).
-// NOT a behavioral UDM: only the accessors those files call are modeled.
+// Also models the synchronous Add/Replace/Delete and placement changes used
+// by DePlace::commit. New change signatures below are local test contracts;
+// the destination UDM ABI must still be checked before porting commit code.
 //
 // Data flow for tests: build a fake_udm::DesignDb (tech layers, lib cells,
 // rows, cells), then db.activate() to make it the Session's current design.
@@ -19,6 +21,7 @@
 #include <cstdint>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <map>
 #include <memory>
 #include <sstream>
@@ -1201,11 +1204,29 @@ enum class UnlChangePhaseE
 class NlEditor
 {
  public:
-  explicit NlEditor(Design* design) : design_(design) {}
+  explicit NlEditor(Design* design) : design_(design)
+  {
+    if (design != nullptr) {
+      for (const auto& [id, cell] : design->getPhysDesMgr()->cells_) {
+        (void) cell;
+        next_cell_id_
+            = std::max(next_cell_id_, int64_t{id.getIndexValue()} + 1);
+      }
+    }
+  }
   Design* getDesign() const { return design_; }
+  // Reserve only in this editor, not in the DB. Multiple Adds can therefore
+  // be checked together, including ID exhaustion, before the first mutation.
+  LeafCellID allocateCellId()
+  {
+    return next_cell_id_ <= std::numeric_limits<int>::max()
+               ? LeafCellID(0, static_cast<int>(next_cell_id_++))
+               : LeafCellID();
+  }
 
  private:
   Design* design_ = nullptr;
+  int64_t next_cell_id_ = 0;
 };
 
 class UnlChange_sizeCell
@@ -1271,6 +1292,106 @@ class UnlChange_removeCell
  private:
   Design& design_;
   LeafCellID cell_id_;
+};
+
+// Local missing-operation support. IDs are never recycled, including after
+// deletion; feasibility is read-only so a rejected batch leaves the DB intact.
+class UnlChange_addCell
+{
+ public:
+  UnlChange_addCell(NlEditor* editor,
+                    Design& design,
+                    UnlChangePhaseE,
+                    const std::string& name,
+                    eFNL::ModuleID master,
+                    eUTL::Point2D origin,
+                    eUTL::PhysOrientation orientation)
+      : design_(design),
+        name_(name),
+        master_(master),
+        origin_(origin),
+        orientation_(orientation),
+        cell_id_(editor->allocateCellId())
+  {
+  }
+
+  bool feasible() const
+  {
+    if (name_.empty() || !master_.isValid() || !cell_id_.isValid()
+        || design_.getPhysDesMgr()->cells_.count(cell_id_) != 0
+        || design_.getLibAcc().getLibCell(master_) == nullptr) {
+      return false;
+    }
+    for (const auto& [id, cell] : design_.getPhysDesMgr()->cells_) {
+      (void) id;
+      if (cell.valid && cell.name == name_) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  void commit()
+  {
+    assert(feasible());
+    design_.getPhysDesMgr()->addCell(
+        cell_id_,
+        &design_.getLibAcc().getPhysLibCell(
+            eLIB::LibCellID(master_.block, master_.index)),
+        origin_.getX().getStorage(),
+        origin_.getY().getStorage(),
+        orientation_,
+        PhysObjStatus::PLACED,
+        name_);
+  }
+
+  LeafCellID getCellId() const { return cell_id_; }
+
+ private:
+  Design& design_;
+  std::string name_;
+  eFNL::ModuleID master_;
+  eUTL::Point2D origin_;
+  eUTL::PhysOrientation orientation_;
+  LeafCellID cell_id_;
+};
+
+class UnlChange_placeCell
+{
+ public:
+  UnlChange_placeCell(NlEditor*,
+                      Design& design,
+                      UnlChangePhaseE,
+                      LeafCellID cellId,
+                      eUTL::Point2D origin,
+                      eUTL::PhysOrientation orientation)
+      : design_(design),
+        cell_id_(cellId),
+        origin_(origin),
+        orientation_(orientation)
+  {
+  }
+
+  bool feasible() const
+  {
+    const auto cell = design_.getPhysDesMgr()->getPhysCell(cell_id_);
+    return cell.isValid() && cell.getStatus() != PhysObjStatus::LOC_FIXED;
+  }
+
+  void commit()
+  {
+    assert(feasible());
+    auto& cell = design_.getPhysDesMgr()->cells_.at(cell_id_);
+    cell.origin = origin_;
+    cell.orient = orientation_;
+    cell.status = PhysObjStatus::PLACED;
+  }
+
+ private:
+  Design& design_;
+  LeafCellID cell_id_;
+  eUTL::Point2D origin_;
+  eUTL::PhysOrientation orientation_;
 };
 
 }  // namespace eUNL

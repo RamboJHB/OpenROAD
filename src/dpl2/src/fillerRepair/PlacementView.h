@@ -49,6 +49,9 @@ struct MasterInfo
   // R0-frame layout -- a mismatched layout puts every band on the opposite
   // track and the checker rejects the overlay (polarity mismatch).
   BandPolarity bottomBandPolarity = BandPolarity::N;
+  // Priority for uncommitted Add choices only. Zero keeps the planner's VT
+  // heuristics; positive values follow the configured filler master order.
+  int addOrder = 0;
 };
 
 struct PlacedInstance

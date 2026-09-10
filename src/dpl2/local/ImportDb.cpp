@@ -298,6 +298,13 @@ bool importOpenRoadDb(odb::dbDatabase* database,
     out << "ERROR: filler configuration failed: " << error.what() << '\n';
     return false;
   }
+  // Filler options are setup data. Finalize them before the first checker
+  // request; ordinary placement commits reuse this checker and its engine.
+  deplace->getNetwork()->updateFillerClassification(*setting);
+  deplace->getPlacementDRC()->addChecker(
+      DRCCheckerType::ImplantLayer,
+      std::make_unique<ipl::ImplantLayerChecker>(
+          deplace->getGrid(), &openroad_design->design, deplace->getNetwork()));
   out << "dpl2 grid: " << deplace->getGrid()->getRowCount().v << " x "
       << deplace->getGrid()->getRowSiteCount().v
       << ", fullUtil=" << deplace->getGrid()->isFullUtil() << '\n';

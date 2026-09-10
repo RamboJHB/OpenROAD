@@ -44,10 +44,12 @@ DePlace
 
 `isLegal` overlays one old standard cell. DePlace `findLegal` collects every
 filler intersecting the proposed target and passes those caller-owned Delete
-records directly through `PlacementDRC`; empty target sites are allowed. The
+records directly through `PlacementDRC`; every target site must already be
+covered by a deleted filler. A larger deleted area alone is insufficient. The
 `test_filler_repair` command similarly resolves every `-inst` selection into a
 Delete overlay and calls the checker without first mutating Grid or Network.
-Both flows remain pre-commit and non-mutating.
+`findLegal` remains a non-mutating probe. On acceptance, `test_filler_repair`
+commits the complete target/overlay/repair batch through `DePlace::commit`.
 
 ## Files to migrate
 
@@ -94,8 +96,8 @@ The concrete destination touch points are:
   fillerSetting;
 - `src/dpl2/src/Place.cpp`: collects all target-intersecting fillers for
   findLegal and passes their Delete overlays through the existing API;
-- `src/dpl2/dpl2ui/testFillerRepairCmd.cc`: direct checker probe for selected
-  filler Deletes, with Add/Replace validation and reporting;
+- `src/dpl2/dpl2ui/testFillerRepairCmd.cc`: direct checker call for selected
+  filler Deletes, with Add/Replace validation, reporting and full commit;
 - `src/dpl2/src/infrastructure/Objects.h`: shared `CellChangeRecord` wire, if
   the destination does not already have the same definition.
 
@@ -162,6 +164,50 @@ other bad records and requests fail with empty changes and structured
 `[fr]` logs.
 
 ## Verification
+
+The 2026-09-10 follow-up adds ordered gap filling and the local commit path:
+
+- Add candidates honor the configured filler master order when `follow order`
+  is enabled, including ordering different footprints before the tiling cap.
+  Site/orientation filtering precedes ranking. When disabled, the prior VT
+  heuristic remains; existing filler swaps keep their prior ranking.
+- Gaps are exactly `deleted sites - target sites`, with explicit target-set
+  containment. Tests cover all 256 masks of a 2-by-4 site region, cross-row
+  corner insertion, disconnected gaps and larger-but-incomplete overlays.
+  Search caps still apply; accepted output is exact and non-overlapping, but
+  an existing solution is not guaranteed to be found within those caps.
+- `avoid pattern` is deliberately deferred, not silently enforced or inferred.
+- The existing `DePlace::commit` now handles Add, Replace and Delete in one
+  batch. It preflights IDs, names, masters, geometry, occupancy, reservations
+  and operation feasibility before mutation. Rejections leave DB/Network/Grid
+  untouched. This is synchronous commit, not a rollback journal for allocator
+  failures or unexpected UDM exceptions. Group-owned/fixed cells and non-core
+  placement changes are outside this path and are rejected.
+- Commit clears old pixels and padding before deleting nodes, updates DB
+  placement/classification and lookup maps, and paints the final instances.
+  Coordinates on the existing wire remain core-relative; DB coordinates are
+  absolute. No engine/checker API or transaction wire was added.
+- `test_filler_repair` commits the temporary target, caller Delete overlays
+  and returned filler changes. A std-to-std replacement keeps its DB identity
+  and nets; an insertion gets a unique `FR_TARGET_<old DB id>[_suffix]` name.
+  Added fillers retain the configured prefix and repair-generated name.
+- The missing UDM Add/placement change operations are implemented in
+  `test/local/fake_udm/include/fake_udm.h`. Their signatures are local test
+  contracts, not verified destination UDM declarations. The existing local
+  OpenROAD wire still uses an in-memory UDM projection of ODB: commits change
+  that projection, not the source ODB block or a subsequent `write_def`.
+- Executable tests now link the real command and DePlace implementation,
+  covering mixed batches, multi-filler gap insertion, unchanged std identity,
+  filler swaps, fresh IDs, name collisions, ID exhaustion, rejected batches,
+  padding cleanup, core offsets and a second repair on the same live checker.
+- Default DePlace checker construction follows Grid initialization. The local
+  import finalizes filler classification/checker setup after filler options.
+
+Validation on 2026-09-10: normal and ASan builds both passed all 400 CTest
+cases (25.72 seconds and 84.01 seconds respectively), including 12 executable
+commit/command tests. Local `ImportDb.cpp` also passed a C++20 syntax-only
+compile against the repository OpenDB and fake-UDM headers. This does not
+validate real UDM linkage, source-ODB writeback or real-net connectivity.
 
 The 2026-09-09 maintenance pass keeps the public engine/checker wire unchanged:
 
@@ -234,8 +280,9 @@ The gate compiles:
 - Confirm fillerSetting is complete before `initPlacementDRC()`.
 - Confirm opto treats all Delete records as caller-owned target overlay input
   and commits those deletions plus returned filler Add/Replace records in one
-  transaction. The generic `DePlace::commit` path still ignores `OpType::Add`,
-  so it is not yet the transaction owner for this buffer-insertion flow.
+  transaction. `DePlace::commit` implements this flow against the local UDM
+  change contracts; map its Add/placement operations to real destination UDM
+  APIs and verify that backend's mutation/error semantics before porting it.
 - Establish a commit/read barrier that keeps DB/Grid/Network synchronized;
   ordinary commits do not require checker replacement, but static setup changes do.
 - Run a real-UDM design with both isLegal and findLegal; fake UDM is only a

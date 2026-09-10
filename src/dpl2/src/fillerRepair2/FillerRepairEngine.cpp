@@ -15,6 +15,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <utility>
@@ -37,6 +38,7 @@ struct PlacementMetadata
   DbCoord siteWidth = 0;
   DbCoord rowHeight = 0;
   DbCoord defaultHaloX = 0;
+  bool followFillerOrder = false;
   std::vector<RowId> rows;
   std::vector<std::optional<MasterRef>> masters;
   std::vector<MasterId> fillerMasterIds;
@@ -795,6 +797,7 @@ void FillerRepairEngine::Impl::buildPlannerData()
     std::vector<MasterId> configured;
     std::string source = "Network filler flags";
     if (const fillerSetting* setting = network_->getFillerSetting()) {
+      placement_.followFillerOrder = setting->getFollowOrder();
       const auto& configuredCells = setting->getFillerCells();
       if (!configuredCells.empty()) {
         source = "fillerSetting";
@@ -825,6 +828,10 @@ void FillerRepairEngine::Impl::buildPlannerData()
         continue;
       }
       placement_.fillerMasterIds.push_back(id);
+      if (placement_.followFillerOrder) {
+        placement_.masters[id]->info.addOrder
+            = static_cast<int>(placement_.fillerMasterIds.size());
+      }
     }
     std::sort(placement_.fillerMasterIds.begin(),
               placement_.fillerMasterIds.end());
@@ -878,6 +885,13 @@ void FillerRepairEngine::Impl::buildPlannerData()
     }
 
     const int reachSites = checker_.getMaxRuleValue();
+    for (auto& [size, masters] : placement_.retileMastersBySize) {
+      (void) size;
+      std::stable_sort(
+          masters.begin(), masters.end(), [&](MasterId a, MasterId b) {
+            return masterInfo(a)->addOrder < masterInfo(b)->addOrder;
+          });
+    }
     const DbCoord checkerReach
         = static_cast<DbCoord>(reachSites) * placement_.siteWidth;
 
@@ -1698,8 +1712,16 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                    filler->rowId + static_cast<RowId>(master->height)));
     }
 
-    // The target may cover pre-existing whitespace, but it may not hide an
-    // unchanged cell. Only the selected Delete fillers are removed.
+    // findLegal supplies a union of Delete fillers covering the whole target.
+    // A larger area is not sufficient: every target site must be included.
+    if (!std::includes(deletedSites.begin(),
+                       deletedSites.end(),
+                       targetSites.begin(),
+                       targetSites.end())) {
+      skip("IncompleteFillerCoverage",
+           "Delete fillers must cover every site of the temporary target");
+      return result;
+    }
     for (const internal::SiteCell& site : targetSites) {
       const Pixel* pixel
           = grid_->gridPixel(GridX{site.colId}, GridY{site.rowId});
@@ -1757,10 +1779,73 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       return result;
     }
 
+    // Cache position-dependent choices only for this repair. Reject unusable
+    // footprints during tiling, before they consume the solution cap.
+    std::map<std::tuple<RowId, int, MasterId>, std::vector<LayoutMasterOption>>
+        tileOptions;
+    const auto optionsFor = [&](const internal::TiledFiller& tile)
+        -> const std::vector<LayoutMasterOption>& {
+      auto [entry, inserted] = tileOptions.try_emplace(
+          std::make_tuple(tile.rowId, tile.colId, tile.masterId));
+      auto& options = entry->second;
+      if (!inserted) {
+        return options;
+      }
+      const MasterInfo* footprint = masterInfo(tile.masterId);
+      if (footprint == nullptr) {
+        return options;
+      }
+      for (const MasterId candidate : placement_.retileMastersBySize.at(
+               {footprint->width, footprint->height})) {
+        const Master* networkMaster = network_->getMaster(candidate);
+        if (networkMaster == nullptr || !networkMaster->isFiller()) {
+          continue;
+        }
+        const eLIB::PhysLibCell* physCell = networkMaster->getPhysLibCell();
+        const eLIB::TechSite* site
+            = physCell != nullptr ? physCell->getTechSite() : nullptr;
+        std::optional<eUTL::PhysOrientation> orientation;
+        if (site != nullptr) {
+          orientation = grid_->getSiteOrientation(
+              GridX{tile.colId}, GridY{tile.rowId}, site->getName());
+        } else {
+          // Database-free fixtures retain the deleted filler as row context.
+          const Pixel* released
+              = grid_->gridPixel(GridX{tile.colId}, GridY{tile.rowId});
+          if (released != nullptr && released->cell != nullptr) {
+            orientation = released->cell->getOrient();
+          }
+        }
+        if (orientation.has_value() && supportedOrientation(*orientation)) {
+          options.push_back({candidate, *orientation});
+        }
+      }
+      if (!placement_.followFillerOrder) {
+        const auto preferred = std::find_if(
+            options.begin(), options.end(), [&](const auto& option) {
+              return masterInfo(option.masterId)->vt == replacement->vt;
+            });
+        if (preferred != options.end()) {
+          std::rotate(options.begin(), preferred, preferred + 1);
+        }
+      }
+      return options;
+    };
+    const auto tilePreference
+        = [&](const internal::TiledFiller& tile) -> std::optional<int> {
+      const auto& options = optionsFor(tile);
+      if (options.empty()) {
+        return std::nullopt;
+      }
+      return masterInfo(options.front().masterId)->addOrder;
+    };
+
     const internal::RetileResult tilings = internal::enumerateRetilings(
         std::vector<internal::SiteCell>(releasedSites.begin(),
                                         releasedSites.end()),
-        footprints);
+        footprints,
+        {},
+        tilePreference);
     log_.block("engine",
                "Retiling search",
                {{"deleted fillers", cat(overlayInstanceIds.size())},
@@ -1788,71 +1873,12 @@ RepairOutcome FillerRepairEngine::Impl::repair(
           usable = false;
           break;
         }
-        std::vector<LayoutMasterOption> options;
-        MasterId chosen = -1;
-        int matchingFootprints = 0;
-        int orientedFootprints = 0;
-        const auto& sameSize = placement_.retileMastersBySize.at(
-            {footprintMaster->width, footprintMaster->height});
-        for (const MasterId candidate : sameSize) {
-          const MasterInfo* master = masterInfo(candidate);
-          const Master* networkMaster = network_->getMaster(candidate);
-          const eLIB::PhysLibCell* physCell
-              = networkMaster != nullptr ? networkMaster->getPhysLibCell()
-                                         : nullptr;
-          const eLIB::TechSite* site
-              = physCell != nullptr ? physCell->getTechSite() : nullptr;
-          if (master == nullptr || networkMaster == nullptr
-              || !networkMaster->isFiller()) {
-            continue;
-          }
-          ++matchingFootprints;
-          std::optional<eUTL::PhysOrientation> orientation;
-          if (site != nullptr) {
-            orientation
-                = grid_->getSiteOrientation(GridX{tile.colId},
-                                            GridY{tile.rowId},
-                                            site->getName());
-          } else {
-            // Database-free checker fixtures do not carry PhysLibCell/site
-            // objects. The released site is still painted by a selected
-            // filler, whose committed orientation is the row orientation.
-            const Pixel* released
-                = grid_->gridPixel(GridX{tile.colId}, GridY{tile.rowId});
-            if (released != nullptr && released->cell != nullptr) {
-              orientation = released->cell->getOrient();
-            }
-          }
-          if (!orientation.has_value()
-              || !supportedOrientation(*orientation)) {
-            continue;
-          }
-          ++orientedFootprints;
-          options.push_back(LayoutMasterOption{candidate, *orientation});
-          if (chosen < 0
-              || (master->vt == replacement->vt
-                  && masterInfo(chosen)->vt != replacement->vt)) {
-            chosen = candidate;
-          }
-        }
-        if (chosen < 0) {
-          log_.block("engine",
-                     "Unusable retiling tile",
-                     {{"row", cat(tile.rowId)},
-                      {"col", cat(tile.colId)},
-                      {"footprint master", cat(tile.masterId)},
-                      {"matching footprints", cat(matchingFootprints)},
-                      {"oriented footprints", cat(orientedFootprints)},
-                      {"configured candidates",
-                       cat(placement_.fillerMasterIds.size())}});
+        std::vector<LayoutMasterOption> options = optionsFor(tile);
+        if (options.empty()) {
           usable = false;
           break;
         }
-        const auto chosenOption = std::find_if(
-            options.begin(), options.end(), [chosen](const auto& option) {
-              return option.masterId == chosen;
-            });
-        std::rotate(options.begin(), chosenOption, chosenOption + 1);
+        const MasterId chosen = options.front().masterId;
 
         const std::string name
             = cat(addedFillerNamePrefix,

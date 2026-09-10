@@ -8,10 +8,12 @@
 
 #pragma once
 
-#include <cstddef>
-#include <vector>
-
 #include <fillerRepair/RepairTypes.h>
+
+#include <cstddef>
+#include <functional>
+#include <optional>
+#include <vector>
 
 namespace dpl2::fillerRepair::internal {
 
@@ -58,8 +60,14 @@ struct RetileResult
   std::size_t searchStates = 0;
 };
 
-RetileResult enumerateRetilings(std::vector<SiteCell> emptySites,
-                                std::vector<FillerFootprint> footprints,
-                                RetileConfig config = {});
+// The optional callback rejects a tile with nullopt, or ranks its available
+// masters at this position (lower first). Called synchronously before a tiling
+// consumes a solution slot; ties keep the largest-footprint-first order.
+RetileResult enumerateRetilings(
+    std::vector<SiteCell> emptySites,
+    std::vector<FillerFootprint> footprints,
+    RetileConfig config = {},
+    const std::function<std::optional<int>(const TiledFiller&)>& preference
+    = {});
 
 }  // namespace dpl2::fillerRepair::internal

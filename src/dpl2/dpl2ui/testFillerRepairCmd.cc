@@ -257,13 +257,20 @@ bool TestFillerRepairCmd::exec()
 
   std::vector<CellChangeRecord> overlayChanges;
   overlayChanges.reserve(overlays.size());
-  std::cout << "checker probe: targetMaster=" << targetMaster->getId()
+  std::cout << "checker request: targetMaster=" << targetMaster->getId()
             << " overlays=" << overlays.size() << " origin=(" << left << ','
             << bottom << ")\n";
   for (const Node* node : overlays) {
     overlayChanges.push_back(deleteRecord(*node));
-    std::cout << "    node=" << node->getId()
-              << " master=" << node->getMaster()->getId()
+    std::cout << "    overlay delete: cellId=" << node->getId()
+              << " dbId=" << node->getDbInst().getIndexValue() << " name="
+              << design->getHierMgr()->getLeafCell(node->getDbInst()).getName()
+              << " master="
+              << node->getMaster()->getPhysLibCell()->getLibCell().getName()
+              << " masterId=" << node->getMaster()->getId()
+              << " widthSites=" << grid->gridWidth(node).v << " origin=("
+              << node->getLeft().v << ',' << node->getBottom().v
+              << ") orient=" << static_cast<int>(node->getOrient().getValue())
               << " kind=" << (node->isFiller() ? "filler" : "std") << '\n';
   }
 
@@ -284,8 +291,82 @@ bool TestFillerRepairCmd::exec()
     const ipl::CheckRequest request{
         &temporary, x, y, *orientation, overlayChanges};
     printRejectedRequest(checker->checkDirect(request));
+    return false;
   }
-  return accepted;
+
+  // The temporary Node's bound ID identifies an overlay, not a newly created
+  // instance. Only a one-to-one std replacement preserves that identity (and
+  // its existing net connections); filler insertion needs a fresh DB cell.
+  std::vector<CellChangeRecord> transaction;
+  if (overlays.size() == 1 && !overlays.front()->isFiller()) {
+    transaction.push_back(
+        CellChangeRecord{OpType::Replace,
+                         overlays.front()->getDbInst(),
+                         UvDist(left),
+                         UvDist(bottom),
+                         overlays.front()->getMaster()->getDbMaster(),
+                         targetMaster->getDbMaster(),
+                         *orientation});
+  } else {
+    transaction = overlayChanges;
+    std::set<std::string> names;
+    for (const auto& [id, node] : network->getNodes()) {
+      (void) id;
+      if (node != nullptr && node->getDbInst().isValid()) {
+        names.insert(
+            design->getHierMgr()->getLeafCell(node->getDbInst()).getName());
+      }
+    }
+    for (const auto& change : changes) {
+      if (const auto* name = std::get_if<std::string>(&change.cell_data_)) {
+        names.insert(*name);
+      }
+    }
+    const std::string base
+        = "FR_TARGET_" + std::to_string(temporary.getDbInst().getIndexValue());
+    std::string name = base;
+    for (int suffix = 1; names.count(name) != 0; ++suffix) {
+      name = base + "_" + std::to_string(suffix);
+    }
+    transaction.push_back(CellChangeRecord{OpType::Add,
+                                           name,
+                                           UvDist(left),
+                                           UvDist(bottom),
+                                           eLIB::LibCellID(),
+                                           targetMaster->getDbMaster(),
+                                           *orientation});
+  }
+  transaction.insert(transaction.end(), changes.begin(), changes.end());
+  if (!dePlace->commit(transaction)) {
+    std::cout << "ERROR: commit rejected; placement was not changed\n";
+    return false;
+  }
+  std::cout << "COMMITTED: target + " << overlayChanges.size()
+            << " overlay(s) + " << changes.size() << " filler change(s)\n";
+  for (const auto& record : transaction) {
+    const auto* id = std::get_if<eUNL::LeafCellID>(&record.cell_data_);
+    Node* node = id != nullptr
+                     ? network->getNode(*id)
+                     : findNode(*network,
+                                *design,
+                                std::get<std::string>(record.cell_data_));
+    if (record.op_ == OpType::Delete) {
+      std::cout << "    delete dbId=" << id->getIndexValue() << '\n';
+      continue;
+    }
+    const auto& physical = *node->getMaster()->getPhysLibCell();
+    std::cout << "    " << (record.op_ == OpType::Add ? "add" : "swap")
+              << " cellId=" << node->getId()
+              << " dbId=" << node->getDbInst().getIndexValue() << " name="
+              << design->getHierMgr()->getLeafCell(node->getDbInst()).getName()
+              << " master=" << physical.getLibCell().getName()
+              << " masterId=" << node->getMaster()->getId()
+              << " widthSites=" << grid->gridWidth(node).v << " origin=("
+              << node->getLeft().v << ',' << node->getBottom().v
+              << ") orient=" << static_cast<int>(node->getOrient().getValue())
+              << '\n';
+  }
+  return true;
 }
 
 }  // namespace dpl2

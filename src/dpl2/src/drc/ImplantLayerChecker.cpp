@@ -1952,8 +1952,8 @@ std::vector<Violation> ImplantLayerChecker::makeViolations(
 }
 
 // Confirm one-to-one std-cell replacement, or validate a filler overlay whose
-// selected fillers intersect the target. Filler coverage may be partial and
-// may extend outside the target; the repair engine fills that released area.
+// selected fillers intersect and fully cover the target. Their union may extend
+// outside the target; the repair engine fills exactly that released area.
 OverlapInfo ImplantLayerChecker::checkOverlap(
     const CheckRequest& request) const
 {
@@ -2031,15 +2031,21 @@ OverlapInfo ImplantLayerChecker::checkOverlap(
         for (GridX x = request.x; x < targetXh; ++x) {
             const Pixel* pixel = grid_->gridPixel(x, y);
             const Node* occupant = pixel != nullptr ? pixel->cell : nullptr;
+            if (pixel != nullptr && occupant == nullptr) {
+              info.diags = Diagnostic{"incomplete_target_overlay",
+                                      "Delete fillers must cover every site of "
+                                      "the temporary target"};
+              return info;
+            }
             if (pixel == nullptr || !pixel->is_valid
                 || pixel->padding_reserved_by != nullptr
                 || (occupant != nullptr
                     && info.fillers.find(occupant->getId())
                            == info.fillers.end())) {
-                info.diags = Diagnostic{
-                    "target_overlaps_unchanged_instance",
-                    "temporary target must cover legal whitespace or selected fillers only"};
-                return info;
+              info.diags = Diagnostic{"target_overlaps_unchanged_instance",
+                                      "temporary target must cover legal sites "
+                                      "owned by selected fillers only"};
+              return info;
             }
         }
     }

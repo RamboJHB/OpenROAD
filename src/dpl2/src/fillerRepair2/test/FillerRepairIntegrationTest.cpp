@@ -901,6 +901,55 @@ TEST_P(FillerRepairIntegrationTest,
   EXPECT_TRUE(changes.empty());
 }
 
+TEST_P(FillerRepairIntegrationTest, LargerDeletedAreaMustActuallyContainTarget)
+{
+  auto data = input(GetParam());
+  data.rules.clear();
+  data.masters.push_back(twoRowMaster(6, true, 2 * kSiteWidth));
+  data.masters.push_back(master(7, 0, false, 3 * kSiteWidth));
+  data.fillerSetting.fillerMasterIds.push_back(6);
+  data.placedInsts.erase(
+      std::remove_if(data.placedInsts.begin(),
+                     data.placedInsts.end(),
+                     [](const PlacedInst& placed) {
+                       return (placed.rowId <= 1 && placed.colId >= 2
+                               && placed.colId < 4)
+                              || (placed.rowId == 0 && placed.colId >= 4
+                                  && placed.colId < 6);
+                     }),
+      data.placedInsts.end());
+  data.placedInsts.push_back(
+      {nodeId(0, 2), 6, 0, 2, PhysOrientationE::R0, true});
+  ImplantLayerCheckerHelper helper;
+  helper.initialize(data);  // intentionally includes uncovered target sites
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+  helper.initChecker(checker);
+  const Node* removed = helper.getNetwork()->getNode(nodeId(0, 2));
+  ASSERT_NE(removed, nullptr);
+  Node temporary;
+  temporary.setId(removed->getId());
+  temporary.setDbInst(removed->getDbInst());
+  temporary.setMaster(helper.getNetwork()->getMaster(7));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(DbuX{3 * kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  const CheckRequest request{&temporary,
+                             GridX{3},
+                             GridY{0},
+                             PhysOrientationE::R0,
+                             {deleteRecord(*removed)}};
+  // Four deleted sites are more than three target sites, but do not contain
+  // the target. Area/bounding-box comparisons must not accept this request.
+  const auto direct = checker.checkDirect(request);
+  EXPECT_FALSE(direct.isLegal);
+  EXPECT_TRUE(hasDiagnostic(direct, "incomplete_target_overlay"));
+  fillerRepair::FillerRepairEngine engine(checker);
+  const auto result = engine.repair(request);
+  EXPECT_FALSE(result.hasSolution);
+  EXPECT_TRUE(result.changes.empty());
+  EXPECT_EQ(removed->getMaster()->getId(), 6);
+}
+
 TEST_P(FillerRepairIntegrationTest,
        TwoRowTargetAcceptsMultipleFillerExactCover)
 {

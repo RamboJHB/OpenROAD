@@ -34,8 +34,8 @@ set(DPL2_SRC "${CMAKE_CURRENT_LIST_DIR}/../src")
 
 # This interface target is the only fake/real UDM switch. Runtime sources
 # contain no fake include, compile definition, or conditional code. The fake
-# headers mirror the real eUNL/eLIB/ePHY/eUTL names and signatures and are used
-# solely to construct deterministic test data.
+# headers model eUNL/eLIB/ePHY/eUTL queries and deterministic test mutations.
+# The local Add/placement change contracts need destination UDM ABI validation.
 add_library(dpl2_test_udm INTERFACE)
 if(DPL2_TEST_USE_FAKE_UDM)
   target_include_directories(
@@ -154,9 +154,9 @@ target_link_libraries(dpl2_fr_deplace_compile_check PRIVATE
     dpl2_fr_chain_common dpl2::fillerRepair)
 dpl2_configure_chain_target(dpl2_fr_deplace_compile_check delivered)
 
-# Keep the local diagnostic command on the same public DePlace contract. It is
-# object-only because the destination command framework supplies registration
-# and Tcl linkage; compiling it here catches stale repair APIs immediately.
+# Keep the command on the same public DePlace contract. The local shim supplies
+# its option framework; the commit executable also links and runs this object
+# without the destination's Tcl registration layer.
 add_library(dpl2_fr_command_compile_check OBJECT
     "${CMAKE_CURRENT_LIST_DIR}/../dpl2ui/testFillerRepairCmd.cc")
 target_include_directories(
@@ -179,7 +179,8 @@ add_subdirectory("${DPL2_SRC}/fillerRepair" fillerRepair)
 # name. This prevents fillerRepair2 from drifting behind the exercised source
 # while keeping it out of runtime linkage and test behavior.
 foreach(shared_file IN ITEMS FillerRepairEngine.cpp FillerRepairEngine.h
-                             RepairPlanner.cpp RepairPlanner.h PlacementView.h)
+                             RepairPlanner.cpp RepairPlanner.h PlacementView.h
+                             FillerRetiler.cpp FillerRetiler.h)
   execute_process(
     COMMAND "${CMAKE_COMMAND}" -E compare_files
             "${DPL2_SRC}/fillerRepair/${shared_file}"
@@ -328,6 +329,21 @@ gtest_discover_tests(
 # constructs fake-UDM objects directly. Everything it links is otherwise the
 # same runtime chain.
 if(DPL2_TEST_USE_FAKE_UDM)
+  add_executable(dpl2_commit_test
+    "${CMAKE_CURRENT_LIST_DIR}/local/commit_test.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/local/FakeUdmE2ETestProvider.cpp")
+  target_include_directories(dpl2_commit_test PRIVATE
+    "${CMAKE_CURRENT_LIST_DIR}/../dpl2ui"
+    "${CMAKE_CURRENT_LIST_DIR}/../local/command_shim/include")
+  target_link_libraries(dpl2_commit_test PRIVATE
+    GTest::gtest_main dpl2_fr_deplace_compile_check
+    dpl2_fr_command_compile_check dpl2_filler_repair_compile_check
+    dpl2_fr_chain_common dpl2::fillerRepair)
+  dpl2_configure_chain_target(dpl2_commit_test strict)
+  gtest_discover_tests(dpl2_commit_test
+    TEST_PREFIX "commit." DISCOVERY_TIMEOUT 30
+    PROPERTIES ENVIRONMENT "FR_VERBOSE=1")
+
   add_executable(
     dpl2_filler_repair_e2e
     "${CMAKE_CURRENT_LIST_DIR}/local/e2e_cases.cpp"

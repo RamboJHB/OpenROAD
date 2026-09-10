@@ -657,17 +657,17 @@ bool DePlace::checkPixels(const Node* cell,
   std::vector<CellChangeRecord> ccRecords;
   if (fillerChanges != nullptr) {
     // Describe every filler intersected by the temporary target as a caller-
-    // owned Delete overlay. The checker/repair engine may accept partial
-    // coverage and retile any released sites outside the target; Grid and
-    // Network remain unchanged during this probe.
+    // owned Delete overlay. Every target site must be covered by these fillers;
+    // the repair engine retiles their released sites outside the target. Grid
+    // and Network remain unchanged during this probe.
     setGridLoc(const_cast<Node*>(cell), x, y);
     std::vector<Node*> replacedFillers;
     std::set<int> seenFillerIds;
     for (GridY y1 = y; y1 < y_end; ++y1) {
       for (GridX x1 = x; x1 < x_end; ++x1) {
         const Pixel* pixel = grid_->gridPixel(x1, y1);
-        if (pixel == nullptr
-            || (pixel->cell != nullptr && !pixel->cell->isFiller())) {
+        if (pixel == nullptr || pixel->cell == nullptr
+            || !pixel->cell->isFiller()) {
           return false;
         }
         if (pixel->cell != nullptr

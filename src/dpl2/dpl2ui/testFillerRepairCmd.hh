@@ -13,15 +13,16 @@ namespace dpl2 {
 //
 // Instance/master names and numeric Network ids are accepted. The instance
 // list may name one committed std cell or every filler covered by one target
-// std cell. The command builds a throw-away Node, invokes ImplantLayerChecker,
-// and never commits the target replacement or returned filler repairs.
+// std cell. The command checks a temporary Node, then commits its target,
+// caller Delete overlays and returned filler Add/Replace records together.
+// A one-to-one std replacement keeps the old DB identity and connections.
 class TestFillerRepairCmd : public uvTCL::CciCommand
 {
  public:
   TestFillerRepairCmd()
       : uvTCL::CciCommand("test_filler_repair",
-                          "test same-footprint std-cell replacement and "
-                          "surrounding filler repair",
+                          "check and commit std-cell placement with "
+                          "gap filling and surrounding filler repair",
                           false,
                           false,
                           false),

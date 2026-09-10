@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
 
+#include <PlacementDRC.h>
 #include <dpl2/DePlace.h>
 #include <infrastructure/Grid.h>
-#include <infrastructure/network.h>
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
-#include <PlacementDRC.h>
+#include <infrastructure/network.h>
+
+#include <set>
 
 namespace dpl2 {
 
@@ -45,6 +47,8 @@ DePlace::DePlace()
     setFixedGridCells();
     setPlacedGridCells();
     groupInitPixels();
+    // Checker construction reads row/site geometry from the initialized Grid.
+    initPlacementDRC();
   }
 }
 
@@ -145,70 +149,214 @@ bool DePlace::isLegal(LeafCellID instId, LibCellID masterId,
 }
 
 /**
- * @brief Apply a batch of CellChangeRecord to the design.
- *
- * Iterates over @p ccRecords and performs each operation:
- *    - OpType::Replace: swaps the cell's master via NlEditor sizeCell change,
- *      then updates the in-memory Node.
- *    - OpType::Delete: removes an existing cell.
- *    - OpType::Add: currently ignored by this generic commit path.
- *
- * @param ccRecords  Vector of CellChangeRecord describing the changes.
- * @return true on success.
+ * Apply a prevalidated Add/Replace/Delete batch. Record coordinates are core
+ * relative, while UDM placement coordinates are absolute. Callers own DRC and
+ * must serialize commits with placement readers. Invalid input is rejected
+ * before any DB, Network or Grid mutation; this is not an undo journal for
+ * allocation failures or unexpected UDM exceptions.
  */
 bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
 {
-  // for increasing coverage
+  if (ccRecords.empty()) {
+    return true;
+  }
+  if (design_ == nullptr || desMgr_ == nullptr || network_ == nullptr
+      || grid_ == nullptr || grid_->getPixelYSize() == 0) {
+    return false;
+  }
+
   eUNL::NlEditor editor(design_);
-  // eUNL::HierID hID = design_->getCurHier().getId();
-  for (const CellChangeRecord& cellChange : ccRecords) {
-    switch (cellChange.op_)
-    {
-    case OpType::Replace:
-    {
-      const eLIB::LibCell& oldLibCell = design_->getLibAcc().getLibCell(
-          cellChange.orig_lib_cell_);
-      eFNL::ModuleID oldModId = oldLibCell.getMaster();
-
-      const eLIB::LibCell& newLibCell = design_->getLibAcc().getLibCell(
-          cellChange.new_lib_cell_);
-      eFNL::ModuleID newModId = newLibCell.getMaster();
-      eUNL::UnlChange_sizeCell sizeCell(&editor, *design_,
+  struct Pending
+  {
+    Node* old = nullptr;
+    Node proposed;
+    std::unique_ptr<eUNL::UnlChange_addCell> add;
+    std::unique_ptr<eUNL::UnlChange_sizeCell> swap;
+    std::unique_ptr<eUNL::UnlChange_placeCell> place;
+    std::unique_ptr<eUNL::UnlChange_removeCell> remove;
+  };
+  std::vector<Pending> pending;
+  pending.reserve(ccRecords.size());
+  std::set<Node*> removedOccupants;
+  std::set<std::string> addedNames;
+  for (const auto& record : ccRecords) {
+    Pending entry;
+    if (record.op_ != OpType::Add) {
+      const auto* id = std::get_if<LeafCellID>(&record.cell_data_);
+      entry.old = id != nullptr ? network_->getNode(*id) : nullptr;
+      if (entry.old == nullptr || entry.old->getMaster() == nullptr
+          || entry.old->isFixed() || entry.old->isTerminal()
+          || entry.old->getGroup() != nullptr
+          || !removedOccupants.insert(entry.old).second) {
+        return false;
+      }
+      const auto physical = desMgr_->getPhysCell(*id);
+      if (!physical.isValid()
+          || physical.getStatus() == PhysObjStatus::LOC_FIXED
+          || physical.getPhysMaster().getLibCellId()
+                 != entry.old->getMaster()->getDbMaster()
+          || physical.getOrigin().getX() - network_->getCore().getXL()
+                 != UvDist(entry.old->getLeft().v)
+          || physical.getOrigin().getY() - network_->getCore().getYL()
+                 != UvDist(entry.old->getBottom().v)
+          || physical.getOrient() != entry.old->getOrient()
+          || (record.orig_lib_cell_.isValid()
+              && record.orig_lib_cell_
+                     != entry.old->getMaster()->getDbMaster())) {
+        return false;
+      }
+    }
+    if (record.op_ == OpType::Delete) {
+      entry.remove = std::make_unique<eUNL::UnlChange_removeCell>(
+          &editor,
+          *design_,
           eUNL::UnlChangePhaseE::PRE_CHANGE,
-          std::get<LeafCellID>(cellChange.cell_data_), oldModId, newModId);
-      assert(sizeCell.feasible());
-      sizeCell.commit();
-      // update in-memory data.
-      Node* cell = this->network_->getNode(std::get<LeafCellID>(
-          cellChange.cell_data_));
+          entry.old->getDbInst());
+      if (!entry.remove->feasible()) {
+        return false;
+      }
+      pending.push_back(std::move(entry));
+      continue;
+    }
+    if (record.op_ != OpType::Add && record.op_ != OpType::Replace) {
+      return false;
+    }
+    Master* master = network_->getMaster(record.new_lib_cell_);
+    if (master == nullptr || master->getPhysLibCell() == nullptr) {
+      return false;
+    }
+    const PhysLibCell& physicalMaster = *master->getPhysLibCell();
+    const auto orientation = record.orientation_;
+    if (orientation != PhysOrientationE::R0
+        && orientation != PhysOrientationE::R180
+        && orientation != PhysOrientationE::MX
+        && orientation != PhysOrientationE::MY) {
+      return false;
+    }
+    entry.proposed.setMaster(master);
+    entry.proposed.setType(master->isFiller() ? Node::FILLER : Node::CELL);
+    entry.proposed.setWidth(DbuX{physicalMaster.getWidth().getStorage()});
+    entry.proposed.setHeight(DbuY{physicalMaster.getHeight().getStorage()});
+    entry.proposed.setLeft(DbuX{record.x_.getStorage()});
+    entry.proposed.setBottom(DbuY{record.y_.getStorage()});
+    entry.proposed.setOrient(orientation);
+    if (physicalMaster.getType().isBlock() || physicalMaster.getType().isPad()
+        || physicalMaster.getType().isCover()
+        || entry.proposed.getWidth().v <= 0
+        || entry.proposed.getHeight().v <= 0) {
+      return false;
+    }
+    const Point2D origin(record.x_ + network_->getCore().getXL(),
+                         record.y_ + network_->getCore().getYL());
+    const auto newModule
+        = design_->getLibAcc().getLibCell(record.new_lib_cell_).getMaster();
+    if (record.op_ == OpType::Add) {
+      const auto* name = std::get_if<std::string>(&record.cell_data_);
+      if (name == nullptr || name->empty()
+          || !addedNames.insert(*name).second) {
+        return false;
+      }
+      entry.add = std::make_unique<eUNL::UnlChange_addCell>(
+          &editor,
+          *design_,
+          eUNL::UnlChangePhaseE::PRE_CHANGE,
+          *name,
+          newModule,
+          origin,
+          orientation);
+      if (!entry.add->feasible()) {
+        return false;
+      }
+    } else {
+      entry.proposed.setDbInst(entry.old->getDbInst());
+      const auto oldModule
+          = design_->getLibAcc()
+                .getLibCell(entry.old->getMaster()->getDbMaster())
+                .getMaster();
+      entry.swap = std::make_unique<eUNL::UnlChange_sizeCell>(
+          &editor,
+          *design_,
+          eUNL::UnlChangePhaseE::PRE_CHANGE,
+          entry.old->getDbInst(),
+          oldModule,
+          newModule);
+      entry.place = std::make_unique<eUNL::UnlChange_placeCell>(
+          &editor,
+          *design_,
+          eUNL::UnlChangePhaseE::PRE_CHANGE,
+          entry.old->getDbInst(),
+          origin,
+          orientation);
+      if (!entry.swap->feasible() || !entry.place->feasible()) {
+        return false;
+      }
+    }
+    pending.push_back(std::move(entry));
+  }
+
+  // Check final footprints together, ignoring only the old instances in this
+  // batch. Do not let record order authorize overlap or overwrite reservations.
+  std::set<Pixel*> claimed;
+  for (auto& entry : pending) {
+    if (entry.remove != nullptr) {
+      continue;
+    }
+    const int64_t right
+        = int64_t{entry.proposed.getLeft().v} + entry.proposed.getWidth().v;
+    const int64_t top
+        = int64_t{entry.proposed.getBottom().v} + entry.proposed.getHeight().v;
+    if (entry.proposed.getLeft().v < 0 || entry.proposed.getBottom().v < 0
+        || right > int64_t{network_->getCore().getXH().getStorage()}
+                       - network_->getCore().getXL().getStorage()
+        || top > int64_t{network_->getCore().getYH().getStorage()}
+                     - network_->getCore().getYL().getStorage()) {
+      return false;
+    }
+    const auto box = grid_->gridCovering(&entry.proposed);
+    if (box.xlo.v < 0 || box.ylo.v < 0 || box.xhi > grid_->getRowSiteCount()
+        || box.yhi > grid_->getRowCount()
+        || box.xlo.v * grid_->getSiteWidth().v != entry.proposed.getLeft().v
+        || box.xhi.v * grid_->getSiteWidth().v
+               != entry.proposed.getLeft().v + entry.proposed.getWidth().v
+        || grid_->gridYToDbu(box.ylo) != entry.proposed.getBottom()
+        || grid_->gridYToDbu(box.yhi)
+               != entry.proposed.getBottom() + entry.proposed.getHeight()) {
+      return false;
+    }
+    const auto padded = grid_->gridCoveringPadded(&entry.proposed);
+    for (GridY y = padded.ylo; y < padded.yhi; ++y) {
+      for (GridX x = padded.xlo; x < padded.xhi; ++x) {
+        Pixel* pixel = grid_->gridPixel(x, y);
+        if (pixel == nullptr || !pixel->is_valid
+            || (pixel->cell != nullptr
+                && removedOccupants.count(pixel->cell) == 0)
+            || (pixel->padding_reserved_by != nullptr
+                && removedOccupants.count(pixel->padding_reserved_by) == 0)
+            || !claimed.insert(pixel).second) {
+          return false;
+        }
+      }
+    }
+  }
+
+  for (Node* old : removedOccupants) {
+    grid_->erasePixel(old);
+  }
+  for (auto& entry : pending) {
+    if (entry.remove != nullptr) {
+      entry.remove->commit();
+      network_->deleteNode(entry.old);
+    } else if (entry.add != nullptr) {
+      entry.add->commit();
+      network_->addNode(entry.add->getCellId(), desMgr_);
+      grid_->paintPixel(network_->getNode(entry.add->getCellId()));
+    } else {
+      entry.swap->commit();
+      entry.place->commit();
       network_->updateNode(
-          cell, desMgr_,
-          design_->getLibAcc().getPhysLibCell(cellChange.new_lib_cell_));
-      break;
+          entry.old, desMgr_, *entry.proposed.getMaster()->getPhysLibCell());
+      grid_->paintPixel(entry.old);
     }
-
-    case OpType::Delete:
-    {
-      eUNL::UnlChange_removeCell removeCell(&editor,
-          *design_, eUNL::UnlChangePhaseE::PRE_CHANGE,
-          std::get<LeafCellID>(cellChange.cell_data_));
-      assert(removeCell.feasible());
-      removeCell.commit();
-      // update in-memory data.
-      Node* cell = this->network_->getNode(std::get<LeafCellID>(
-          cellChange.cell_data_));
-      network_->deleteNode(cell);
-      break;
-    }
-
-    case OpType::Add:
-    {
-    }
-
-    default:
-      break;
-    }
-
   }
   return true;
 }
@@ -320,9 +468,9 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   // inside legalCellInRect() is disabled.
   Node* search_cell = &cell;
   std::pair<int, int> Coordinate;
-  // checkPixels() accepts only an exact-cover filler at each candidate and
-  // builds that one filler Delete overlay internally. ccRecords receives only
-  // surrounding filler Replace records from the accepted candidate.
+  // checkPixels() collects every target-intersecting filler Delete overlay.
+  // Their union must cover the target; repair fills the remaining gaps and
+  // returns filler Add/Replace records from the accepted candidate.
   if (va == nullptr) {
     Coordinate = legalCellInRect(rect, search_cell, &ccRecords);
   } else {
@@ -365,8 +513,7 @@ Rect DePlace::getCoreArea()
 }
 
 // Asking isTerminal() rather than listing CELL and FILLER also keeps grid
-// occupancy independent of the filler/non-filler classification, which
-// Network::updateNode does not refresh after a master swap.
+// occupancy independent of the filler/non-filler classification.
 void DePlace::paintGridCell(Node* cell)
 {
   grid_->visitCellPixels(cell, false, [&](Pixel* pixel, bool padded) {

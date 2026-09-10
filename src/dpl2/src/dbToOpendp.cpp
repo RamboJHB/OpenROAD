@@ -31,7 +31,6 @@ void DePlace::importDb()
   grid_->examineRows(desMgr_);
   initEdgeTypeTable();
   createNetwork();
-  initPlacementDRC();
   setUpPlacementGroups();
   data_loaded_ = true;
 }
