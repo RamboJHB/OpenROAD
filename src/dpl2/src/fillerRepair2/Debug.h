@@ -79,9 +79,7 @@ class DebugLog
 
   // A named record. Each value stays paired with its label and long values
   // wrap beneath the record instead of extending one terminal-wide line.
-  void block(const char* stage,
-             const std::string& title,
-             std::initializer_list<DebugField> fields) const
+  void block(const char* stage, const std::string& title, std::initializer_list<DebugField> fields) const
   {
     if (!enabled_) {
       return;
@@ -96,9 +94,7 @@ class DebugLog
     lines.reserve(fields.size() + 1);
     for (const DebugField& field : fields) {
       const std::string label
-          = field.name.size() < labelWidth
-                ? field.name + std::string(labelWidth - field.name.size(), ' ')
-                : field.name;
+          = field.name.size() < labelWidth ? field.name + std::string(labelWidth - field.name.size(), ' ') : field.name;
       const std::vector<std::string> values = splitLogicalLines(field.value);
       lines.push_back(cat("  ", label, " : ", values.front()));
       const std::string continuation(labelWidth + 5, ' ');
@@ -109,9 +105,7 @@ class DebugLog
     emit(stage, wrapLines(lines), false);
   }
 
-  void list(const char* stage,
-            const std::string& title,
-            const std::vector<std::string>& items) const
+  void list(const char* stage, const std::string& title, const std::vector<std::string>& items) const
   {
     if (!enabled_) {
       return;
@@ -131,9 +125,7 @@ class DebugLog
   // A compact table with adaptive column widths. Wide cells are wrapped in
   // place, so adding a long diagnostic or master description never recreates
   // the unreadable one-line transcript this interface is meant to avoid.
-  void table(const char* stage,
-             const std::string& title,
-             const std::vector<std::string>& headers,
+  void table(const char* stage, const std::string& title, const std::vector<std::string>& headers,
              const std::vector<std::vector<std::string>>& rows) const
   {
     if (!enabled_) {
@@ -146,14 +138,11 @@ class DebugLog
 
     std::vector<size_t> widths(headers.size(), kMinColumnWidth);
     for (size_t col = 0; col < headers.size(); ++col) {
-      widths[col] = std::min(kMaxColumnWidth,
-                             std::max(kMinColumnWidth, headers[col].size()));
+      widths[col] = std::min(kMaxColumnWidth, std::max(kMinColumnWidth, headers[col].size()));
     }
     for (const auto& row : rows) {
       for (size_t col = 0; col < std::min(row.size(), widths.size()); ++col) {
-        widths[col]
-            = std::min(kMaxColumnWidth,
-                       std::max(widths[col], longestLogicalLine(row[col])));
+        widths[col] = std::min(kMaxColumnWidth, std::max(widths[col], longestLogicalLine(row[col])));
       }
     }
 
@@ -208,8 +197,7 @@ class DebugLog
     return lines;
   }
 
-  static std::vector<std::string> wrapLine(const std::string& line,
-                                           size_t width)
+  static std::vector<std::string> wrapLine(const std::string& line, size_t width)
   {
     if (line.empty() || line.size() <= width) {
       return {line};
@@ -217,8 +205,7 @@ class DebugLog
 
     const size_t firstText = line.find_first_not_of(' ');
     const size_t indent = firstText == std::string::npos ? 0 : firstText;
-    const std::string continuation(
-        std::min(indent + 2, width > 1 ? width - 1 : size_t{0}), ' ');
+    const std::string continuation(std::min(indent + 2, width > 1 ? width - 1 : size_t{0}), ' ');
     std::vector<std::string> wrapped;
     std::string remaining = line;
     std::string prefix;
@@ -242,8 +229,7 @@ class DebugLog
     return wrapped;
   }
 
-  static std::vector<std::string> wrapLines(
-      const std::vector<std::string>& lines)
+  static std::vector<std::string> wrapLines(const std::vector<std::string>& lines)
   {
     std::vector<std::string> wrapped;
     for (const std::string& line : lines) {
@@ -273,13 +259,11 @@ class DebugLog
 
   static std::string pad(const std::string& value, size_t width)
   {
-    return value.size() < width ? value + std::string(width - value.size(), ' ')
-                                : value;
+    return value.size() < width ? value + std::string(width - value.size(), ' ') : value;
   }
 
-  static void appendTableRow(std::vector<std::string>& lines,
-                             const std::vector<std::string>& row,
-                             const std::vector<size_t>& widths)
+  static void appendTableRow(
+      std::vector<std::string>& lines, const std::vector<std::string>& row, const std::vector<size_t>& widths)
   {
     std::vector<std::vector<std::string>> cells(widths.size());
     size_t height = 1;
@@ -293,16 +277,13 @@ class DebugLog
         if (col != 0) {
           rendered += " | ";
         }
-        rendered += pad(line < cells[col].size() ? cells[col][line] : "",
-                        widths[col]);
+        rendered += pad(line < cells[col].size() ? cells[col][line] : "", widths[col]);
       }
       lines.push_back(std::move(rendered));
     }
   }
 
-  static void emit(const char* stage,
-                   const std::vector<std::string>& lines,
-                   bool leadingSeparator)
+  static void emit(const char* stage, const std::vector<std::string>& lines, bool leadingSeparator)
   {
     std::string output;
     if (leadingSeparator) {

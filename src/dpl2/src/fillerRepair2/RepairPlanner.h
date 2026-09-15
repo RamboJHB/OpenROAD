@@ -106,13 +106,12 @@ struct RepairConfig
   // Authoritative horizontal rule reach, in DBU. Runtime supplies the whole
   // checker rule deck; portable tests may use their reported rule distances.
   DbCoord ruleDistance = 0;
-  bool verbose = true;            // [fr] transcript; FR_VERBOSE=0 silences
+  bool verbose = true;  // [fr] transcript; FR_VERBOSE=0 silences
 
   bool valid() const
   {
-    return checkerCallBudgetPerWindow > 0 && batchSize > 0 && maxSubsetSize > 0
-           && memberCapSize2 >= 0 && memberCapSize3 >= 0 && memberCapSize4 >= 0
-           && adaptiveStepFillers > 0 && maxAdaptiveLevels >= 0
+    return checkerCallBudgetPerWindow > 0 && batchSize > 0 && maxSubsetSize > 0 && memberCapSize2 >= 0
+           && memberCapSize3 >= 0 && memberCapSize4 >= 0 && adaptiveStepFillers > 0 && maxAdaptiveLevels >= 0
            && ruleDistance >= 0;
   }
 };
@@ -139,10 +138,8 @@ using Overlay = std::vector<Swap>;
 // be a placed filler, and the new master a DIFFERENT filler master of exactly
 // the same width and height -- so the cell keeps its site, and nothing has to
 // be re-placed. `*error` (if given) says which of those failed.
-std::optional<Swap> makeSwap(const PlacementView& view,
-                             InstanceId instanceId,
-                             MasterId newMasterId,
-                             std::string* error = nullptr);
+std::optional<Swap> makeSwap(
+    const PlacementView& view, InstanceId instanceId, MasterId newMasterId, std::string* error = nullptr);
 
 // --- Overlay identity ------------------------------------------------------
 //
@@ -177,14 +174,8 @@ struct OverlayKey
   std::array<Entry, kInlineSwaps> inlineSwaps{};
   std::vector<Entry> overflow;  // used iff count > kInlineSwaps
 
-  const Entry* data() const
-  {
-    return count > kInlineSwaps ? overflow.data() : inlineSwaps.data();
-  }
-  Entry* data()
-  {
-    return count > kInlineSwaps ? overflow.data() : inlineSwaps.data();
-  }
+  const Entry* data() const { return count > kInlineSwaps ? overflow.data() : inlineSwaps.data(); }
+  Entry* data() { return count > kInlineSwaps ? overflow.data() : inlineSwaps.data(); }
   std::size_t size() const { return count; }
   const Entry* begin() const { return data(); }
   const Entry* end() const { return data() + count; }
@@ -196,8 +187,7 @@ struct OverlayKey
     if (n > kInlineSwaps) {
       overflow.resize(n);
       if (count <= kInlineSwaps) {
-        std::copy(inlineSwaps.begin(), inlineSwaps.begin() + count,
-                  overflow.begin());
+        std::copy(inlineSwaps.begin(), inlineSwaps.begin() + count, overflow.begin());
       }
     } else if (count > kInlineSwaps) {
       std::copy_n(overflow.begin(), n, inlineSwaps.begin());
@@ -207,10 +197,8 @@ struct OverlayKey
 
   bool operator==(const OverlayKey& other) const
   {
-    return guardXl == other.guardXl && guardXh == other.guardXh
-           && guardRowLo == other.guardRowLo && guardRowHi == other.guardRowHi
-           && count == other.count
-           && std::equal(begin(), end(), other.begin());
+    return guardXl == other.guardXl && guardXh == other.guardXh && guardRowLo == other.guardRowLo
+           && guardRowHi == other.guardRowHi && count == other.count && std::equal(begin(), end(), other.begin());
   }
   bool operator!=(const OverlayKey& other) const { return !(*this == other); }
 };
@@ -223,8 +211,7 @@ struct OverlayKeyHash
 OverlayKey overlayKey(const Region& guard, const Overlay& overlay);
 
 // Wire conversion, deterministic order (sorted by instanceId).
-ipl::FillerChanges toFillerChanges(const Overlay& overlay,
-                                   const PlacementView& dataSource);
+ipl::FillerChanges toFillerChanges(const Overlay& overlay, const PlacementView& dataSource);
 
 struct SwapGenerationResult
 {
@@ -236,10 +223,7 @@ struct SwapGenerationResult
   std::vector<Diagnostic> diagnostics;
 };
 
-SwapGenerationResult generateSwaps(
-    const RepairWindow& window,
-    const PlacementView& view,
-    const DebugLog& log);
+SwapGenerationResult generateSwaps(const RepairWindow& window, const PlacementView& view, const DebugLog& log);
 
 // --- what the checker reported, in the planner's terms ----------------------
 
@@ -250,7 +234,7 @@ struct NormalizedViolation
 {
   Violation raw;
 
-  std::vector<RowId> rowIds;  // sorted unique, never empty
+  std::vector<RowId> rowIds;   // sorted unique, never empty
   bool rowIdFallback = false;  // rowIds were missing; anchor row substituted
 
   // How much x this violation actually covers: its own xWindow plus the span
@@ -266,9 +250,7 @@ struct NormalizedViolation
 
 // Deterministic; one transcript line per violation, showing what it was and
 // what footprint it turned into.
-std::vector<NormalizedViolation> normalizeViolations(
-    const FillerRepairRequest& request,
-    const DebugLog& log);
+std::vector<NormalizedViolation> normalizeViolations(const FillerRepairRequest& request, const DebugLog& log);
 
 // "Are these two the same violation?", across two separate checker runs. Not
 // pointer or index identity -- the checker rebuilds its findings every call --
@@ -281,12 +263,7 @@ bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth);
 // whose classes differ can never match, so comparing this first skips the
 // real call for every pair that was never going to match. Pure speed: it
 // changes no answer, no scan order, and no matching rule.
-using SignatureClass =
-    std::tuple<int,
-               ViolationKind,
-               ViolationRelation,
-               LayerId,
-               std::optional<LayerId>>;
+using SignatureClass = std::tuple<int, ViolationKind, ViolationRelation, LayerId, std::optional<LayerId>>;
 
 inline SignatureClass signatureClass(const Violation& v)
 {
@@ -297,15 +274,12 @@ inline SignatureClass signatureClass(const Violation& v)
 // this candidate changed, or sits within `ruleDistance` of one on the same or
 // an adjacent row. A new violation we caused blocks the candidate; one that
 // was already there, or is too far away to be our doing, does not.
-bool isRelatedToOverlay(const Violation& violation,
-                        const Overlay& overlay,
-                        DbCoord ruleDistance);
+bool isRelatedToOverlay(const Violation& violation, const Overlay& overlay, DbCoord ruleDistance);
 
 // Roughly how far a rule can reach: the largest requiredValue the checker
 // reported, or one site if it reported none. Used only to size windows and
 // relatedness margins. It never decides legality -- the checker does.
-DbCoord estimateRuleDistance(const std::vector<Violation>& violations,
-                             DbCoord siteWidth);
+DbCoord estimateRuleDistance(const std::vector<Violation>& violations, DbCoord siteWidth);
 
 // --- repair window: where the search is allowed to edit ---------------------
 
@@ -343,11 +317,9 @@ struct RepairWindow
 // The starting window: the fillers around the violation the checker just
 // reported. `ruleDistance` only widens how far a bridge filler is looked for.
 // Growing the window is a separate, stateful step -- see below.
-RepairWindow buildWindow(const TargetPlace& anchor,
-                         const std::vector<NormalizedViolation>& violations,
-                         const PlacementView& view,
-                         DbCoord ruleDistance,
-                         const DebugLog& log);
+RepairWindow buildWindow(
+    const TargetPlace& anchor, const std::vector<NormalizedViolation>& violations, const PlacementView& view,
+    DbCoord ruleDistance, const DebugLog& log);
 
 // Nothing in this window worked, so reach a little further. `blocking` is
 // what stopped the best candidate we found; where those violations sit tells
@@ -356,13 +328,9 @@ RepairWindow buildWindow(const TargetPlace& anchor,
 // Deliberately small steps: each side gains at most `fillersPerRow` fillers
 // per row and stops at the first non-filler, so a long filler run is walked
 // a few sites at a time instead of being swallowed whole.
-RepairWindow expandWindowAdaptive(const RepairWindow& current,
-                                  const TargetPlace& anchor,
-                                  const std::vector<Violation>& blocking,
-                                  const PlacementView& view,
-                                  int fillersPerRow,
-                                  DbCoord ruleDistance,
-                                  const DebugLog& log);
+RepairWindow expandWindowAdaptive(
+    const RepairWindow& current, const TargetPlace& anchor, const std::vector<Violation>& blocking,
+    const PlacementView& view, int fillersPerRow, DbCoord ruleDistance, const DebugLog& log);
 
 // --- which moves to try first -----------------------------------------------
 
@@ -376,12 +344,8 @@ struct FillerDomain
 };
 
 std::vector<FillerDomain> rankFillers(
-    const std::vector<Swap>& swaps,
-    const TargetPlace& anchor,
-    const std::vector<NormalizedViolation>& violations,
-    const RepairWindow& window,
-    const PlacementView& view,
-    const DebugLog& log);
+    const std::vector<Swap>& swaps, const TargetPlace& anchor, const std::vector<NormalizedViolation>& violations,
+    const RepairWindow& window, const PlacementView& view, const DebugLog& log);
 
 // --- turning moves into candidates ------------------------------------------
 
@@ -401,10 +365,7 @@ struct EnumerationPlan
 // actually checked. The oracle cache owns that knowledge; neither instance
 // ordering nor prior enumeration bounds are evidence of a checker answer.
 EnumerationPlan enumerateOverlays(
-    const std::vector<FillerDomain>& ranked,
-    const RepairConfig& config,
-    int budget,
-    const DebugLog& log,
+    const std::vector<FillerDomain>& ranked, const RepairConfig& config, int budget, const DebugLog& log,
     const std::function<bool(const Overlay&)>& wasChecked = {});
 
 // --- asking the checker, and reading its answer -----------------------------
@@ -415,12 +376,12 @@ EnumerationPlan enumerateOverlays(
 // fix what we were asked to fix, without breaking anything?
 struct DeltaSummary
 {
-  bool usable = false;         // the checker actually answered
-  bool inconsistent = false;   // it said legal but listed violations, or v.v.
-  int residualOriginals = 0;   // violations we were asked to fix, still there
-  int newInWindow = 0;         // we broke something where we were editing
-  int relatedInHalo = 0;       // we broke something just outside it
-  int unrelatedInHalo = 0;     // was already broken out there; not our problem
+  bool usable = false;        // the checker actually answered
+  bool inconsistent = false;  // it said legal but listed violations, or v.v.
+  int residualOriginals = 0;  // violations we were asked to fix, still there
+  int newInWindow = 0;        // we broke something where we were editing
+  int relatedInHalo = 0;      // we broke something just outside it
+  int unrelatedInHalo = 0;    // was already broken out there; not our problem
   // The findings that actually blocked acceptance. Where they sit is what
   // tells the next growth step which way to reach.
   std::vector<Violation> blockingViolations;
@@ -431,14 +392,10 @@ struct DeltaSummary
 class OracleGate
 {
  public:
-  OracleGate(const PlacementView& dataSource,
-             RepairOracle& oracle,
-             const TargetPlace& anchor,
-             const std::vector<Violation>& originals,
-             DbCoord siteWidth,
-             DbCoord ruleDistance,
-             const RepairConfig& config,
-             const DebugLog& log);
+  OracleGate(
+      const PlacementView& dataSource, RepairOracle& oracle, const TargetPlace& anchor,
+      const std::vector<Violation>& originals, DbCoord siteWidth, DbCoord ruleDistance, const RepairConfig& config,
+      const DebugLog& log);
 
   // Asks the checker what this guard looks like with NOTHING changed. That
   // answer is what every candidate is compared against, so it is also a
@@ -466,10 +423,8 @@ class OracleGate
 
   // Walks the candidates in order, in batches, and stops at the first one the
   // checker calls clean. Budget is spent per candidate actually sent.
-  SearchResult search(const std::vector<Overlay>& candidates,
-                      const RepairWindow& window,
-                      const Region& guard,
-                      int& budget);
+  SearchResult search(
+      const std::vector<Overlay>& candidates, const RepairWindow& window, const Region& guard, int& budget);
 
   int requestsSent() const { return requests_sent_; }
   int batchesSent() const { return batches_sent_; }
@@ -482,13 +437,10 @@ class OracleGate
     }
     const OracleResult& result = found->second;
     return result.status != OracleStatus::CheckerError
-           && (result.status != OracleStatus::Checked
-               || result.isLegal == result.violations.empty())
-           && std::none_of(result.diagnostics.begin(),
-                           result.diagnostics.end(),
-                           [](const Diagnostic& diagnostic) {
-                             return diagnostic.severity == Severity::Fatal;
-                           });
+           && (result.status != OracleStatus::Checked || result.isLegal == result.violations.empty())
+           && std::none_of(result.diagnostics.begin(), result.diagnostics.end(), [](const Diagnostic& diagnostic) {
+                return diagnostic.severity == Severity::Fatal;
+              });
   }
   const std::vector<Diagnostic>& diagnostics() const { return diagnostics_; }
 
@@ -498,15 +450,9 @@ class OracleGate
   // answer, or nullptr if the budget ran out before it was asked. Handing the
   // answers back means the caller never repeats the lookup done here.
   // False = the checker broke the batch protocol.
-  bool resolve(const Overlay* chunk,
-               const OverlayKey* keys,
-               std::size_t count,
-               const Region& guard,
-               int& budget,
+  bool resolve(const Overlay* chunk, const OverlayKey* keys, std::size_t count, const Region& guard, int& budget,
                std::vector<const OracleResult*>& out);
-  DeltaSummary classify(const OracleResult& result,
-                        const Overlay& overlay,
-                        const RepairWindow& window) const;
+  DeltaSummary classify(const OracleResult& result, const Overlay& overlay, const RepairWindow& window) const;
   // The stale-snapshot check described on runBaseline(). Reads the baseline
   // already in hand, so it costs nothing.
   bool checkBaselineConsistency(const RepairWindow& window);
@@ -554,9 +500,7 @@ namespace internal {
 class RepairPlanner
 {
  public:
-  RepairPlanner(const PlacementView& view,
-                      RepairOracle& oracle,
-                      RepairConfig config = {});
+  RepairPlanner(const PlacementView& view, RepairOracle& oracle, RepairConfig config = {});
 
   FillerRepairResult repair(const FillerRepairRequest& request);
 

@@ -15,10 +15,7 @@ namespace dpl2::fillerRepair {
 // Swap model -- one filler, one new master, everything else unchanged.
 // --------------------------------------------------------------------------
 
-std::optional<Swap> makeSwap(const PlacementView& view,
-                             InstanceId instanceId,
-                             MasterId newMasterId,
-                             std::string* error)
+std::optional<Swap> makeSwap(const PlacementView& view, InstanceId instanceId, MasterId newMasterId, std::string* error)
 {
   const auto fail = [error](std::string why) -> std::optional<Swap> {
     if (error != nullptr) {
@@ -46,9 +43,9 @@ std::optional<Swap> makeSwap(const PlacementView& view,
     return fail(cat("master ", newMasterId, " is the current master"));
   }
   if (newMaster->width != oldMaster->width || newMaster->height != oldMaster->height) {
-    return fail(cat("size mismatch: master ", newMasterId, " w=", newMaster->width,
-                    " h=", newMaster->height, " vs current w=", oldMaster->width,
-                    " h=", oldMaster->height));
+    return fail(cat(
+        "size mismatch: master ", newMasterId, " w=", newMaster->width, " h=", newMaster->height,
+        " vs current w=", oldMaster->width, " h=", oldMaster->height));
   }
 
   Swap swap;
@@ -99,26 +96,20 @@ OverlayKey overlayKey(const Region& guard, const Overlay& overlay)
     entries[i] = {overlay[i].instanceId, overlay[i].newMasterId};
   }
   std::sort(entries, entries + key.size());
-  key.resize(static_cast<std::size_t>(
-      std::unique(entries, entries + key.size()) - entries));
+  key.resize(static_cast<std::size_t>(std::unique(entries, entries + key.size()) - entries));
   return key;
 }
 
-ipl::FillerChanges toFillerChanges(const Overlay& overlay,
-                                   const PlacementView& dataSource)
+ipl::FillerChanges toFillerChanges(const Overlay& overlay, const PlacementView& dataSource)
 {
   ipl::FillerChanges changes;
   changes.reserve(overlay.size());
   for (const Swap& swap : overlay) {
-    changes.push_back(
-        dataSource.cellChangeRecord(swap.instanceId, swap.newMasterId));
+    changes.push_back(dataSource.cellChangeRecord(swap.instanceId, swap.newMasterId));
   }
-  std::sort(changes.begin(),
-            changes.end(),
-            [](const CellChangeRecord& a, const CellChangeRecord& b) {
-              return cellChangeRecordInstanceId(a)
-                     < cellChangeRecordInstanceId(b);
-            });
+  std::sort(changes.begin(), changes.end(), [](const CellChangeRecord& a, const CellChangeRecord& b) {
+    return cellChangeRecordInstanceId(a) < cellChangeRecordInstanceId(b);
+  });
   return changes;
 }
 
@@ -127,10 +118,14 @@ namespace {
 const char* candidateOrientName(Orient orientation)
 {
   switch (orientation) {
-    case Orient::R180: return "R180";
-    case Orient::MX: return "MX";
-    case Orient::MY: return "MY";
-    case Orient::R0: return "R0";
+    case Orient::R180:
+      return "R180";
+    case Orient::MX:
+      return "MX";
+    case Orient::MY:
+      return "MY";
+    case Orient::R0:
+      return "R0";
   }
   return "UNKNOWN";
 }
@@ -150,40 +145,31 @@ void appendCandidateReason(std::string& reasons, const char* reason)
 
 bool providerReturned(const MasterCandidateResult& result, MasterId id)
 {
-  return std::find(result.candidates.begin(), result.candidates.end(), id)
-         != result.candidates.end();
+  return std::find(result.candidates.begin(), result.candidates.end(), id) != result.candidates.end();
 }
 
-void logCandidateProviderTrace(const PlacementView& view,
-                               InstanceId fillerId,
-                               const MasterCandidateResult& result,
-                               const DebugLog& log)
+void logCandidateProviderTrace(
+    const PlacementView& view, InstanceId fillerId, const MasterCandidateResult& result, const DebugLog& log)
 {
   if (!log.enabled()) {
     return;
   }
 
   const PlacedInstance* inst = view.instance(fillerId);
-  const MasterInfo* current
-      = inst != nullptr ? view.masterInfo(inst->masterId) : nullptr;
+  const MasterInfo* current = inst != nullptr ? view.masterInfo(inst->masterId) : nullptr;
   log.block(
-      "candidate",
-      "Candidate provider request",
+      "candidate", "Candidate provider request",
       {{"filler", cat(fillerId)},
        {"instance",
         inst == nullptr
             ? "MISSING"
-            : cat("row=", inst->rowId, " x=", inst->x,
-                  " orient=", candidateOrientName(inst->orientation),
-                  " filler=", inst->isFiller,
-                  " currentMaster=", inst->masterId)},
+            : cat("row=", inst->rowId, " x=", inst->x, " orient=", candidateOrientName(inst->orientation),
+                  " filler=", inst->isFiller, " currentMaster=", inst->masterId)},
        {"current master",
         current == nullptr
             ? "metadata=MISSING"
-            : cat("master=", current->id, " filler=", current->isFiller,
-                  " vt=", current->vt, " width=", current->width,
-                  " height=", current->height, " bottom=",
-                  candidatePolarityName(current->bottomBandPolarity))},
+            : cat("master=", current->id, " filler=", current->isFiller, " vt=", current->vt, " width=", current->width,
+                  " height=", current->height, " bottom=", candidatePolarityName(current->bottomBandPolarity))},
        {"configured count", cat(view.fillerMasterIds().size())},
        {"returned count", cat(result.candidates.size())},
        {"diagnostic count", cat(result.diagnostics.size())}});
@@ -191,8 +177,7 @@ void logCandidateProviderTrace(const PlacementView& view,
   // A zero result gets the full rejection matrix. On the normal path, avoid
   // repeating the whole configured library for every editable filler and log
   // only the candidates the provider actually returned.
-  const bool logRejected
-      = result.candidates.empty() || !result.diagnostics.empty();
+  const bool logRejected = result.candidates.empty() || !result.diagnostics.empty();
   std::vector<std::vector<std::string>> configuredRows;
   for (const MasterId id : view.fillerMasterIds()) {
     const MasterInfo* candidate = view.masterInfo(id);
@@ -239,39 +224,21 @@ void logCandidateProviderTrace(const PlacementView& view,
     if (!returned && reasons.empty()) {
       appendCandidateReason(reasons, "PROVIDER_DID_NOT_RETURN");
     }
-    const char* decision = returned ? (reasons.empty() ? "accept"
-                                                       : "returned-with-conflict")
-                                    : "reject";
+    const char* decision = returned ? (reasons.empty() ? "accept" : "returned-with-conflict") : "reject";
     configuredRows.push_back(
-        {cat(id),
-         candidate == nullptr ? "MISSING" : cat(candidate->isFiller),
-         candidate == nullptr ? "-" : cat(candidate->vt),
-         candidate == nullptr ? "-" : cat(candidate->width),
+        {cat(id), candidate == nullptr ? "MISSING" : cat(candidate->isFiller),
+         candidate == nullptr ? "-" : cat(candidate->vt), candidate == nullptr ? "-" : cat(candidate->width),
          candidate == nullptr ? "-" : cat(candidate->height),
-         candidate == nullptr
-             ? "-"
-             : candidatePolarityName(candidate->bottomBandPolarity),
-         decision,
+         candidate == nullptr ? "-" : candidatePolarityName(candidate->bottomBandPolarity), decision,
          reasons.empty() ? "NONE" : reasons});
   }
-  log.table("candidate",
-            cat("Configured choices for filler ", fillerId),
-            {"master",
-             "filler",
-             "VT",
-             "width",
-             "height",
-             "bottom",
-             "decision",
-             "reasons"},
-            configuredRows);
+  log.table("candidate", cat("Configured choices for filler ", fillerId),
+            {"master", "filler", "VT", "width", "height", "bottom", "decision", "reasons"}, configuredRows);
 
   std::vector<std::string> diagnosticItems;
   diagnosticItems.reserve(result.diagnostics.size());
   for (const Diagnostic& diagnostic : result.diagnostics) {
-    diagnosticItems.push_back(
-        cat("filler=", fillerId, " code=", diagnostic.code,
-            " message=", diagnostic.message));
+    diagnosticItems.push_back(cat("filler=", fillerId, " code=", diagnostic.code, " message=", diagnostic.message));
   }
   if (!diagnosticItems.empty()) {
     log.list("candidate", "Provider diagnostics", diagnosticItems);
@@ -280,10 +247,7 @@ void logCandidateProviderTrace(const PlacementView& view,
 
 }  // namespace
 
-SwapGenerationResult generateSwaps(
-    const RepairWindow& window,
-    const PlacementView& view,
-    const DebugLog& log)
+SwapGenerationResult generateSwaps(const RepairWindow& window, const PlacementView& view, const DebugLog& log)
 {
   SwapGenerationResult result;
   const bool verbose = log.enabled();
@@ -293,26 +257,19 @@ SwapGenerationResult generateSwaps(
   std::vector<std::vector<std::string>> fillerRows;
 
   for (const InstanceId fillerId : window.editableFillers) {
-    MasterCandidateResult candidates =
-        view.getUsableMasterCandidates(fillerId);
+    MasterCandidateResult candidates = view.getUsableMasterCandidates(fillerId);
     logCandidateProviderTrace(view, fillerId, candidates, log);
     // Provider diagnostics (unknown instance, not a filler, ...) are kept:
     // they explain why a filler contributed no moves.
-    result.diagnostics.insert(result.diagnostics.end(),
-                              candidates.diagnostics.begin(),
-                              candidates.diagnostics.end());
+    result.diagnostics.insert(result.diagnostics.end(), candidates.diagnostics.begin(), candidates.diagnostics.end());
 
     if (candidates.candidates.empty()) {
       result.diagnostics.push_back(
-          makeDiag(Severity::Info, "NoUsableMaster",
-                   cat("filler ", fillerId, ": no same-size replacement")));
+          makeDiag(Severity::Info, "NoUsableMaster", cat("filler ", fillerId, ": no same-size replacement")));
       const PlacedInstance* filler = view.instance(fillerId);
       if (verbose) {
         fillerRows.push_back(
-            {cat(fillerId),
-             filler != nullptr ? cat(filler->rowId) : "-",
-             filler != nullptr ? cat(filler->x) : "-",
-             "0",
+            {cat(fillerId), filler != nullptr ? cat(filler->rowId) : "-", filler != nullptr ? cat(filler->x) : "-", "0",
              "no usable master"});
       }
       continue;
@@ -328,10 +285,8 @@ SwapGenerationResult generateSwaps(
       // that fails validation must never enter the search.
       const auto swap = makeSwap(view, fillerId, candidate, &error);
       if (!swap.has_value()) {
-        result.diagnostics.push_back(
-            makeDiag(Severity::Warning, "RejectedCandidate",
-                     cat("filler ", fillerId, " -> master ",
-                         candidate, ": ", error)));
+        result.diagnostics.push_back(makeDiag(
+            Severity::Warning, "RejectedCandidate", cat("filler ", fillerId, " -> master ", candidate, ": ", error)));
         if (verbose) {
           rejectedRows.push_back({cat(fillerId), cat(candidate), error});
         }
@@ -340,44 +295,27 @@ SwapGenerationResult generateSwaps(
       result.swaps.push_back(*swap);
       ++emitted;
       if (verbose) {
-        emittedRows.push_back({cat(swap->instanceId),
-                               cat(swap->rowId),
-                               show(swap->span),
-                               cat(swap->oldMasterId),
-                               cat(swap->oldVt),
-                               cat(swap->newMasterId),
-                               cat(swap->newVt)});
+        emittedRows.push_back(
+            {cat(swap->instanceId), cat(swap->rowId), show(swap->span), cat(swap->oldMasterId), cat(swap->oldVt),
+             cat(swap->newMasterId), cat(swap->newVt)});
       }
     }
     const PlacedInstance* filler = view.instance(fillerId);
     if (verbose) {
       fillerRows.push_back(
-          {cat(fillerId),
-           filler != nullptr ? cat(filler->rowId) : "-",
-           filler != nullptr ? cat(filler->x) : "-",
-           cat(emitted),
-           filler != nullptr ? "ready" : "disappeared from PlacementView"});
+          {cat(fillerId), filler != nullptr ? cat(filler->rowId) : "-", filler != nullptr ? cat(filler->x) : "-",
+           cat(emitted), filler != nullptr ? "ready" : "disappeared from PlacementView"});
     }
   }
 
-  log.table("swapgen",
-            "Per-filler summary",
-            {"filler", "row", "x", "swaps", "status"},
-            fillerRows);
+  log.table("swapgen", "Per-filler summary", {"filler", "row", "x", "swaps", "status"}, fillerRows);
   if (!rejectedRows.empty()) {
-    log.table("swapgen",
-              "Rejected swap candidates",
-              {"filler", "master", "reason"},
-              rejectedRows);
+    log.table("swapgen", "Rejected swap candidates", {"filler", "master", "reason"}, rejectedRows);
   }
-  log.table("swapgen",
-            "Emitted swaps",
-            {"filler", "row", "span", "old master", "old VT", "new master", "new VT"},
+  log.table("swapgen", "Emitted swaps", {"filler", "row", "span", "old master", "old VT", "new master", "new VT"},
             emittedRows);
-  log.block("swapgen",
-            cat("Window L", window.level, " summary"),
-            {{"editable fillers", cat(window.editableFillers.size())},
-             {"swaps", cat(result.swaps.size())}});
+  log.block("swapgen", cat("Window L", window.level, " summary"),
+            {{"editable fillers", cat(window.editableFillers.size())}, {"swaps", cat(result.swaps.size())}});
   return result;
 }
 
@@ -404,8 +342,7 @@ std::vector<RowId> sortedUniqueRows(const std::vector<RowId>& rows)
 // sizes a linear scan beats sorting, let alone two heap allocations.
 bool sameRowSet(const std::vector<RowId>& a, const std::vector<RowId>& b)
 {
-  const auto coveredBy = [](const std::vector<RowId>& lhs,
-                            const std::vector<RowId>& rhs) {
+  const auto coveredBy = [](const std::vector<RowId>& lhs, const std::vector<RowId>& rhs) {
     for (const RowId row : lhs) {
       if (std::find(rhs.begin(), rhs.end(), row) == rhs.end()) {
         return false;
@@ -440,9 +377,7 @@ DbCoord intervalDistance(const XInterval& a, const XInterval& b)
 
 }  // namespace
 
-std::vector<NormalizedViolation> normalizeViolations(
-    const FillerRepairRequest& request,
-    const DebugLog& log)
+std::vector<NormalizedViolation> normalizeViolations(const FillerRepairRequest& request, const DebugLog& log)
 {
   std::vector<NormalizedViolation> result;
   result.reserve(request.violations.size());
@@ -482,8 +417,7 @@ std::vector<NormalizedViolation> normalizeViolations(
 
     // The changed std cell is always an anchor, participant or not.
     const InstanceId target = request.targetPlace.instanceId;
-    if (std::find(nv.cellAnchors.begin(), nv.cellAnchors.end(), target)
-        == nv.cellAnchors.end()) {
+    if (std::find(nv.cellAnchors.begin(), nv.cellAnchors.end(), target) == nv.cellAnchors.end()) {
       nv.cellAnchors.push_back(target);
     }
     std::sort(nv.cellAnchors.begin(), nv.cellAnchors.end());
@@ -491,40 +425,23 @@ std::vector<NormalizedViolation> normalizeViolations(
 
     if (log.enabled()) {
       violationRows.push_back(
-          {cat(i),
-           cat(raw.ruleId),
-           cat(kindName(raw.kind), '/', relationName(raw.relation)),
-           cat(raw.primaryLayer,
-               raw.secondaryLayer ? cat('/', *raw.secondaryLayer)
-                                  : std::string()),
-           cat(nv.rowIds.size(),
-               nv.rowIdFallback ? " (anchor fallback)" : ""),
-           show(raw.xWindow),
-           show(nv.xRange),
-           cat(nv.cellAnchors.size()),
-           cat(nv.fillerParticipants.size())});
+          {cat(i), cat(raw.ruleId), cat(kindName(raw.kind), '/', relationName(raw.relation)),
+           cat(raw.primaryLayer, raw.secondaryLayer ? cat('/', *raw.secondaryLayer) : std::string()),
+           cat(nv.rowIds.size(), nv.rowIdFallback ? " (anchor fallback)" : ""), show(raw.xWindow), show(nv.xRange),
+           cat(nv.cellAnchors.size()), cat(nv.fillerParticipants.size())});
     }
 
     result.push_back(std::move(nv));
   }
 
-  log.table("normalize",
-            "Normalized violations",
-            {"#",
-             "rule",
-             "kind / relation",
-             "layer",
-             "rows",
-             "x window",
-             "footprint",
-             "anchors",
-             "fillers"},
-            violationRows);
-  log.block("normalize",
-            "Normalization summary",
-            {{"normalized violations", cat(result.size())},
-             {"row fallbacks", cat(rowFallbacks)},
-             {"anchor", cat(request.targetPlace.instanceId)}});
+  log.table(
+      "normalize", "Normalized violations",
+      {"#", "rule", "kind / relation", "layer", "rows", "x window", "footprint", "anchors", "fillers"}, violationRows);
+  log.block(
+      "normalize", "Normalization summary",
+      {{"normalized violations", cat(result.size())},
+       {"row fallbacks", cat(rowFallbacks)},
+       {"anchor", cat(request.targetPlace.instanceId)}});
   return result;
 }
 
@@ -545,8 +462,7 @@ bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth)
   // xWindow tolerance: overlap of at least half the shorter window, or the
   // windows lie within one site of each other (covers zero-length windows
   // and one-site jitter across snapshots).
-  const DbCoord overlap = std::min(a.xWindow.xh, b.xWindow.xh)
-                          - std::max(a.xWindow.xl, b.xWindow.xl);
+  const DbCoord overlap = std::min(a.xWindow.xh, b.xWindow.xh) - std::max(a.xWindow.xl, b.xWindow.xl);
   const DbCoord shorter = std::min(a.xWindow.length(), b.xWindow.length());
   if (overlap * 2 >= shorter && overlap > 0) {
     return true;
@@ -554,9 +470,7 @@ bool sameSignature(const Violation& a, const Violation& b, DbCoord siteWidth)
   return intervalDistance(a.xWindow, b.xWindow) <= siteWidth;
 }
 
-bool isRelatedToOverlay(const Violation& violation,
-                        const Overlay& overlay,
-                        DbCoord ruleDistance)
+bool isRelatedToOverlay(const Violation& violation, const Overlay& overlay, DbCoord ruleDistance)
 {
   for (const Swap& swap : overlay) {
     // Direct participation of a changed instance.
@@ -582,8 +496,7 @@ bool isRelatedToOverlay(const Violation& violation,
   return false;
 }
 
-DbCoord estimateRuleDistance(const std::vector<Violation>& violations,
-                             DbCoord siteWidth)
+DbCoord estimateRuleDistance(const std::vector<Violation>& violations, DbCoord siteWidth)
 {
   DbCoord distance = siteWidth;
   for (const Violation& v : violations) {
@@ -649,20 +562,12 @@ XInterval quantizeGuard(XInterval guard, DbCoord anchorX, DbCoord siteWidth)
   // it. Overshooting the right edge is harmless (those columns are empty and
   // Grid::gridPixel bounds-checks), and the view exposes no core width to
   // clamp against.
-  return XInterval{
-      std::max<DbCoord>(anchorX - snapUpPow2(left, unit), 0),
-      anchorX + snapUpPow2(right, unit)};
+  return XInterval{std::max<DbCoord>(anchorX - snapUpPow2(left, unit), 0), anchorX + snapUpPow2(right, unit)};
 }
 
-RepairWindow finalizeWindow(int level,
-                            const std::set<RowId>& rowSet,
-                            const std::set<InstanceId>& editable,
-                            const std::set<InstanceId>& bridge,
-                            XInterval x,
-                            DbCoord anchorX,
-                            const PlacementView& view,
-                            DbCoord ruleDistance,
-                            const DebugLog& log)
+RepairWindow finalizeWindow(
+    int level, const std::set<RowId>& rowSet, const std::set<InstanceId>& editable, const std::set<InstanceId>& bridge,
+    XInterval x, DbCoord anchorX, const PlacementView& view, DbCoord ruleDistance, const DebugLog& log)
 {
   RepairWindow window;
   window.level = level;
@@ -678,11 +583,9 @@ RepairWindow finalizeWindow(int level,
       editableInsts.push_back(inst);
     }
   }
-  std::sort(editableInsts.begin(), editableInsts.end(),
-            [](const PlacedInstance* a, const PlacedInstance* b) {
-              return std::tie(a->rowId, a->x, a->id)
-                     < std::tie(b->rowId, b->x, b->id);
-            });
+  std::sort(editableInsts.begin(), editableInsts.end(), [](const PlacedInstance* a, const PlacedInstance* b) {
+    return std::tie(a->rowId, a->x, a->id) < std::tie(b->rowId, b->x, b->id);
+  });
   for (const PlacedInstance* inst : editableInsts) {
     window.editableFillers.push_back(inst->id);
   }
@@ -702,30 +605,24 @@ RepairWindow finalizeWindow(int level,
   // Current implant rules couple adjacent rows. Keep two context rows and at
   // least the whole rule reach horizontally, then quantize outwards so cache
   // reuse cannot reduce the checker's required context.
-  const std::vector<RowId> guardRows =
-      clampRows(view, window.rows.front() - 2, window.rows.back() + 2);
+  const std::vector<RowId> guardRows = clampRows(view, window.rows.front() - 2, window.rows.back() + 2);
   XInterval guardX{window.x.xl - ruleDistance, window.x.xh + ruleDistance};
   for (const RowId rowId : guardRows) {
-    for (const PlacedInstance& inst :
-         instancesInRing(view, rowId, window.x, 2)) {
+    for (const PlacedInstance& inst : instancesInRing(view, rowId, window.x, 2)) {
       const XInterval span = instanceSpan(view, inst);
       guardX.xl = std::min(guardX.xl, span.xl);
       guardX.xh = std::max(guardX.xh, span.xh);
     }
   }
-  window.guardRegion = Region{quantizeGuard(guardX, anchorX, view.siteWidth()),
-                              guardRows.front(),
-                              guardRows.back()};
+  window.guardRegion = Region{quantizeGuard(guardX, anchorX, view.siteWidth()), guardRows.front(), guardRows.back()};
 
-  log.block("window",
-            level == 0 ? "Initial repair window"
-                       : cat("Grown repair window L", level),
-            {{"rows",
-              cat('[', window.rows.front(), ',', window.rows.back(), ']')},
-             {"x", show(window.x)},
-             {"editable fillers", cat(window.editableFillers.size())},
-             {"bridge fillers", cat(window.bridgeFillers.size())},
-             {"guard", show(window.guardRegion)}});
+  log.block(
+      "window", level == 0 ? "Initial repair window" : cat("Grown repair window L", level),
+      {{"rows", cat('[', window.rows.front(), ',', window.rows.back(), ']')},
+       {"x", show(window.x)},
+       {"editable fillers", cat(window.editableFillers.size())},
+       {"bridge fillers", cat(window.bridgeFillers.size())},
+       {"guard", show(window.guardRegion)}});
   return window;
 }
 
@@ -733,25 +630,18 @@ RepairWindow finalizeWindow(int level,
 
 bool RepairWindow::containsEditable(InstanceId id) const
 {
-  return std::find(editableFillers.begin(), editableFillers.end(), id)
-         != editableFillers.end();
+  return std::find(editableFillers.begin(), editableFillers.end(), id) != editableFillers.end();
 }
 
-RepairWindow buildWindow(const TargetPlace& anchor,
-                         const std::vector<NormalizedViolation>& violations,
-                         const PlacementView& view,
-                         DbCoord ruleDistance,
-                         const DebugLog& log)
+RepairWindow buildWindow(
+    const TargetPlace& anchor, const std::vector<NormalizedViolation>& violations, const PlacementView& view,
+    DbCoord ruleDistance, const DebugLog& log)
 {
   const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);
   const DbCoord anchorWidth = anchorMaster != nullptr ? anchorMaster->width : 0;
   const XInterval anchorSpan{anchor.x, anchor.x + anchorWidth};
 
-  const RowId anchorTop
-      = anchor.rowId
-        + (anchorMaster != nullptr ? std::max<DbCoord>(1, anchorMaster->height)
-                                   : 1)
-        - 1;
+  const RowId anchorTop = anchor.rowId + (anchorMaster != nullptr ? std::max<DbCoord>(1, anchorMaster->height) : 1) - 1;
   const auto anchorRows = clampRows(view, anchor.rowId, anchorTop);
   std::set<RowId> rowSet(anchorRows.begin(), anchorRows.end());
   std::set<InstanceId> editable;
@@ -792,8 +682,7 @@ RepairWindow buildWindow(const TargetPlace& anchor,
   // --- Bridge fillers (default-mandatory): fillers touching the
   // anchor in its row, and fillers in rows ±1 overlapping the anchor span
   // widened by one rule distance. They join even outside the footprint.
-  const XInterval bridgeSpan{anchorSpan.xl - ruleDistance,
-                             anchorSpan.xh + ruleDistance};
+  const XInterval bridgeSpan{anchorSpan.xl - ruleDistance, anchorSpan.xh + ruleDistance};
   for (const RowId rowId : clampRows(view, anchor.rowId - 1, anchorTop + 1)) {
     // Only instances overlapping bridgeSpan can qualify: the row==anchor
     // touch cases (span touches an anchor edge) and the coupled-row overlap
@@ -809,9 +698,7 @@ RepairWindow buildWindow(const TargetPlace& anchor,
       }
       const XInterval span = instanceSpan(view, inst);
       const bool inAnchorRow = rowId >= anchor.rowId && rowId <= anchorTop;
-      const bool touchesAnchor
-          = inAnchorRow
-            && (span.xh == anchorSpan.xl || span.xl == anchorSpan.xh);
+      const bool touchesAnchor = inAnchorRow && (span.xh == anchorSpan.xl || span.xl == anchorSpan.xh);
       const bool underOrOverAnchor = !inAnchorRow && span.overlaps(bridgeSpan);
       if (touchesAnchor || underOrOverAnchor) {
         include(inst, /*isBridge=*/true);
@@ -819,23 +706,16 @@ RepairWindow buildWindow(const TargetPlace& anchor,
     }
   }
 
-  return finalizeWindow(
-      0, rowSet, editable, bridge, x, anchor.x, view, ruleDistance, log);
+  return finalizeWindow(0, rowSet, editable, bridge, x, anchor.x, view, ruleDistance, log);
 }
 
-RepairWindow expandWindowAdaptive(const RepairWindow& current,
-                                  const TargetPlace& anchor,
-                                  const std::vector<Violation>& blocking,
-                                  const PlacementView& view,
-                                  int fillersPerRow,
-                                  DbCoord ruleDistance,
-                                  const DebugLog& log)
+RepairWindow expandWindowAdaptive(
+    const RepairWindow& current, const TargetPlace& anchor, const std::vector<Violation>& blocking,
+    const PlacementView& view, int fillersPerRow, DbCoord ruleDistance, const DebugLog& log)
 {
   std::set<RowId> rowSet(current.rows.begin(), current.rows.end());
-  std::set<InstanceId> editable(current.editableFillers.begin(),
-                                current.editableFillers.end());
-  std::set<InstanceId> bridge(current.bridgeFillers.begin(),
-                              current.bridgeFillers.end());
+  std::set<InstanceId> editable(current.editableFillers.begin(), current.editableFillers.end());
+  std::set<InstanceId> bridge(current.bridgeFillers.begin(), current.bridgeFillers.end());
   XInterval x = current.x;
 
   bool growLeft = false;
@@ -852,8 +732,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
     if (violation.xWindow.xh >= current.x.xh) {
       growRight = true;
     }
-    if (violation.xWindow.xl > current.x.xl
-        && violation.xWindow.xh < current.x.xh) {
+    if (violation.xWindow.xl > current.x.xl && violation.xWindow.xh < current.x.xh) {
       const DbCoord leftDistance = violation.xWindow.xl - current.x.xl;
       const DbCoord rightDistance = current.x.xh - violation.xWindow.xh;
       growLeft |= leftDistance <= rightDistance;
@@ -865,19 +744,14 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
     growRight = true;
   }
   log.section("window", cat("ADAPTIVE EXPANSION FROM L", current.level));
-  log.block("window",
-            "Expansion request",
-            {{"blocking violations", cat(blocking.size())},
-             {"direction",
-              cat(growLeft ? "left" : "",
-                  growLeft && growRight ? "+" : "",
-                  growRight ? "right" : "")},
-             {"step per row", cat(std::max(1, fillersPerRow))}});
+  log.block(
+      "window", "Expansion request",
+      {{"blocking violations", cat(blocking.size())},
+       {"direction", cat(growLeft ? "left" : "", growLeft && growRight ? "+" : "", growRight ? "right" : "")},
+       {"step per row", cat(std::max(1, fillersPerRow))}});
 
   const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);
-  const XInterval anchorSpan{
-      anchor.x,
-      anchor.x + (anchorMaster != nullptr ? anchorMaster->width : 0)};
+  const XInterval anchorSpan{anchor.x, anchor.x + (anchorMaster != nullptr ? anchorMaster->width : 0)};
   const int step = std::max(1, fillersPerRow);
   int addedLeftTotal = 0;
   int addedRightTotal = 0;
@@ -889,9 +763,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
       DbCoord leftFrontier = current.x.xl;
       DbCoord rightFrontier = current.x.xh;
       bool hasSeed = false;
-      const RowId anchorHeight
-          = anchorMaster != nullptr ? std::max<DbCoord>(1, anchorMaster->height)
-                                    : 1;
+      const RowId anchorHeight = anchorMaster != nullptr ? std::max<DbCoord>(1, anchorMaster->height) : 1;
       if (rowId >= anchor.rowId && rowId < anchor.rowId + anchorHeight) {
         leftFrontier = anchorSpan.xl;
         rightFrontier = anchorSpan.xh;
@@ -920,9 +792,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
         int added = 0;
         // Walk left from the instance just left of the frontier (everything at
         // or right of it has span.xh > leftFrontier and was skipped before).
-        for (int i = firstRightEdgeAfter(view, all, leftFrontier) - 1;
-             i >= 0 && added < step;
-             --i) {
+        for (int i = firstRightEdgeAfter(view, all, leftFrontier) - 1; i >= 0 && added < step; --i) {
           const XInterval span = instanceSpan(view, all[i]);
           if (span.xh > leftFrontier || editable.count(all[i].id) > 0) {
             continue;
@@ -944,9 +814,7 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
         int added = 0;
         // Walk right from the first instance at or right of the frontier
         // (everything before it has span.xl < rightFrontier and was skipped).
-        for (int i = firstStartAtOrAfter(all, rightFrontier);
-             i < static_cast<int>(all.size()) && added < step;
-             ++i) {
+        for (int i = firstStartAtOrAfter(all, rightFrontier); i < static_cast<int>(all.size()) && added < step; ++i) {
           const XInterval span = instanceSpan(view, all[i]);
           if (span.xl < rightFrontier || editable.count(all[i].id) > 0) {
             continue;
@@ -974,31 +842,23 @@ RepairWindow expandWindowAdaptive(const RepairWindow& current,
   // case, try the opposite side once before declaring the window exhausted.
   const bool primaryAdded = addOnSides(growLeft, growRight);
   if (!primaryAdded && growLeft != growRight) {
-    log.block("window",
-              "Direction fallback",
-              {{"primary", growLeft ? "left" : "right"},
-               {"result", "added no filler"},
-               {"fallback", growLeft ? "right" : "left"}});
+    log.block(
+        "window", "Direction fallback",
+        {{"primary", growLeft ? "left" : "right"},
+         {"result", "added no filler"},
+         {"fallback", growLeft ? "right" : "left"}});
     addOnSides(growRight, growLeft);
   }
 
-  log.block("window",
-            "Adaptive step result",
-            {{"from level", cat(current.level)},
-             {"to level", cat(current.level + 1)},
-             {"added left", cat(addedLeftTotal)},
-             {"added right", cat(addedRightTotal)},
-             {"editable total", cat(editable.size())}});
+  log.block(
+      "window", "Adaptive step result",
+      {{"from level", cat(current.level)},
+       {"to level", cat(current.level + 1)},
+       {"added left", cat(addedLeftTotal)},
+       {"added right", cat(addedRightTotal)},
+       {"editable total", cat(editable.size())}});
 
-  return finalizeWindow(current.level + 1,
-                        rowSet,
-                        editable,
-                        bridge,
-                        x,
-                        anchor.x,
-                        view,
-                        ruleDistance,
-                        log);
+  return finalizeWindow(current.level + 1, rowSet, editable, bridge, x, anchor.x, view, ruleDistance, log);
 }
 
 // --------------------------------------------------------------------------
@@ -1085,11 +945,11 @@ VtId neighborMajorityVt(const PlacementView& view, const PlacedInstance& inst)
 // here -- they order options WITHIN a domain, below.
 struct FillerKey
 {
-  int direct = 0;      // descending
-  int bridge = 0;      // descending
-  DbCoord width = 0;   // ascending
-  DbCoord x = 0;       // ascending
-  RowId row = 0;       // ascending
+  int direct = 0;     // descending
+  int bridge = 0;     // descending
+  DbCoord width = 0;  // ascending
+  DbCoord x = 0;      // ascending
+  RowId row = 0;      // ascending
 
   bool operator<(const FillerKey& o) const
   {
@@ -1112,12 +972,8 @@ struct FillerKey
 }  // namespace
 
 std::vector<FillerDomain> rankFillers(
-    const std::vector<Swap>& swaps,
-    const TargetPlace& anchor,
-    const std::vector<NormalizedViolation>& violations,
-    const RepairWindow& window,
-    const PlacementView& view,
-    const DebugLog& log)
+    const std::vector<Swap>& swaps, const TargetPlace& anchor, const std::vector<NormalizedViolation>& violations,
+    const RepairWindow& window, const PlacementView& view, const DebugLog& log)
 {
   const MasterInfo* anchorMaster = view.masterInfo(anchor.masterId);
   const VtId anchorVt = anchorMaster != nullptr ? anchorMaster->vt : kUnknownVt;
@@ -1126,8 +982,7 @@ std::vector<FillerDomain> rankFillers(
   for (const NormalizedViolation& nv : violations) {
     direct.insert(nv.fillerParticipants.begin(), nv.fillerParticipants.end());
   }
-  std::set<InstanceId> bridge(window.bridgeFillers.begin(),
-                              window.bridgeFillers.end());
+  std::set<InstanceId> bridge(window.bridgeFillers.begin(), window.bridgeFillers.end());
 
   // Group swaps into per-filler domains, keyed for deterministic grouping.
   std::map<InstanceId, FillerDomain> byFiller;
@@ -1145,25 +1000,19 @@ std::vector<FillerDomain> rankFillers(
     // the third VT (neither) last -- demoted within THIS domain only, so it
     // stays reachable in every subset the filler joins.
     const PlacedInstance* filler = view.instance(id);
-    const VtId majorityVt =
-        filler != nullptr ? neighborMajorityVt(view, *filler) : kUnknownVt;
-    const bool isAddition
-        = view.cellChangeRecord(id, domain.options.front().newMasterId).op_
-          == OpType::Add;
+    const VtId majorityVt = filler != nullptr ? neighborMajorityVt(view, *filler) : kUnknownVt;
+    const bool isAddition = view.cellChangeRecord(id, domain.options.front().newMasterId).op_ == OpType::Add;
     const auto optionKey = [&](const Swap& s) {
       const MasterInfo* master = view.masterInfo(s.newMasterId);
-      const int addOrder
-          = isAddition && master != nullptr ? master->addOrder : 0;
+      const int addOrder = isAddition && master != nullptr ? master->addOrder : 0;
       const bool third = s.newVt != anchorVt && s.newVt != majorityVt;
       const int anchorVote = s.newVt == anchorVt ? 0 : 1;
       const int majorityVote = s.newVt == majorityVt ? 0 : 1;
-      return std::make_tuple(
-          addOrder, third, anchorVote, majorityVote, s.newMasterId);
+      return std::make_tuple(addOrder, third, anchorVote, majorityVote, s.newMasterId);
     };
-    std::stable_sort(domain.options.begin(), domain.options.end(),
-                     [&](const Swap& a, const Swap& b) {
-                       return optionKey(a) < optionKey(b);
-                     });
+    std::stable_sort(domain.options.begin(), domain.options.end(), [&](const Swap& a, const Swap& b) {
+      return optionKey(a) < optionKey(b);
+    });
     for (const Swap& s : domain.options) {
       demoted += std::get<1>(optionKey(s)) ? 1 : 0;
     }
@@ -1180,19 +1029,18 @@ std::vector<FillerDomain> rankFillers(
     key.row = any.rowId;
     return key;
   };
-  std::stable_sort(ranked.begin(), ranked.end(),
-                   [&](const FillerDomain& a, const FillerDomain& b) {
-                     return fillerKey(a) < fillerKey(b);
-                   });
+  std::stable_sort(ranked.begin(), ranked.end(), [&](const FillerDomain& a, const FillerDomain& b) {
+    return fillerKey(a) < fillerKey(b);
+  });
 
   if (log.enabled()) {
     log.section("rank", "FILLER RANKING");
-    log.block("rank",
-              "Ranking summary",
-              {{"filler domains", cat(ranked.size())},
-               {"swaps", cat(swaps.size())},
-               {"anchor VT", cat(anchorVt)},
-               {"demoted third-VT choices", cat(demoted)}});
+    log.block(
+        "rank", "Ranking summary",
+        {{"filler domains", cat(ranked.size())},
+         {"swaps", cat(swaps.size())},
+         {"anchor VT", cat(anchorVt)},
+         {"demoted third-VT choices", cat(demoted)}});
     // Print the actual domain order consumed by SubsetSearcher. Each line
     // contains the filler-level key followed by the complete, still-reachable
     // master domain (anchor/majority choices first, third VT last).
@@ -1203,29 +1051,14 @@ std::vector<FillerDomain> rankFillers(
       const FillerKey key = fillerKey(domain);
       std::string options;
       for (const Swap& swap : domain.options) {
-        options += cat(options.empty() ? "" : ",", "m", swap.newMasterId,
-                       ":vt", swap.newVt);
+        options += cat(options.empty() ? "" : ",", "m", swap.newMasterId, ":vt", swap.newVt);
       }
-      rankingRows.push_back({cat(rank),
-                             cat(domain.instanceId),
-                             cat(key.direct),
-                             cat(key.bridge),
-                             cat(key.width),
-                             cat(key.x),
-                             cat(key.row),
-                             cat('[', options, ']')});
+      rankingRows.push_back(
+          {cat(rank), cat(domain.instanceId), cat(key.direct), cat(key.bridge), cat(key.width), cat(key.x),
+           cat(key.row), cat('[', options, ']')});
     }
-    log.table("rank",
-              "Ranked filler domains",
-              {"rank",
-               "filler",
-               "direct",
-               "bridge",
-               "width",
-               "x",
-               "row",
-               "master domains"},
-              rankingRows);
+    log.table("rank", "Ranked filler domains",
+              {"rank", "filler", "direct", "bridge", "width", "x", "row", "master domains"}, rankingRows);
   }
   return ranked;
 }
@@ -1255,18 +1088,13 @@ long long fullSpaceSize(const std::vector<FillerDomain>& ranked, long long cap)
 }  // namespace
 
 EnumerationPlan enumerateOverlays(
-    const std::vector<FillerDomain>& ranked,
-    const RepairConfig& config,
-    int budget,
-    const DebugLog& log,
+    const std::vector<FillerDomain>& ranked, const RepairConfig& config, int budget, const DebugLog& log,
     const std::function<bool(const Overlay&)>& wasChecked)
 {
   EnumerationPlan plan;
   if (ranked.empty() || budget <= 0) {
     log.section("enumerate", "OVERLAY ENUMERATION");
-    log.block("enumerate",
-              "Enumeration skipped",
-              {{"domains", cat(ranked.size())}, {"budget", cat(budget)}});
+    log.block("enumerate", "Enumeration skipped", {{"domains", cat(ranked.size())}, {"budget", cat(budget)}});
     return plan;
   }
   log.section("enumerate", "OVERLAY ENUMERATION");
@@ -1277,21 +1105,17 @@ EnumerationPlan enumerateOverlays(
     optionTotal += domain.options.size();
   }
 
-  const long long space
-      = fullSpaceSize(ranked, std::numeric_limits<int>::max());
+  const long long space = fullSpaceSize(ranked, std::numeric_limits<int>::max());
   const bool exhaustive = space <= budget;
 
-  const int maxSize
-      = exhaustive ? fillerTotal : std::min(config.maxSubsetSize, fillerTotal);
+  const int maxSize = exhaustive ? fillerTotal : std::min(config.maxSubsetSize, fillerTotal);
   // Member cap counts FILLERS: size-s subsets draw from the first
   // N_s ranked fillers, each contributing its full domain.
   const auto memberCap = [&](int size) -> int {
     if (exhaustive || size == 1) {
       return fillerTotal;
     }
-    const int cap = size == 2   ? config.memberCapSize2
-                    : size == 3 ? config.memberCapSize3
-                                : config.memberCapSize4;
+    const int cap = size == 2 ? config.memberCapSize2 : size == 3 ? config.memberCapSize3 : config.memberCapSize4;
     return std::min(cap, fillerTotal);
   };
 
@@ -1299,8 +1123,7 @@ EnumerationPlan enumerateOverlays(
   Overlay current;         // one option per chosen filler, filler-rank order
   // The emitted count is bounded by the budget, so the candidate list is
   // sized once instead of doubling its way there.
-  plan.overlays.reserve(static_cast<size_t>(
-      std::min<long long>(space, static_cast<long long>(budget))));
+  plan.overlays.reserve(static_cast<size_t>(std::min<long long>(space, static_cast<long long>(budget))));
   bool budgetHit = false;
   long long checkedCount = 0;
   std::vector<std::vector<std::string>> subsetRows;
@@ -1338,8 +1161,7 @@ EnumerationPlan enumerateOverlays(
   };
 
   // Lexicographic filler combinations of `size` within the rank prefix `cap`.
-  const auto choose =
-      [&](const auto& self, int size, int from, int cap) -> void {
+  const auto choose = [&](const auto& self, int size, int from, int cap) -> void {
     if (budgetHit) {
       return;
     }
@@ -1364,32 +1186,25 @@ EnumerationPlan enumerateOverlays(
     // Per-size accounting makes it obvious when a large-window member cap or
     // the checker budget, rather than the legality oracle, removed candidates.
     if (log.enabled()) {
-      subsetRows.push_back({cat(size),
-                            cat(cap, '/', fillerTotal),
-                            cat(plan.overlays.size() - before),
-                            budgetHit ? "budget reached" : "ready"});
+      subsetRows.push_back(
+          {cat(size), cat(cap, '/', fillerTotal), cat(plan.overlays.size() - before),
+           budgetHit ? "budget reached" : "ready"});
     }
   }
   // Only actual cache entries count as covered. Enumeration limits never do.
-  plan.complete
-      = static_cast<long long>(plan.overlays.size()) + checkedCount == space;
+  plan.complete = static_cast<long long>(plan.overlays.size()) + checkedCount == space;
   if (log.enabled() && checkedCount != 0) {
-    log.block("enumerate",
-              "Checked candidates skipped",
-              {{"candidates", cat(checkedCount)}});
+    log.block("enumerate", "Checked candidates skipped", {{"candidates", cat(checkedCount)}});
   }
-  log.table("enumerate",
-            "Subset enumeration",
-            {"subset size", "member prefix", "emitted", "status"},
-            subsetRows);
-  log.block("enumerate",
-            "Enumeration summary",
-            {{"filler domains", cat(fillerTotal)},
-             {"options", cat(optionTotal)},
-             {"space", cat(space)},
-             {"coverage", plan.complete ? "complete" : "truncated"},
-             {"overlay candidates", cat(plan.overlays.size())},
-             {"maximum subset size", cat(maxSize)}});
+  log.table("enumerate", "Subset enumeration", {"subset size", "member prefix", "emitted", "status"}, subsetRows);
+  log.block(
+      "enumerate", "Enumeration summary",
+      {{"filler domains", cat(fillerTotal)},
+       {"options", cat(optionTotal)},
+       {"space", cat(space)},
+       {"coverage", plan.complete ? "complete" : "truncated"},
+       {"overlay candidates", cat(plan.overlays.size())},
+       {"maximum subset size", cat(maxSize)}});
   return plan;
 }
 
@@ -1410,8 +1225,7 @@ bool inRepairWindow(const Violation& v, const RepairWindow& window)
     return false;
   }
   for (const RowId row : v.rowIds) {
-    if (std::find(window.rows.begin(), window.rows.end(), row)
-        != window.rows.end()) {
+    if (std::find(window.rows.begin(), window.rows.end(), row) != window.rows.end()) {
       return true;
     }
   }
@@ -1440,14 +1254,10 @@ bool inGuardRegion(const Violation& v, const Region& guard)
 
 }  // namespace
 
-OracleGate::OracleGate(const PlacementView& dataSource,
-                       RepairOracle& oracle,
-                       const TargetPlace& anchor,
-                       const std::vector<Violation>& originals,
-                       DbCoord siteWidth,
-                       DbCoord ruleDistance,
-                       const RepairConfig& config,
-                       const DebugLog& log)
+OracleGate::OracleGate(
+    const PlacementView& dataSource, RepairOracle& oracle, const TargetPlace& anchor,
+    const std::vector<Violation>& originals, DbCoord siteWidth, DbCoord ruleDistance, const RepairConfig& config,
+    const DebugLog& log)
     : data_source_(dataSource),
       oracle_(oracle),
       anchor_(anchor),
@@ -1471,25 +1281,19 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
   auto it = cache_.find(key);
   if (it != cache_.end()) {
     ++cache_hits_;
-    log_.block("gate",
-               "Baseline cache hit",
-               {{"guard", show(guard)}});
+    log_.block("gate", "Baseline cache hit", {{"guard", show(guard)}});
   } else {
     if (budget <= 0) {
-      log_.block("gate",
-                 "Baseline skipped",
-                 {{"reason", "checker budget is exhausted"}});
+      log_.block("gate", "Baseline skipped", {{"reason", "checker budget is exhausted"}});
       return false;
     }
     OracleRequest request;
     request.requestId = next_request_id_++;
     request.targetPlace = anchor_;
     request.guardRegion = guard;
-    log_.block("gate",
-               "Baseline request",
-               {{"request ID", cat(request.requestId)},
-                {"guard", show(guard)},
-                {"budget before", cat(budget)}});
+    log_.block(
+        "gate", "Baseline request",
+        {{"request ID", cat(request.requestId)}, {"guard", show(guard)}, {"budget before", cat(budget)}});
     const OracleResult result = oracle_.checkPlaceWithOverlay(request);
     ++requests_sent_;
     --budget;
@@ -1499,14 +1303,14 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
           cat("baseline echoed id ", result.requestId, " != ", request.requestId)));
       return false;
     }
-    log_.block("gate",
-               "Baseline result",
-               {{"request ID", cat(result.requestId)},
-                {"status", cat(static_cast<int>(result.status))},
-                {"legal", cat(result.isLegal)},
-                {"violations", cat(result.violations.size())},
-                {"diagnostics", cat(result.diagnostics.size())},
-                {"budget after", cat(budget)}});
+    log_.block(
+        "gate", "Baseline result",
+        {{"request ID", cat(result.requestId)},
+         {"status", cat(static_cast<int>(result.status))},
+         {"legal", cat(result.isLegal)},
+         {"violations", cat(result.violations.size())},
+         {"diagnostics", cat(result.diagnostics.size())},
+         {"budget after", cat(budget)}});
     it = cache_.emplace(key, result).first;
   }
 
@@ -1519,15 +1323,11 @@ bool OracleGate::runBaseline(const RepairWindow& window, int& budget)
     baseline_classes_.push_back(signatureClass(v));
   }
   if (baseline_->status != OracleStatus::Checked) {
-    diagnostics_.push_back(makeDiag(Severity::Error, "BaselineUnusable",
-                                    "baseline check did not complete"));
+    diagnostics_.push_back(makeDiag(Severity::Error, "BaselineUnusable", "baseline check did not complete"));
     baseline_ = nullptr;
     return false;
   }
-  log_.block("gate",
-             "Baseline summary",
-             {{"guard", show(guard)},
-              {"violations", cat(baseline_->violations.size())}});
+  log_.block("gate", "Baseline summary", {{"guard", show(guard)}, {"violations", cat(baseline_->violations.size())}});
 
   // Baseline consistency gate: refuse to search on a stale/inconsistent
   // snapshot.
@@ -1555,8 +1355,7 @@ bool OracleGate::checkBaselineConsistency(const RepairWindow& window)
     ++inGuardOriginals;
     bool matched = false;
     for (size_t i = 0; i < baseline_->violations.size(); ++i) {
-      if (!consumed[i]
-          && sameSignature(original, baseline_->violations[i], site_width_)) {
+      if (!consumed[i] && sameSignature(original, baseline_->violations[i], site_width_)) {
         consumed[i] = 1;
         matched = true;
         break;
@@ -1568,11 +1367,9 @@ bool OracleGate::checkBaselineConsistency(const RepairWindow& window)
           cat("original rule=", original.ruleId, ' ', show(original.xWindow),
               " lies in the guard but is absent from the baseline; input "
               "snapshot is stale/inconsistent -- refusing to search")));
-      log_.block("gate",
-                 "Baseline mismatch",
-                 {{"original", show(original.xWindow)},
-                  {"reason", "not reproduced"},
-                  {"decision", "abort window"}});
+      log_.block(
+          "gate", "Baseline mismatch",
+          {{"original", show(original.xWindow)}, {"reason", "not reproduced"}, {"decision", "abort window"}});
       return false;
     }
   }
@@ -1590,28 +1387,24 @@ bool OracleGate::checkBaselineConsistency(const RepairWindow& window)
     if (inRepairWindow(b, window)) {
       diagnostics_.push_back(makeDiag(
           Severity::Fatal, "BaselineMismatch",
-          cat("baseline carries an in-window violation rule=", b.ruleId, ' ',
-              show(b.xWindow), " that is not among the original snapshot; "
+          cat("baseline carries an in-window violation rule=", b.ruleId, ' ', show(b.xWindow),
+              " that is not among the original snapshot; "
               "input is inconsistent -- refusing to search")));
-      log_.block("gate",
-                 "Baseline mismatch",
-                 {{"unexpected in-window", show(b.xWindow)},
-                  {"decision", "abort window"}});
+      log_.block(
+          "gate", "Baseline mismatch", {{"unexpected in-window", show(b.xWindow)}, {"decision", "abort window"}});
       return false;
     }
   }
 
-  log_.block("gate",
-             "Baseline consistent",
-             {{"in-guard originals", cat(inGuardOriginals)},
-              {"reproduced", "all"},
-              {"unexpected in-window violations", "none"}});
+  log_.block(
+      "gate", "Baseline consistent",
+      {{"in-guard originals", cat(inGuardOriginals)},
+       {"reproduced", "all"},
+       {"unexpected in-window violations", "none"}});
   return true;
 }
 
-DeltaSummary OracleGate::classify(const OracleResult& result,
-                                  const Overlay& overlay,
-                                  const RepairWindow& window) const
+DeltaSummary OracleGate::classify(const OracleResult& result, const Overlay& overlay, const RepairWindow& window) const
 {
   DeltaSummary summary;
   summary.usable = result.status == OracleStatus::Checked;
@@ -1683,8 +1476,7 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
     if (inRepairWindow(v, window)) {
       ++summary.newInWindow;
       summary.blockingViolations.push_back(v);
-    } else if (isRelatedToOverlay(v, overlay,
-                                  std::max(rule_distance_, v.requiredValue))) {
+    } else if (isRelatedToOverlay(v, overlay, std::max(rule_distance_, v.requiredValue))) {
       // Per-violation rule distance: a new violation from a
       // larger-distance rule must not be mislabeled unrelated and let through.
       ++summary.relatedInHalo;
@@ -1694,18 +1486,16 @@ DeltaSummary OracleGate::classify(const OracleResult& result,
     }
   }
 
-  summary.clean = !summary.inconsistent && summary.residualOriginals == 0
-                  && summary.newInWindow == 0 && summary.relatedInHalo == 0;
+  summary.clean
+      = !summary.inconsistent && summary.residualOriginals == 0 && summary.newInWindow == 0
+        && summary.relatedInHalo == 0;
   return summary;
 }
 
 // Uncached candidates go to one checker batch; cache hits consume no budget.
-bool OracleGate::resolve(const Overlay* chunk,
-                         const OverlayKey* chunkKeys,
-                         std::size_t count,
-                         const Region& guard,
-                         int& budget,
-                         std::vector<const OracleResult*>& out)
+bool OracleGate::resolve(
+    const Overlay* chunk, const OverlayKey* chunkKeys, std::size_t count, const Region& guard, int& budget,
+    std::vector<const OracleResult*>& out)
 {
   out.assign(count, nullptr);
 
@@ -1742,27 +1532,24 @@ bool OracleGate::resolve(const Overlay* chunk,
   }
   if (requests.empty()) {
     if (log_.enabled()) {
-      log_.block("gate",
-                 "Checker batch avoided",
-                 {{"chunk", cat(count)},
-                  {"cached", cat(cachedInChunk)},
-                  {"skipped for budget", cat(skippedForBudget)}});
+      log_.block(
+          "gate", "Checker batch avoided",
+          {{"chunk", cat(count)}, {"cached", cat(cachedInChunk)}, {"skipped for budget", cat(skippedForBudget)}});
     }
     return true;
   }
 
   if (log_.enabled()) {
-    log_.block("gate",
-               "Checker batch request",
-               {{"chunk", cat(count)},
-                {"uncached", cat(requests.size())},
-                {"cached", cat(cachedInChunk)},
-                {"skipped for budget", cat(skippedForBudget)},
-                {"guard", show(guard)},
-                {"budget", cat(budgetBefore, " -> ", budget)}});
+    log_.block(
+        "gate", "Checker batch request",
+        {{"chunk", cat(count)},
+         {"uncached", cat(requests.size())},
+         {"cached", cat(cachedInChunk)},
+         {"skipped for budget", cat(skippedForBudget)},
+         {"guard", show(guard)},
+         {"budget", cat(budgetBefore, " -> ", budget)}});
   }
-  std::vector<OracleResult> results =
-      oracle_.checkPlaceWithOverlays(requests);
+  std::vector<OracleResult> results = oracle_.checkPlaceWithOverlays(requests);
   ++batches_sent_;
   requests_sent_ += static_cast<int>(requests.size());
 
@@ -1771,12 +1558,9 @@ bool OracleGate::resolve(const Overlay* chunk,
   if (results.size() != requests.size()) {
     diagnostics_.push_back(makeDiag(
         Severity::Fatal, "CheckerProtocolError",
-        cat("batch returned ", results.size(), " result(s) for ",
-            requests.size(), " request(s)")));
-    log_.block("gate",
-               "Checker batch protocol error",
-               {{"results", cat(results.size())},
-                {"requests", cat(requests.size())}});
+        cat("batch returned ", results.size(), " result(s) for ", requests.size(), " request(s)")));
+    log_.block(
+        "gate", "Checker batch protocol error", {{"results", cat(results.size())}, {"requests", cat(requests.size())}});
     return false;
   }
   // Non-const: each id is validated to appear exactly once, so the result it
@@ -1785,12 +1569,9 @@ bool OracleGate::resolve(const Overlay* chunk,
   std::map<OracleRequestId, OracleResult*> byId;
   for (OracleResult& result : results) {
     if (!byId.emplace(result.requestId, &result).second) {
-      diagnostics_.push_back(makeDiag(
-          Severity::Fatal, "CheckerProtocolError",
-          cat("duplicate requestId ", result.requestId)));
-      log_.block("gate",
-                 "Checker batch protocol error",
-                 {{"duplicate request ID", cat(result.requestId)}});
+      diagnostics_.push_back(
+          makeDiag(Severity::Fatal, "CheckerProtocolError", cat("duplicate requestId ", result.requestId)));
+      log_.block("gate", "Checker batch protocol error", {{"duplicate request ID", cat(result.requestId)}});
       return false;
     }
   }
@@ -1798,58 +1579,47 @@ bool OracleGate::resolve(const Overlay* chunk,
     const auto it = byId.find(requests[i].requestId);
     if (it == byId.end()) {
       diagnostics_.push_back(makeDiag(
-          Severity::Fatal, "CheckerProtocolError",
-          cat("missing result for requestId ", requests[i].requestId)));
-      log_.block("gate",
-                 "Checker batch protocol error",
-                 {{"missing request ID", cat(requests[i].requestId)}});
+          Severity::Fatal, "CheckerProtocolError", cat("missing result for requestId ", requests[i].requestId)));
+      log_.block("gate", "Checker batch protocol error", {{"missing request ID", cat(requests[i].requestId)}});
       return false;
     }
     const std::size_t index = pending[i];
-    out[index] =
-        &cache_.emplace(chunkKeys[index], std::move(*it->second))
-             .first->second;
+    out[index] = &cache_.emplace(chunkKeys[index], std::move(*it->second)).first->second;
   }
   if (log_.enabled()) {
-    log_.block("gate",
-               "Checker batch result",
-               {{"results", cat(results.size())},
-                {"cache size", cat(cache_.size())},
-                {"requests total", cat(requests_sent_)},
-                {"batches total", cat(batches_sent_)}});
+    log_.block(
+        "gate", "Checker batch result",
+        {{"results", cat(results.size())},
+         {"cache size", cat(cache_.size())},
+         {"requests total", cat(requests_sent_)},
+         {"batches total", cat(batches_sent_)}});
   }
   return true;
 }
 
-OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidates,
-                                            const RepairWindow& window,
-                                            const Region& guard,
-                                            int& budget)
+OracleGate::SearchResult OracleGate::search(
+    const std::vector<Overlay>& candidates, const RepairWindow& window, const Region& guard, int& budget)
 {
   SearchResult sr;
   if (!config_.valid()) {
-    diagnostics_.push_back(makeDiag(Severity::Fatal,
-                                    "InvalidRepairConfig",
-                                    "invalid search bounds or batch size"));
+    diagnostics_.push_back(makeDiag(Severity::Fatal, "InvalidRepairConfig", "invalid search bounds or batch size"));
     sr.protocolError = true;
     return sr;
   }
   log_.section("gate", "CANDIDATE SEARCH");
-  log_.block("gate",
-             "Search input",
-             {{"candidates", cat(candidates.size())},
-              {"batch size", cat(config_.batchSize)},
-              {"budget", cat(budget)},
-              {"window", show(window.area())},
-              {"guard", show(guard)}});
+  log_.block(
+      "gate", "Search input",
+      {{"candidates", cat(candidates.size())},
+       {"batch size", cat(config_.batchSize)},
+       {"budget", cat(budget)},
+       {"window", show(window.area())},
+       {"guard", show(guard)}});
 
   size_t next = 0;
-  std::vector<OverlayKey> chunkKeys;          // reused across chunks
-  std::vector<const OracleResult*> answers;   // ditto
+  std::vector<OverlayKey> chunkKeys;         // reused across chunks
+  std::vector<const OracleResult*> answers;  // ditto
   while (next < candidates.size()) {
-    const size_t chunkEnd =
-        std::min(candidates.size(),
-                 next + static_cast<size_t>(config_.batchSize));
+    const size_t chunkEnd = std::min(candidates.size(), next + static_cast<size_t>(config_.batchSize));
     const size_t count = chunkEnd - next;
     // Identity is built ONCE per candidate, and resolve() hands back the
     // answers so this loop never repeats its cache lookup.
@@ -1858,8 +1628,7 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
     for (size_t i = next; i < chunkEnd; ++i) {
       chunkKeys.push_back(overlayKey(guard, candidates[i]));
     }
-    if (!resolve(&candidates[next], chunkKeys.data(), count, guard, budget,
-                 answers)) {
+    if (!resolve(&candidates[next], chunkKeys.data(), count, guard, budget, answers)) {
       sr.protocolError = true;
       return sr;
     }
@@ -1873,51 +1642,46 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
       }
       const DeltaSummary summary = classify(*answer, candidates[i], window);
       sr.checkerError
-          |= summary.inconsistent
-             || answer->status == OracleStatus::CheckerError
-             || std::any_of(answer->diagnostics.begin(),
-                            answer->diagnostics.end(),
-                            [](const Diagnostic& diagnostic) {
-                              return diagnostic.severity == Severity::Fatal;
-                            });
+          |= summary.inconsistent || answer->status == OracleStatus::CheckerError
+             || std::any_of(answer->diagnostics.begin(), answer->diagnostics.end(), [](const Diagnostic& diagnostic) {
+                  return diagnostic.severity == Severity::Fatal;
+                });
       if (summary.clean) {
         sr.foundClean = true;
         sr.cleanOverlay = candidates[i];
-        log_.block("gate",
-                   "Clean overlay accepted",
-                   {{"candidate", cat(i)},
-                    {"swaps", cat(candidates[i].size())},
-                    {"residual originals", "0"},
-                    {"new in window", "0"},
-                    {"related in halo", "0"},
-                    {"unrelated in halo", cat(summary.unrelatedInHalo)},
-                    {"decision", "accept"}});
+        log_.block(
+            "gate", "Clean overlay accepted",
+            {{"candidate", cat(i)},
+             {"swaps", cat(candidates[i].size())},
+             {"residual originals", "0"},
+             {"new in window", "0"},
+             {"related in halo", "0"},
+             {"unrelated in halo", cat(summary.unrelatedInHalo)},
+             {"decision", "accept"}});
         return sr;
       }
       // Track best non-clean for diagnostics (fewer blocking findings, then
       // fewer changes, then earlier enumeration index).
-      const int blockers = summary.residualOriginals + summary.newInWindow
-                           + summary.relatedInHalo + (summary.usable ? 0 : 1000);
-      const int bestBlockers = sr.bestSummary.residualOriginals
-                               + sr.bestSummary.newInWindow
-                               + sr.bestSummary.relatedInHalo
-                               + (sr.bestSummary.usable ? 0 : 1000);
+      const int blockers
+          = summary.residualOriginals + summary.newInWindow + summary.relatedInHalo + (summary.usable ? 0 : 1000);
+      const int bestBlockers
+          = sr.bestSummary.residualOriginals + sr.bestSummary.newInWindow + sr.bestSummary.relatedInHalo
+            + (sr.bestSummary.usable ? 0 : 1000);
       if (!sr.hasBest || blockers < bestBlockers
-          || (blockers == bestBlockers
-              && candidates[i].size() < sr.bestOverlay.size())) {
+          || (blockers == bestBlockers && candidates[i].size() < sr.bestOverlay.size())) {
         sr.hasBest = true;
         sr.bestOverlay = candidates[i];
         sr.bestSummary = summary;
-        log_.block("gate",
-                   "Best candidate updated",
-                   {{"candidate", cat(i)},
-                    {"swaps", cat(candidates[i].size())},
-                    {"usable", cat(summary.usable)},
-                    {"inconsistent", cat(summary.inconsistent)},
-                    {"residual originals", cat(summary.residualOriginals)},
-                    {"new in window", cat(summary.newInWindow)},
-                    {"related in halo", cat(summary.relatedInHalo)},
-                    {"unrelated in halo", cat(summary.unrelatedInHalo)}});
+        log_.block(
+            "gate", "Best candidate updated",
+            {{"candidate", cat(i)},
+             {"swaps", cat(candidates[i].size())},
+             {"usable", cat(summary.usable)},
+             {"inconsistent", cat(summary.inconsistent)},
+             {"residual originals", cat(summary.residualOriginals)},
+             {"new in window", cat(summary.newInWindow)},
+             {"related in halo", cat(summary.relatedInHalo)},
+             {"unrelated in halo", cat(summary.unrelatedInHalo)}});
       }
     }
     next = chunkEnd;
@@ -1926,12 +1690,12 @@ OracleGate::SearchResult OracleGate::search(const std::vector<Overlay>& candidat
       break;
     }
   }
-  log_.block("gate",
-             "Search result",
-             {{"clean", "false"},
-              {"has best candidate", cat(sr.hasBest)},
-              {"budget exhausted", cat(sr.budgetExhausted)},
-              {"budget remaining", cat(budget)}});
+  log_.block(
+      "gate", "Search result",
+      {{"clean", "false"},
+       {"has best candidate", cat(sr.hasBest)},
+       {"budget exhausted", cat(sr.budgetExhausted)},
+       {"budget remaining", cat(budget)}});
   return sr;
 }
 
@@ -1944,14 +1708,11 @@ namespace {
 
 int blockerCount(const OracleGate::SearchResult& result)
 {
-  return result.bestSummary.residualOriginals
-         + result.bestSummary.newInWindow
-         + result.bestSummary.relatedInHalo
+  return result.bestSummary.residualOriginals + result.bestSummary.newInWindow + result.bestSummary.relatedInHalo
          + (result.bestSummary.usable ? 0 : 1000);
 }
 
-bool betterBest(const OracleGate::SearchResult& candidate,
-                const OracleGate::SearchResult& current)
+bool betterBest(const OracleGate::SearchResult& candidate, const OracleGate::SearchResult& current)
 {
   return candidate.hasBest
          && (!current.hasBest || blockerCount(candidate) < blockerCount(current)
@@ -1961,27 +1722,19 @@ bool betterBest(const OracleGate::SearchResult& candidate,
 
 std::string windowLabel(const RepairWindow& window)
 {
-  return window.level == 0 ? cat("start")
-                           : cat("grown x", window.level);
+  return window.level == 0 ? cat("start") : cat("grown x", window.level);
 }
 
 }  // namespace
 
 namespace internal {
 
-RepairPlanner::RepairPlanner(
-    const PlacementView& view,
-    RepairOracle& oracle,
-    RepairConfig config)
-    : view_(view),
-      oracle_(oracle),
-      config_(config),
-      log_(config.verbose)
+RepairPlanner::RepairPlanner(const PlacementView& view, RepairOracle& oracle, RepairConfig config)
+    : view_(view), oracle_(oracle), config_(config), log_(config.verbose)
 {
 }
 
-FillerRepairResult RepairPlanner::repair(
-    const FillerRepairRequest& request)
+FillerRepairResult RepairPlanner::repair(const FillerRepairRequest& request)
 {
   FillerRepairResult result;
 
@@ -2004,48 +1757,37 @@ FillerRepairResult RepairPlanner::repair(
 
   if (!config_.valid()) {
     result.diagnostics.push_back(
-        makeDiag(Severity::Fatal,
-                 "InvalidRepairConfig",
-                 "invalid search bounds or batch size"));
+        makeDiag(Severity::Fatal, "InvalidRepairConfig", "invalid search bounds or batch size"));
     return result;
   }
 
   const std::vector<RowId>& viewRows = view_.rows();
   if (viewRows.empty() || view_.siteWidth() <= 0) {
     result.diagnostics.push_back(makeDiag(
-        Severity::Fatal,
-        "InvalidPlacementView",
-        cat("placement view has no usable grid: rows=", viewRows.size(),
-            " siteWidth=", view_.siteWidth())));
+        Severity::Fatal, "InvalidPlacementView",
+        cat("placement view has no usable grid: rows=", viewRows.size(), " siteWidth=", view_.siteWidth())));
     return result;
   }
-  const PlacedInstance* currentTarget =
-      view_.instance(request.targetPlace.instanceId);
+  const PlacedInstance* currentTarget = view_.instance(request.targetPlace.instanceId);
   if (currentTarget == nullptr) {
     result.diagnostics.push_back(makeDiag(
-        Severity::Fatal,
-        "UnknownTarget",
-        cat("target instance ", request.targetPlace.instanceId,
-            " is absent from the placement view")));
+        Severity::Fatal, "UnknownTarget",
+        cat("target instance ", request.targetPlace.instanceId, " is absent from the placement view")));
     return result;
   }
   if (view_.masterInfo(currentTarget->masterId) == nullptr
       || view_.masterInfo(request.targetPlace.masterId) == nullptr) {
     result.diagnostics.push_back(makeDiag(
-        Severity::Fatal,
-        "UnknownTargetMaster",
+        Severity::Fatal, "UnknownTargetMaster",
         cat("target instance ", request.targetPlace.instanceId,
             " references unavailable current/replacement master metadata")));
     return result;
   }
-  if (std::find(viewRows.begin(), viewRows.end(), request.targetPlace.rowId)
-          == viewRows.end()
+  if (std::find(viewRows.begin(), viewRows.end(), request.targetPlace.rowId) == viewRows.end()
       || request.targetPlace.x < 0) {
     result.diagnostics.push_back(makeDiag(
-        Severity::Fatal,
-        "InvalidTargetPlacement",
-        cat("target placement is outside the view: row=",
-            request.targetPlace.rowId, " x=", request.targetPlace.x)));
+        Severity::Fatal, "InvalidTargetPlacement",
+        cat("target placement is outside the view: row=", request.targetPlace.rowId, " x=", request.targetPlace.x)));
     return result;
   }
 
@@ -2053,22 +1795,19 @@ FillerRepairResult RepairPlanner::repair(
   // knob. This makes a runtime failure reproducible from one captured log
   // without relying on hidden defaults.
   log_.section("planner", "REPAIR PLANNING");
-  log_.block("planner",
-             "Repair request",
-             {{"anchor instance", cat(request.targetPlace.instanceId)},
-              {"master", cat(request.targetPlace.masterId)},
-              {"row", cat(request.targetPlace.rowId)},
-              {"x", cat(request.targetPlace.x)},
-              {"violations", cat(request.violations.size())}});
   log_.block(
-      "planner",
-      "Search configuration",
+      "planner", "Repair request",
+      {{"anchor instance", cat(request.targetPlace.instanceId)},
+       {"master", cat(request.targetPlace.masterId)},
+       {"row", cat(request.targetPlace.rowId)},
+       {"x", cat(request.targetPlace.x)},
+       {"violations", cat(request.violations.size())}});
+  log_.block(
+      "planner", "Search configuration",
       {{"budget per window", cat(config_.checkerCallBudgetPerWindow)},
        {"batch size", cat(config_.batchSize)},
        {"maximum subset", cat(config_.maxSubsetSize)},
-       {"member caps",
-        cat('[', config_.memberCapSize2, ',', config_.memberCapSize3, ',',
-            config_.memberCapSize4, ']')},
+       {"member caps", cat('[', config_.memberCapSize2, ',', config_.memberCapSize3, ',', config_.memberCapSize4, ']')},
        {"adaptive step", cat(config_.adaptiveStepFillers)},
        {"maximum adaptive levels", cat(config_.maxAdaptiveLevels)},
        {"budget per repair", cat(config_.checkerCallBudgetPerRepair)}});
@@ -2079,30 +1818,25 @@ FillerRepairResult RepairPlanner::repair(
   // Empty snapshot: nothing to repair is a success with no changes.
   if (request.violations.empty()) {
     result.hasSolution = true;
-    result.diagnostics.push_back(makeDiag(
-        Severity::Info, "EmptySnapshot", "no violations in initial snapshot"));
+    result.diagnostics.push_back(makeDiag(Severity::Info, "EmptySnapshot", "no violations in initial snapshot"));
     log_.section("planner", "REPAIR RESULT");
-    log_.block("planner",
-               "Empty violation snapshot",
-               {{"has solution", "true"}, {"changes", "0"}});
+    log_.block("planner", "Empty violation snapshot", {{"has solution", "true"}, {"changes", "0"}});
     return result;
   }
 
   // Stage 2: normalize the snapshot into signatures/footprints.
-  const std::vector<NormalizedViolation> violations =
-      normalizeViolations(request, log_);
+  const std::vector<NormalizedViolation> violations = normalizeViolations(request, log_);
 
   const DbCoord ruleDistance
-      = std::max(config_.ruleDistance,
-                 estimateRuleDistance(request.violations, view_.siteWidth()));
-  log_.block("planner",
-             "L0 window input",
-             {{"normalized violations", cat(violations.size())},
-              {"site width", cat(view_.siteWidth())},
-              {"rule distance", cat(ruleDistance)},
-              {"next step", "build L0 window"}});
-  OracleGate gate(view_, oracle_, request.targetPlace, request.violations,
-                  view_.siteWidth(), ruleDistance, config_, log_);
+      = std::max(config_.ruleDistance, estimateRuleDistance(request.violations, view_.siteWidth()));
+  log_.block(
+      "planner", "L0 window input",
+      {{"normalized violations", cat(violations.size())},
+       {"site width", cat(view_.siteWidth())},
+       {"rule distance", cat(ruleDistance)},
+       {"next step", "build L0 window"}});
+  OracleGate gate(
+      view_, oracle_, request.targetPlace, request.violations, view_.siteWidth(), ruleDistance, config_, log_);
 
   // The adaptive window loop: search L0, then grow K fillers toward the
   // best non-clean candidate's blocking side until clean or an expansion
@@ -2112,12 +1846,7 @@ FillerRepairResult RepairPlanner::repair(
   // an earlier smaller window being complete does not prove the
   // later truncated window has no solution.
   bool lastSearchedDefinitive = false;
-  RepairWindow window = buildWindow(
-                                    request.targetPlace,
-                                    violations,
-                                    view_,
-                                    ruleDistance,
-                                    log_);
+  RepairWindow window = buildWindow(request.targetPlace, violations, view_, ruleDistance, log_);
 
   for (;;) {
     const std::string label = windowLabel(window);
@@ -2127,18 +1856,14 @@ FillerRepairResult RepairPlanner::repair(
     // Per-repair ceiling across all adaptive levels. Checked before the
     // window is searched so exhaustion ends the search the same way an
     // expansion cutoff does -- truncated, not a baseline-gate failure.
-    if (config_.checkerCallBudgetPerRepair > 0
-        && gate.requestsSent() >= config_.checkerCallBudgetPerRepair) {
+    if (config_.checkerCallBudgetPerRepair > 0 && gate.requestsSent() >= config_.checkerCallBudgetPerRepair) {
       result.diagnostics.push_back(makeDiag(
           Severity::Info, "RepairBudgetExhausted",
-          cat("window ", label, " not searched: checker requests=",
-              gate.requestsSent(), " reached checkerCallBudgetPerRepair=",
-              config_.checkerCallBudgetPerRepair, " -> truncated")));
-      log_.block("planner",
-                 "Per-repair checker budget exhausted",
-                 {{"budget", cat(config_.checkerCallBudgetPerRepair)},
-                  {"before window", label},
-                  {"result", "truncated"}});
+          cat("window ", label, " not searched: checker requests=", gate.requestsSent(),
+              " reached checkerCallBudgetPerRepair=", config_.checkerCallBudgetPerRepair, " -> truncated")));
+      log_.block(
+          "planner", "Per-repair checker budget exhausted",
+          {{"budget", cat(config_.checkerCallBudgetPerRepair)}, {"before window", label}, {"result", "truncated"}});
       lastSearchedDefinitive = false;
       break;
     }
@@ -2147,87 +1872,60 @@ FillerRepairResult RepairPlanner::repair(
     // window and guard are logged before generating swaps so a transcript can
     // explain exactly which fillers were editable versus check-only.
     log_.section("planner", cat("SEARCH WINDOW ", label));
-    log_.block("planner",
-               "Window input",
-               {{"area", show(window.area())},
-                {"guard", show(window.guardRegion)},
-                {"editable fillers", cat(window.editableFillers.size())},
-                {"bridge fillers", cat(window.bridgeFillers.size())}});
+    log_.block(
+        "planner", "Window input",
+        {{"area", show(window.area())},
+         {"guard", show(window.guardRegion)},
+         {"editable fillers", cat(window.editableFillers.size())},
+         {"bridge fillers", cat(window.bridgeFillers.size())}});
 
     if (window.editableFillers.empty()) {
       currentDefinitive = true;
       lastSearchedDefinitive = true;
       result.diagnostics.push_back(makeDiag(
           Severity::Warning, "NoEditableFiller",
-          cat("window ", label, " ", show(window.area()),
-              " contains no editable filler")));
+          cat("window ", label, " ", show(window.area()), " contains no editable filler")));
     } else {
-      const SwapGenerationResult generated =
-          generateSwaps(window, view_, log_);
-      result.diagnostics.insert(result.diagnostics.end(),
-                                generated.diagnostics.begin(),
-                                generated.diagnostics.end());
+      const SwapGenerationResult generated = generateSwaps(window, view_, log_);
+      result.diagnostics.insert(result.diagnostics.end(), generated.diagnostics.begin(), generated.diagnostics.end());
       if (generated.swaps.empty()) {
-        currentDefinitive
-            = std::none_of(generated.diagnostics.begin(),
-                           generated.diagnostics.end(),
-                           [](const Diagnostic& diagnostic) {
-                             return diagnostic.severity == Severity::Error
-                                    || diagnostic.severity == Severity::Fatal;
-                           });
+        currentDefinitive = std::none_of(
+            generated.diagnostics.begin(), generated.diagnostics.end(), [](const Diagnostic& diagnostic) {
+              return diagnostic.severity == Severity::Error || diagnostic.severity == Severity::Fatal;
+            });
         lastSearchedDefinitive = currentDefinitive;
-        result.diagnostics.push_back(makeDiag(
-            Severity::Warning, "NoSwapGenerated",
-            cat("window ", label, ": no usable swap")));
+        result.diagnostics.push_back(
+            makeDiag(Severity::Warning, "NoSwapGenerated", cat("window ", label, ": no usable swap")));
       } else {
-        const std::vector<FillerDomain> ranked =
-            rankFillers(generated.swaps,
-                        request.targetPlace,
-                        violations,
-                        window,
-                        view_,
-                        log_);
+        const std::vector<FillerDomain> ranked
+            = rankFillers(generated.swaps, request.targetPlace, violations, window, view_, log_);
 
         int budget = config_.checkerCallBudgetPerWindow;
         if (config_.checkerCallBudgetPerRepair > 0) {
           // Never let one window spend past the per-repair ceiling. The
           // remainder is > 0 here: the loop head just checked it.
-          budget = std::min(budget,
-                            config_.checkerCallBudgetPerRepair
-                                - gate.requestsSent());
+          budget = std::min(budget, config_.checkerCallBudgetPerRepair - gate.requestsSent());
         }
         if (!gate.runBaseline(window, budget)) {
           result.hasSolution = false;
-          result.diagnostics.insert(result.diagnostics.end(),
-                                    gate.diagnostics().begin(),
-                                    gate.diagnostics().end());
+          result.diagnostics.insert(result.diagnostics.end(), gate.diagnostics().begin(), gate.diagnostics().end());
           result.diagnostics.push_back(makeDiag(
               Severity::Fatal, "BaselineGateFailed",
-              cat("baseline gate failed at window ", label,
-                  " (see BaselineUnusable/BaselineMismatch above)")));
-          log_.block("planner",
-                     "Window aborted",
-                     {{"reason", "baseline gate failed"}});
+              cat("baseline gate failed at window ", label, " (see BaselineUnusable/BaselineMismatch above)")));
+          log_.block("planner", "Window aborted", {{"reason", "baseline gate failed"}});
           return result;
         }
 
-        const EnumerationPlan plan = enumerateOverlays(
-            ranked, config_, budget, log_, [&](const Overlay& overlay) {
-              return gate.wasChecked(window.guardRegion, overlay);
-            });
-        OracleGate::SearchResult sr =
-            gate.search(plan.overlays, window, window.guardRegion, budget);
+        const EnumerationPlan plan = enumerateOverlays(ranked, config_, budget, log_, [&](const Overlay& overlay) {
+          return gate.wasChecked(window.guardRegion, overlay);
+        });
+        OracleGate::SearchResult sr = gate.search(plan.overlays, window, window.guardRegion, budget);
         if (sr.protocolError) {
           result.hasSolution = false;
-          result.diagnostics.insert(result.diagnostics.end(),
-                                    gate.diagnostics().begin(),
-                                    gate.diagnostics().end());
-          result.diagnostics.push_back(makeDiag(
-              Severity::Fatal, "CheckerProtocolError",
-              "batch protocol violated; rejecting this repair"));
-          log_.block("planner",
-                     "Window aborted",
-                     {{"reason", "checker protocol error"}});
+          result.diagnostics.insert(result.diagnostics.end(), gate.diagnostics().begin(), gate.diagnostics().end());
+          result.diagnostics.push_back(
+              makeDiag(Severity::Fatal, "CheckerProtocolError", "batch protocol violated; rejecting this repair"));
+          log_.block("planner", "Window aborted", {{"reason", "checker protocol error"}});
           return result;
         }
 
@@ -2236,38 +1934,32 @@ FillerRepairResult RepairPlanner::repair(
           result.changes = toFillerChanges(sr.cleanOverlay, view_);
           result.diagnostics.push_back(makeDiag(
               Severity::Info, "Solution",
-              cat("window ", label, ": ", result.changes.size(),
-                  " change(s); checker requests=", gate.requestsSent(),
-                  " batches=", gate.batchesSent(),
-                  " cacheHits=", gate.cacheHits())));
+              cat("window ", label, ": ", result.changes.size(), " change(s); checker requests=", gate.requestsSent(),
+                  " batches=", gate.batchesSent(), " cacheHits=", gate.cacheHits())));
           log_.section("planner", "REPAIR RESULT");
-          log_.block("planner",
-                     "Solution",
-                     {{"window", label},
-                      {"changes", cat(result.changes.size())},
-                      {"checker requests", cat(gate.requestsSent())},
-                      {"cache hits", cat(gate.cacheHits())}});
+          log_.block(
+              "planner", "Solution",
+              {{"window", label},
+               {"changes", cat(result.changes.size())},
+               {"checker requests", cat(gate.requestsSent())},
+               {"cache hits", cat(gate.cacheHits())}});
           return result;
         }
 
         if (betterBest(sr, best)) {
           best = sr;
-          log_.block("planner",
-                     "Best-so-far updated",
-                     {{"window", label},
-                      {"swaps", cat(best.bestOverlay.size())},
-                      {"residual originals",
-                       cat(best.bestSummary.residualOriginals)},
-                      {"new in window", cat(best.bestSummary.newInWindow)},
-                      {"related in halo",
-                       cat(best.bestSummary.relatedInHalo)}});
+          log_.block(
+              "planner", "Best-so-far updated",
+              {{"window", label},
+               {"swaps", cat(best.bestOverlay.size())},
+               {"residual originals", cat(best.bestSummary.residualOriginals)},
+               {"new in window", cat(best.bestSummary.newInWindow)},
+               {"related in halo", cat(best.bestSummary.relatedInHalo)}});
         }
-        currentDefinitive
-            = plan.complete && !sr.budgetExhausted && !sr.checkerError;
+        currentDefinitive = plan.complete && !sr.budgetExhausted && !sr.checkerError;
         if (sr.checkerError) {
           result.diagnostics.push_back(makeDiag(
-              Severity::Error,
-              "CheckerEvaluationFailed",
+              Severity::Error, "CheckerEvaluationFailed",
               "some candidates could not be checked; search is incomplete"));
         }
         lastSearchedDefinitive = currentDefinitive;
@@ -2276,18 +1968,15 @@ FillerRepairResult RepairPlanner::repair(
         }
         result.diagnostics.push_back(makeDiag(
             Severity::Info, "WindowExhausted",
-            cat("window ", label, ": ", plan.overlays.size(),
-                " candidate(s), ",
-                currentDefinitive
-                    ? "complete enumeration, definitively no clean overlay"
-                    : "truncated (size caps or budget), no clean overlay found")));
-        log_.block("planner",
-                   "Window exhausted",
-                   {{"window", label},
-                    {"clean overlay", "none"},
-                    {"coverage",
-                     currentDefinitive ? "definitive" : "truncated"},
-                    {"next step", "adaptive expansion"}});
+            cat("window ", label, ": ", plan.overlays.size(), " candidate(s), ",
+                currentDefinitive ? "complete enumeration, definitively no clean overlay"
+                                  : "truncated (size caps or budget), no clean overlay found")));
+        log_.block(
+            "planner", "Window exhausted",
+            {{"window", label},
+             {"clean overlay", "none"},
+             {"coverage", currentDefinitive ? "definitive" : "truncated"},
+             {"next step", "adaptive expansion"}});
       }
     }
 
@@ -2298,34 +1987,22 @@ FillerRepairResult RepairPlanner::repair(
     if (window.level >= config_.maxAdaptiveLevels) {
       result.diagnostics.push_back(makeDiag(
           Severity::Info, "ExpansionCutoff",
-          cat("window ", label, " reached maxAdaptiveLevels=",
-              config_.maxAdaptiveLevels, " -> stop escalation (truncated)")));
-      log_.block("planner",
-                 "Expansion cutoff",
-                 {{"window", label},
-                  {"adaptive level cap", cat(config_.maxAdaptiveLevels)},
-                  {"result", "truncated"}});
+          cat("window ", label, " reached maxAdaptiveLevels=", config_.maxAdaptiveLevels,
+              " -> stop escalation (truncated)")));
+      log_.block(
+          "planner", "Expansion cutoff",
+          {{"window", label}, {"adaptive level cap", cat(config_.maxAdaptiveLevels)}, {"result", "truncated"}});
       // Farther windows were never searched, so no-solution is not definitive.
       lastSearchedDefinitive = false;
       break;
     }
-    const RepairWindow expanded
-        = expandWindowAdaptive(window,
-                               request.targetPlace,
-                               blockingForExpansion,
-                               view_,
-                               config_.adaptiveStepFillers,
-                               ruleDistance,
-                               log_);
+    const RepairWindow expanded = expandWindowAdaptive(
+        window, request.targetPlace, blockingForExpansion, view_, config_.adaptiveStepFillers, ruleDistance, log_);
     if (expanded.editableFillers == window.editableFillers) {
       result.diagnostics.push_back(makeDiag(
           Severity::Info, "ExpansionCutoff",
-          cat("window ", label,
-              " adaptive step adds no new editable filler -> stop escalation")));
-      log_.block("planner",
-                 "Expansion cutoff",
-                 {{"window", label},
-                  {"reason", "adaptive step adds no filler"}});
+          cat("window ", label, " adaptive step adds no new editable filler -> stop escalation")));
+      log_.block("planner", "Expansion cutoff", {{"window", label}, {"reason", "adaptive step adds no filler"}});
       break;
     }
     window = expanded;
@@ -2338,24 +2015,21 @@ FillerRepairResult RepairPlanner::repair(
       Severity::Error, "NoCleanOverlay",
       cat("no baseline-delta clean overlay found; ",
           lastSearchedDefinitive ? "window space exhausted definitively" : "budget/caps truncated",
-          "; checker requests=", gate.requestsSent(), " batches=",
-          gate.batchesSent(), " cacheHits=", gate.cacheHits())));
+          "; checker requests=", gate.requestsSent(), " batches=", gate.batchesSent(),
+          " cacheHits=", gate.cacheHits())));
   if (best.hasBest) {
     result.diagnostics.push_back(makeDiag(
         Severity::Info, "BestOverlay",
-        cat("best non-clean candidate: ", best.bestOverlay.size(),
-            " swap(s), residualOriginals=", best.bestSummary.residualOriginals,
-            " newInWindow=", best.bestSummary.newInWindow,
-            " relatedInHalo=", best.bestSummary.relatedInHalo,
-            " unrelatedInHalo=", best.bestSummary.unrelatedInHalo)));
+        cat("best non-clean candidate: ", best.bestOverlay.size(), " swap(s), residualOriginals=",
+            best.bestSummary.residualOriginals, " newInWindow=", best.bestSummary.newInWindow,
+            " relatedInHalo=", best.bestSummary.relatedInHalo, " unrelatedInHalo=", best.bestSummary.unrelatedInHalo)));
   }
   log_.section("planner", "REPAIR RESULT");
-  log_.block("planner",
-             "No solution",
-             {{"coverage",
-               lastSearchedDefinitive ? "definitive" : "truncated"},
-              {"checker requests", cat(gate.requestsSent())},
-              {"cache hits", cat(gate.cacheHits())}});
+  log_.block(
+      "planner", "No solution",
+      {{"coverage", lastSearchedDefinitive ? "definitive" : "truncated"},
+       {"checker requests", cat(gate.requestsSent())},
+       {"cache hits", cat(gate.cacheHits())}});
   return result;
 }
 

@@ -22,10 +22,7 @@ struct SiteCell
   RowId rowId = 0;
   int colId = 0;
 
-  bool operator==(const SiteCell& other) const
-  {
-    return rowId == other.rowId && colId == other.colId;
-  }
+  bool operator==(const SiteCell& other) const { return rowId == other.rowId && colId == other.colId; }
 
   bool operator<(const SiteCell& other) const
   {
@@ -65,12 +62,7 @@ struct RetileResult
 // consumes a solution slot; ties keep the largest-footprint-first order. The
 // second argument is the current partial tiling, before adding this tile.
 RetileResult enumerateRetilings(
-    std::vector<SiteCell> emptySites,
-    std::vector<FillerFootprint> footprints,
-    RetileConfig config = {},
-    const std::function<std::optional<int>(const TiledFiller&,
-                                           const std::vector<TiledFiller>&)>&
-        preference
-    = {});
+    std::vector<SiteCell> emptySites, std::vector<FillerFootprint> footprints, RetileConfig config = {},
+    const std::function<std::optional<int>(const TiledFiller&, const std::vector<TiledFiller>&)>& preference = {});
 
 }  // namespace dpl2::fillerRepair::internal

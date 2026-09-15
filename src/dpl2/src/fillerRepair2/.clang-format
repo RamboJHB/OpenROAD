@@ -1,0 +1,16 @@
+# Keep the project's brace/indent style, with fewer unnecessary line breaks.
+BasedOnStyle: InheritParentConfig
+ColumnLimit: 120
+BinPackArguments: true
+BinPackParameters: true
+AllowAllArgumentsOnNextLine: false
+AllowAllParametersOfDeclarationOnNextLine: false
+# Split nested calls by argument groups instead of deeply indenting lambdas.
+PenaltyIndentedWhitespace: 20
+
+# Formatting must not reorder code or rewrite comments.
+SortIncludes: Never
+SortUsingDeclarations: Never
+BreakStringLiterals: false
+ReflowComments: false
+FixNamespaceComments: false

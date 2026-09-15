@@ -32,7 +32,7 @@ struct OracleRequest
 {
   OracleRequestId requestId = -1;  // planner-generated, unique per batch
   TargetPlace targetPlace;
-  Region guardRegion;  // repair window expanded by a two-cell guard halo
+  Region guardRegion;                // repair window expanded by a two-cell guard halo
   ipl::FillerChanges fillerChanges;  // one atomic overlay candidate
 };
 
@@ -61,16 +61,14 @@ class RepairOracle
   virtual ~RepairOracle() = default;
 
   virtual OracleResult checkPlaceWithOverlay(const OracleRequest& request) = 0;
-  virtual std::vector<OracleResult> checkPlaceWithOverlays(
-      const std::vector<OracleRequest>& requests) = 0;
+  virtual std::vector<OracleResult> checkPlaceWithOverlays(const std::vector<OracleRequest>& requests) = 0;
 };
 
 // Used by the portable planner tests, which travel with the payload -- so
 // this is NOT droppable unless you drop those too.
 inline bool isOracleSnapshotClean(const OracleResult& result)
 {
-  return result.status == OracleStatus::Checked && result.isLegal
-         && result.violations.empty();
+  return result.status == OracleStatus::Checked && result.isLegal && result.violations.empty();
 }
 
 }  // namespace dpl2::fillerRepair

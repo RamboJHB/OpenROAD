@@ -12,20 +12,15 @@ namespace {
 
 uint64_t siteKey(RowId rowId, int colId)
 {
-  return (static_cast<uint64_t>(static_cast<uint32_t>(rowId)) << 32)
-         | static_cast<uint32_t>(colId);
+  return (static_cast<uint64_t>(static_cast<uint32_t>(rowId)) << 32) | static_cast<uint32_t>(colId);
 }
 
 class ExactCoverSearch
 {
  public:
   ExactCoverSearch(
-      std::vector<SiteCell> sites,
-      std::vector<FillerFootprint> footprints,
-      RetileConfig config,
-      const std::function<std::optional<int>(const TiledFiller&,
-                                             const std::vector<TiledFiller>&)>&
-          preference)
+      std::vector<SiteCell> sites, std::vector<FillerFootprint> footprints, RetileConfig config,
+      const std::function<std::optional<int>(const TiledFiller&, const std::vector<TiledFiller>&)>& preference)
       : sites_(std::move(sites)),
         footprints_(std::move(footprints)),
         config_(config),
@@ -33,8 +28,7 @@ class ExactCoverSearch
         covered_(sites_.size(), false)
   {
     for (std::size_t index = 0; index < sites_.size(); ++index) {
-      index_by_site_.emplace(
-          siteKey(sites_[index].rowId, sites_[index].colId), index);
+      index_by_site_.emplace(siteKey(sites_[index].rowId, sites_[index].colId), index);
     }
   }
 
@@ -83,15 +77,11 @@ class ExactCoverSearch
     std::vector<Choice> choices;
     for (const FillerFootprint& footprint : footprints_) {
       std::vector<std::size_t> cells;
-      cells.reserve(static_cast<std::size_t>(footprint.widthSites)
-                    * static_cast<std::size_t>(footprint.heightRows));
+      cells.reserve(static_cast<std::size_t>(footprint.widthSites) * static_cast<std::size_t>(footprint.heightRows));
       bool fits = true;
-      for (int rowOffset = 0; rowOffset < footprint.heightRows && fits;
-           ++rowOffset) {
-        for (int colOffset = 0; colOffset < footprint.widthSites;
-             ++colOffset) {
-          const auto found = index_by_site_.find(
-              siteKey(anchor.rowId + rowOffset, anchor.colId + colOffset));
+      for (int rowOffset = 0; rowOffset < footprint.heightRows && fits; ++rowOffset) {
+        for (int colOffset = 0; colOffset < footprint.widthSites; ++colOffset) {
+          const auto found = index_by_site_.find(siteKey(anchor.rowId + rowOffset, anchor.colId + colOffset));
           if (found == index_by_site_.end() || covered_[found->second]) {
             fits = false;
             break;
@@ -104,17 +94,15 @@ class ExactCoverSearch
       }
 
       const TiledFiller tile{footprint.masterId, anchor.rowId, anchor.colId};
-      const auto rank
-          = preference_ ? preference_(tile, current_) : std::optional<int>{0};
+      const auto rank = preference_ ? preference_(tile, current_) : std::optional<int>{0};
       if (!rank.has_value()) {
         continue;
       }
       choices.push_back({tile, std::move(cells), *rank});
     }
-    std::stable_sort(
-        choices.begin(), choices.end(), [](const auto& a, const auto& b) {
-          return a.preference < b.preference;
-        });
+    std::stable_sort(choices.begin(), choices.end(), [](const auto& a, const auto& b) {
+      return a.preference < b.preference;
+    });
 
     for (const Choice& choice : choices) {
       for (const std::size_t cell : choice.cells) {
@@ -126,8 +114,7 @@ class ExactCoverSearch
       for (const std::size_t cell : choice.cells) {
         covered_[cell] = false;
       }
-      if (result_.solutions.size() >= config_.maxSolutions
-          || result_.searchStates >= config_.maxSearchStates) {
+      if (result_.solutions.size() >= config_.maxSolutions || result_.searchStates >= config_.maxSearchStates) {
         result_.truncated = true;
         return;
       }
@@ -137,9 +124,7 @@ class ExactCoverSearch
   std::vector<SiteCell> sites_;
   std::vector<FillerFootprint> footprints_;
   RetileConfig config_;
-  const std::function<std::optional<int>(const TiledFiller&,
-                                         const std::vector<TiledFiller>&)>&
-      preference_;
+  const std::function<std::optional<int>(const TiledFiller&, const std::vector<TiledFiller>&)>& preference_;
   std::unordered_map<uint64_t, std::size_t> index_by_site_;
   std::vector<bool> covered_;
   std::vector<TiledFiller> current_;
@@ -149,20 +134,14 @@ class ExactCoverSearch
 }  // namespace
 
 RetileResult enumerateRetilings(
-    std::vector<SiteCell> emptySites,
-    std::vector<FillerFootprint> footprints,
-    RetileConfig config,
-    const std::function<std::optional<int>(const TiledFiller&,
-                                           const std::vector<TiledFiller>&)>&
-        preference)
+    std::vector<SiteCell> emptySites, std::vector<FillerFootprint> footprints, RetileConfig config,
+    const std::function<std::optional<int>(const TiledFiller&, const std::vector<TiledFiller>&)>& preference)
 {
   std::sort(emptySites.begin(), emptySites.end());
-  emptySites.erase(std::unique(emptySites.begin(), emptySites.end()),
-                   emptySites.end());
+  emptySites.erase(std::unique(emptySites.begin(), emptySites.end()), emptySites.end());
   footprints.erase(
       std::remove_if(
-          footprints.begin(),
-          footprints.end(),
+          footprints.begin(), footprints.end(),
           [&](const FillerFootprint& footprint) {
             return footprint.widthSites <= 0
                    || footprint.heightRows <= 0
@@ -173,35 +152,28 @@ RetileResult enumerateRetilings(
                           > emptySites.size();
           }),
       footprints.end());
-  std::sort(
-      footprints.begin(),
-      footprints.end(),
-      [](const FillerFootprint& left, const FillerFootprint& right) {
-        const int64_t leftArea = int64_t{left.widthSites} * left.heightRows;
-        const int64_t rightArea = int64_t{right.widthSites} * right.heightRows;
-        if (leftArea != rightArea) {
-          return leftArea > rightArea;
-        }
-        if (left.heightRows != right.heightRows) {
-          return left.heightRows > right.heightRows;
-        }
-        if (left.widthSites != right.widthSites) {
-          return left.widthSites > right.widthSites;
-        }
-        return left.masterId < right.masterId;
-      });
+  std::sort(footprints.begin(), footprints.end(), [](const FillerFootprint& left, const FillerFootprint& right) {
+    const int64_t leftArea = int64_t{left.widthSites} * left.heightRows;
+    const int64_t rightArea = int64_t{right.widthSites} * right.heightRows;
+    if (leftArea != rightArea) {
+      return leftArea > rightArea;
+    }
+    if (left.heightRows != right.heightRows) {
+      return left.heightRows > right.heightRows;
+    }
+    if (left.widthSites != right.widthSites) {
+      return left.widthSites > right.widthSites;
+    }
+    return left.masterId < right.masterId;
+  });
   footprints.erase(
-      std::unique(footprints.begin(),
-                  footprints.end(),
-                  [](const FillerFootprint& left,
-                     const FillerFootprint& right) {
-                    return left.widthSites == right.widthSites
-                           && left.heightRows == right.heightRows;
-                  }),
+      std::unique(
+          footprints.begin(), footprints.end(),
+          [](const FillerFootprint& left, const FillerFootprint& right) {
+            return left.widthSites == right.widthSites && left.heightRows == right.heightRows;
+          }),
       footprints.end());
-  return ExactCoverSearch(
-             std::move(emptySites), std::move(footprints), config, preference)
-      .run();
+  return ExactCoverSearch(std::move(emptySites), std::move(footprints), config, preference).run();
 }
 
 }  // namespace dpl2::fillerRepair::internal

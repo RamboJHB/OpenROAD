@@ -32,7 +32,7 @@ struct OracleRequest
 {
   OracleRequestId requestId = -1;  // planner-generated, unique per batch
   TargetPlace targetPlace;
-  Region guardRegion;  // repair window expanded by a two-cell guard halo
+  Region guardRegion;                // repair window expanded by a two-cell guard halo
   ipl::FillerChanges fillerChanges;  // one atomic overlay candidate
 };
 
@@ -61,8 +61,7 @@ class RepairOracle
   virtual ~RepairOracle() = default;
 
   virtual OracleResult checkPlaceWithOverlay(const OracleRequest& request) = 0;
-  virtual std::vector<OracleResult> checkPlaceWithOverlays(
-      const std::vector<OracleRequest>& requests) = 0;
+  virtual std::vector<OracleResult> checkPlaceWithOverlays(const std::vector<OracleRequest>& requests) = 0;
 };
 
 }  // namespace dpl2::fillerRepair
