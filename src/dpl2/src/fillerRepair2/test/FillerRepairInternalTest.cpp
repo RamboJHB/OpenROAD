@@ -985,68 +985,82 @@ void testRetilerPrefersDeterministicLargestExactCover()
             (std::set<std::pair<fr::RowId, int>>{{0, 0}, {0, 1}, {1, 0}, {1, 1}}));
 }
 
-void testRetilerRejectsUnfillableReleasedArea()
-{
-  const fr::internal::RetileResult result = fr::internal::enumerateRetilings({{0, 0}, {0, 1}, {0, 2}}, {{7, 2, 1}});
-
-  EXPECT_TRUE(result.solutions.empty());
-  EXPECT_FALSE(result.truncated);
-}
-
-void testRetilerNeverOverlapsOrFillsOutsideReleasedSites()
-{
-  const std::vector<fr::internal::SiteCell> released{{2, 4}, {2, 5}, {2, 6}, {2, 7}};
-  const std::vector<fr::internal::FillerFootprint> footprints{{3, 1, 1}, {4, 2, 1}};
-  const fr::internal::RetileResult result = fr::internal::enumerateRetilings(released, footprints);
-  const std::set<std::pair<fr::RowId, int>> expected{{2, 4}, {2, 5}, {2, 6}, {2, 7}};
-
-  ASSERT_FALSE(result.solutions.empty());
-  for (const auto& tiling : result.solutions) {
-    EXPECT_EQ(coveredRetilerSites(tiling, footprints), expected);
-  }
-}
-
 TEST(FillerRetiler, AllTwoByFourGapMasksMatchIndependentReachability)
 {
   // Includes disconnected gaps, stairs, holes and full-row strips. Compute
   // tileable masks independently by adding every possible disjoint rectangle.
-  const std::vector<fr::internal::FillerFootprint> footprints{{10, 2, 1}, {11, 3, 1}, {12, 1, 2}, {13, 2, 2}};
-  std::vector<unsigned> rectangles;
-  for (const auto& footprint : footprints) {
-    for (int row = 0; row + footprint.heightRows <= 2; ++row) {
-      for (int col = 0; col + footprint.widthSites <= 4; ++col) {
-        unsigned mask = 0;
-        for (int r = row; r < row + footprint.heightRows; ++r) {
-          for (int c = col; c < col + footprint.widthSites; ++c) {
-            mask |= 1u << (4 * r + c);
+  const std::vector<std::vector<fr::internal::FillerFootprint>>
+      libraries{{{10, 2, 1}, {11, 3, 1}, {12, 1, 2}, {13, 2, 2}}, {{3, 1, 1}, {4, 2, 1}}, {{7, 2, 1}}};
+  for (const auto& footprints : libraries) {
+    SCOPED_TRACE(::testing::Message() << "library=" << footprints.front().masterId);
+    std::vector<unsigned> rectangles;
+    for (const auto& footprint : footprints) {
+      for (int row = 0; row + footprint.heightRows <= 2; ++row) {
+        for (int col = 0; col + footprint.widthSites <= 4; ++col) {
+          unsigned mask = 0;
+          for (int r = row; r < row + footprint.heightRows; ++r) {
+            for (int c = col; c < col + footprint.widthSites; ++c) {
+              mask |= 1u << (4 * r + c);
+            }
+          }
+          rectangles.push_back(mask);
+        }
+      }
+    }
+    std::array<bool, 256> reachable{};
+    reachable[0] = true;
+    for (unsigned mask = 0; mask < reachable.size(); ++mask) {
+      if (reachable[mask]) {
+        for (const unsigned rectangle : rectangles) {
+          if ((mask & rectangle) == 0) {
+            reachable[mask | rectangle] = true;
           }
         }
-        rectangles.push_back(mask);
+      }
+      std::vector<fr::internal::SiteCell> sites;
+      std::set<std::pair<fr::RowId, int>> expected;
+      for (int bit = 0; bit < 8; ++bit) {
+        if ((mask & (1u << bit)) != 0) {
+          sites.push_back({3 + bit / 4, 7 + bit % 4});
+          expected.emplace(3 + bit / 4, 7 + bit % 4);
+        }
+      }
+      const auto result = fr::internal::enumerateRetilings(sites, footprints);
+      EXPECT_EQ(!result.solutions.empty(), reachable[mask]) << "mask=" << mask;
+      if (!reachable[mask]) {
+        EXPECT_FALSE(result.truncated) << "mask=" << mask;
+      }
+      for (const auto& tiling : result.solutions) {
+        EXPECT_EQ(coveredRetilerSites(tiling, footprints), expected);
       }
     }
   }
-  std::array<bool, 256> reachable{};
-  reachable[0] = true;
-  for (unsigned mask = 0; mask < reachable.size(); ++mask) {
-    if (reachable[mask]) {
-      for (const unsigned rectangle : rectangles) {
-        if ((mask & rectangle) == 0) {
-          reachable[mask | rectangle] = true;
-        }
+}
+
+TEST(FillerRetiler, NormalizationAndBudgetsNeverPublishPartialTilings)
+{
+  const std::vector<fr::internal::SiteCell> sites{{5, 9}, {5, 8}, {5, 9}};
+  const std::vector<fr::internal::FillerFootprint> footprints{{2, 2, 1}, {1, 1, 1}, {3, 0, 2}, {4, 2, -1}};
+  for (size_t maxSolutions : {0u, 1u, 16u}) {
+    for (size_t maxStates : {0u, 1u, 10u}) {
+      SCOPED_TRACE(::testing::Message() << "solutions=" << maxSolutions << " states=" << maxStates);
+      fr::internal::RetileConfig config;
+      config.maxSolutions = maxSolutions;
+      config.maxSearchStates = maxStates;
+      const auto result = fr::internal::enumerateRetilings(sites, footprints, config);
+      EXPECT_LE(result.solutions.size(), maxSolutions);
+      EXPECT_LE(result.searchStates, maxStates);
+      EXPECT_EQ(!result.solutions.empty(), maxSolutions > 0 && maxStates > 1);
+      if (maxSolutions == 0 || maxStates <= 1) {
+        EXPECT_TRUE(result.truncated);
       }
-    }
-    std::vector<fr::internal::SiteCell> sites;
-    std::set<std::pair<fr::RowId, int>> expected;
-    for (int bit = 0; bit < 8; ++bit) {
-      if ((mask & (1u << bit)) != 0) {
-        sites.push_back({bit / 4, bit % 4});
-        expected.emplace(bit / 4, bit % 4);
+      for (const auto& solution : result.solutions) {
+        EXPECT_EQ(coveredRetilerSites(solution, footprints), (std::set<std::pair<fr::RowId, int>>{{5, 8}, {5, 9}}));
       }
-    }
-    const auto result = fr::internal::enumerateRetilings(sites, footprints);
-    EXPECT_EQ(!result.solutions.empty(), reachable[mask]) << "mask=" << mask;
-    for (const auto& tiling : result.solutions) {
-      EXPECT_EQ(coveredRetilerSites(tiling, footprints), expected);
+      if (!result.solutions.empty()) {
+        ASSERT_EQ(result.solutions.front().size(), 1u);
+        EXPECT_EQ(result.solutions.front().front().masterId, 2);
+      }
     }
   }
 }
@@ -5288,8 +5302,6 @@ const std::vector<Test>& internalCases()
       {"overlay_key_spills_past_inline_buffer", testOverlayKeySpillsPastTheInlineBuffer},
       {"signature_class_mismatch_implies_signature_mismatch", testSignatureClassMismatchImpliesSignatureMismatch},
       {"retiler_prefers_deterministic_largest_exact_cover", testRetilerPrefersDeterministicLargestExactCover},
-      {"retiler_rejects_unfillable_released_area", testRetilerRejectsUnfillableReleasedArea},
-      {"retiler_never_overlaps_or_fills_outside_released_sites", testRetilerNeverOverlapsOrFillsOutsideReleasedSites},
       {"planner_user_grid_mw_ms_1", testPlannerUserGridMwMs1},
   };
 

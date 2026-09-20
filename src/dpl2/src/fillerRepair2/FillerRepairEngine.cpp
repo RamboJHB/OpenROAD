@@ -1463,6 +1463,16 @@ RepairOutcome FillerRepairEngine::Impl::repair(const ipl::CheckRequest& request)
       }
       addedFillerNamePrefix += "FILLER_REPAIR_";
     }
+    // A previously added filler can move without changing its name. Read names
+    // per request, just like placement, so a legal repair can also be committed.
+    std::unordered_set<std::string> existingNames;
+    if (checker_.getDesign() != nullptr) {
+      for (const auto& [id, node] : network_->getNodes()) {
+        if (node != nullptr && node->getDbInst().isValid()) {
+          existingNames.insert(checker_.cellName(node.get()));
+        }
+      }
+    }
     std::vector<internal::FillerFootprint> footprints;
     for (const auto& [size, masters] : placement_.retileMastersBySize) {
       footprints.push_back(internal::FillerFootprint{
@@ -1587,6 +1597,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(const ipl::CheckRequest& request)
     bool searchTruncated = tilings.truncated;
     for (const std::vector<internal::TiledFiller>& tiling : tilings.solutions) {
       std::vector<LayoutAddition> additions;
+      std::unordered_set<std::string> additionNames;
       bool usable = true;
       int addIndex = 0;
       for (const internal::TiledFiller& tile : tiling) {
@@ -1602,9 +1613,13 @@ RepairOutcome FillerRepairEngine::Impl::repair(const ipl::CheckRequest& request)
         }
         const MasterId chosen = options.front().masterId;
 
-        const std::string name = cat(
+        const std::string baseName = cat(
             addedFillerNamePrefix, tile.rowId, '_', tile.colId, "_W", footprintMaster->width, "_H",
             footprintMaster->height, '_', addIndex);
+        std::string name = baseName;
+        for (size_t suffix = 1; existingNames.count(name) != 0 || !additionNames.insert(name).second; ++suffix) {
+          name = cat(baseName, '_', suffix);
+        }
         const eUTL::PhysOrientation orientation = options.front().orientation;
         CellChangeRecord addition{
             OpType::Add,

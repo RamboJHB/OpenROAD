@@ -59,7 +59,7 @@ small integration form, and its tests are split by responsibility:
 
 - `test/FillerRepairIntegrationTest.cpp` exercises the public checker/engine
   boundary with `ImplantLayerCheckerHelper`. Its five-row fixtures assert at
-  least six cells per row and cover 50%, 75%, and 90% occupied-site
+  least ten cells per row and cover 50%, 75%, and 90% occupied-site
   utilization;
 - `test/FillerRepairInternalTest.cpp` exercises planner behavior through
   in-memory `PlacementView` and `RepairOracle` doubles and also covers
@@ -164,6 +164,47 @@ other bad records and requests fail with empty changes and structured
 `[fr]` logs.
 
 ## Verification
+
+### Expanded regression and deduplication (2026-09-20)
+
+- Found a reproducible lifecycle defect: after a committed generated filler
+  moved to another position, retiling its original position reused its name.
+  The checker accepted the geometry but `DePlace::commit` rejected the duplicate
+  name. The engine now reads current Network/DB names per repair and appends a
+  deterministic suffix only on collision. Prefixes and collision-free names,
+  public interfaces and caller-owned Delete semantics are unchanged.
+- The regression executes repair, full commit, a committed move/master change,
+  and a second repair/commit on the same engine. It reserves the first suffix
+  as well, checking both live-name lookup and deterministic suffix selection.
+- Local/fake-UDM policy and retile examples use 12 rows by 40 sites. Fixture
+  checks require at least ten distinct cells in every row AND every column.
+  A table retains 13 representative layouts: exact cover, both core boundaries,
+  symmetric/asymmetric gaps, several deleted fillers, lower/upper cuts of a
+  two-row filler, two-row targets, four single-row deletions, staggered and
+  disconnected gaps, and width/height divisibility failures.
+- Successful probes independently verify Add coverage equals deleted sites
+  minus target sites, no overlap/Delete output, deterministic output when Delete
+  order reverses, and a full real DePlace commit. DB/master/orientation/position
+  and full Grid occupancy are checked afterwards. Failed probes must leave
+  DB/Network/Grid unchanged. Implant legality is rechecked with the real checker.
+- Retiler internal tests independently enumerate all 256 two-by-four gap masks
+  against three master libraries (768 combinations), including translated sites,
+  and test nine solution/state-budget combinations with duplicate input sites
+  and invalid footprints. These algorithm-unit inputs intentionally stay small.
+- Deduplication removed two standalone retile cases subsumed by that exhaustive
+  check and the repeated density variants of eight density-independent contract
+  tests. Two initially added invalid-overlay examples were dropped because the
+  existing dedicated tests already cover them. The C++17 planner and isolated
+  migration builds remain separate gates, not interchangeable duplicate builds.
+- The migration tag `filler-repair-port-20260915` remains fixed at `026e4f0b7b`;
+  these are follow-up changes, not a retag of the previously delivered baseline.
+
+Validation: the new lifecycle regression failed before the fix with the reused
+Add name and `DePlace::commit == false`. After the fix and final deduplication,
+normal and ASan builds both passed all 409 CTest cases (24.50 seconds and
+71.95 seconds). Compared with the 412-case baseline, 15 independent cases were
+added and 18 redundant executions were removed; the retile mask test now covers
+768 combinations rather than 256. Formatting and `git diff --check` pass.
 
 The 2026-09-10 follow-up adds ordered gap filling and the local commit path:
 

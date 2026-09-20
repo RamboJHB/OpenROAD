@@ -21,7 +21,7 @@ constexpr Dbu kSiteWidth = 10;
 constexpr Dbu kRowHeight = 100;
 constexpr Dbu kMinRule = 20;
 constexpr RowId kRowCount = 5;
-constexpr ColId kColCount = 20;
+constexpr ColId kColCount = 40;
 constexpr int kDefaultUtilization = 90;
 
 constexpr InstanceId nodeId(RowId row, ColId col)
@@ -147,7 +147,7 @@ void initializeFixture(ImplantLayerCheckerHelper& helper, const ImplantInput& in
   const FixtureStats stats = fixtureStats(input);
   EXPECT_EQ(stats.cellsByRow.size(), static_cast<size_t>(input.rowCount));
   for (size_t row = 0; row < stats.cellsByRow.size(); ++row) {
-    EXPECT_GE(stats.cellsByRow[row], 6) << "row " << row;
+    EXPECT_GE(stats.cellsByRow[row], 10) << "row " << row;
   }
   EXPECT_EQ(100 * stats.occupiedSites, expectedUtilization * input.rowCount * input.colCount);
   helper.initialize(input);
@@ -371,6 +371,9 @@ class FillerRepairIntegrationTest : public ::testing::TestWithParam<int>
 {
 };
 
+// Keep utilization variants for repair/search behavior. Input validation and
+// disabled/unavailable paths run once: background density cannot affect them.
+
 TEST_P(FillerRepairIntegrationTest, CheckerRepairsTemporaryNodeWithoutMutation)
 {
   const int utilization = GetParam();
@@ -437,9 +440,9 @@ TEST_P(FillerRepairIntegrationTest, CheckerRepairsTemporaryNodeWithoutMutation)
   EXPECT_EQ(bridge->getMaster()->getId(), oldBridgeMaster);
 }
 
-TEST_P(FillerRepairIntegrationTest, RequestCoordinatesOverrideTemporaryNodePlacement)
+TEST_F(FillerRepairIntegrationTest, RequestCoordinatesOverrideTemporaryNodePlacement)
 {
-  const int utilization = GetParam();
+  const int utilization = kDefaultUtilization;
   ImplantLayerCheckerHelper helper;
   initializeFixture(helper, input(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
@@ -548,9 +551,9 @@ TEST_P(FillerRepairIntegrationTest, MultipleFillerDeletesExactCoverAndNeverBecom
   }
 }
 
-TEST_P(FillerRepairIntegrationTest, MultipleFillerDeletesValidateCoverageAndIntersection)
+TEST_F(FillerRepairIntegrationTest, MultipleFillerDeletesValidateCoverageAndIntersection)
 {
-  const int utilization = GetParam();
+  const int utilization = kDefaultUtilization;
   ImplantLayerCheckerHelper helper;
   initializeFixture(helper, multiDeleteInput(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
@@ -739,9 +742,9 @@ TEST_P(FillerRepairIntegrationTest, NonExactUnfillableReleasedSiteReturnsNoSolut
   EXPECT_TRUE(changes.empty());
 }
 
-TEST_P(FillerRepairIntegrationTest, LargerDeletedAreaMustActuallyContainTarget)
+TEST_F(FillerRepairIntegrationTest, LargerDeletedAreaMustActuallyContainTarget)
 {
-  auto data = input(GetParam());
+  auto data = input(kDefaultUtilization);
   data.rules.clear();
   data.masters.push_back(twoRowMaster(6, true, 2 * kSiteWidth));
   data.masters.push_back(master(7, 0, false, 3 * kSiteWidth));
@@ -819,9 +822,9 @@ TEST_P(FillerRepairIntegrationTest, TwoRowTargetAcceptsMultipleFillerExactCover)
   EXPECT_EQ(second->getMaster()->getId(), secondMaster);
 }
 
-TEST_P(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
+TEST_F(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
 {
-  const int utilization = GetParam();
+  const int utilization = kDefaultUtilization;
   ImplantLayerCheckerHelper helper;
   initializeFixture(helper, input(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
@@ -882,9 +885,9 @@ TEST_P(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
   EXPECT_EQ(replaced->getMaster()->getId(), 2);
 }
 
-TEST_P(FillerRepairIntegrationTest, StandardCellReplacementRejectsMoveAndFootprintChange)
+TEST_F(FillerRepairIntegrationTest, StandardCellReplacementRejectsMoveAndFootprintChange)
 {
-  const int utilization = GetParam();
+  const int utilization = kDefaultUtilization;
   ImplantLayerCheckerHelper helper;
   initializeFixture(helper, multiDeleteInput(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
@@ -920,9 +923,9 @@ TEST_P(FillerRepairIntegrationTest, StandardCellReplacementRejectsMoveAndFootpri
   EXPECT_TRUE(hasDiagnostic(result, "target_move_unsupported"));
 }
 
-TEST_P(FillerRepairIntegrationTest, MultiFillerOverlayRejectsFillersUnrelatedToTarget)
+TEST_F(FillerRepairIntegrationTest, MultiFillerOverlayRejectsFillersUnrelatedToTarget)
 {
-  const int utilization = GetParam();
+  const int utilization = kDefaultUtilization;
   ImplantLayerCheckerHelper helper;
   initializeFixture(helper, multiDeleteInput(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
@@ -958,9 +961,9 @@ TEST_P(FillerRepairIntegrationTest, MultiFillerOverlayRejectsFillersUnrelatedToT
   EXPECT_TRUE(hasDiagnostic(result, "target_overlay_does_not_intersect"));
 }
 
-TEST_P(FillerRepairIntegrationTest, DisabledRepairDoesNotPublishChanges)
+TEST_F(FillerRepairIntegrationTest, DisabledRepairDoesNotPublishChanges)
 {
-  const int utilization = GetParam();
+  const int utilization = kDefaultUtilization;
   ImplantLayerCheckerHelper helper;
   initializeFixture(helper, input(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
@@ -1403,9 +1406,9 @@ TEST(FillerRepairBudgetTest, NonExactRepairSharesOneCheckerBudget)
   }
 }
 
-TEST_P(FillerRepairIntegrationTest, EngineWithoutGridIsUnavailable)
+TEST_F(FillerRepairIntegrationTest, EngineWithoutGridIsUnavailable)
 {
-  const int utilization = GetParam();
+  const int utilization = kDefaultUtilization;
   ImplantLayerCheckerHelper helper;
   initializeFixture(helper, input(utilization), utilization);
   ImplantLayerChecker checker(nullptr, nullptr, helper.getNetwork());
