@@ -2,6 +2,8 @@
 
 ## Current state
 
+Current migration tag: `filler-repair-port-20260921` (see dated validation below).
+
 This handoff describes the second destination-port version of fillerRepair.
 Its checker-side marker is the two repair failure logs added in
 `ImplantLayerChecker::repairOverlay()`.
@@ -164,6 +166,46 @@ other bad records and requests fail with empty changes and structured
 `[fr]` logs.
 
 ## Verification
+
+### Internal density layouts and migration baseline (2026-09-21)
+
+The migration baseline for this update is `filler-repair-port-20260921`.
+The previous `filler-repair-port-20260915` tag is preserved, not moved. This
+update only changes tests and this handoff; runtime logic and public APIs
+remain unchanged from the tested live-name-collision fix.
+
+- Added eight explicit 12-row by 40-site internal layouts, two for each exact
+  standard-cell ratio: 50% (240/480), 65% (312/480), 80% (384/480), and 95%
+  (456/480). Ratios describe the initial placement, before Delete/target/Add.
+  Every initial cell occupies one site, so instance-count and site-area ratios
+  agree. The tests assert dimensions, cell counts and ratios.
+- Layout literals follow physical placement: y=11 at the top, y=0 at the bottom,
+  x=0..39 left to right. Comments show coordinates and each repair region.
+  S denotes fixed standard cells, F retained fillers, D deleted fillers outside
+  the target, and T deleted fillers underneath the target. D+T is the Delete
+  footprint; D alone is the exact Add coverage. One site is five DBU.
+- The eight cases cover split left/right gaps, a two-row pocket, disconnected
+  boundary gaps, a staggered staircase, exact cover with no Add, an untileable
+  one-site width remainder, vertical-only filling, and incompatible height.
+  Distinct distributed/clustered backgrounds exercise each requested ratio.
+- Retile checks compare the first tiling against explicit expected rectangles,
+  independently verify every returned tiling's exact/no-overlap site set, and
+  reverse both released-site and master order to check determinism. Impossible
+  cases must finish exhaustively without publishing a partial tiling.
+- Successful tilings are materialized in the existing in-memory planner view.
+  Non-exact cases start with a real synthetic min-width violation and require
+  an added-filler master swap; exact cover requires no change. Full-layout
+  oracle checks, unchanged standard cells, unchanged search input, same-size
+  swaps, preserved orientation/position and repeatability are asserted. The
+  completed layouts also retain at least ten distinct cells per row and column.
+  These portable tests do not replace real-checker/DePlace commit tests.
+- GoogleTest sources use the existing compact 120-column style. Spatial map
+  tables deliberately preserve one physical row per source line.
+
+Validation: all eight new cases passed their targeted run. Full normal and
+ASan builds both passed all 417 CTest cases (22.89 and 73.50 seconds), up from
+409. GoogleTest formatting checks and `git diff --check` also passed. No new
+runtime defect was found by these layouts; no production source was changed.
 
 ### Expanded regression and deduplication (2026-09-20)
 

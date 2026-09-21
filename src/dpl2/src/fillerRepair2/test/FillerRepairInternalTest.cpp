@@ -19,6 +19,7 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <array>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
@@ -1196,6 +1197,390 @@ fr::TargetPlace anchorPlace(const fr::TestPlacementView& design, fr::InstanceId 
   place.x = inst->x;
   return place;
 }
+
+struct DensityLayout
+{
+  const char* name;
+  int stdPercent;
+  std::array<const char*, 12> rows;  // Physical order: y=11 at the top, y=0 at the bottom.
+  std::vector<fr::internal::FillerFootprint> footprints;
+  std::vector<fr::internal::TiledFiller> firstTiling;
+  bool tileable;
+  int minWidthSites;
+};
+
+// Each glyph is one initially placed 1x1 cell; count ratio == occupied-site ratio.
+// S = fixed standard cell; F = retained filler; D = deleted filler / released gap;
+// T = deleted filler underneath the new rectangular standard-cell target.
+// Thus D+T is the caller-owned Delete area, D is exactly what retile must fill.
+// Maps below ARE the placement input, not illustrations reconstructed from it.
+// IDs = 1 + 40*y + x; x increases rightward, y increases upward; one site = 5 DBU.
+// Footprint master IDs = 100 + 10*width + height; +1000 is the same size at VT2.
+// clang-format off
+const DensityLayout kDensityLayouts[] = {
+  // 50%: 240 standard cells / 480 cells. y05, x16..23: DDDTTDDD -> [F3][target2][F3]; gaps on both sides.
+  // x: 0000000000111111111122222222223333333333
+  //    0123456789012345678901234567890123456789
+  {"Std50Split", 50,
+   {
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSSSSSSSSS",  // y=11
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=10
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=09
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=08
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=07
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=06
+      "FFSSFFSSFFSSFFSSDDDTTDDDFFSSFFSSFFSSFFSS",  // y=05
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=04
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=03
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=02
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=01
+      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=00
+   },
+   {{131, 3, 1}}, {{131, 5, 16}, {131, 5, 21}}, true, 3},
+
+  // 50%: 240 standard cells / 480 cells. y05: DDDDDD / y04: DDTTDD -> two 2x2 fillers and the upper 2x1 bridge.
+  // x: 0000000000111111111122222222223333333333
+  //    0123456789012345678901234567890123456789
+  {"Std50Pocket", 50,
+   {
+      "FFSSSSSSSSSSSSSSSSSSSSFFFFFFFFFFFFFFFFFF",  // y=11
+      "SSSSSSSSSSSSSSSSSSSSFFFFFFFFFFFFFFFFFFFF",  // y=10
+      "SSSSSSSSSSSSSSSSSSFFFFFFFFFFFFFFFFFFFFSS",  // y=09
+      "SSSSSSSSSSSSSSSSFFFFFFFFFFFFFFFFFFFFSSSS",  // y=08
+      "SSSSSSSSSSSSSSFFFFFFFFFFFFFFFFFFFFSSSSSS",  // y=07
+      "SSSSSSSSSSSSFFFFFFFFFFFFFFFFFFFFSSSSSSSS",  // y=06
+      "SSSSSSSSSSFFFFFFDDDDDDFFFFFFFFSSSSSSSSSS",  // y=05
+      "SSSSSSSSFFFFFFFFDDTTDDFFFFFFSSSSSSSSSSSS",  // y=04
+      "SSSSSSFFFFFFFFFFFFFFFFFFFFSSSSSSSSSSSSSS",  // y=03
+      "SSSSFFFFFFFFFFFFFFFFFFFFSSSSSSSSSSSSSSSS",  // y=02
+      "SSFFFFFFFFFFFFFFFFFFFFSSSSSSSSSSSSSSSSSS",  // y=01
+      "FFFFFFFFFFFFFFFFFFFFSSSSSSSSSSSSSSSSSSSS",  // y=00
+   },
+   {{121, 2, 1}, {122, 2, 2}}, {{122, 4, 16}, {122, 4, 20}, {121, 5, 18}}, true, 3},
+
+  // 65%: 312 standard cells / 480 cells. y11, x36..39: DDDD; y00, x00..05: TTDDDD. Disconnected edge gaps.
+  // x: 0000000000111111111122222222223333333333
+  //    0123456789012345678901234567890123456789
+  {"Std65Corners", 65,
+   {
+      "SSSSSSSSSSSSSSFFFFFFFFFFFFSSSSSSSSSSDDDD",  // y=11
+      "SSSSSSSSSSSSSSFFFFFFFFFFFFSSSSSSSSSSSSSS",  // y=10
+      "SSSSSSSSSSSSSSFFFFFFFFFFFFSSSSSSSSSSSSSS",  // y=09
+      "SSSSSSSSSSSSSSFFFFFFFFFFFFSSSSSSSSSSSSSS",  // y=08
+      "SSSSSSSSSSSSSSFFFFFFFFFFFFSSSSSSSSSSSSSS",  // y=07
+      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=06
+      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=05
+      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=04
+      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=03
+      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=02
+      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=01
+      "TTDDDDSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=00
+   },
+   {{141, 4, 1}}, {{141, 0, 2}, {141, 11, 36}}, true, 3},
+
+  // 65%: 312 standard cells / 480 cells. x16..25, top down: y06 ....DDDDDD / y05 ..DDTTDD.. / y04 DDDDDD....
+  // x: 0000000000111111111122222222223333333333
+  //    0123456789012345678901234567890123456789
+  {"Std65Stair", 65,
+   {
+      "FFFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFF",  // y=11
+      "FFFFSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFFFF",  // y=10
+      "FSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFFFFFFF",  // y=09
+      "SSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFFFFFFFFSS",  // y=08
+      "SSSSSSSSSSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSS",  // y=07
+      "SSSSSSSSSSSSSSSSSSFFDDDDDDFFFFFFSSSSSSSS",  // y=06
+      "SSSSSSSSSSSSSSSFFFDDTTDDFFFFFSSSSSSSSSSS",  // y=05
+      "SSSSSSSSSSSSFFFFDDDDDDFFFFSSSSSSSSSSSSSS",  // y=04
+      "SSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSSSSSS",  // y=03
+      "SSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSSSSSSSSS",  // y=02
+      "SSSFFFFFFFFFFFFFFSSSSSSSSSSSSSSSSSSSSSSS",  // y=01
+      "FFFFFFFFFFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=00
+   },
+   {{121, 2, 1}, {122, 2, 2}},
+   {{121, 4, 16}, {122, 4, 18}, {121, 4, 20}, {122, 5, 22}, {121, 6, 20}, {121, 6, 24}}, true, 3},
+
+  // 80%: 384 standard cells / 480 cells. y09/y08, x30..31: TT / TT. Deletes exactly cover the 2x2 target; no Add.
+  // x: 0000000000111111111122222222223333333333
+  //    0123456789012345678901234567890123456789
+  {"Std80Exact", 80,
+   {
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSSSSSSSSSSS",  // y=11
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=10
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSTTSSSFSSSS",  // y=09
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSTTSSSFSSSS",  // y=08
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=07
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=06
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=05
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=04
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=03
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=02
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=01
+      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=00
+   },
+   {{121, 2, 1}, {122, 2, 2}}, {}, true, 2},
+
+  // 80%: 384 standard cells / 480 cells. y07, x09..13: DTTDD. Widths {2,4} cannot fill the isolated one-site gap.
+  // x: 0000000000111111111122222222223333333333
+  //    0123456789012345678901234567890123456789
+  {"Std80WidthBlocked", 80,
+   {
+      "SSSSSSSSSSSSSSSSSSFFFFFFFSSSSSSSSSSSSSSS",  // y=11
+      "SSSSSSSSSSSSSSSSSSSSFFFFFFFSSSSSSSSSSSSS",  // y=10
+      "SSSSSSSSSSSSSSSSSSSSSSFFFFFFFSSSSSSSSSSS",  // y=09
+      "SSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFSSSSSSSSS",  // y=08
+      "SSSSSSSSSDTTDDSSSSSSSSSSSSFFFFFFFSSSSSSS",  // y=07
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFFSSSS",  // y=06
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFFSS",  // y=05
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFF",  // y=04
+      "FFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFF",  // y=03
+      "FFFFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFFFF",  // y=02
+      "FFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFF",  // y=01
+      "FFFFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=00
+   },
+   {{121, 2, 1}, {141, 4, 1}}, {}, false, 0},
+
+  // 95%: 456 standard cells / 480 cells. y01/y00, x00..02: DTD / DTD -> two vertical fillers beside a 1x2 target.
+  // x: 0000000000111111111122222222223333333333
+  //    0123456789012345678901234567890123456789
+  {"Std95Vertical", 95,
+   {
+      "SFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=11
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFS",  // y=10
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSS",  // y=09
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSS",  // y=08
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSS",  // y=07
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSS",  // y=06
+      "SSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSS",  // y=05
+      "SSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSS",  // y=04
+      "SSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSS",  // y=03
+      "SSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=02
+      "DTDSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=01
+      "DTDFFFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=00
+   },
+   {{112, 1, 2}}, {{112, 0, 0}, {112, 0, 2}}, true, 2},
+
+  // 95%: 456 standard cells / 480 cells. y11, x37..39: DTD. Two single-row gaps cannot use a double-height filler.
+  // x: 0000000000111111111122222222223333333333
+  //    0123456789012345678901234567890123456789
+  {"Std95HeightBlocked", 95,
+   {
+      "SSSSSSFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSDTD",  // y=11
+      "SSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=10
+      "SSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=09
+      "SSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSSSS",  // y=08
+      "SSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSSSS",  // y=07
+      "SSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSS",  // y=06
+      "SSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSS",  // y=05
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSS",  // y=04
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSS",  // y=03
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSS",  // y=02
+      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSS",  // y=01
+      "FFFFFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSF",  // y=00
+   },
+   {{112, 1, 2}}, {}, false, 0},
+};
+// clang-format on
+
+class FillerRepairDensityLayout : public ::testing::TestWithParam<DensityLayout>
+{
+};
+
+TEST_P(FillerRepairDensityLayout, RetileAndRepairPreserveGeometryAndStandardCells)
+{
+  const DensityLayout& layout = GetParam();
+  constexpr int rows = 12, cols = 40, siteWidth = 5;
+  fr::TestPlacementView design;
+  design.setSiteWidth(siteWidth).addMaster(10, siteWidth, 1, false, 1);
+  design.addMaster(111, siteWidth, 1, true, 1).addMaster(1111, siteWidth, 1, true, 2);
+  for (const auto& footprint : layout.footprints) {
+    design.addMaster(footprint.masterId, footprint.widthSites * siteWidth, footprint.heightRows, true, 1);
+    design.addMaster(footprint.masterId + 1000, footprint.widthSites * siteWidth, footprint.heightRows, true, 2);
+  }
+
+  using Site = std::pair<fr::RowId, int>;
+  std::set<Site> deleted, targetSites, expectedGaps;
+  std::vector<fr::internal::SiteCell> released;
+  int standardCells = 0;
+  int targetRow = rows, targetCol = cols, targetTop = -1, targetRight = -1;
+  for (int row = 0; row < rows; ++row) {
+    const std::string glyphs = layout.rows[rows - 1 - row];
+    ASSERT_EQ(glyphs.size(), cols) << "row=" << row;
+    design.addRow(row, 0, cols * siteWidth);
+    for (int col = 0; col < cols; ++col) {
+      const char glyph = glyphs[col];
+      ASSERT_NE(std::string("SFDT").find(glyph), std::string::npos);
+      const bool isStd = glyph == 'S';
+      standardCells += isStd;
+      design.place(
+          1 + row * cols + col, isStd ? 10 : 111, row, col * siteWidth, row % 2 == 0 ? fr::Orient::MX : fr::Orient::R0);
+      if (glyph == 'D' || glyph == 'T') {
+        deleted.emplace(row, col);
+      }
+      if (glyph == 'D') {
+        released.push_back({row, col});
+        expectedGaps.emplace(row, col);
+      }
+      if (glyph == 'T') {
+        targetSites.emplace(row, col);
+        targetRow = std::min(targetRow, row);
+        targetCol = std::min(targetCol, col);
+        targetTop = std::max(targetTop, row);
+        targetRight = std::max(targetRight, col);
+      }
+    }
+    ASSERT_EQ(design.instancesInRow(row).size(), cols);
+  }
+  ASSERT_EQ(100 * standardCells, layout.stdPercent * rows * cols);
+  ASSERT_FALSE(targetSites.empty());
+  const int targetWidth = targetRight - targetCol + 1, targetHeight = targetTop - targetRow + 1;
+  ASSERT_EQ(targetSites.size(), targetWidth * targetHeight);
+  ASSERT_EQ(deleted.size(), expectedGaps.size() + targetSites.size());
+
+  // Capture identity, geometry, master and orientation independently of the search.
+  const auto snapshot = [](const fr::TestPlacementView& view) {
+    std::map<fr::InstanceId, std::tuple<fr::MasterId, fr::RowId, fr::DbCoord, fr::Orient, bool>> result;
+    for (const auto row : view.rows()) {
+      for (const auto& covered : view.instancesInRow(row)) {
+        const auto& inst = *view.instance(covered.id);
+        result.emplace(inst.id, std::make_tuple(inst.masterId, inst.rowId, inst.x, inst.orientation, inst.isFiller));
+      }
+    }
+    return result;
+  };
+  const auto initialPlacement = snapshot(design);
+  ASSERT_EQ(initialPlacement.size(), rows * cols);
+  const auto result = fr::internal::enumerateRetilings(released, layout.footprints);
+  EXPECT_EQ(snapshot(design), initialPlacement);
+  ASSERT_EQ(!result.solutions.empty(), layout.tileable);
+  if (!layout.tileable) {
+    EXPECT_FALSE(result.truncated);  // Exhaustive impossibility, not a budget timeout.
+  }
+  for (const auto& tiling : result.solutions) {
+    EXPECT_EQ(coveredRetilerSites(tiling, layout.footprints), expectedGaps);
+  }
+
+  // Input enumeration order cannot change either the alternatives or their order.
+  std::reverse(released.begin(), released.end());
+  auto reversedLibrary = layout.footprints;
+  std::reverse(reversedLibrary.begin(), reversedLibrary.end());
+  const auto repeated = fr::internal::enumerateRetilings(released, reversedLibrary);
+  EXPECT_EQ(repeated.truncated, result.truncated);
+  EXPECT_EQ(repeated.searchStates, result.searchStates);
+  ASSERT_EQ(repeated.solutions.size(), result.solutions.size());
+  const auto tileKey = [](const auto& tile) { return std::make_tuple(tile.masterId, tile.rowId, tile.colId); };
+  for (size_t solution = 0; solution < result.solutions.size(); ++solution) {
+    ASSERT_EQ(repeated.solutions[solution].size(), result.solutions[solution].size());
+    for (size_t tile = 0; tile < result.solutions[solution].size(); ++tile) {
+      EXPECT_EQ(tileKey(repeated.solutions[solution][tile]), tileKey(result.solutions[solution][tile]));
+    }
+  }
+  if (!layout.tileable) {
+    return;
+  }
+  const auto& tiling = result.solutions.front();
+  ASSERT_EQ(tiling.size(), layout.firstTiling.size());
+  for (size_t tile = 0; tile < tiling.size(); ++tile) {
+    EXPECT_EQ(tileKey(tiling[tile]), tileKey(layout.firstTiling[tile]));
+  }
+
+  // Model the engine's post-retile planner view, without claiming to exercise
+  // its public Add/Delete wire or the real checker (integration tests own those).
+  fr::TestPlacementView repaired = design;
+  for (const auto& [row, col] : deleted) {
+    repaired.remove(1 + row * cols + col);
+  }
+  constexpr fr::InstanceId targetId = 10000, firstAddedId = 20000;
+  repaired.addMaster(20, targetWidth * siteWidth, targetHeight, false, 2);
+  repaired.place(targetId, 20, targetRow, targetCol * siteWidth, targetRow % 2 == 0 ? fr::Orient::MX : fr::Orient::R0);
+  for (size_t index = 0; index < tiling.size(); ++index) {
+    const auto& tile = tiling[index];
+    repaired.place(
+        firstAddedId + index, tile.masterId, tile.rowId, tile.colId * siteWidth,
+        tile.rowId % 2 == 0 ? fr::Orient::MX : fr::Orient::R0);
+  }
+
+  std::set<Site> occupied;
+  std::array<std::set<fr::InstanceId>, cols> columnCells;
+  for (int row = 0; row < rows; ++row) {
+    ASSERT_GE(repaired.instancesInRow(row).size(), 10u);
+    for (const auto& inst : repaired.instancesInRow(row)) {
+      const auto* master = repaired.masterInfo(inst.masterId);
+      ASSERT_NE(master, nullptr);
+      ASSERT_EQ(inst.x % siteWidth, 0);
+      ASSERT_EQ(master->width % siteWidth, 0);
+      for (int col = inst.x / siteWidth; col < (inst.x + master->width) / siteWidth; ++col) {
+        ASSERT_GE(col, 0);
+        ASSERT_LT(col, cols);
+        EXPECT_TRUE(occupied.emplace(row, col).second) << "overlap at " << row << ',' << col;
+        columnCells[col].insert(inst.id);
+      }
+    }
+  }
+  EXPECT_EQ(occupied.size(), rows * cols);
+  for (const auto& cells : columnCells) {
+    EXPECT_GE(cells.size(), 10u);
+  }
+  const auto afterRetile = snapshot(repaired);
+  for (const auto& [id, original] : initialPlacement) {
+    if (!std::get<4>(original)) {
+      ASSERT_NE(repaired.instance(id), nullptr);
+      EXPECT_EQ(afterRetile.at(id), original);
+    }
+  }
+
+  fr::PlannerTestRules rules;
+  rules.mwIntra = layout.minWidthSites * siteWidth;
+  fr::TestRepairOracle checker(repaired, rules);
+  fr::OracleRequest check;
+  check.targetPlace = anchorPlace(repaired, targetId);
+  check.guardRegion = {{0, cols * siteWidth}, 0, rows - 1};
+  const auto baseline = checker.checkPlaceWithOverlay(check);
+  ASSERT_EQ(baseline.status, fr::OracleStatus::Checked);
+  ASSERT_EQ(baseline.isLegal, tiling.empty());  // Non-exact seeds must actually require a swap.
+  fr::RepairConfig config;
+  config.verbose = verbose();
+  config.ruleDistance = rules.mwIntra;
+  fr::internal::RepairPlanner planner(repaired, checker, config);
+  const fr::FillerRepairRequest request{check.targetPlace, baseline.violations};
+  const auto beforeSearch = snapshot(repaired);
+  const auto repair = planner.repair(request);
+  ASSERT_TRUE(repair.hasSolution);
+  EXPECT_EQ(repair.changes.empty(), tiling.empty());
+  EXPECT_EQ(snapshot(repaired), beforeSearch);
+  EXPECT_EQ(snapshot(design), initialPlacement);
+  std::set<fr::InstanceId> changed;
+  bool changedAddedFiller = false;
+  for (const auto& change : repair.changes) {
+    const auto id = fr::cellChangeRecordInstanceId(change);
+    const auto* inst = repaired.instance(id);
+    ASSERT_NE(inst, nullptr);
+    EXPECT_TRUE(inst->isFiller);
+    EXPECT_TRUE(changed.insert(id).second);
+    EXPECT_EQ(change.op_, dpl2::OpType::Replace);
+    const auto* oldMaster = repaired.masterInfo(inst->masterId);
+    const auto* newMaster = repaired.masterInfo(fr::cellChangeRecordNewMasterId(change));
+    ASSERT_NE(newMaster, nullptr);
+    EXPECT_TRUE(newMaster->isFiller);
+    EXPECT_EQ(newMaster->width, oldMaster->width);
+    EXPECT_EQ(newMaster->height, oldMaster->height);
+    EXPECT_TRUE(fr::sameCellChangeRecord(change, repaired.cellChangeRecord(id, newMaster->id)));
+    changedAddedFiller |= id >= firstAddedId;
+  }
+  EXPECT_EQ(changedAddedFiller, !tiling.empty());
+  check.fillerChanges = repair.changes;
+  EXPECT_TRUE(fr::isOracleSnapshotClean(checker.checkPlaceWithOverlay(check)));
+  const auto repairAgain = planner.repair(request);
+  ASSERT_TRUE(repairAgain.hasSolution);
+  ASSERT_EQ(repairAgain.changes.size(), repair.changes.size());
+  for (size_t index = 0; index < repair.changes.size(); ++index) {
+    EXPECT_TRUE(fr::sameCellChangeRecord(repairAgain.changes[index], repair.changes[index]));
+  }
+  EXPECT_EQ(snapshot(repaired), beforeSearch);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TwelveByForty, FillerRepairDensityLayout, ::testing::ValuesIn(kDensityLayouts),
+    [](const ::testing::TestParamInfo<DensityLayout>& info) { return info.param.name; });
 
 // --- Swap primitives ---------------------------------------------------------
 
