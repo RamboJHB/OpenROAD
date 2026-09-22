@@ -2,7 +2,7 @@
 
 ## Current state
 
-Current migration tag: `filler-repair-port-20260921` (see dated validation below).
+Current migration tag: `filler-repair-port-20260922` (see dated validation below).
 
 This handoff describes the second destination-port version of fillerRepair.
 Its checker-side marker is the two repair failure logs added in
@@ -166,6 +166,44 @@ other bad records and requests fail with empty changes and structured
 `[fr]` logs.
 
 ## Verification
+
+### Mixed-width, interleaved internal layouts (2026-09-22)
+
+The current migration baseline is `filler-repair-port-20260922`. Earlier tags
+remain fixed. This update replaces the eight density maps from 2026-09-21;
+it does not add duplicate cases or change runtime code or public interfaces.
+
+- Each 12-by-40 map now contains 20 mixed-width cells per row (240 instances
+  total), with fillers interspersed among standard cells. Every layout includes
+  widths of 1, 2 and 3 sites for BOTH classes; selected Delete regions also use
+  4-site fillers. The placement grid's physical site width stays five DBU.
+- The four standard-cell ratios remain exact by BOTH instance count and site
+  area: 50% = 120/240 cells and 240/480 sites; 65% = 156/240 and 312/480;
+  80% = 192/240 and 384/480; 95% = 228/240 and 456/480. Each ratio has two
+  layouts. Every row has the same instance-count ratio; area ratios are checked
+  across the full layout, including all caller-deleted fillers before repair.
+- Map columns still correspond to physical sites. A, B-, C-- denote standard
+  cells of widths 1, 2, 3; a, b-, c-- denote retained fillers. Numeric tokens
+  1, 2-, 3--, 4--- mark caller-deleted fillers. A dash continues the SAME cell,
+  never a second instance or an empty site. The target rectangle is explicit,
+  independent of old cell boundaries. Comments retain site-level D/T sketches.
+- Assertions reject malformed width continuations, incorrect ratios, missing
+  width diversity and grouped backgrounds. Only the intentional multi-filler
+  Delete region may contain adjacent fillers (at most two); standard-cell run
+  lengths and class transitions are also bounded for each density. At 95%, one
+  filler per row necessarily leaves longer standard-cell runs; its column and
+  width vary across rows instead of forming one filler strip.
+- Deletes now remove instance IDs, not one ID per covered site. Their full
+  master footprints must contain the target, and released sites are computed
+  as Delete sites minus target sites. The eight existing retile shapes and
+  expected first tilings remain unchanged, including both unfillable cases.
+  Exact coverage, unchanged standard cells, added-filler swaps, deterministic
+  output and at least ten distinct cells per row/column remain checked.
+
+Validation: all eight revised layouts passed their targeted run. Full normal
+and ASan builds both passed all 417 CTest cases (22.65 and 71.27 seconds).
+Formatting checks and `git diff --check` passed. No production changes were
+needed; the old clustered, single-site density maps were replaced, not retained.
 
 ### Internal density layouts and migration baseline (2026-09-21)
 

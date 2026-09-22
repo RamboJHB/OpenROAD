@@ -1203,181 +1203,199 @@ struct DensityLayout
   const char* name;
   int stdPercent;
   std::array<const char*, 12> rows;  // Physical order: y=11 at the top, y=0 at the bottom.
+  std::array<int, 4> target;         // {bottom row, left site, width in sites, height in rows}.
   std::vector<fr::internal::FillerFootprint> footprints;
   std::vector<fr::internal::TiledFiller> firstTiling;
   bool tileable;
   int minWidthSites;
 };
 
-// Each glyph is one initially placed 1x1 cell; count ratio == occupied-site ratio.
-// S = fixed standard cell; F = retained filler; D = deleted filler / released gap;
-// T = deleted filler underneath the new rectangular standard-cell target.
-// Thus D+T is the caller-owned Delete area, D is exactly what retile must fill.
-// Maps below ARE the placement input, not illustrations reconstructed from it.
-// IDs = 1 + 40*y + x; x increases rightward, y increases upward; one site = 5 DBU.
-// Footprint master IDs = 100 + 10*width + height; +1000 is the same size at VT2.
+// One character column = one site, NOT one cell. A/B-/C-- = std widths 1/2/3;
+// a/b-/c-- = retained filler widths 1/2/3; 1/2-/3--/4--- = deleted filler widths.
+// '-' continues the same instance: e.g. "Ab-C--" is three cells over six sites.
+// Every row has 20 mixed-width cells. Ratios are checked by BOTH count and area.
+// Initial instance IDs = 1 + 40*y + leftSite; one site = 5 DBU; all cells height 1.
+// Filler master IDs = 100 + 10*width + height; +1000 is the same size at VT2.
+// Repair sketches in comments use D = released gap and T = target site.
+// The literal maps are the actual placement input; only required Delete regions
+// have two adjacent fillers. Other fillers are interspersed with standard cells.
 // clang-format off
 const DensityLayout kDensityLayouts[] = {
-  // 50%: 240 standard cells / 480 cells. y05, x16..23: DDDTTDDD -> [F3][target2][F3]; gaps on both sides.
+  // 50%: 120/240 std cells, 240/480 std sites.
+  // y05, x16..23: DDDTTDDD -> [F3][target2][F3]; gaps on both sides.
   // x: 0000000000111111111122222222223333333333
   //    0123456789012345678901234567890123456789
   {"Std50Split", 50,
    {
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSSSSSSSSS",  // y=11
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=10
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=09
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=08
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=07
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=06
-      "FFSSFFSSFFSSFFSSDDDTTDDDFFSSFFSSFFSSFFSS",  // y=05
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=04
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=03
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=02
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=01
-      "FFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSSFFSS",  // y=00
+      "c--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ab-B-",  // y=11
+      "B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-",  // y=10
+      "aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-B-",  // y=09
+      "C--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aB-b-",  // y=08
+      "b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-",  // y=07
+      "Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-b-",  // y=06
+      "c--B-aC--b-AaB-A4---4---AaB-aC--b-B-aC--",  // y=05
+      "B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-",  // y=04
+      "aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-B-",  // y=03
+      "C--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aB-b-",  // y=02
+      "b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-",  // y=01
+      "Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-b-",  // y=00
    },
-   {{131, 3, 1}}, {{131, 5, 16}, {131, 5, 21}}, true, 3},
+   {5, 19, 2, 1}, {{131, 3, 1}},
+   {{131, 5, 16}, {131, 5, 21}}, true, 3},
 
-  // 50%: 240 standard cells / 480 cells. y05: DDDDDD / y04: DDTTDD -> two 2x2 fillers and the upper 2x1 bridge.
+  // 50%: 120/240 std cells, 240/480 std sites.
+  // y05: DDDDDD / y04: DDTTDD -> two 2x2 fillers and the upper 2x1 bridge.
   // x: 0000000000111111111122222222223333333333
   //    0123456789012345678901234567890123456789
   {"Std50Pocket", 50,
    {
-      "FFSSSSSSSSSSSSSSSSSSSSFFFFFFFFFFFFFFFFFF",  // y=11
-      "SSSSSSSSSSSSSSSSSSSSFFFFFFFFFFFFFFFFFFFF",  // y=10
-      "SSSSSSSSSSSSSSSSSSFFFFFFFFFFFFFFFFFFFFSS",  // y=09
-      "SSSSSSSSSSSSSSSSFFFFFFFFFFFFFFFFFFFFSSSS",  // y=08
-      "SSSSSSSSSSSSSSFFFFFFFFFFFFFFFFFFFFSSSSSS",  // y=07
-      "SSSSSSSSSSSSFFFFFFFFFFFFFFFFFFFFSSSSSSSS",  // y=06
-      "SSSSSSSSSSFFFFFFDDDDDDFFFFFFFFSSSSSSSSSS",  // y=05
-      "SSSSSSSSFFFFFFFFDDTTDDFFFFFFSSSSSSSSSSSS",  // y=04
-      "SSSSSSFFFFFFFFFFFFFFFFFFFFSSSSSSSSSSSSSS",  // y=03
-      "SSSSFFFFFFFFFFFFFFFFFFFFSSSSSSSSSSSSSSSS",  // y=02
-      "SSFFFFFFFFFFFFFFFFFFFFSSSSSSSSSSSSSSSSSS",  // y=01
-      "FFFFFFFFFFFFFFFFFFFFSSSSSSSSSSSSSSSSSSSS",  // y=00
+      "Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-b-",  // y=11
+      "c--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ab-B-",  // y=10
+      "B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-",  // y=09
+      "aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-B-",  // y=08
+      "C--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aB-b-",  // y=07
+      "b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-",  // y=06
+      "Ac--B-aC--b-AaB-3--3--B-Ac--B-aC--b-C--a",  // y=05
+      "c--B-aC--b-Ac--A3--3--B-AaB-aC--b-B-aC--",  // y=04
+      "B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-",  // y=03
+      "aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-B-",  // y=02
+      "C--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aB-b-",  // y=01
+      "b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-",  // y=00
    },
-   {{121, 2, 1}, {122, 2, 2}}, {{122, 4, 16}, {122, 4, 20}, {121, 5, 18}}, true, 3},
+   {4, 18, 2, 1}, {{121, 2, 1}, {122, 2, 2}},
+   {{122, 4, 16}, {122, 4, 20}, {121, 5, 18}}, true, 3},
 
-  // 65%: 312 standard cells / 480 cells. y11, x36..39: DDDD; y00, x00..05: TTDDDD. Disconnected edge gaps.
+  // 65%: 156/240 std cells, 312/480 std sites.
+  // y11, x36..39: DDDD; y00, x00..05: TTDDDD. Disconnected edge gaps.
   // x: 0000000000111111111122222222223333333333
   //    0123456789012345678901234567890123456789
   {"Std65Corners", 65,
    {
-      "SSSSSSSSSSSSSSFFFFFFFFFFFFSSSSSSSSSSDDDD",  // y=11
-      "SSSSSSSSSSSSSSFFFFFFFFFFFFSSSSSSSSSSSSSS",  // y=10
-      "SSSSSSSSSSSSSSFFFFFFFFFFFFSSSSSSSSSSSSSS",  // y=09
-      "SSSSSSSSSSSSSSFFFFFFFFFFFFSSSSSSSSSSSSSS",  // y=08
-      "SSSSSSSSSSSSSSFFFFFFFFFFFFSSSSSSSSSSSSSS",  // y=07
-      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=06
-      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=05
-      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=04
-      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=03
-      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=02
-      "SSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=01
-      "TTDDDDSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSS",  // y=00
+      "B-Ac--B-aC--B-aC--B-aC--B-aC--Ac--AA4---",  // y=11
+      "AC--b-AC--b-Ac--B-Ac--B-AaB-C--aC--C--b-",  // y=10
+      "C--B-aC--B-aC--B-aC--b-AC--c--AAc--AAc--",  // y=09
+      "B-Ac--B-Ac--B-Ac--B-AaB-aC--C--aC--C--b-",  // y=08
+      "AC--b-AC--b-AC--b-AC--b-AC--b-Ac--B-C--a",  // y=07
+      "C--B-aC--B-aC--B-aC--B-b-AB-c--AAc--Ac--",  // y=06
+      "b-Ac--B-Ac--B-Ac--B-AaB-B-aC--C--aC--C--",  // y=05
+      "aC--B-aC--b-AC--b-AC--b-AC--c--AC--c--AA",  // y=04
+      "c--B-Ac--B-Ac--B-aC--B-aC--B-aC--B-b-AB-",  // y=03
+      "b-AC--b-AC--b-AC--b-Ac--B-AaB-B-b-C--C--",  // y=02
+      "aC--B-aC--B-aC--B-b-C--B-c--Ac--AAc--AB-",  // y=01
+      "3--3--Ac--B-AaB-AaB-AaB-B-C--b-C--C--C--",  // y=00
    },
-   {{141, 4, 1}}, {{141, 0, 2}, {141, 11, 36}}, true, 3},
+   {0, 0, 2, 1}, {{141, 4, 1}},
+   {{141, 0, 2}, {141, 11, 36}}, true, 3},
 
-  // 65%: 312 standard cells / 480 cells. x16..25, top down: y06 ....DDDDDD / y05 ..DDTTDD.. / y04 DDDDDD....
+  // 65%: 156/240 std cells, 312/480 std sites.
+  // x16..25, top down: y06 ....DDDDDD / y05 ..DDTTDD.. / y04 DDDDDD....
   // x: 0000000000111111111122222222223333333333
   //    0123456789012345678901234567890123456789
   {"Std65Stair", 65,
    {
-      "FFFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFF",  // y=11
-      "FFFFSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFFFF",  // y=10
-      "FSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFFFFFFF",  // y=09
-      "SSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFFFFFFFFSS",  // y=08
-      "SSSSSSSSSSSSSSSSSSSSSFFFFFFFFFFFFFFSSSSS",  // y=07
-      "SSSSSSSSSSSSSSSSSSFFDDDDDDFFFFFFSSSSSSSS",  // y=06
-      "SSSSSSSSSSSSSSSFFFDDTTDDFFFFFSSSSSSSSSSS",  // y=05
-      "SSSSSSSSSSSSFFFFDDDDDDFFFFSSSSSSSSSSSSSS",  // y=04
-      "SSSSSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSSSSSS",  // y=03
-      "SSSSSSFFFFFFFFFFFFFFSSSSSSSSSSSSSSSSSSSS",  // y=02
-      "SSSFFFFFFFFFFFFFFSSSSSSSSSSSSSSSSSSSSSSS",  // y=01
-      "FFFFFFFFFFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=00
+      "C--b-Ac--B-Ac--B-Ac--B-AaB-B-aC--C--aC--",  // y=11
+      "B-aC--B-aC--b-AC--b-AC--b-AC--c--AAc--B-",  // y=10
+      "Ac--B-Ac--B-Ac--B-aC--B-aC--B-aC--B-b-B-",  // y=09
+      "C--b-AC--b-AC--b-AC--b-Ac--B-AaB-B-b-C--",  // y=08
+      "B-aC--B-aC--B-aC--B-b-C--B-c--Ac--AAc--A",  // y=07
+      "Ac--B-AaB-AaB-AaB-B-3--3--C--b-C--C--C--",  // y=06
+      "C--b-AC--b-AC--b-A3--3--AC--aAC--aAC--B-",  // y=05
+      "B-Ac--B-aC--B-aA3--3--C--B-aC--B-b-C--AA",  // y=04
+      "AC--b-AC--b-Ac--B-Ac--B-AaB-C--aC--C--b-",  // y=03
+      "C--B-aC--B-aC--B-aC--b-AC--c--AAc--AAc--",  // y=02
+      "B-Ac--B-Ac--B-Ac--B-AaB-aC--C--aC--C--b-",  // y=01
+      "AC--b-AC--b-AC--b-AC--b-AC--b-Ac--B-C--a",  // y=00
    },
-   {{121, 2, 1}, {122, 2, 2}},
+   {5, 20, 2, 1}, {{121, 2, 1}, {122, 2, 2}},
    {{121, 4, 16}, {122, 4, 18}, {121, 4, 20}, {122, 5, 22}, {121, 6, 20}, {121, 6, 24}}, true, 3},
 
-  // 80%: 384 standard cells / 480 cells. y09/y08, x30..31: TT / TT. Deletes exactly cover the 2x2 target; no Add.
+  // 80%: 192/240 std cells, 384/480 std sites.
+  // y09/y08, x30..31: TT / TT. Deletes exactly cover the 2x2 target; no Add.
   // x: 0000000000111111111122222222223333333333
   //    0123456789012345678901234567890123456789
   {"Std80Exact", 80,
    {
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSSSSSSSSSSS",  // y=11
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=10
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSTTSSSFSSSS",  // y=09
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSTTSSSFSSSS",  // y=08
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=07
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=06
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=05
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=04
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=03
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=02
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=01
-      "FSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSSFSSSS",  // y=00
+      "AC--b-AC--B-Ac--B-AC--B-aC--B-AC--b-AC--",  // y=11
+      "c--B-AC--B-aC--B-AC--b-AC--B-Ab-B-AC--B-",  // y=10
+      "B-AC--b-AC--B-Ac--B-AC--B-aC--2-AC--B-B-",  // y=09
+      "Ac--B-AC--B-aC--B-AC--b-AC--B-2-C--B-AB-",  // y=08
+      "C--B-AC--b-AC--B-Ac--B-AC--B-aC--B-AB-b-",  // y=07
+      "B-Ac--B-AC--B-aC--B-AC--b-AC--B-Ab-B-C--",  // y=06
+      "aC--B-AC--b-AC--B-Ac--B-AC--B-b-C--B-AB-",  // y=05
+      "C--B-Ac--B-AC--B-aC--B-AC--b-AC--B-Ab-B-",  // y=04
+      "B-aC--B-AC--b-AC--B-Ac--B-AC--B-b-C--B-A",  // y=03
+      "AC--B-Ac--B-AC--B-aC--B-AC--b-AC--B-B-b-",  // y=02
+      "C--B-aC--B-AC--b-AC--B-Ac--B-AC--B-b-AB-",  // y=01
+      "b-AC--B-Ac--B-AC--B-aC--B-AC--b-AC--B-B-",  // y=00
    },
-   {{121, 2, 1}, {122, 2, 2}}, {}, true, 2},
+   {8, 30, 2, 2}, {{121, 2, 1}, {122, 2, 2}},
+   {}, true, 2},
 
-  // 80%: 384 standard cells / 480 cells. y07, x09..13: DTTDD. Widths {2,4} cannot fill the isolated one-site gap.
+  // 80%: 192/240 std cells, 384/480 std sites.
+  // y07, x09..13: DTTDD. Widths {2,4} cannot fill the isolated one-site gap.
   // x: 0000000000111111111122222222223333333333
   //    0123456789012345678901234567890123456789
   {"Std80WidthBlocked", 80,
    {
-      "SSSSSSSSSSSSSSSSSSFFFFFFFSSSSSSSSSSSSSSS",  // y=11
-      "SSSSSSSSSSSSSSSSSSSSFFFFFFFSSSSSSSSSSSSS",  // y=10
-      "SSSSSSSSSSSSSSSSSSSSSSFFFFFFFSSSSSSSSSSS",  // y=09
-      "SSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFSSSSSSSSS",  // y=08
-      "SSSSSSSSSDTTDDSSSSSSSSSSSSFFFFFFFSSSSSSS",  // y=07
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFFSSSS",  // y=06
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFFSS",  // y=05
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFFFF",  // y=04
-      "FFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFFFFFF",  // y=03
-      "FFFFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFFFF",  // y=02
-      "FFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFF",  // y=01
-      "FFFFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=00
+      "B-aC--B-AC--b-AC--B-Ac--B-AC--B-b-C--B-A",  // y=11
+      "AC--B-Ac--B-AC--B-aC--B-AC--b-AC--B-B-b-",  // y=10
+      "C--B-aC--B-AC--b-AC--B-Ac--B-AC--B-b-AB-",  // y=09
+      "b-AC--B-Ac--B-AC--B-aC--B-AC--b-AC--B-B-",  // y=08
+      "AC--B-aAA2-3--B-AC--B-Ab-B-AC--C--C--C--",  // y=07
+      "C--b-AC--B-Ac--B-AC--B-aC--B-AC--b-AC--A",  // y=06
+      "B-AC--B-aC--B-AC--b-AC--B-Ac--B-AC--B-b-",  // y=05
+      "AC--b-AC--B-Ac--B-AC--B-aC--B-AC--b-AC--",  // y=04
+      "c--B-AC--B-aC--B-AC--b-AC--B-Ab-B-AC--B-",  // y=03
+      "B-AC--b-AC--B-Ac--B-AC--B-aC--B-AC--b-B-",  // y=02
+      "Ac--B-AC--B-aC--B-AC--b-AC--B-Ab-B-B-C--",  // y=01
+      "C--B-AC--b-AC--B-Ac--B-AC--B-aC--B-AB-b-",  // y=00
    },
-   {{121, 2, 1}, {141, 4, 1}}, {}, false, 0},
+   {7, 10, 2, 1}, {{121, 2, 1}, {141, 4, 1}},
+   {}, false, 0},
 
-  // 95%: 456 standard cells / 480 cells. y01/y00, x00..02: DTD / DTD -> two vertical fillers beside a 1x2 target.
+  // 95%: 228/240 std cells, 456/480 std sites.
+  // y01/y00, x00..02: DTD / DTD -> two vertical fillers beside a 1x2 target.
   // x: 0000000000111111111122222222223333333333
   //    0123456789012345678901234567890123456789
   {"Std95Vertical", 95,
    {
-      "SFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=11
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFS",  // y=10
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSS",  // y=09
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSS",  // y=08
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSS",  // y=07
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSS",  // y=06
-      "SSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSS",  // y=05
-      "SSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSS",  // y=04
-      "SSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSS",  // y=03
-      "SSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=02
-      "DTDSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=01
-      "DTDFFFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=00
+      "c--B-AC--B-AC--B-AC--B-AC--B-AC--B-AC--A",  // y=11
+      "B-AC--b-AC--B-AC--B-AC--B-AC--B-AC--B-B-",  // y=10
+      "AC--B-AC--B-aC--B-AC--B-AC--B-AC--B-AC--",  // y=09
+      "C--B-AC--B-AC--B-Ac--B-AC--B-AC--B-AC--A",  // y=08
+      "B-AC--B-AC--B-AC--B-AC--b-AC--B-AC--B-B-",  // y=07
+      "AC--B-AC--B-AC--B-AC--B-AC--B-aC--B-AC--",  // y=06
+      "C--B-AC--B-AC--B-AC--B-AC--B-AC--B-Ac--A",  // y=05
+      "B-aC--B-AC--B-AC--B-AC--B-AC--B-AC--B-B-",  // y=04
+      "AC--B-AaB-AC--B-AC--B-AC--B-AC--B-C--C--",  // y=03
+      "C--B-AC--B-AC--aAC--B-AC--B-AC--B-AC--B-",  // y=02
+      "3--AC--B-AC--B-AC--B-AC--B-AC--B-AC--B-A",  // y=01
+      "3--C--B-AC--B-AC--B-AC--B-AC--B-AC--B-AA",  // y=00
    },
-   {{112, 1, 2}}, {{112, 0, 0}, {112, 0, 2}}, true, 2},
+   {0, 1, 1, 2}, {{112, 1, 2}},
+   {{112, 0, 0}, {112, 0, 2}}, true, 2},
 
-  // 95%: 456 standard cells / 480 cells. y11, x37..39: DTD. Two single-row gaps cannot use a double-height filler.
+  // 95%: 228/240 std cells, 456/480 std sites.
+  // y11, x37..39: DTD. Two single-row gaps cannot use a double-height filler.
   // x: 0000000000111111111122222222223333333333
   //    0123456789012345678901234567890123456789
   {"Std95HeightBlocked", 95,
    {
-      "SSSSSSFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSDTD",  // y=11
-      "SSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=10
-      "SSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSSSSSSS",  // y=09
-      "SSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSSSSSSS",  // y=08
-      "SSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSSSSS",  // y=07
-      "SSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSSSSS",  // y=06
-      "SSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSSSSS",  // y=05
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSSSSS",  // y=04
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSSSSS",  // y=03
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSSSSS",  // y=02
-      "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSFSSS",  // y=01
-      "FFFFFFFFFSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSF",  // y=00
+      "AC--B-AC--B-AC--B-AC--B-AC--B-AC--B-A3--",  // y=11
+      "C--B-c--C--B-AC--B-AC--B-AC--B-AC--B-AAA",  // y=10
+      "B-AC--B-Ab-B-AC--B-AC--B-AC--B-AC--B-C--",  // y=09
+      "AC--B-AC--B-AC--aAC--B-AC--B-AC--B-B-C--",  // y=08
+      "C--B-AC--B-AC--B-AC--B-c--C--B-AC--B-AAA",  // y=07
+      "B-AC--B-AC--B-AC--B-AC--B-Ab-B-AC--B-C--",  // y=06
+      "AC--B-AC--B-AC--B-AC--B-AC--B-AC--aB-C--",  // y=05
+      "c--B-AC--B-AC--B-AC--B-AC--B-AC--B-AC--A",  // y=04
+      "B-AC--b-AC--B-AC--B-AC--B-AC--B-AC--B-B-",  // y=03
+      "AC--B-AC--B-aC--B-AC--B-AC--B-AC--B-AC--",  // y=02
+      "C--B-AC--B-AC--B-Ab-B-AC--B-AC--B-AC--B-",  // y=01
+      "B-AC--B-AC--B-AC--B-AC--aAC--B-AC--B-C--",  // y=00
    },
-   {{112, 1, 2}}, {}, false, 0},
+   {11, 38, 1, 1}, {{112, 1, 2}},
+   {}, false, 0},
 };
 // clang-format on
 
@@ -1388,10 +1406,14 @@ class FillerRepairDensityLayout : public ::testing::TestWithParam<DensityLayout>
 TEST_P(FillerRepairDensityLayout, RetileAndRepairPreserveGeometryAndStandardCells)
 {
   const DensityLayout& layout = GetParam();
-  constexpr int rows = 12, cols = 40, siteWidth = 5;
+  constexpr int rows = 12, cols = 40, cellsPerRow = 20, siteWidth = 5;
   fr::TestPlacementView design;
-  design.setSiteWidth(siteWidth).addMaster(10, siteWidth, 1, false, 1);
-  design.addMaster(111, siteWidth, 1, true, 1).addMaster(1111, siteWidth, 1, true, 2);
+  design.setSiteWidth(siteWidth);
+  for (int width = 1; width <= 4; ++width) {
+    design.addMaster(10 + width, width * siteWidth, 1, false, 1);
+    design.addMaster(101 + 10 * width, width * siteWidth, 1, true, 1);
+    design.addMaster(1101 + 10 * width, width * siteWidth, 1, true, 2);
+  }
   for (const auto& footprint : layout.footprints) {
     design.addMaster(footprint.masterId, footprint.widthSites * siteWidth, footprint.heightRows, true, 1);
     design.addMaster(footprint.masterId + 1000, footprint.widthSites * siteWidth, footprint.heightRows, true, 2);
@@ -1399,41 +1421,92 @@ TEST_P(FillerRepairDensityLayout, RetileAndRepairPreserveGeometryAndStandardCell
 
   using Site = std::pair<fr::RowId, int>;
   std::set<Site> deleted, targetSites, expectedGaps;
+  std::set<fr::InstanceId> deletedIds;
+  std::set<int> standardWidths, fillerWidths;
   std::vector<fr::internal::SiteCell> released;
-  int standardCells = 0;
-  int targetRow = rows, targetCol = cols, targetTop = -1, targetRight = -1;
-  for (int row = 0; row < rows; ++row) {
-    const std::string glyphs = layout.rows[rows - 1 - row];
-    ASSERT_EQ(glyphs.size(), cols) << "row=" << row;
-    design.addRow(row, 0, cols * siteWidth);
-    for (int col = 0; col < cols; ++col) {
-      const char glyph = glyphs[col];
-      ASSERT_NE(std::string("SFDT").find(glyph), std::string::npos);
-      const bool isStd = glyph == 'S';
-      standardCells += isStd;
-      design.place(
-          1 + row * cols + col, isStd ? 10 : 111, row, col * siteWidth, row % 2 == 0 ? fr::Orient::MX : fr::Orient::R0);
-      if (glyph == 'D' || glyph == 'T') {
-        deleted.emplace(row, col);
-      }
-      if (glyph == 'D') {
-        released.push_back({row, col});
-        expectedGaps.emplace(row, col);
-      }
-      if (glyph == 'T') {
-        targetSites.emplace(row, col);
-        targetRow = std::min(targetRow, row);
-        targetCol = std::min(targetCol, col);
-        targetTop = std::max(targetTop, row);
-        targetRight = std::max(targetRight, col);
-      }
+  int standardCells = 0, standardSites = 0;
+  const auto [targetRow, targetCol, targetWidth, targetHeight] = layout.target;
+  ASSERT_GE(targetRow, 0);
+  ASSERT_GE(targetCol, 0);
+  ASSERT_GT(targetWidth, 0);
+  ASSERT_GT(targetHeight, 0);
+  ASSERT_LE(targetRow + targetHeight, rows);
+  ASSERT_LE(targetCol + targetWidth, cols);
+  for (int row = targetRow; row < targetRow + targetHeight; ++row) {
+    for (int col = targetCol; col < targetCol + targetWidth; ++col) {
+      targetSites.emplace(row, col);
     }
-    ASSERT_EQ(design.instancesInRow(row).size(), cols);
   }
-  ASSERT_EQ(100 * standardCells, layout.stdPercent * rows * cols);
-  ASSERT_FALSE(targetSites.empty());
-  const int targetWidth = targetRight - targetCol + 1, targetHeight = targetTop - targetRow + 1;
-  ASSERT_EQ(targetSites.size(), targetWidth * targetHeight);
+  for (int row = 0; row < rows; ++row) {
+    SCOPED_TRACE(::testing::Message() << "row=" << row);
+    const std::string glyphs = layout.rows[rows - 1 - row];
+    ASSERT_EQ(glyphs.size(), cols);
+    design.addRow(row, 0, cols * siteWidth);
+    int rowStandardCells = 0, rowFillerCells = 0, transitions = 0;
+    int standardRun = 0, fillerRun = 0, maxStandardRun = 0, maxFillerRun = 0;
+    bool previousStd = false, previousDeleted = false;
+    for (int col = 0; col < cols;) {
+      const char glyph = glyphs[col];
+      const bool isStd = glyph >= 'A' && glyph <= 'C';
+      const bool isDeleted = glyph >= '1' && glyph <= '4';
+      ASSERT_TRUE(isStd || isDeleted || (glyph >= 'a' && glyph <= 'c')) << "site=" << col;
+      const int width = isStd ? glyph - 'A' + 1 : isDeleted ? glyph - '0' : glyph - 'a' + 1;
+      ASSERT_LE(col + width, cols);
+      for (int offset = 1; offset < width; ++offset) {
+        ASSERT_EQ(glyphs[col + offset], '-') << "continuation site=" << col + offset;
+      }
+      standardCells += isStd;
+      standardSites += isStd ? width : 0;
+      (isStd ? standardWidths : fillerWidths).insert(width);
+      rowStandardCells += isStd;
+      rowFillerCells += !isStd;
+      transitions += col != 0 && previousStd != isStd;
+      if (col != 0 && !previousStd && !isStd) {
+        EXPECT_TRUE(previousDeleted && isDeleted) << "only the Delete region may have adjacent fillers";
+      }
+      previousStd = isStd;
+      previousDeleted = isDeleted;
+      standardRun = isStd ? standardRun + 1 : 0;
+      fillerRun = isStd ? 0 : fillerRun + 1;
+      maxStandardRun = std::max(maxStandardRun, standardRun);
+      maxFillerRun = std::max(maxFillerRun, fillerRun);
+      const fr::InstanceId id = 1 + row * cols + col;
+      design.place(
+          id, isStd ? 10 + width : 101 + 10 * width, row, col * siteWidth,
+          row % 2 == 0 ? fr::Orient::MX : fr::Orient::R0);
+      if (isDeleted) {
+        deletedIds.insert(id);
+        for (int offset = 0; offset < width; ++offset) {
+          deleted.emplace(row, col + offset);
+        }
+      }
+      col += width;
+    }
+    ASSERT_EQ(design.instancesInRow(row).size(), cellsPerRow);
+    ASSERT_EQ(100 * rowStandardCells, layout.stdPercent * cellsPerRow);
+    // Enforce mixing, not just the aggregate ratio. The one adjacent pair is
+    // allowed for a multi-filler Delete; high-std ratios necessarily have longer std runs.
+    EXPECT_LE(maxFillerRun, 2);
+    EXPECT_GE(transitions, std::max(1, 2 * rowFillerCells - 3));
+    const int maxStdRun
+        = rowFillerCells == 1 ? rowStandardCells : (rowStandardCells + rowFillerCells - 2) / (rowFillerCells - 1);
+    EXPECT_LE(maxStandardRun, maxStdRun);
+  }
+  ASSERT_EQ(100 * standardCells, layout.stdPercent * rows * cellsPerRow);
+  ASSERT_EQ(100 * standardSites, layout.stdPercent * rows * cols);
+  EXPECT_EQ(standardWidths, (std::set<int>{1, 2, 3}));
+  for (int width : {1, 2, 3}) {
+    EXPECT_EQ(fillerWidths.count(width), 1u);
+  }
+  for (const Site& site : targetSites) {
+    ASSERT_EQ(deleted.count(site), 1u) << "target must be covered by deleted fillers";
+  }
+  for (const auto& [row, col] : deleted) {
+    if (targetSites.count({row, col}) == 0) {
+      released.push_back({row, col});
+      expectedGaps.emplace(row, col);
+    }
+  }
   ASSERT_EQ(deleted.size(), expectedGaps.size() + targetSites.size());
 
   // Capture identity, geometry, master and orientation independently of the search.
@@ -1448,7 +1521,7 @@ TEST_P(FillerRepairDensityLayout, RetileAndRepairPreserveGeometryAndStandardCell
     return result;
   };
   const auto initialPlacement = snapshot(design);
-  ASSERT_EQ(initialPlacement.size(), rows * cols);
+  ASSERT_EQ(initialPlacement.size(), rows * cellsPerRow);
   const auto result = fr::internal::enumerateRetilings(released, layout.footprints);
   EXPECT_EQ(snapshot(design), initialPlacement);
   ASSERT_EQ(!result.solutions.empty(), layout.tileable);
@@ -1486,8 +1559,8 @@ TEST_P(FillerRepairDensityLayout, RetileAndRepairPreserveGeometryAndStandardCell
   // Model the engine's post-retile planner view, without claiming to exercise
   // its public Add/Delete wire or the real checker (integration tests own those).
   fr::TestPlacementView repaired = design;
-  for (const auto& [row, col] : deleted) {
-    repaired.remove(1 + row * cols + col);
+  for (const fr::InstanceId id : deletedIds) {
+    repaired.remove(id);
   }
   constexpr fr::InstanceId targetId = 10000, firstAddedId = 20000;
   repaired.addMaster(20, targetWidth * siteWidth, targetHeight, false, 2);
