@@ -19,7 +19,6 @@
 #include <gtest/gtest.h>
 
 #include <algorithm>
-#include <array>
 #include <climits>
 #include <cstdio>
 #include <cstdlib>
@@ -61,16 +60,20 @@ MasterId cellChangeRecordNewMasterId(const CellChangeRecord& change)
   return static_cast<MasterId>(change.new_lib_cell_.getIndexValue());
 }
 
-bool sameCellChangeRecord(const CellChangeRecord& left, const CellChangeRecord& right)
+bool sameCellChangeRecord(const CellChangeRecord& left,
+                          const CellChangeRecord& right)
 {
-  return left.op_ == right.op_ && left.cell_data_ == right.cell_data_ && left.x_ == right.x_ && left.y_ == right.y_
-         && left.orig_lib_cell_ == right.orig_lib_cell_ && left.new_lib_cell_ == right.new_lib_cell_
+  return left.op_ == right.op_ && left.cell_data_ == right.cell_data_
+         && left.x_ == right.x_ && left.y_ == right.y_
+         && left.orig_lib_cell_ == right.orig_lib_cell_
+         && left.new_lib_cell_ == right.new_lib_cell_
          && left.orientation_.getValue() == right.orientation_.getValue();
 }
 
 bool isOracleSnapshotClean(const OracleResult& result)
 {
-  return result.status == OracleStatus::Checked && result.isLegal && result.violations.empty();
+  return result.status == OracleStatus::Checked && result.isLegal
+         && result.violations.empty();
 }
 
 eUTL::PhysOrientation toCellChangeOrientation(Orient orientation)
@@ -97,9 +100,8 @@ class TestPlacementView : public PlacementView
     return *this;
   }
 
-  TestPlacementView& addMaster(
-      MasterId id, DbCoord width, DbCoord height, bool isFiller, VtId vt,
-      BandPolarity bottomBandPolarity = BandPolarity::N)
+  TestPlacementView& addMaster(MasterId id, DbCoord width, DbCoord height, bool isFiller, VtId vt,
+                        BandPolarity bottomBandPolarity = BandPolarity::N)
   {
     masters_[id] = MasterInfo{id, width, height, isFiller, vt, bottomBandPolarity};
     caches_dirty_ = true;  // master height feeds multi-row bucketing
@@ -113,7 +115,8 @@ class TestPlacementView : public PlacementView
     return *this;
   }
 
-  TestPlacementView& place(InstanceId id, MasterId masterId, RowId rowId, DbCoord x, Orient orient = Orient::R0)
+  TestPlacementView& place(InstanceId id, MasterId masterId, RowId rowId, DbCoord x,
+                    Orient orient = Orient::R0)
   {
     const auto it = masters_.find(masterId);
     const bool isFiller = it != masters_.end() && it->second.isFiller;
@@ -172,18 +175,21 @@ class TestPlacementView : public PlacementView
     return filler_master_list_;
   }
 
-  CellChangeRecord cellChangeRecord(InstanceId instanceId, MasterId newMasterId) const override
+  CellChangeRecord cellChangeRecord(InstanceId instanceId,
+                                    MasterId newMasterId) const override
   {
     const PlacedInstance* placed = instance(instanceId);
-    const MasterId originalMaster = placed != nullptr ? placed->masterId : MasterId{};
-    return CellChangeRecord{
-        OpType::Replace,
-        CellData{eUNL::LeafCellID(0, instanceId)},
-        eUTL::UvDist(placed != nullptr ? placed->x : 0),
-        eUTL::UvDist(placed != nullptr ? placed->rowId : 0),
-        eLIB::LibCellID(0, originalMaster),
-        eLIB::LibCellID(0, newMasterId),
-        toCellChangeOrientation(placed != nullptr ? placed->orientation : Orient::R0)};
+    const MasterId originalMaster
+        = placed != nullptr ? placed->masterId : MasterId{};
+    return CellChangeRecord{OpType::Replace,
+                            CellData{eUNL::LeafCellID(0, instanceId)},
+                            eUTL::UvDist(placed != nullptr ? placed->x : 0),
+                            eUTL::UvDist(placed != nullptr ? placed->rowId : 0),
+                            eLIB::LibCellID(0, originalMaster),
+                            eLIB::LibCellID(0, newMasterId),
+                            toCellChangeOrientation(
+                                placed != nullptr ? placed->orientation
+                                                  : Orient::R0)};
   }
 
  private:
@@ -203,7 +209,8 @@ class TestPlacementView : public PlacementView
     by_row_.clear();
     for (const auto& [id, inst] : instances_) {
       const MasterInfo* master = masterInfo(inst.masterId);
-      const DbCoord height = master != nullptr ? std::max<DbCoord>(master->height, 1) : 1;
+      const DbCoord height
+          = master != nullptr ? std::max<DbCoord>(master->height, 1) : 1;
       // Multi-height contract: reported by every covered row. Rows are
       // bucketed even when not declared via addRow (tests place instances
       // in undeclared rows for boundary cases).
@@ -214,9 +221,10 @@ class TestPlacementView : public PlacementView
       }
     }
     for (auto& [rowId, list] : by_row_) {
-      std::sort(list.begin(), list.end(), [](const PlacedInstance& a, const PlacedInstance& b) {
-        return a.x != b.x ? a.x < b.x : a.id < b.id;
-      });
+      std::sort(list.begin(), list.end(),
+                [](const PlacedInstance& a, const PlacedInstance& b) {
+                  return a.x != b.x ? a.x < b.x : a.id < b.id;
+                });
     }
 
     if (have_configured_fillers_) {
@@ -232,12 +240,13 @@ class TestPlacementView : public PlacementView
     // Contract: sorted ascending, unique.
     std::sort(filler_master_list_.begin(), filler_master_list_.end());
     filler_master_list_.erase(
-        std::unique(filler_master_list_.begin(), filler_master_list_.end()), filler_master_list_.end());
+        std::unique(filler_master_list_.begin(), filler_master_list_.end()),
+        filler_master_list_.end());
   }
 
   DbCoord site_width_ = 1;
-  std::map<MasterId, MasterInfo> masters_;  // ordered => deterministic
-  std::map<RowId, XInterval> row_spans_;    // ordered => deterministic
+  std::map<MasterId, MasterInfo> masters_;      // ordered => deterministic
+  std::map<RowId, XInterval> row_spans_;        // ordered => deterministic
   std::map<InstanceId, PlacedInstance> instances_;
   std::vector<MasterId> configured_fillers_;
   bool have_configured_fillers_ = false;
@@ -276,6 +285,7 @@ class TestPlacementView : public PlacementView
 //
 // VtId mapping (pinned, documented): family enum index -- VTS=0, VTL=1,
 // VTH=2, VTUL=3; underivable -> kUnknownVt.
+
 
 #include <map>
 #include <string>
@@ -321,9 +331,9 @@ struct MasterDescription
   // rebuildMasterShapes' band anchor.
   BandPolarity bottomBandPolarity = BandPolarity::N;
   bool isFiller = false;
-  bool usable = false;  // derivation succeeded; unusable masters are never
-                        // offered as swap candidates
-  std::string reason;   // checker-style code when unusable, empty otherwise
+  bool usable = false;   // derivation succeeded; unusable masters are never
+                         // offered as swap candidates
+  std::string reason;    // checker-style code when unusable, empty otherwise
 };
 
 class SyntheticMasterCatalog
@@ -331,7 +341,10 @@ class SyntheticMasterCatalog
  public:
   // `view` resolves instances for the candidate query (which is keyed by
   // filler INSTANCE); the catalog itself is master-only.
-  SyntheticMasterCatalog(DbCoord siteWidth, DbCoord rowHeight) : site_width_(siteWidth), row_height_(rowHeight) {}
+  SyntheticMasterCatalog(DbCoord siteWidth, DbCoord rowHeight)
+      : site_width_(siteWidth), row_height_(rowHeight)
+  {
+  }
 
   // --- catalog building (mirrors ImplantInput.layers / .masters) -----------
   void addLayer(LayerId id, const std::string& name);
@@ -339,12 +352,17 @@ class SyntheticMasterCatalog
   // Convenience: a single-row master carrying the two canonical band shapes
   // (bottom on the family's N layer, top on its P layer) exactly as
   // rebuildMasterShapes would emit them. Layers of `family` must exist.
-  void addBandMaster(MasterId id, const std::string& name, DbCoord width, bool isFiller, const std::string& family);
+  void addBandMaster(MasterId id,
+                     const std::string& name,
+                     DbCoord width,
+                     bool isFiller,
+                     const std::string& family);
 
   // --- the requested query --------------------------------------------------
   // One description per input id, input order preserved; unknown ids yield
   // usable=false with reason "unknown_master".
-  std::vector<MasterDescription> describeMasters(const std::vector<MasterId>& ids) const;
+  std::vector<MasterDescription> describeMasters(
+      const std::vector<MasterId>& ids) const;
   // nullptr when the id is not in the catalog.
   const MasterDescription* describeMaster(MasterId id) const;
 
@@ -380,14 +398,16 @@ class SyntheticMasterCatalog
   DbCoord site_width_ = 1;
   DbCoord row_height_ = 1;
   std::map<LayerId, LayerInfo> layers_;              // ordered: deterministic
-  std::map<MasterId, SyntheticMaster> masters_;      // ordered: deterministic
+  std::map<MasterId, SyntheticMaster> masters_;        // ordered: deterministic
   std::map<MasterId, MasterDescription> described_;  // derived on addMaster
 };
 
 // parseLayerName replica (ImplantLayerCheckerHelper.cpp): split at the LAST
 // '_'; family index VTS=0 VTL=1 VTH=2 VTUL=3, unknown -> -1; polarity "P"/"p"
 // -> P, anything else N. Exposed for tests.
-void parseSyntheticLayerName(const std::string& name, int& familyIndex, bool& polarityP);
+void parseSyntheticLayerName(const std::string& name,
+                           int& familyIndex,
+                           bool& polarityP);
 
 }  // namespace dpl2::fillerRepair
 
@@ -396,7 +416,9 @@ void parseSyntheticLayerName(const std::string& name, int& familyIndex, bool& po
 
 namespace dpl2::fillerRepair {
 
-void parseSyntheticLayerName(const std::string& name, int& familyIndex, bool& polarityP)
+void parseSyntheticLayerName(const std::string& name,
+                           int& familyIndex,
+                           bool& polarityP)
 {
   familyIndex = -1;
   polarityP = false;
@@ -430,7 +452,8 @@ void SyntheticMasterCatalog::addLayer(LayerId id, const std::string& name)
   layers_[id] = info;
 }
 
-const SyntheticMasterCatalog::LayerInfo* SyntheticMasterCatalog::layer(LayerId id) const
+const SyntheticMasterCatalog::LayerInfo* SyntheticMasterCatalog::layer(
+    LayerId id) const
 {
   const auto it = layers_.find(id);
   return it != layers_.end() ? &it->second : nullptr;
@@ -439,16 +462,21 @@ const SyntheticMasterCatalog::LayerInfo* SyntheticMasterCatalog::layer(LayerId i
 // Derivation mirror of ImplantLayerChecker::buildMasters: width alignment,
 // per-shape layer lookup, single-family requirement, full-width span. The
 // first failed rule is recorded as the checker-style reason.
-MasterDescription SyntheticMasterCatalog::derive(const SyntheticMaster& master) const
+MasterDescription SyntheticMasterCatalog::derive(
+    const SyntheticMaster& master) const
 {
   MasterDescription d;
   d.masterId = master.masterId;
   d.name = master.name;
   d.width = master.width;
   d.isFiller = master.isFiller;
-  d.heightRows = row_height_ > 0 ? static_cast<int>((master.height + row_height_ - 1) / row_height_) : 0;
+  d.heightRows = row_height_ > 0
+                     ? static_cast<int>((master.height + row_height_ - 1)
+                                        / row_height_)
+                     : 0;
 
-  if (site_width_ <= 0 || master.width <= 0 || master.width % site_width_ != 0) {
+  if (site_width_ <= 0 || master.width <= 0
+      || master.width % site_width_ != 0) {
     d.reason = "master_width_not_site_aligned";
     return d;
   }
@@ -484,7 +512,8 @@ MasterDescription SyntheticMasterCatalog::derive(const SyntheticMaster& master) 
   // Band anchor exactly like rebuildMasterShapes: the bottommost shape's
   // layer polarity is the master's R0-frame bottom band.
   if (bottom != nullptr) {
-    d.bottomBandPolarity = layer(bottom->layer)->polarityP ? BandPolarity::P : BandPolarity::N;
+    d.bottomBandPolarity =
+        layer(bottom->layer)->polarityP ? BandPolarity::P : BandPolarity::N;
   }
   d.usable = true;
   return d;
@@ -496,8 +525,11 @@ void SyntheticMasterCatalog::addMaster(const SyntheticMaster& master)
   described_[master.masterId] = derive(master);
 }
 
-void SyntheticMasterCatalog::addBandMaster(
-    MasterId id, const std::string& name, DbCoord width, bool isFiller, const std::string& family)
+void SyntheticMasterCatalog::addBandMaster(MasterId id,
+                                             const std::string& name,
+                                             DbCoord width,
+                                             bool isFiller,
+                                             const std::string& family)
 {
   // Find the family's N and P layers (rebuildMasterShapes needs both).
   int familyIndex = -1;
@@ -521,17 +553,20 @@ void SyntheticMasterCatalog::addBandMaster(
   // Canonical single-row band pair: bottom band on the N layer, top band on
   // the P layer, both spanning the full width (rebuildMasterShapes).
   master.shapes.push_back(SyntheticMasterShape{0, nLayer, 0, 0, width, halfRow});
-  master.shapes.push_back(SyntheticMasterShape{1, pLayer, 0, halfRow, width, row_height_});
+  master.shapes.push_back(
+      SyntheticMasterShape{1, pLayer, 0, halfRow, width, row_height_});
   addMaster(master);
 }
 
-const MasterDescription* SyntheticMasterCatalog::describeMaster(MasterId id) const
+const MasterDescription* SyntheticMasterCatalog::describeMaster(
+    MasterId id) const
 {
   const auto it = described_.find(id);
   return it != described_.end() ? &it->second : nullptr;
 }
 
-std::vector<MasterDescription> SyntheticMasterCatalog::describeMasters(const std::vector<MasterId>& ids) const
+std::vector<MasterDescription> SyntheticMasterCatalog::describeMasters(
+    const std::vector<MasterId>& ids) const
 {
   std::vector<MasterDescription> result;
   result.reserve(ids.size());
@@ -553,9 +588,9 @@ void SyntheticMasterCatalog::registerInto(TestPlacementView& design) const
   std::vector<MasterId> fillerIds;
   for (const auto& [id, d] : described_) {
     if (d.usable) {
-      design.addMaster(id, d.width, d.heightRows, d.isFiller, d.vt, d.bottomBandPolarity);
-      if (d.isFiller)
-        fillerIds.push_back(id);
+      design.addMaster(id, d.width, d.heightRows, d.isFiller, d.vt,
+                       d.bottomBandPolarity);
+      if (d.isFiller) fillerIds.push_back(id);
     }
   }
   design.setFillerMasterIds(std::move(fillerIds));
@@ -573,16 +608,20 @@ void SyntheticMasterCatalog::addAppendixALibrary()
 
   // F_FILL{8,4,3,2}_63S6T9{R,L,UL}_1; master id = width-in-sites * 10 +
   // family index (VTS=0, VTL=1, VTUL=3) -- deterministic and readable.
-  const std::pair<const char*, const char*> suffixToFamily[] = {{"R", "VTS"}, {"L", "VTL"}, {"UL", "VTUL"}};
+  const std::pair<const char*, const char*> suffixToFamily[] = {
+      {"R", "VTS"}, {"L", "VTL"}, {"UL", "VTUL"}};
   for (const int widthSites : {2, 3, 4, 8}) {
     for (const auto& [suffix, family] : suffixToFamily) {
       int familyIndex = -1;
       bool polarityP = false;
-      parseSyntheticLayerName(std::string(family) + "_N", familyIndex, polarityP);
+      parseSyntheticLayerName(std::string(family) + "_N", familyIndex,
+                            polarityP);
       const MasterId id = widthSites * 10 + familyIndex;
-      addBandMaster(
-          id, cat("F_FILL", widthSites, "_63S6T9", suffix, "_1"), widthSites * site_width_,
-          /*isFiller=*/true, family);
+      addBandMaster(id,
+                    cat("F_FILL", widthSites, "_63S6T9", suffix, "_1"),
+                    widthSites * site_width_,
+                    /*isFiller=*/true,
+                    family);
     }
   }
 }
@@ -617,6 +656,7 @@ void SyntheticMasterCatalog::addAppendixALibrary()
 //  - status != Checked always carries diagnostics;
 //  - violations are collected only inside guardRegion.
 
+
 #include <map>
 #include <vector>
 
@@ -635,10 +675,14 @@ struct PlannerTestRules
 class TestRepairOracle : public RepairOracle
 {
  public:
-  TestRepairOracle(const TestPlacementView& design, PlannerTestRules rules) : design_(design), rules_(rules) {}
+  TestRepairOracle(const TestPlacementView& design, PlannerTestRules rules)
+      : design_(design), rules_(rules)
+  {
+  }
 
   OracleResult checkPlaceWithOverlay(const OracleRequest& request) override;
-  std::vector<OracleResult> checkPlaceWithOverlays(const std::vector<OracleRequest>& requests) override;
+  std::vector<OracleResult> checkPlaceWithOverlays(
+      const std::vector<OracleRequest>& requests) override;
 
   // Telemetry for tests: total requests evaluated / batch calls made.
   int requestCount() const { return request_count_; }
@@ -656,11 +700,13 @@ class TestRepairOracle : public RepairOracle
 
   // Effective master of an instance under the overlay: fillerChanges first,
   // then the target-place master override, else the placed master.
-  MasterId effectiveMaster(
-      const PlacedInstance& inst, const OracleRequest& request, const std::map<InstanceId, MasterId>& overlay) const;
+  MasterId effectiveMaster(const PlacedInstance& inst,
+                           const OracleRequest& request,
+                           const std::map<InstanceId, MasterId>& overlay) const;
 
-  std::vector<Run> buildRuns(
-      RowId rowId, const OracleRequest& request, const std::map<InstanceId, MasterId>& overlay) const;
+  std::vector<Run> buildRuns(RowId rowId,
+                             const OracleRequest& request,
+                             const std::map<InstanceId, MasterId>& overlay) const;
 
   const TestPlacementView& design_;
   PlannerTestRules rules_;
@@ -672,11 +718,14 @@ class TestRepairOracle : public RepairOracle
 
 #include <algorithm>
 
+
 namespace dpl2::fillerRepair {
 
 namespace {
 
-ViolationParticipant participantOf(const PlacementView& view, const PlacedInstance& inst, const TargetPlace& target)
+ViolationParticipant participantOf(const PlacementView& view,
+                                   const PlacedInstance& inst,
+                                   const TargetPlace& target)
 {
   ViolationParticipant p;
   p.instanceId = inst.id;
@@ -705,13 +754,15 @@ bool inGuardRegion(const Violation& v, const Region& region)
 
 }  // namespace
 
-OracleResult TestRepairOracle::checkPlaceWithOverlay(const OracleRequest& request)
+OracleResult TestRepairOracle::checkPlaceWithOverlay(
+    const OracleRequest& request)
 {
   ++request_count_;
   return evaluate(request);
 }
 
-std::vector<OracleResult> TestRepairOracle::checkPlaceWithOverlays(const std::vector<OracleRequest>& requests)
+std::vector<OracleResult> TestRepairOracle::checkPlaceWithOverlays(
+    const std::vector<OracleRequest>& requests)
 {
   ++batch_count_;
   std::vector<OracleResult> results;
@@ -726,7 +777,9 @@ std::vector<OracleResult> TestRepairOracle::checkPlaceWithOverlays(const std::ve
 }
 
 MasterId TestRepairOracle::effectiveMaster(
-    const PlacedInstance& inst, const OracleRequest& request, const std::map<InstanceId, MasterId>& overlay) const
+    const PlacedInstance& inst,
+    const OracleRequest& request,
+    const std::map<InstanceId, MasterId>& overlay) const
 {
   const auto it = overlay.find(inst.id);
   if (it != overlay.end()) {
@@ -739,7 +792,9 @@ MasterId TestRepairOracle::effectiveMaster(
 }
 
 std::vector<TestRepairOracle::Run> TestRepairOracle::buildRuns(
-    RowId rowId, const OracleRequest& request, const std::map<InstanceId, MasterId>& overlay) const
+    RowId rowId,
+    const OracleRequest& request,
+    const std::map<InstanceId, MasterId>& overlay) const
 {
   std::vector<Run> runs;
   for (const PlacedInstance& placed : design_.instancesInRow(rowId)) {
@@ -748,7 +803,8 @@ std::vector<TestRepairOracle::Run> TestRepairOracle::buildRuns(
     const XInterval span = XInterval{placed.x, placed.x + master->width};
     // Extend the previous run only when same VT and x-contiguous; a gap in
     // coverage (illegal design, pre-check territory) breaks the run.
-    if (!runs.empty() && runs.back().vt == master->vt && runs.back().span.xh == span.xl) {
+    if (!runs.empty() && runs.back().vt == master->vt
+        && runs.back().span.xh == span.xl) {
       runs.back().span.xh = span.xh;
       runs.back().insts.push_back(inst);
     } else {
@@ -768,12 +824,14 @@ OracleResult TestRepairOracle::evaluate(const OracleRequest& request) const
   std::map<InstanceId, MasterId> overlay;
   const auto invalid = [&](std::string why) {
     result.status = OracleStatus::InvalidOverlay;
-    result.diagnostics.push_back(makeDiag(Severity::Error, "InvalidOverlay", std::move(why)));
+    result.diagnostics.push_back(
+        makeDiag(Severity::Error, "InvalidOverlay", std::move(why)));
     return result;
   };
 
   if (design_.instance(request.targetPlace.instanceId) == nullptr) {
-    return invalid(cat("target instance ", request.targetPlace.instanceId, " not found"));
+    return invalid(cat("target instance ", request.targetPlace.instanceId,
+                       " not found"));
   }
   for (const CellChangeRecord& change : request.fillerChanges) {
     const InstanceId instanceId = cellChangeRecordInstanceId(change);
@@ -790,11 +848,14 @@ OracleResult TestRepairOracle::evaluate(const OracleRequest& request) const
     if (newMaster == nullptr || !newMaster->isFiller) {
       return invalid(cat("master ", newMasterId, " unknown or not a filler"));
     }
-    if (newMaster->width != oldMaster->width || newMaster->height != oldMaster->height) {
-      return invalid(cat("size mismatch for instance ", instanceId, ": new master ", newMasterId));
+    if (newMaster->width != oldMaster->width
+        || newMaster->height != oldMaster->height) {
+      return invalid(cat("size mismatch for instance ", instanceId,
+                         ": new master ", newMasterId));
     }
     if (!overlay.emplace(instanceId, newMasterId).second) {
-      return invalid(cat("duplicate instance ", instanceId, " in one overlay"));
+      return invalid(cat("duplicate instance ", instanceId,
+                         " in one overlay"));
     }
   }
 
@@ -878,7 +939,8 @@ OracleResult TestRepairOracle::evaluate(const OracleRequest& request) const
         if (a.vt != b.vt) {
           continue;
         }
-        const DbCoord overlap = std::min(a.span.xh, b.span.xh) - std::max(a.span.xl, b.span.xl);
+        const DbCoord overlap = std::min(a.span.xh, b.span.xh)
+                                - std::max(a.span.xl, b.span.xl);
         if (overlap > 0 && rules_.mwInter > 0 && overlap < rules_.mwInter) {
           // Inter-row MW (ruleId 3): merged shape too narrow at the row
           // boundary.
@@ -888,14 +950,16 @@ OracleResult TestRepairOracle::evaluate(const OracleRequest& request) const
           v.relation = ViolationRelation::InterRow;
           v.primaryLayer = a.vt;
           v.rowIds = {rowA, rowB};
-          v.xWindow = XInterval{std::max(a.span.xl, b.span.xl), std::min(a.span.xh, b.span.xh)};
+          v.xWindow = XInterval{std::max(a.span.xl, b.span.xl),
+                                std::min(a.span.xh, b.span.xh)};
           v.measuredValue = overlap;
           v.requiredValue = rules_.mwInter;
           v.participants = participants(a);
           const auto more = participants(b);
           v.participants.insert(v.participants.end(), more.begin(), more.end());
           addViolation(std::move(v));
-        } else if (overlap <= 0 && rules_.msInter > 0 && -overlap < rules_.msInter) {
+        } else if (overlap <= 0 && rules_.msInter > 0
+                   && -overlap < rules_.msInter) {
           // Inter-row MS (ruleId 4): disjoint same-VT shapes too close
           // (corner touch = distance 0 counts).
           const DbCoord dist = -overlap;
@@ -953,13 +1017,15 @@ bool verbose()
 }
 
 std::set<std::pair<fr::RowId, int>> coveredRetilerSites(
-    const std::vector<fr::internal::TiledFiller>& tiling, const std::vector<fr::internal::FillerFootprint>& footprints)
+    const std::vector<fr::internal::TiledFiller>& tiling,
+    const std::vector<fr::internal::FillerFootprint>& footprints)
 {
   std::set<std::pair<fr::RowId, int>> sites;
   for (const fr::internal::TiledFiller& tile : tiling) {
-    const auto footprint = std::find_if(footprints.begin(), footprints.end(), [&](const auto& item) {
-      return item.masterId == tile.masterId;
-    });
+    const auto footprint = std::find_if(
+        footprints.begin(), footprints.end(), [&](const auto& item) {
+          return item.masterId == tile.masterId;
+        });
     EXPECT_NE(footprint, footprints.end());
     if (footprint == footprints.end()) {
       continue;
@@ -975,93 +1041,90 @@ std::set<std::pair<fr::RowId, int>> coveredRetilerSites(
 
 void testRetilerPrefersDeterministicLargestExactCover()
 {
-  const std::vector<fr::internal::SiteCell> released{{0, 0}, {0, 1}, {1, 0}, {1, 1}};
-  const std::vector<fr::internal::FillerFootprint> footprints{{10, 1, 1}, {11, 2, 1}, {12, 2, 2}};
-  const fr::internal::RetileResult result = fr::internal::enumerateRetilings(released, footprints);
+  const std::vector<fr::internal::SiteCell> released{
+      {0, 0}, {0, 1}, {1, 0}, {1, 1}};
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {10, 1, 1}, {11, 2, 1}, {12, 2, 2}};
+  const fr::internal::RetileResult result
+      = fr::internal::enumerateRetilings(released, footprints);
 
   ASSERT_FALSE(result.solutions.empty());
   ASSERT_EQ(result.solutions.front().size(), 1U);
   EXPECT_EQ(result.solutions.front().front().masterId, 12);
   EXPECT_EQ(coveredRetilerSites(result.solutions.front(), footprints),
-            (std::set<std::pair<fr::RowId, int>>{{0, 0}, {0, 1}, {1, 0}, {1, 1}}));
+            (std::set<std::pair<fr::RowId, int>>{
+                {0, 0}, {0, 1}, {1, 0}, {1, 1}}));
+}
+
+void testRetilerRejectsUnfillableReleasedArea()
+{
+  const fr::internal::RetileResult result
+      = fr::internal::enumerateRetilings({{0, 0}, {0, 1}, {0, 2}},
+                                         {{7, 2, 1}});
+
+  EXPECT_TRUE(result.solutions.empty());
+  EXPECT_FALSE(result.truncated);
+}
+
+void testRetilerNeverOverlapsOrFillsOutsideReleasedSites()
+{
+  const std::vector<fr::internal::SiteCell> released{
+      {2, 4}, {2, 5}, {2, 6}, {2, 7}};
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {3, 1, 1}, {4, 2, 1}};
+  const fr::internal::RetileResult result
+      = fr::internal::enumerateRetilings(released, footprints);
+  const std::set<std::pair<fr::RowId, int>> expected{
+      {2, 4}, {2, 5}, {2, 6}, {2, 7}};
+
+  ASSERT_FALSE(result.solutions.empty());
+  for (const auto& tiling : result.solutions) {
+    EXPECT_EQ(coveredRetilerSites(tiling, footprints), expected);
+  }
 }
 
 TEST(FillerRetiler, AllTwoByFourGapMasksMatchIndependentReachability)
 {
   // Includes disconnected gaps, stairs, holes and full-row strips. Compute
   // tileable masks independently by adding every possible disjoint rectangle.
-  const std::vector<std::vector<fr::internal::FillerFootprint>>
-      libraries{{{10, 2, 1}, {11, 3, 1}, {12, 1, 2}, {13, 2, 2}}, {{3, 1, 1}, {4, 2, 1}}, {{7, 2, 1}}};
-  for (const auto& footprints : libraries) {
-    SCOPED_TRACE(::testing::Message() << "library=" << footprints.front().masterId);
-    std::vector<unsigned> rectangles;
-    for (const auto& footprint : footprints) {
-      for (int row = 0; row + footprint.heightRows <= 2; ++row) {
-        for (int col = 0; col + footprint.widthSites <= 4; ++col) {
-          unsigned mask = 0;
-          for (int r = row; r < row + footprint.heightRows; ++r) {
-            for (int c = col; c < col + footprint.widthSites; ++c) {
-              mask |= 1u << (4 * r + c);
-            }
-          }
-          rectangles.push_back(mask);
-        }
-      }
-    }
-    std::array<bool, 256> reachable{};
-    reachable[0] = true;
-    for (unsigned mask = 0; mask < reachable.size(); ++mask) {
-      if (reachable[mask]) {
-        for (const unsigned rectangle : rectangles) {
-          if ((mask & rectangle) == 0) {
-            reachable[mask | rectangle] = true;
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {10, 2, 1}, {11, 3, 1}, {12, 1, 2}, {13, 2, 2}};
+  std::vector<unsigned> rectangles;
+  for (const auto& footprint : footprints) {
+    for (int row = 0; row + footprint.heightRows <= 2; ++row) {
+      for (int col = 0; col + footprint.widthSites <= 4; ++col) {
+        unsigned mask = 0;
+        for (int r = row; r < row + footprint.heightRows; ++r) {
+          for (int c = col; c < col + footprint.widthSites; ++c) {
+            mask |= 1u << (4 * r + c);
           }
         }
-      }
-      std::vector<fr::internal::SiteCell> sites;
-      std::set<std::pair<fr::RowId, int>> expected;
-      for (int bit = 0; bit < 8; ++bit) {
-        if ((mask & (1u << bit)) != 0) {
-          sites.push_back({3 + bit / 4, 7 + bit % 4});
-          expected.emplace(3 + bit / 4, 7 + bit % 4);
-        }
-      }
-      const auto result = fr::internal::enumerateRetilings(sites, footprints);
-      EXPECT_EQ(!result.solutions.empty(), reachable[mask]) << "mask=" << mask;
-      if (!reachable[mask]) {
-        EXPECT_FALSE(result.truncated) << "mask=" << mask;
-      }
-      for (const auto& tiling : result.solutions) {
-        EXPECT_EQ(coveredRetilerSites(tiling, footprints), expected);
+        rectangles.push_back(mask);
       }
     }
   }
-}
-
-TEST(FillerRetiler, NormalizationAndBudgetsNeverPublishPartialTilings)
-{
-  const std::vector<fr::internal::SiteCell> sites{{5, 9}, {5, 8}, {5, 9}};
-  const std::vector<fr::internal::FillerFootprint> footprints{{2, 2, 1}, {1, 1, 1}, {3, 0, 2}, {4, 2, -1}};
-  for (size_t maxSolutions : {0u, 1u, 16u}) {
-    for (size_t maxStates : {0u, 1u, 10u}) {
-      SCOPED_TRACE(::testing::Message() << "solutions=" << maxSolutions << " states=" << maxStates);
-      fr::internal::RetileConfig config;
-      config.maxSolutions = maxSolutions;
-      config.maxSearchStates = maxStates;
-      const auto result = fr::internal::enumerateRetilings(sites, footprints, config);
-      EXPECT_LE(result.solutions.size(), maxSolutions);
-      EXPECT_LE(result.searchStates, maxStates);
-      EXPECT_EQ(!result.solutions.empty(), maxSolutions > 0 && maxStates > 1);
-      if (maxSolutions == 0 || maxStates <= 1) {
-        EXPECT_TRUE(result.truncated);
+  std::array<bool, 256> reachable{};
+  reachable[0] = true;
+  for (unsigned mask = 0; mask < reachable.size(); ++mask) {
+    if (reachable[mask]) {
+      for (const unsigned rectangle : rectangles) {
+        if ((mask & rectangle) == 0) {
+          reachable[mask | rectangle] = true;
+        }
       }
-      for (const auto& solution : result.solutions) {
-        EXPECT_EQ(coveredRetilerSites(solution, footprints), (std::set<std::pair<fr::RowId, int>>{{5, 8}, {5, 9}}));
+    }
+    std::vector<fr::internal::SiteCell> sites;
+    std::set<std::pair<fr::RowId, int>> expected;
+    for (int bit = 0; bit < 8; ++bit) {
+      if ((mask & (1u << bit)) != 0) {
+        sites.push_back({bit / 4, bit % 4});
+        expected.emplace(bit / 4, bit % 4);
       }
-      if (!result.solutions.empty()) {
-        ASSERT_EQ(result.solutions.front().size(), 1u);
-        EXPECT_EQ(result.solutions.front().front().masterId, 2);
-      }
+    }
+    const auto result = fr::internal::enumerateRetilings(sites, footprints);
+    EXPECT_EQ(!result.solutions.empty(), reachable[mask]) << "mask=" << mask;
+    for (const auto& tiling : result.solutions) {
+      EXPECT_EQ(coveredRetilerSites(tiling, footprints), expected);
     }
   }
 }
@@ -1069,20 +1132,27 @@ TEST(FillerRetiler, NormalizationAndBudgetsNeverPublishPartialTilings)
 TEST(FillerRetiler, PreferenceAndLegalityAreAppliedBeforeTheSolutionCap)
 {
   const std::vector<fr::internal::SiteCell> sites{{0, 0}, {0, 1}};
-  const std::vector<fr::internal::FillerFootprint> footprints{{10, 1, 1}, {11, 2, 1}, {12, 1, 1}};
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {10, 1, 1}, {11, 2, 1}, {12, 1, 1}};
   fr::internal::RetileConfig config;
   config.maxSolutions = 1;
   const auto ordered = fr::internal::enumerateRetilings(
-      sites, footprints, config,
-      [](const fr::internal::TiledFiller& tile, const std::vector<fr::internal::TiledFiller>&) {
+      sites,
+      footprints,
+      config,
+      [](const fr::internal::TiledFiller& tile,
+         const std::vector<fr::internal::TiledFiller>&) {
         return std::optional<int>{tile.masterId == 10 ? 1 : 2};
       });
   ASSERT_EQ(ordered.solutions.size(), 1u);
   ASSERT_EQ(ordered.solutions.front().size(), 2u);
   EXPECT_EQ(ordered.solutions.front().front().masterId, 10);
   const auto filtered = fr::internal::enumerateRetilings(
-      sites, footprints, config,
-      [](const fr::internal::TiledFiller& tile, const std::vector<fr::internal::TiledFiller>&) -> std::optional<int> {
+      sites,
+      footprints,
+      config,
+      [](const fr::internal::TiledFiller& tile,
+         const std::vector<fr::internal::TiledFiller>&) -> std::optional<int> {
         return tile.masterId != 10 ? std::optional<int>{0} : std::nullopt;
       });
   ASSERT_EQ(filtered.solutions.size(), 1u);
@@ -1098,9 +1168,12 @@ TEST(FillerRetiler, PrefixConstraintsBacktrackBeforeTheSolutionCap)
   config.maxSolutions = 1;
   bool rejectedMixedWidths = false;
   const auto result = fr::internal::enumerateRetilings(
-      {{0, 0}, {0, 1}, {0, 2}}, {{1, 1, 1}, {2, 2, 1}}, config,
+      {{0, 0}, {0, 1}, {0, 2}},
+      {{1, 1, 1}, {2, 2, 1}},
+      config,
       [&](const fr::internal::TiledFiller& tile,
-          const std::vector<fr::internal::TiledFiller>& partial) -> std::optional<int> {
+          const std::vector<fr::internal::TiledFiller>& partial)
+          -> std::optional<int> {
         if (!partial.empty() && partial.back().masterId != tile.masterId) {
           rejectedMixedWidths = true;
           return std::nullopt;
@@ -1117,7 +1190,8 @@ TEST(FillerRetiler, PrefixConstraintsBacktrackBeforeTheSolutionCap)
 
 TEST(FillerRetiler, OversizedUnusedFootprintsAreRejectedBeforeAllocation)
 {
-  const auto result = fr::internal::enumerateRetilings({{0, 0}, {0, 1}}, {{1, 1, 1}, {2, INT_MAX, INT_MAX}});
+  const auto result = fr::internal::enumerateRetilings(
+      {{0, 0}, {0, 1}}, {{1, 1, 1}, {2, INT_MAX, INT_MAX}});
   ASSERT_EQ(result.solutions.size(), 1u);
   EXPECT_EQ(result.solutions.front().size(), 2u);
 }
@@ -1198,463 +1272,6 @@ fr::TargetPlace anchorPlace(const fr::TestPlacementView& design, fr::InstanceId 
   return place;
 }
 
-struct DensityLayout
-{
-  const char* name;
-  int stdPercent;
-  std::array<const char*, 12> rows;  // Physical order: y=11 at the top, y=0 at the bottom.
-  std::array<int, 4> target;         // {bottom row, left site, width in sites, height in rows}.
-  std::vector<fr::internal::FillerFootprint> footprints;
-  std::vector<fr::internal::TiledFiller> firstTiling;
-  bool tileable;
-  int minWidthSites;
-};
-
-// One character column = one site, NOT one cell. A/B-/C-- = std widths 1/2/3;
-// a/b-/c-- = retained filler widths 1/2/3; 1/2-/3--/4--- = deleted filler widths.
-// '-' continues the same instance: e.g. "Ab-C--" is three cells over six sites.
-// Every row has 20 mixed-width cells. Ratios are checked by BOTH count and area.
-// Initial instance IDs = 1 + 40*y + leftSite; one site = 5 DBU; all cells height 1.
-// Filler master IDs = 100 + 10*width + height; +1000 is the same size at VT2.
-// Repair sketches in comments use D = released gap and T = target site.
-// The literal maps are the actual placement input; only required Delete regions
-// have two adjacent fillers. Other fillers are interspersed with standard cells.
-// clang-format off
-const DensityLayout kDensityLayouts[] = {
-  // 50%: 120/240 std cells, 240/480 std sites.
-  // y05, x16..23: DDDTTDDD -> [F3][target2][F3]; gaps on both sides.
-  // x: 0000000000111111111122222222223333333333
-  //    0123456789012345678901234567890123456789
-  {"Std50Split", 50,
-   {
-      "c--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ab-B-",  // y=11
-      "B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-",  // y=10
-      "aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-B-",  // y=09
-      "C--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aB-b-",  // y=08
-      "b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-",  // y=07
-      "Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-b-",  // y=06
-      "c--B-aC--b-AaB-A4---4---AaB-aC--b-B-aC--",  // y=05
-      "B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-",  // y=04
-      "aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-B-",  // y=03
-      "C--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aB-b-",  // y=02
-      "b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-",  // y=01
-      "Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-b-",  // y=00
-   },
-   {5, 19, 2, 1}, {{131, 3, 1}},
-   {{131, 5, 16}, {131, 5, 21}}, true, 3},
-
-  // 50%: 120/240 std cells, 240/480 std sites.
-  // y05: DDDDDD / y04: DDTTDD -> two 2x2 fillers and the upper 2x1 bridge.
-  // x: 0000000000111111111122222222223333333333
-  //    0123456789012345678901234567890123456789
-  {"Std50Pocket", 50,
-   {
-      "Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-b-",  // y=11
-      "c--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ab-B-",  // y=10
-      "B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-",  // y=09
-      "aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-B-",  // y=08
-      "C--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aB-b-",  // y=07
-      "b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-",  // y=06
-      "Ac--B-aC--b-AaB-3--3--B-Ac--B-aC--b-C--a",  // y=05
-      "c--B-aC--b-Ac--A3--3--B-AaB-aC--b-B-aC--",  // y=04
-      "B-aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-",  // y=03
-      "aC--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-b-B-",  // y=02
-      "C--b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aB-b-",  // y=01
-      "b-Ac--B-aC--b-Ac--B-aC--b-Ac--B-aC--b-B-",  // y=00
-   },
-   {4, 18, 2, 1}, {{121, 2, 1}, {122, 2, 2}},
-   {{122, 4, 16}, {122, 4, 20}, {121, 5, 18}}, true, 3},
-
-  // 65%: 156/240 std cells, 312/480 std sites.
-  // y11, x36..39: DDDD; y00, x00..05: TTDDDD. Disconnected edge gaps.
-  // x: 0000000000111111111122222222223333333333
-  //    0123456789012345678901234567890123456789
-  {"Std65Corners", 65,
-   {
-      "B-Ac--B-aC--B-aC--B-aC--B-aC--Ac--AA4---",  // y=11
-      "AC--b-AC--b-Ac--B-Ac--B-AaB-C--aC--C--b-",  // y=10
-      "C--B-aC--B-aC--B-aC--b-AC--c--AAc--AAc--",  // y=09
-      "B-Ac--B-Ac--B-Ac--B-AaB-aC--C--aC--C--b-",  // y=08
-      "AC--b-AC--b-AC--b-AC--b-AC--b-Ac--B-C--a",  // y=07
-      "C--B-aC--B-aC--B-aC--B-b-AB-c--AAc--Ac--",  // y=06
-      "b-Ac--B-Ac--B-Ac--B-AaB-B-aC--C--aC--C--",  // y=05
-      "aC--B-aC--b-AC--b-AC--b-AC--c--AC--c--AA",  // y=04
-      "c--B-Ac--B-Ac--B-aC--B-aC--B-aC--B-b-AB-",  // y=03
-      "b-AC--b-AC--b-AC--b-Ac--B-AaB-B-b-C--C--",  // y=02
-      "aC--B-aC--B-aC--B-b-C--B-c--Ac--AAc--AB-",  // y=01
-      "3--3--Ac--B-AaB-AaB-AaB-B-C--b-C--C--C--",  // y=00
-   },
-   {0, 0, 2, 1}, {{141, 4, 1}},
-   {{141, 0, 2}, {141, 11, 36}}, true, 3},
-
-  // 65%: 156/240 std cells, 312/480 std sites.
-  // x16..25, top down: y06 ....DDDDDD / y05 ..DDTTDD.. / y04 DDDDDD....
-  // x: 0000000000111111111122222222223333333333
-  //    0123456789012345678901234567890123456789
-  {"Std65Stair", 65,
-   {
-      "C--b-Ac--B-Ac--B-Ac--B-AaB-B-aC--C--aC--",  // y=11
-      "B-aC--B-aC--b-AC--b-AC--b-AC--c--AAc--B-",  // y=10
-      "Ac--B-Ac--B-Ac--B-aC--B-aC--B-aC--B-b-B-",  // y=09
-      "C--b-AC--b-AC--b-AC--b-Ac--B-AaB-B-b-C--",  // y=08
-      "B-aC--B-aC--B-aC--B-b-C--B-c--Ac--AAc--A",  // y=07
-      "Ac--B-AaB-AaB-AaB-B-3--3--C--b-C--C--C--",  // y=06
-      "C--b-AC--b-AC--b-A3--3--AC--aAC--aAC--B-",  // y=05
-      "B-Ac--B-aC--B-aA3--3--C--B-aC--B-b-C--AA",  // y=04
-      "AC--b-AC--b-Ac--B-Ac--B-AaB-C--aC--C--b-",  // y=03
-      "C--B-aC--B-aC--B-aC--b-AC--c--AAc--AAc--",  // y=02
-      "B-Ac--B-Ac--B-Ac--B-AaB-aC--C--aC--C--b-",  // y=01
-      "AC--b-AC--b-AC--b-AC--b-AC--b-Ac--B-C--a",  // y=00
-   },
-   {5, 20, 2, 1}, {{121, 2, 1}, {122, 2, 2}},
-   {{121, 4, 16}, {122, 4, 18}, {121, 4, 20}, {122, 5, 22}, {121, 6, 20}, {121, 6, 24}}, true, 3},
-
-  // 80%: 192/240 std cells, 384/480 std sites.
-  // y09/y08, x30..31: TT / TT. Deletes exactly cover the 2x2 target; no Add.
-  // x: 0000000000111111111122222222223333333333
-  //    0123456789012345678901234567890123456789
-  {"Std80Exact", 80,
-   {
-      "AC--b-AC--B-Ac--B-AC--B-aC--B-AC--b-AC--",  // y=11
-      "c--B-AC--B-aC--B-AC--b-AC--B-Ab-B-AC--B-",  // y=10
-      "B-AC--b-AC--B-Ac--B-AC--B-aC--2-AC--B-B-",  // y=09
-      "Ac--B-AC--B-aC--B-AC--b-AC--B-2-C--B-AB-",  // y=08
-      "C--B-AC--b-AC--B-Ac--B-AC--B-aC--B-AB-b-",  // y=07
-      "B-Ac--B-AC--B-aC--B-AC--b-AC--B-Ab-B-C--",  // y=06
-      "aC--B-AC--b-AC--B-Ac--B-AC--B-b-C--B-AB-",  // y=05
-      "C--B-Ac--B-AC--B-aC--B-AC--b-AC--B-Ab-B-",  // y=04
-      "B-aC--B-AC--b-AC--B-Ac--B-AC--B-b-C--B-A",  // y=03
-      "AC--B-Ac--B-AC--B-aC--B-AC--b-AC--B-B-b-",  // y=02
-      "C--B-aC--B-AC--b-AC--B-Ac--B-AC--B-b-AB-",  // y=01
-      "b-AC--B-Ac--B-AC--B-aC--B-AC--b-AC--B-B-",  // y=00
-   },
-   {8, 30, 2, 2}, {{121, 2, 1}, {122, 2, 2}},
-   {}, true, 2},
-
-  // 80%: 192/240 std cells, 384/480 std sites.
-  // y07, x09..13: DTTDD. Widths {2,4} cannot fill the isolated one-site gap.
-  // x: 0000000000111111111122222222223333333333
-  //    0123456789012345678901234567890123456789
-  {"Std80WidthBlocked", 80,
-   {
-      "B-aC--B-AC--b-AC--B-Ac--B-AC--B-b-C--B-A",  // y=11
-      "AC--B-Ac--B-AC--B-aC--B-AC--b-AC--B-B-b-",  // y=10
-      "C--B-aC--B-AC--b-AC--B-Ac--B-AC--B-b-AB-",  // y=09
-      "b-AC--B-Ac--B-AC--B-aC--B-AC--b-AC--B-B-",  // y=08
-      "AC--B-aAA2-3--B-AC--B-Ab-B-AC--C--C--C--",  // y=07
-      "C--b-AC--B-Ac--B-AC--B-aC--B-AC--b-AC--A",  // y=06
-      "B-AC--B-aC--B-AC--b-AC--B-Ac--B-AC--B-b-",  // y=05
-      "AC--b-AC--B-Ac--B-AC--B-aC--B-AC--b-AC--",  // y=04
-      "c--B-AC--B-aC--B-AC--b-AC--B-Ab-B-AC--B-",  // y=03
-      "B-AC--b-AC--B-Ac--B-AC--B-aC--B-AC--b-B-",  // y=02
-      "Ac--B-AC--B-aC--B-AC--b-AC--B-Ab-B-B-C--",  // y=01
-      "C--B-AC--b-AC--B-Ac--B-AC--B-aC--B-AB-b-",  // y=00
-   },
-   {7, 10, 2, 1}, {{121, 2, 1}, {141, 4, 1}},
-   {}, false, 0},
-
-  // 95%: 228/240 std cells, 456/480 std sites.
-  // y01/y00, x00..02: DTD / DTD -> two vertical fillers beside a 1x2 target.
-  // x: 0000000000111111111122222222223333333333
-  //    0123456789012345678901234567890123456789
-  {"Std95Vertical", 95,
-   {
-      "c--B-AC--B-AC--B-AC--B-AC--B-AC--B-AC--A",  // y=11
-      "B-AC--b-AC--B-AC--B-AC--B-AC--B-AC--B-B-",  // y=10
-      "AC--B-AC--B-aC--B-AC--B-AC--B-AC--B-AC--",  // y=09
-      "C--B-AC--B-AC--B-Ac--B-AC--B-AC--B-AC--A",  // y=08
-      "B-AC--B-AC--B-AC--B-AC--b-AC--B-AC--B-B-",  // y=07
-      "AC--B-AC--B-AC--B-AC--B-AC--B-aC--B-AC--",  // y=06
-      "C--B-AC--B-AC--B-AC--B-AC--B-AC--B-Ac--A",  // y=05
-      "B-aC--B-AC--B-AC--B-AC--B-AC--B-AC--B-B-",  // y=04
-      "AC--B-AaB-AC--B-AC--B-AC--B-AC--B-C--C--",  // y=03
-      "C--B-AC--B-AC--aAC--B-AC--B-AC--B-AC--B-",  // y=02
-      "3--AC--B-AC--B-AC--B-AC--B-AC--B-AC--B-A",  // y=01
-      "3--C--B-AC--B-AC--B-AC--B-AC--B-AC--B-AA",  // y=00
-   },
-   {0, 1, 1, 2}, {{112, 1, 2}},
-   {{112, 0, 0}, {112, 0, 2}}, true, 2},
-
-  // 95%: 228/240 std cells, 456/480 std sites.
-  // y11, x37..39: DTD. Two single-row gaps cannot use a double-height filler.
-  // x: 0000000000111111111122222222223333333333
-  //    0123456789012345678901234567890123456789
-  {"Std95HeightBlocked", 95,
-   {
-      "AC--B-AC--B-AC--B-AC--B-AC--B-AC--B-A3--",  // y=11
-      "C--B-c--C--B-AC--B-AC--B-AC--B-AC--B-AAA",  // y=10
-      "B-AC--B-Ab-B-AC--B-AC--B-AC--B-AC--B-C--",  // y=09
-      "AC--B-AC--B-AC--aAC--B-AC--B-AC--B-B-C--",  // y=08
-      "C--B-AC--B-AC--B-AC--B-c--C--B-AC--B-AAA",  // y=07
-      "B-AC--B-AC--B-AC--B-AC--B-Ab-B-AC--B-C--",  // y=06
-      "AC--B-AC--B-AC--B-AC--B-AC--B-AC--aB-C--",  // y=05
-      "c--B-AC--B-AC--B-AC--B-AC--B-AC--B-AC--A",  // y=04
-      "B-AC--b-AC--B-AC--B-AC--B-AC--B-AC--B-B-",  // y=03
-      "AC--B-AC--B-aC--B-AC--B-AC--B-AC--B-AC--",  // y=02
-      "C--B-AC--B-AC--B-Ab-B-AC--B-AC--B-AC--B-",  // y=01
-      "B-AC--B-AC--B-AC--B-AC--aAC--B-AC--B-C--",  // y=00
-   },
-   {11, 38, 1, 1}, {{112, 1, 2}},
-   {}, false, 0},
-};
-// clang-format on
-
-class FillerRepairDensityLayout : public ::testing::TestWithParam<DensityLayout>
-{
-};
-
-TEST_P(FillerRepairDensityLayout, RetileAndRepairPreserveGeometryAndStandardCells)
-{
-  const DensityLayout& layout = GetParam();
-  constexpr int rows = 12, cols = 40, cellsPerRow = 20, siteWidth = 5;
-  fr::TestPlacementView design;
-  design.setSiteWidth(siteWidth);
-  for (int width = 1; width <= 4; ++width) {
-    design.addMaster(10 + width, width * siteWidth, 1, false, 1);
-    design.addMaster(101 + 10 * width, width * siteWidth, 1, true, 1);
-    design.addMaster(1101 + 10 * width, width * siteWidth, 1, true, 2);
-  }
-  for (const auto& footprint : layout.footprints) {
-    design.addMaster(footprint.masterId, footprint.widthSites * siteWidth, footprint.heightRows, true, 1);
-    design.addMaster(footprint.masterId + 1000, footprint.widthSites * siteWidth, footprint.heightRows, true, 2);
-  }
-
-  using Site = std::pair<fr::RowId, int>;
-  std::set<Site> deleted, targetSites, expectedGaps;
-  std::set<fr::InstanceId> deletedIds;
-  std::set<int> standardWidths, fillerWidths;
-  std::vector<fr::internal::SiteCell> released;
-  int standardCells = 0, standardSites = 0;
-  const auto [targetRow, targetCol, targetWidth, targetHeight] = layout.target;
-  ASSERT_GE(targetRow, 0);
-  ASSERT_GE(targetCol, 0);
-  ASSERT_GT(targetWidth, 0);
-  ASSERT_GT(targetHeight, 0);
-  ASSERT_LE(targetRow + targetHeight, rows);
-  ASSERT_LE(targetCol + targetWidth, cols);
-  for (int row = targetRow; row < targetRow + targetHeight; ++row) {
-    for (int col = targetCol; col < targetCol + targetWidth; ++col) {
-      targetSites.emplace(row, col);
-    }
-  }
-  for (int row = 0; row < rows; ++row) {
-    SCOPED_TRACE(::testing::Message() << "row=" << row);
-    const std::string glyphs = layout.rows[rows - 1 - row];
-    ASSERT_EQ(glyphs.size(), cols);
-    design.addRow(row, 0, cols * siteWidth);
-    int rowStandardCells = 0, rowFillerCells = 0, transitions = 0;
-    int standardRun = 0, fillerRun = 0, maxStandardRun = 0, maxFillerRun = 0;
-    bool previousStd = false, previousDeleted = false;
-    for (int col = 0; col < cols;) {
-      const char glyph = glyphs[col];
-      const bool isStd = glyph >= 'A' && glyph <= 'C';
-      const bool isDeleted = glyph >= '1' && glyph <= '4';
-      ASSERT_TRUE(isStd || isDeleted || (glyph >= 'a' && glyph <= 'c')) << "site=" << col;
-      const int width = isStd ? glyph - 'A' + 1 : isDeleted ? glyph - '0' : glyph - 'a' + 1;
-      ASSERT_LE(col + width, cols);
-      for (int offset = 1; offset < width; ++offset) {
-        ASSERT_EQ(glyphs[col + offset], '-') << "continuation site=" << col + offset;
-      }
-      standardCells += isStd;
-      standardSites += isStd ? width : 0;
-      (isStd ? standardWidths : fillerWidths).insert(width);
-      rowStandardCells += isStd;
-      rowFillerCells += !isStd;
-      transitions += col != 0 && previousStd != isStd;
-      if (col != 0 && !previousStd && !isStd) {
-        EXPECT_TRUE(previousDeleted && isDeleted) << "only the Delete region may have adjacent fillers";
-      }
-      previousStd = isStd;
-      previousDeleted = isDeleted;
-      standardRun = isStd ? standardRun + 1 : 0;
-      fillerRun = isStd ? 0 : fillerRun + 1;
-      maxStandardRun = std::max(maxStandardRun, standardRun);
-      maxFillerRun = std::max(maxFillerRun, fillerRun);
-      const fr::InstanceId id = 1 + row * cols + col;
-      design.place(
-          id, isStd ? 10 + width : 101 + 10 * width, row, col * siteWidth,
-          row % 2 == 0 ? fr::Orient::MX : fr::Orient::R0);
-      if (isDeleted) {
-        deletedIds.insert(id);
-        for (int offset = 0; offset < width; ++offset) {
-          deleted.emplace(row, col + offset);
-        }
-      }
-      col += width;
-    }
-    ASSERT_EQ(design.instancesInRow(row).size(), cellsPerRow);
-    ASSERT_EQ(100 * rowStandardCells, layout.stdPercent * cellsPerRow);
-    // Enforce mixing, not just the aggregate ratio. The one adjacent pair is
-    // allowed for a multi-filler Delete; high-std ratios necessarily have longer std runs.
-    EXPECT_LE(maxFillerRun, 2);
-    EXPECT_GE(transitions, std::max(1, 2 * rowFillerCells - 3));
-    const int maxStdRun
-        = rowFillerCells == 1 ? rowStandardCells : (rowStandardCells + rowFillerCells - 2) / (rowFillerCells - 1);
-    EXPECT_LE(maxStandardRun, maxStdRun);
-  }
-  ASSERT_EQ(100 * standardCells, layout.stdPercent * rows * cellsPerRow);
-  ASSERT_EQ(100 * standardSites, layout.stdPercent * rows * cols);
-  EXPECT_EQ(standardWidths, (std::set<int>{1, 2, 3}));
-  for (int width : {1, 2, 3}) {
-    EXPECT_EQ(fillerWidths.count(width), 1u);
-  }
-  for (const Site& site : targetSites) {
-    ASSERT_EQ(deleted.count(site), 1u) << "target must be covered by deleted fillers";
-  }
-  for (const auto& [row, col] : deleted) {
-    if (targetSites.count({row, col}) == 0) {
-      released.push_back({row, col});
-      expectedGaps.emplace(row, col);
-    }
-  }
-  ASSERT_EQ(deleted.size(), expectedGaps.size() + targetSites.size());
-
-  // Capture identity, geometry, master and orientation independently of the search.
-  const auto snapshot = [](const fr::TestPlacementView& view) {
-    std::map<fr::InstanceId, std::tuple<fr::MasterId, fr::RowId, fr::DbCoord, fr::Orient, bool>> result;
-    for (const auto row : view.rows()) {
-      for (const auto& covered : view.instancesInRow(row)) {
-        const auto& inst = *view.instance(covered.id);
-        result.emplace(inst.id, std::make_tuple(inst.masterId, inst.rowId, inst.x, inst.orientation, inst.isFiller));
-      }
-    }
-    return result;
-  };
-  const auto initialPlacement = snapshot(design);
-  ASSERT_EQ(initialPlacement.size(), rows * cellsPerRow);
-  const auto result = fr::internal::enumerateRetilings(released, layout.footprints);
-  EXPECT_EQ(snapshot(design), initialPlacement);
-  ASSERT_EQ(!result.solutions.empty(), layout.tileable);
-  if (!layout.tileable) {
-    EXPECT_FALSE(result.truncated);  // Exhaustive impossibility, not a budget timeout.
-  }
-  for (const auto& tiling : result.solutions) {
-    EXPECT_EQ(coveredRetilerSites(tiling, layout.footprints), expectedGaps);
-  }
-
-  // Input enumeration order cannot change either the alternatives or their order.
-  std::reverse(released.begin(), released.end());
-  auto reversedLibrary = layout.footprints;
-  std::reverse(reversedLibrary.begin(), reversedLibrary.end());
-  const auto repeated = fr::internal::enumerateRetilings(released, reversedLibrary);
-  EXPECT_EQ(repeated.truncated, result.truncated);
-  EXPECT_EQ(repeated.searchStates, result.searchStates);
-  ASSERT_EQ(repeated.solutions.size(), result.solutions.size());
-  const auto tileKey = [](const auto& tile) { return std::make_tuple(tile.masterId, tile.rowId, tile.colId); };
-  for (size_t solution = 0; solution < result.solutions.size(); ++solution) {
-    ASSERT_EQ(repeated.solutions[solution].size(), result.solutions[solution].size());
-    for (size_t tile = 0; tile < result.solutions[solution].size(); ++tile) {
-      EXPECT_EQ(tileKey(repeated.solutions[solution][tile]), tileKey(result.solutions[solution][tile]));
-    }
-  }
-  if (!layout.tileable) {
-    return;
-  }
-  const auto& tiling = result.solutions.front();
-  ASSERT_EQ(tiling.size(), layout.firstTiling.size());
-  for (size_t tile = 0; tile < tiling.size(); ++tile) {
-    EXPECT_EQ(tileKey(tiling[tile]), tileKey(layout.firstTiling[tile]));
-  }
-
-  // Model the engine's post-retile planner view, without claiming to exercise
-  // its public Add/Delete wire or the real checker (integration tests own those).
-  fr::TestPlacementView repaired = design;
-  for (const fr::InstanceId id : deletedIds) {
-    repaired.remove(id);
-  }
-  constexpr fr::InstanceId targetId = 10000, firstAddedId = 20000;
-  repaired.addMaster(20, targetWidth * siteWidth, targetHeight, false, 2);
-  repaired.place(targetId, 20, targetRow, targetCol * siteWidth, targetRow % 2 == 0 ? fr::Orient::MX : fr::Orient::R0);
-  for (size_t index = 0; index < tiling.size(); ++index) {
-    const auto& tile = tiling[index];
-    repaired.place(
-        firstAddedId + index, tile.masterId, tile.rowId, tile.colId * siteWidth,
-        tile.rowId % 2 == 0 ? fr::Orient::MX : fr::Orient::R0);
-  }
-
-  std::set<Site> occupied;
-  std::array<std::set<fr::InstanceId>, cols> columnCells;
-  for (int row = 0; row < rows; ++row) {
-    ASSERT_GE(repaired.instancesInRow(row).size(), 10u);
-    for (const auto& inst : repaired.instancesInRow(row)) {
-      const auto* master = repaired.masterInfo(inst.masterId);
-      ASSERT_NE(master, nullptr);
-      ASSERT_EQ(inst.x % siteWidth, 0);
-      ASSERT_EQ(master->width % siteWidth, 0);
-      for (int col = inst.x / siteWidth; col < (inst.x + master->width) / siteWidth; ++col) {
-        ASSERT_GE(col, 0);
-        ASSERT_LT(col, cols);
-        EXPECT_TRUE(occupied.emplace(row, col).second) << "overlap at " << row << ',' << col;
-        columnCells[col].insert(inst.id);
-      }
-    }
-  }
-  EXPECT_EQ(occupied.size(), rows * cols);
-  for (const auto& cells : columnCells) {
-    EXPECT_GE(cells.size(), 10u);
-  }
-  const auto afterRetile = snapshot(repaired);
-  for (const auto& [id, original] : initialPlacement) {
-    if (!std::get<4>(original)) {
-      ASSERT_NE(repaired.instance(id), nullptr);
-      EXPECT_EQ(afterRetile.at(id), original);
-    }
-  }
-
-  fr::PlannerTestRules rules;
-  rules.mwIntra = layout.minWidthSites * siteWidth;
-  fr::TestRepairOracle checker(repaired, rules);
-  fr::OracleRequest check;
-  check.targetPlace = anchorPlace(repaired, targetId);
-  check.guardRegion = {{0, cols * siteWidth}, 0, rows - 1};
-  const auto baseline = checker.checkPlaceWithOverlay(check);
-  ASSERT_EQ(baseline.status, fr::OracleStatus::Checked);
-  ASSERT_EQ(baseline.isLegal, tiling.empty());  // Non-exact seeds must actually require a swap.
-  fr::RepairConfig config;
-  config.verbose = verbose();
-  config.ruleDistance = rules.mwIntra;
-  fr::internal::RepairPlanner planner(repaired, checker, config);
-  const fr::FillerRepairRequest request{check.targetPlace, baseline.violations};
-  const auto beforeSearch = snapshot(repaired);
-  const auto repair = planner.repair(request);
-  ASSERT_TRUE(repair.hasSolution);
-  EXPECT_EQ(repair.changes.empty(), tiling.empty());
-  EXPECT_EQ(snapshot(repaired), beforeSearch);
-  EXPECT_EQ(snapshot(design), initialPlacement);
-  std::set<fr::InstanceId> changed;
-  bool changedAddedFiller = false;
-  for (const auto& change : repair.changes) {
-    const auto id = fr::cellChangeRecordInstanceId(change);
-    const auto* inst = repaired.instance(id);
-    ASSERT_NE(inst, nullptr);
-    EXPECT_TRUE(inst->isFiller);
-    EXPECT_TRUE(changed.insert(id).second);
-    EXPECT_EQ(change.op_, dpl2::OpType::Replace);
-    const auto* oldMaster = repaired.masterInfo(inst->masterId);
-    const auto* newMaster = repaired.masterInfo(fr::cellChangeRecordNewMasterId(change));
-    ASSERT_NE(newMaster, nullptr);
-    EXPECT_TRUE(newMaster->isFiller);
-    EXPECT_EQ(newMaster->width, oldMaster->width);
-    EXPECT_EQ(newMaster->height, oldMaster->height);
-    EXPECT_TRUE(fr::sameCellChangeRecord(change, repaired.cellChangeRecord(id, newMaster->id)));
-    changedAddedFiller |= id >= firstAddedId;
-  }
-  EXPECT_EQ(changedAddedFiller, !tiling.empty());
-  check.fillerChanges = repair.changes;
-  EXPECT_TRUE(fr::isOracleSnapshotClean(checker.checkPlaceWithOverlay(check)));
-  const auto repairAgain = planner.repair(request);
-  ASSERT_TRUE(repairAgain.hasSolution);
-  ASSERT_EQ(repairAgain.changes.size(), repair.changes.size());
-  for (size_t index = 0; index < repair.changes.size(); ++index) {
-    EXPECT_TRUE(fr::sameCellChangeRecord(repairAgain.changes[index], repair.changes[index]));
-  }
-  EXPECT_EQ(snapshot(repaired), beforeSearch);
-}
-
-INSTANTIATE_TEST_SUITE_P(
-    TwelveByForty, FillerRepairDensityLayout, ::testing::ValuesIn(kDensityLayouts),
-    [](const ::testing::TestParamInfo<DensityLayout>& info) { return info.param.name; });
-
 // --- Swap primitives ---------------------------------------------------------
 
 void testSwapConstruction()
@@ -1689,7 +1306,8 @@ void testOverlayKeyOrderIndependent()
   auto m2 = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
   const fr::Region guard{fr::XInterval{0, 40}, 0, 0};
 
-  EXPECT_TRUE(fr::overlayKey(guard, {m1, m2}) == fr::overlayKey(guard, {m2, m1}));
+  EXPECT_TRUE(fr::overlayKey(guard, {m1, m2})
+              == fr::overlayKey(guard, {m2, m1}));
   EXPECT_TRUE(fr::overlayKey(guard, {m1}) != fr::overlayKey(guard, {m1, m2}));
   // Same instance, different target master => different overlay.
   auto m1b = *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3));
@@ -1700,7 +1318,8 @@ void testOverlayKeyOrderIndependent()
   // Equal keys must hash equal, or the cache would issue duplicate checker
   // calls for overlays it already answered.
   const fr::OverlayKeyHash hash;
-  EXPECT_EQ(hash(fr::overlayKey(guard, {m1, m2})), hash(fr::overlayKey(guard, {m2, m1})));
+  EXPECT_EQ(hash(fr::overlayKey(guard, {m1, m2})),
+            hash(fr::overlayKey(guard, {m2, m1})));
 
   // The guard is part of the identity: the same overlay under a different
   // guard is a different checker question.
@@ -1749,10 +1368,14 @@ void testPlannerDoesNotRunPlacementPrecheck()
 
 void testPlannerRejectsIncompletePlacementView()
 {
-  const auto hasCode = [](const fr::FillerRepairResult& result, const std::string& code) {
-    return std::any_of(result.diagnostics.begin(), result.diagnostics.end(), [&](const fr::Diagnostic& diagnostic) {
-      return diagnostic.code == code;
-    });
+  const auto hasCode = [](const fr::FillerRepairResult& result,
+                          const std::string& code) {
+    return std::any_of(
+        result.diagnostics.begin(),
+        result.diagnostics.end(),
+        [&](const fr::Diagnostic& diagnostic) {
+          return diagnostic.code == code;
+        });
   };
 
   fr::TestPlacementView empty;
@@ -1766,10 +1389,14 @@ void testPlannerRejectsIncompletePlacementView()
   EXPECT_EQ(emptyChecker.requestCount(), 0);
 
   fr::TestPlacementView missingTarget;
-  missingTarget.setSiteWidth(1).addRow(0, 0, 10).addMaster(20, 2, 1, false, 1);
+  missingTarget.setSiteWidth(1)
+      .addRow(0, 0, 10)
+      .addMaster(20, 2, 1, false, 1);
   fr::TestRepairOracle missingTargetChecker(missingTarget, {});
-  fr::internal::RepairPlanner missingTargetPlanner(missingTarget, missingTargetChecker, {});
-  const fr::FillerRepairResult targetResult = missingTargetPlanner.repair(request);
+  fr::internal::RepairPlanner missingTargetPlanner(
+      missingTarget, missingTargetChecker, {});
+  const fr::FillerRepairResult targetResult =
+      missingTargetPlanner.repair(request);
   EXPECT_FALSE(targetResult.hasSolution);
   EXPECT_TRUE(hasCode(targetResult, "UnknownTarget"));
   EXPECT_EQ(missingTargetChecker.requestCount(), 0);
@@ -1777,8 +1404,10 @@ void testPlannerRejectsIncompletePlacementView()
   missingTarget.place(10, 20, 0, 0);
   request.targetPlace.masterId = 99;
   fr::TestRepairOracle missingMasterChecker(missingTarget, {});
-  fr::internal::RepairPlanner missingMasterPlanner(missingTarget, missingMasterChecker, {});
-  const fr::FillerRepairResult masterResult = missingMasterPlanner.repair(request);
+  fr::internal::RepairPlanner missingMasterPlanner(
+      missingTarget, missingMasterChecker, {});
+  const fr::FillerRepairResult masterResult =
+      missingMasterPlanner.repair(request);
   EXPECT_FALSE(masterResult.hasSolution);
   EXPECT_TRUE(hasCode(masterResult, "UnknownTargetMaster"));
   EXPECT_EQ(missingMasterChecker.requestCount(), 0);
@@ -1858,13 +1487,17 @@ void testSyntheticCatalogRejectsMalformedMasters()
   provider.addLayer(3, "VTL_N");
 
   // Width 3 not aligned to siteWidth 2.
-  provider.addMaster({901, "BAD_WIDTH", 3, 2, true, {{0, 1, 0, 0, 3, 1}, {1, 2, 0, 1, 3, 2}}});
+  provider.addMaster({901, "BAD_WIDTH", 3, 2, true,
+                      {{0, 1, 0, 0, 3, 1}, {1, 2, 0, 1, 3, 2}}});
   // Shapes on two different families.
-  provider.addMaster({902, "MIXED_FAMILY", 4, 2, true, {{0, 1, 0, 0, 4, 1}, {1, 3, 0, 1, 4, 2}}});
+  provider.addMaster({902, "MIXED_FAMILY", 4, 2, true,
+                      {{0, 1, 0, 0, 4, 1}, {1, 3, 0, 1, 4, 2}}});
   // Shape on a layer the catalog does not know.
-  provider.addMaster({903, "UNKNOWN_LAYER", 4, 2, true, {{0, 99, 0, 0, 4, 2}}});
+  provider.addMaster({903, "UNKNOWN_LAYER", 4, 2, true,
+                      {{0, 99, 0, 0, 4, 2}}});
   // Implant shape narrower than the master width.
-  provider.addMaster({904, "PARTIAL_SPAN", 4, 2, true, {{0, 1, 0, 0, 2, 2}}});
+  provider.addMaster({904, "PARTIAL_SPAN", 4, 2, true,
+                      {{0, 1, 0, 0, 2, 2}}});
   // No shapes at all.
   provider.addMaster({905, "NO_SHAPES", 4, 2, true, {}});
 
@@ -1974,7 +1607,8 @@ void testPlannerSolvesWithSyntheticCatalog()
   snapReq.guardRegion = fr::Region{fr::XInterval{0, 16}, 0, 0};
   fr::FillerRepairRequest request;
   request.targetPlace = anchor;
-  request.violations = snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
+  request.violations =
+      snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
   EXPECT_EQ(request.violations.size(), 3u);
 
   fr::TestRepairOracle checker(design, rules);
@@ -1995,7 +1629,9 @@ void testPlannerSolvesWithSyntheticCatalog()
 // row1 below it (inter-row MS), plus everything else VT1. Recoloring the
 // row1 filler to VT1... would merge with neighbors; instead the clean fix is
 // recoloring it to VT2? See per-test comments; rules are chosen per case.
-fr::OracleRequest baselineRequest(const fr::TestPlacementView& design, fr::InstanceId anchor, fr::OracleRequestId id)
+fr::OracleRequest baselineRequest(const fr::TestPlacementView& design,
+                                        fr::InstanceId anchor,
+                                        fr::OracleRequestId id)
 {
   fr::OracleRequest request;
   request.requestId = id;
@@ -2030,8 +1666,9 @@ void testCheckerInvalidIsolated()
   auto valid = baselineRequest(f.design, f.anchor, 1);
   auto invalid = baselineRequest(f.design, f.anchor, 2);
   // Duplicate instance in one overlay -> InvalidOverlay for this request only.
-  invalid.fillerChanges
-      = {f.design.cellChangeRecord(101, fillerMaster(2, kVt2)), f.design.cellChangeRecord(101, fillerMaster(2, kVt3))};
+  invalid.fillerChanges = {
+      f.design.cellChangeRecord(101, fillerMaster(2, kVt2)),
+      f.design.cellChangeRecord(101, fillerMaster(2, kVt3))};
   auto valid2 = baselineRequest(f.design, f.anchor, 3);
 
   const auto results = checker.checkPlaceWithOverlays({valid, invalid, valid2});
@@ -2052,7 +1689,8 @@ void testCheckerIntraMsDetectAndClear()
   rules.msIntra = 3;
   fr::TestRepairOracle checker(f.design, rules);
 
-  const auto baseline = checker.checkPlaceWithOverlay(baselineRequest(f.design, /*anchor=*/100, 1));
+  const auto baseline = checker.checkPlaceWithOverlay(
+      baselineRequest(f.design, /*anchor=*/100, 1));
   EXPECT_TRUE(baseline.status == fr::OracleStatus::Checked);
   EXPECT_TRUE(!baseline.isLegal);
   EXPECT_EQ(baseline.violations.size(), 1u);
@@ -2062,7 +1700,8 @@ void testCheckerIntraMsDetectAndClear()
 
   // Overlay: recolor 103 to VT1 -> single VT1 run [0,16) -> clean.
   auto overlay = baselineRequest(f.design, 100, 2);
-  overlay.fillerChanges = {f.design.cellChangeRecord(103, fillerMaster(2, kVt1))};
+  overlay.fillerChanges = {
+      f.design.cellChangeRecord(103, fillerMaster(2, kVt1))};
   const auto fixed = checker.checkPlaceWithOverlay(overlay);
   EXPECT_TRUE(fixed.status == fr::OracleStatus::Checked);
   EXPECT_TRUE(fr::isOracleSnapshotClean(fixed));
@@ -2146,7 +1785,7 @@ void testCheckerTargetOverrideSeedsViolation()
       .place(200, fillerMaster(3, kVt1), 1, 0)
       .place(201, fillerMaster(3, kVt1), 1, 3)
       .place(202, fillerMaster(3, kVt1), 1, 6)
-      .place(203, fillerMaster(2, kVt2), 1, 9)  // bridge filler under anchor
+      .place(203, fillerMaster(2, kVt2), 1, 9)   // bridge filler under anchor
       .place(204, fillerMaster(2, kVt1), 1, 11)
       .place(205, fillerMaster(3, kVt1), 1, 13);
 
@@ -2176,17 +1815,21 @@ void testCheckerTargetOverrideSeedsViolation()
   // -> row1 becomes one VT1 run, anchor's VT2 shape has no partner -> clean.
   auto repaired = changed;
   repaired.requestId = 3;
-  repaired.fillerChanges = {design.cellChangeRecord(203, fillerMaster(2, kVt1))};
+  repaired.fillerChanges = {
+      design.cellChangeRecord(203, fillerMaster(2, kVt1))};
   const auto fixed = checker.checkPlaceWithOverlay(repaired);
   EXPECT_TRUE(fr::isOracleSnapshotClean(fixed));
 }
 
+
 // --- Normalization + signature -----------------------------------------------
 
 // Hand-built violation matching the inter-row MW shape of the fake checker.
-fr::Violation makeViolation(
-    int ruleId, fr::ViolationKind kind, fr::ViolationRelation relation, std::vector<fr::RowId> rows,
-    fr::XInterval xWindow)
+fr::Violation makeViolation(int ruleId,
+                            fr::ViolationKind kind,
+                            fr::ViolationRelation relation,
+                            std::vector<fr::RowId> rows,
+                            fr::XInterval xWindow)
 {
   fr::Violation v;
   v.ruleId = ruleId;
@@ -2206,7 +1849,9 @@ void testNormalizeViolations()
 
   // Violation with participants: footprint must union xWindow with
   // participant ranges; filler/cell participants split into the two lists.
-  fr::Violation v = makeViolation(3, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  fr::Violation v = makeViolation(3, fr::ViolationKind::MinWidth,
+                                  fr::ViolationRelation::InterRow, {0, 1},
+                                  {10, 11});
   fr::ViolationParticipant cell;
   cell.instanceId = 103;
   cell.rowId = 0;
@@ -2221,10 +1866,13 @@ void testNormalizeViolations()
   v.participants = {cell, filler};
 
   // Violation without rows: must fall back to the anchor row and say so.
-  fr::Violation noRows = makeViolation(2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {}, {4, 6});
+  fr::Violation noRows = makeViolation(2, fr::ViolationKind::MinSpacing,
+                                       fr::ViolationRelation::IntraRow, {},
+                                       {4, 6});
   request.violations = {v, noRows};
 
-  const auto normalized = fr::normalizeViolations(request, fr::DebugLog(verbose()));
+  const auto normalized =
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
   EXPECT_EQ(normalized.size(), 2u);
 
   EXPECT_TRUE(normalized[0].xRange == (fr::XInterval{10, 16}));
@@ -2241,7 +1889,9 @@ void testNormalizeViolations()
 
 void testSignatureMatching()
 {
-  const auto base = makeViolation(3, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {0, 1}, {10, 14});
+  const auto base = makeViolation(3, fr::ViolationKind::MinWidth,
+                                  fr::ViolationRelation::InterRow, {0, 1},
+                                  {10, 14});
 
   // Identical -> match; rows in different order -> still match.
   auto same = base;
@@ -2293,22 +1943,26 @@ void testRelatedness()
   const fr::Overlay overlay = {move};  // span [4,6) row 0
 
   // Participant is the changed instance -> related.
-  auto direct = makeViolation(2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {20, 22});
+  auto direct = makeViolation(2, fr::ViolationKind::MinSpacing,
+                              fr::ViolationRelation::IntraRow, {0}, {20, 22});
   fr::ViolationParticipant p;
   p.instanceId = 101;
   direct.participants = {p};
   EXPECT_TRUE(fr::isRelatedToOverlay(direct, overlay, 1));
 
   // Geometric proximity on the same row -> related.
-  auto near = makeViolation(2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {6, 7});
+  auto near = makeViolation(2, fr::ViolationKind::MinSpacing,
+                            fr::ViolationRelation::IntraRow, {0}, {6, 7});
   EXPECT_TRUE(fr::isRelatedToOverlay(near, overlay, 1));
 
   // Same row but far in x -> unrelated.
-  auto farX = makeViolation(2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {12, 14});
+  auto farX = makeViolation(2, fr::ViolationKind::MinSpacing,
+                            fr::ViolationRelation::IntraRow, {0}, {12, 14});
   EXPECT_TRUE(!fr::isRelatedToOverlay(farX, overlay, 1));
 
   // Near in x but two rows away -> unrelated (rules couple adjacent rows).
-  auto farRow = makeViolation(2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {2}, {5, 6});
+  auto farRow = makeViolation(2, fr::ViolationKind::MinSpacing,
+                              fr::ViolationRelation::IntraRow, {2}, {5, 6});
   EXPECT_TRUE(!fr::isRelatedToOverlay(farRow, overlay, 1));
 }
 
@@ -2350,7 +2004,8 @@ void testWindowL0()
   request.targetPlace.masterId = cellMaster(kVt2);  // the opto change
 
   // The seeded inter-row MW between anchor [10,14) and filler 203 [9,11).
-  auto v = makeViolation(3, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  auto v = makeViolation(3, fr::ViolationKind::MinWidth,
+                         fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
   fr::ViolationParticipant pf;
   pf.instanceId = 203;
   pf.rowId = 1;
@@ -2359,8 +2014,10 @@ void testWindowL0()
   v.participants = {pf};
   request.violations = {v};
 
-  const auto normalized = fr::normalizeViolations(request, fr::DebugLog(verbose()));
-  const auto window = fr::buildWindow(request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+  const auto normalized =
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
+  const auto window = fr::buildWindow(request.targetPlace, normalized,
+                                      design, 1, fr::DebugLog(verbose()));
 
   // Participant 203, anchor-adjacent 101/103, bridge under anchor 204/205
   // ([13,16) overlaps the widened anchor span [9,15)).
@@ -2385,7 +2042,11 @@ void testWindowL0ExactMembership()
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
   request.targetPlace.masterId = cellMaster(kVt2);
-  auto violation = makeViolation(3, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  auto violation = makeViolation(3,
+                                 fr::ViolationKind::MinWidth,
+                                 fr::ViolationRelation::InterRow,
+                                 {0, 1},
+                                 {10, 11});
   fr::ViolationParticipant participant;
   participant.instanceId = 203;
   participant.rowId = 1;
@@ -2394,13 +2055,21 @@ void testWindowL0ExactMembership()
   violation.participants = {participant};
   request.violations = {violation};
 
-  const auto normalized = fr::normalizeViolations(request, fr::DebugLog(verbose()));
-  const auto window = fr::buildWindow(request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+  const auto normalized =
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
+  const auto window = fr::buildWindow(
+                                      request.targetPlace,
+                                      normalized,
+                                      design,
+                                      1,
+                                      fr::DebugLog(verbose()));
 
   EXPECT_TRUE(window.rows == (std::vector<fr::RowId>{0, 1}));
   EXPECT_TRUE(window.x == (fr::XInterval{8, 16}));
-  EXPECT_TRUE(window.editableFillers == (std::vector<fr::InstanceId>{101, 103, 203, 204, 205}));
-  EXPECT_TRUE(window.bridgeFillers == (std::vector<fr::InstanceId>{101, 103, 203, 204, 205}));
+  EXPECT_TRUE(window.editableFillers
+        == (std::vector<fr::InstanceId>{101, 103, 203, 204, 205}));
+  EXPECT_TRUE(window.bridgeFillers
+        == (std::vector<fr::InstanceId>{101, 103, 203, 204, 205}));
   EXPECT_TRUE(!window.containsEditable(100));
   EXPECT_TRUE(!window.containsEditable(202));
 }
@@ -2410,22 +2079,37 @@ void testWindowBridgeConditionsEach()
   // Vt Type: {1,2} | Widths: {2,4} | cell type: 1=std, 0=filler
   // Three sparse sub-layouts isolate left-touch, right-touch, and adjacent-row
   // overlap with the widened anchor span.
-  const auto makeWindow = [](fr::TestPlacementView& design, fr::InstanceId anchor, fr::XInterval footprint) {
+  const auto makeWindow = [](fr::TestPlacementView& design,
+                             fr::InstanceId anchor,
+                             fr::XInterval footprint) {
     fr::FillerRepairRequest request;
     request.targetPlace = anchorPlace(design, anchor);
-    request.violations = {makeViolation(
-        1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {request.targetPlace.rowId}, footprint)};
-    const auto normalized = fr::normalizeViolations(request, fr::DebugLog(verbose()));
-    return fr::buildWindow(request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+    request.violations = {makeViolation(1,
+                                        fr::ViolationKind::MinWidth,
+                                        fr::ViolationRelation::IntraRow,
+                                        {request.targetPlace.rowId},
+                                        footprint)};
+    const auto normalized = fr::normalizeViolations(
+        request, fr::DebugLog(verbose()));
+    return fr::buildWindow(
+                           request.targetPlace,
+                           normalized,
+                           design,
+                           1,
+                           fr::DebugLog(verbose()));
   };
 
   fr::TestPlacementView left = makeLibrary();
-  left.addRow(0, 0, 8).place(10, fillerMaster(2, kVt1), 0, 2).place(11, cellMaster(kVt2), 0, 4);
+  left.addRow(0, 0, 8)
+      .place(10, fillerMaster(2, kVt1), 0, 2)
+      .place(11, cellMaster(kVt2), 0, 4);
   const auto leftWindow = makeWindow(left, 11, {4, 5});
   EXPECT_TRUE(leftWindow.containsEditable(10));
 
   fr::TestPlacementView right = makeLibrary();
-  right.addRow(0, 0, 8).place(20, cellMaster(kVt2), 0, 0).place(21, fillerMaster(2, kVt1), 0, 4);
+  right.addRow(0, 0, 8)
+      .place(20, cellMaster(kVt2), 0, 0)
+      .place(21, fillerMaster(2, kVt1), 0, 4);
   const auto rightWindow = makeWindow(right, 20, {0, 1});
   EXPECT_TRUE(rightWindow.containsEditable(21));
 
@@ -2436,8 +2120,8 @@ void testWindowBridgeConditionsEach()
       .addRow(1, 0, 10)
       .place(32, cellMaster(kVt2), 1, 4);
   const auto adjacentWindow = makeWindow(adjacent, 32, {4, 5});
-  EXPECT_TRUE(adjacentWindow.containsEditable(30));   // overlaps widened [3,9)
-  EXPECT_TRUE(!adjacentWindow.containsEditable(31));  // only touches x=3
+  EXPECT_TRUE(adjacentWindow.containsEditable(30));  // overlaps widened [3,9)
+  EXPECT_TRUE(!adjacentWindow.containsEditable(31)); // only touches x=3
 }
 
 // The guard is the checker's question, so a guard that tracked the window
@@ -2462,13 +2146,20 @@ void testGuardQuantizationContainsWindowAndIsStable()
     design.place(100 + i, fillerMaster(2, kVt1), 0, 8 + 2 * i);
   }
 
-  fr::Violation original = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {8, 12});
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {8, 12});
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 2);
   request.violations = {original};
-  const auto normalized = fr::normalizeViolations(request, fr::DebugLog(verbose()));
+  const auto normalized =
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
 
-  fr::RepairWindow window = fr::buildWindow(request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+  fr::RepairWindow window = fr::buildWindow(
+      request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
 
   std::set<std::pair<fr::DbCoord, fr::DbCoord>> guards;
   int levels = 0;
@@ -2481,7 +2172,13 @@ void testGuardQuantizationContainsWindowAndIsStable()
     ++levels;
 
     const fr::RepairWindow next
-        = fr::expandWindowAdaptive(window, request.targetPlace, {original}, design, 1, 1, fr::DebugLog(verbose()));
+        = fr::expandWindowAdaptive(window,
+                                   request.targetPlace,
+                                   {original},
+                                   design,
+                                   1,
+                                   1,
+                                   fr::DebugLog(verbose()));
     if (next.editableFillers == window.editableFillers) {
       break;  // expansion cutoff
     }
@@ -2508,10 +2205,16 @@ void testWindowAtDesignEdges()
       .place(300, fillerMaster(4, kVt1), 2, 0);
   fr::FillerRepairRequest bottomRequest;
   bottomRequest.targetPlace = anchorPlace(bottom, 100);
-  bottomRequest.violations
-      = {makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {0, 1})};
-  auto normalized = fr::normalizeViolations(bottomRequest, fr::DebugLog(verbose()));
-  const auto bottomWindow = fr::buildWindow(bottomRequest.targetPlace, normalized, bottom, 1, fr::DebugLog(verbose()));
+  bottomRequest.violations = {makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {0, 1})};
+  auto normalized = fr::normalizeViolations(
+      bottomRequest, fr::DebugLog(verbose()));
+  const auto bottomWindow = fr::buildWindow(
+                                            bottomRequest.targetPlace,
+                                            normalized,
+                                            bottom,
+                                            1,
+                                            fr::DebugLog(verbose()));
   EXPECT_EQ(bottomWindow.guardRegion.rowLo, 0);
   EXPECT_EQ(bottomWindow.guardRegion.rowHi, 2);
   EXPECT_TRUE(bottomWindow.guardRegion.x.xl >= 0);
@@ -2526,9 +2229,16 @@ void testWindowAtDesignEdges()
       .place(601, cellMaster(kVt2), 2, 4);
   fr::FillerRepairRequest topRequest;
   topRequest.targetPlace = anchorPlace(top, 601);
-  topRequest.violations = {makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {2}, {7, 8})};
-  normalized = fr::normalizeViolations(topRequest, fr::DebugLog(verbose()));
-  const auto topWindow = fr::buildWindow(topRequest.targetPlace, normalized, top, 1, fr::DebugLog(verbose()));
+  topRequest.violations = {makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {2}, {7, 8})};
+  normalized =
+      fr::normalizeViolations(topRequest, fr::DebugLog(verbose()));
+  const auto topWindow = fr::buildWindow(
+                                         topRequest.targetPlace,
+                                         normalized,
+                                         top,
+                                         1,
+                                         fr::DebugLog(verbose()));
   EXPECT_EQ(topWindow.guardRegion.rowLo, 0);
   EXPECT_EQ(topWindow.guardRegion.rowHi, 2);
   // The view has no right-core boundary; guard context can extend into empty
@@ -2542,18 +2252,22 @@ void testWindowAdaptiveAddsKOnBlockingSide()
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
 
-  auto v = makeViolation(3, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  auto v = makeViolation(3, fr::ViolationKind::MinWidth,
+                         fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
   request.violations = {v};
-  const auto normalized = fr::normalizeViolations(request, fr::DebugLog(verbose()));
+  const auto normalized =
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
 
-  const auto l0 = fr::buildWindow(request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+  const auto l0 = fr::buildWindow(request.targetPlace, normalized,
+                                  design, 1, fr::DebugLog(verbose()));
   // Blocking lies closer to L0's left edge. One adaptive step grows left by
   // K=2 fillers per relevant row, not to the fixed/row boundary.
-  const auto window = fr::expandWindowAdaptive(l0, request.targetPlace, {v}, design, 2, 1, fr::DebugLog(verbose()));
+  const auto window = fr::expandWindowAdaptive(
+      l0, request.targetPlace, {v}, design, 2, 1, fr::DebugLog(verbose()));
   EXPECT_TRUE(window.x == (fr::XInterval{0, 16}));
-  EXPECT_TRUE(window.containsEditable(100));   // row0: only one filler before boundary
-  EXPECT_TRUE(window.containsEditable(201));   // row1: second filler added
-  EXPECT_TRUE(window.containsEditable(202));   // row1: nearest filler added
+  EXPECT_TRUE(window.containsEditable(100));  // row0: only one filler before boundary
+  EXPECT_TRUE(window.containsEditable(201));  // row1: second filler added
+  EXPECT_TRUE(window.containsEditable(202));  // row1: nearest filler added
   EXPECT_TRUE(!window.containsEditable(200));  // third filler: proves no whole-run sweep
 
   // If the chosen side is blocked by a non-filler, the opposite side gets one
@@ -2571,10 +2285,20 @@ void testWindowAdaptiveAddsKOnBlockingSide()
   seed.x = {4, 8};
   seed.guardRegion = {{0, 12}, 0, 0};
   const fr::TargetPlace fallbackAnchor = anchorPlace(fallback, 301);
-  const fr::Violation leftBlocking
-      = makeViolation(4, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {3, 4});
+  const fr::Violation leftBlocking = makeViolation(
+      4,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {3, 4});
   const fr::RepairWindow fallbackWindow
-      = fr::expandWindowAdaptive(seed, fallbackAnchor, {leftBlocking}, fallback, 1, 1, fr::DebugLog(verbose()));
+      = fr::expandWindowAdaptive(seed,
+                                 fallbackAnchor,
+                                 {leftBlocking},
+                                 fallback,
+                                 1,
+                                 1,
+                                 fr::DebugLog(verbose()));
   EXPECT_TRUE(fallbackWindow.containsEditable(302));
   EXPECT_TRUE(!fallbackWindow.containsEditable(303));
 }
@@ -2603,18 +2327,30 @@ void testWindowAdaptiveCoupledRowsAndFixedBoundary()
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 201);
-  const fr::Violation original
-      = makeViolation(7, fr::ViolationKind::MinSpacing, fr::ViolationRelation::InterRow, {1}, {11, 14});
+  const fr::Violation original = makeViolation(
+      7,
+      fr::ViolationKind::MinSpacing,
+      fr::ViolationRelation::InterRow,
+      {1},
+      {11, 14});
   request.violations = {original};
-  const auto normalized = fr::normalizeViolations(request, fr::DebugLog(verbose()));
-  const fr::RepairWindow l0 = fr::buildWindow(request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+  const auto normalized =
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
+  const fr::RepairWindow l0 = fr::buildWindow(
+      request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
   const fr::RepairWindow expanded
-      = fr::expandWindowAdaptive(l0, request.targetPlace, {original}, design, 1, 1, fr::DebugLog(verbose()));
+      = fr::expandWindowAdaptive(l0,
+                                 request.targetPlace,
+                                 {original},
+                                 design,
+                                 1,
+                                 1,
+                                 fr::DebugLog(verbose()));
 
-  EXPECT_TRUE(expanded.containsEditable(203));   // anchor row, first right filler
-  EXPECT_TRUE(expanded.containsEditable(303));   // coupled row +1
-  EXPECT_TRUE(!expanded.containsEditable(304));  // K=1, no run sweep
-  EXPECT_TRUE(!expanded.containsEditable(104));  // row -1 stopped at fixed cell 103
+  EXPECT_TRUE(expanded.containsEditable(203));  // anchor row, first right filler
+  EXPECT_TRUE(expanded.containsEditable(303));  // coupled row +1
+  EXPECT_TRUE(!expanded.containsEditable(304)); // K=1, no run sweep
+  EXPECT_TRUE(!expanded.containsEditable(104)); // row -1 stopped at fixed cell 103
 }
 
 void testGuardRegionTwoCellRing()
@@ -2623,7 +2359,8 @@ void testGuardRegionTwoCellRing()
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
 
-  auto v = makeViolation(3, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  auto v = makeViolation(3, fr::ViolationKind::MinWidth,
+                         fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
   fr::ViolationParticipant pf;
   pf.instanceId = 203;
   pf.rowId = 1;
@@ -2631,9 +2368,11 @@ void testGuardRegionTwoCellRing()
   pf.isFiller = true;
   v.participants = {pf};
   request.violations = {v};
-  const auto normalized = fr::normalizeViolations(request, fr::DebugLog(verbose()));
+  const auto normalized =
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
 
-  const auto window = fr::buildWindow(request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
+  const auto window = fr::buildWindow(request.targetPlace, normalized,
+                                      design, 1, fr::DebugLog(verbose()));
   // Guard: rows clamped to the design (0..1); x widened by two instances
   // beyond the window on each side -> reaches the row edges here.
   EXPECT_EQ(window.guardRegion.rowLo, 0);
@@ -2665,7 +2404,8 @@ void testPlannerNoEditableFillerZeroCalls()
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
-  auto v = makeViolation(2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {8, 9});
+  auto v = makeViolation(2, fr::ViolationKind::MinSpacing,
+                         fr::ViolationRelation::IntraRow, {0}, {8, 9});
   request.violations = {v};
 
   const auto result = planner.repair(request);
@@ -2683,7 +2423,8 @@ class ReentrantChecker : public fr::RepairOracle
   fr::FillerRepairResult inner;
   bool fired = false;
 
-  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& r) override
+  fr::OracleResult checkPlaceWithOverlay(
+      const fr::OracleRequest& r) override
   {
     if (!fired && planner != nullptr && request != nullptr) {
       fired = true;
@@ -2698,7 +2439,8 @@ class ReentrantChecker : public fr::RepairOracle
     result.isLegal = result.violations.empty();
     return result;
   }
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     std::vector<fr::OracleResult> results;
     for (const auto& r : requests) {
@@ -2718,8 +2460,9 @@ void testPlannerReentrantRepairRefused()
       .place(100, cellMaster(kVt1), 0, 0)
       .place(140, fillerMaster(4, kVt1), 0, 4)
       .place(103, cellMaster(kVt2), 0, 8);
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {4, 8});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0},
+      {4, 8});
 
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 103);
@@ -2738,11 +2481,13 @@ void testPlannerReentrantRepairRefused()
   EXPECT_TRUE(!checker.inner.hasSolution);
   bool sawReentrant = false;
   for (const auto& diag : checker.inner.diagnostics) {
-    sawReentrant |= diag.severity == fr::Severity::Fatal && diag.code == "ReentrantRepair";
+    sawReentrant |= diag.severity == fr::Severity::Fatal
+                    && diag.code == "ReentrantRepair";
   }
   EXPECT_TRUE(sawReentrant);
   EXPECT_TRUE(result.hasSolution);  // the outer repair is unaffected
 }
+
 
 // --- Swap generator ----------------------------------------------------------
 
@@ -2753,7 +2498,8 @@ void testSwapGeneratorBasic()
   request.targetPlace = anchorPlace(design, 102);
   request.targetPlace.masterId = cellMaster(kVt2);
 
-  auto v = makeViolation(3, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
+  auto v = makeViolation(3, fr::ViolationKind::MinWidth,
+                         fr::ViolationRelation::InterRow, {0, 1}, {10, 11});
   fr::ViolationParticipant pf;
   pf.instanceId = 203;
   pf.rowId = 1;
@@ -2762,9 +2508,12 @@ void testSwapGeneratorBasic()
   v.participants = {pf};
   request.violations = {v};
 
-  const auto normalized = fr::normalizeViolations(request, fr::DebugLog(verbose()));
-  const auto window = fr::buildWindow(request.targetPlace, normalized, design, 1, fr::DebugLog(verbose()));
-  const auto generated = fr::generateSwaps(window, design, fr::DebugLog(verbose()));
+  const auto normalized =
+      fr::normalizeViolations(request, fr::DebugLog(verbose()));
+  const auto window = fr::buildWindow(request.targetPlace, normalized,
+                                      design, 1, fr::DebugLog(verbose()));
+  const auto generated = fr::generateSwaps(window, design,
+                                               fr::DebugLog(verbose()));
 
   // Full library: every editable filler has exactly 2 same-size candidates.
   EXPECT_EQ(generated.swaps.size(), window.editableFillers.size() * 2);
@@ -2795,7 +2544,8 @@ void testSwapGeneratorNoUsableMaster()
   window.x = {0, 5};
   window.editableFillers = {100};
 
-  const auto generated = fr::generateSwaps(window, design, fr::DebugLog(verbose()));
+  const auto generated = fr::generateSwaps(window, design,
+                                               fr::DebugLog(verbose()));
   EXPECT_TRUE(generated.swaps.empty());
   bool sawNoUsable = false;
   for (const auto& diag : generated.diagnostics) {
@@ -2807,7 +2557,8 @@ void testSwapGeneratorNoUsableMaster()
 class MixedValidityPlacementView : public fr::TestPlacementView
 {
  public:
-  fr::MasterCandidateResult getUsableMasterCandidates(fr::InstanceId) const override
+  fr::MasterCandidateResult getUsableMasterCandidates(
+      fr::InstanceId) const override
   {
     fr::MasterCandidateResult result;
     result.candidates = {fillerMaster(4, kVt2), fillerMaster(2, kVt2)};
@@ -2830,17 +2581,20 @@ void testSwapgenRejectedCandidateDiag()
   window.x = {0, 2};
   window.editableFillers = {100};
 
-  const auto generated = fr::generateSwaps(window, design, fr::DebugLog(verbose()));
+  const auto generated = fr::generateSwaps(
+      window, design, fr::DebugLog(verbose()));
   EXPECT_EQ(generated.swaps.size(), 1u);
   EXPECT_EQ(generated.swaps.front().newMasterId, fillerMaster(2, kVt2));
   bool sawRejected = false;
   for (const auto& diagnostic : generated.diagnostics) {
-    sawRejected
-        |= diagnostic.severity == fr::Severity::Warning && diagnostic.code == "RejectedCandidate"
-           && diagnostic.message.find("size mismatch") != std::string::npos;
+    sawRejected |= diagnostic.severity == fr::Severity::Warning
+                   && diagnostic.code == "RejectedCandidate"
+                   && diagnostic.message.find("size mismatch")
+                          != std::string::npos;
   }
   EXPECT_TRUE(sawRejected);
 }
+
 
 // --- Ranker, enumeration, oracle gate, end-to-end ----------------------------
 
@@ -2865,18 +2619,23 @@ ScenarioA makeScenarioA()
   fr::TestRepairOracle snapshotChecker(sc.design, sc.rules);
   auto initial = baselineRequest(sc.design, 102, 0);
   initial.targetPlace.masterId = cellMaster(kVt2);
-  sc.request.violations = snapshotChecker.checkPlaceWithOverlay(initial).violations;
+  sc.request.violations =
+      snapshotChecker.checkPlaceWithOverlay(initial).violations;
   return sc;
 }
 
 void testRankerOrder()
 {
   ScenarioA sc = makeScenarioA();
-  const auto normalized = fr::normalizeViolations(sc.request, fr::DebugLog(verbose()));
-  const auto window = fr::buildWindow(sc.request.targetPlace, normalized, sc.design, 2, fr::DebugLog(verbose()));
-  const auto generated = fr::generateSwaps(window, sc.design, fr::DebugLog(verbose()));
-  const auto ranked = fr::rankFillers(
-      generated.swaps, sc.request.targetPlace, normalized, window, sc.design, fr::DebugLog(verbose()));
+  const auto normalized =
+      fr::normalizeViolations(sc.request, fr::DebugLog(verbose()));
+  const auto window = fr::buildWindow(sc.request.targetPlace, normalized,
+                                      sc.design, 2, fr::DebugLog(verbose()));
+  const auto generated = fr::generateSwaps(window, sc.design,
+                                           fr::DebugLog(verbose()));
+  const auto ranked =
+      fr::rankFillers(generated.swaps, sc.request.targetPlace, normalized,
+                      window, sc.design, fr::DebugLog(verbose()));
 
   // the ranker returns filler DOMAINS. 203 is the only direct
   // participant -> its domain ranks first; within the domain the
@@ -2923,7 +2682,12 @@ void testRankerFillerKeyIsolated()
   window.bridgeFillers = {701};
   fr::TargetPlace anchor;
   anchor.masterId = cellMaster(kVt2);
-  const auto ranked = fr::rankFillers(swaps, anchor, {direct}, window, design, fr::DebugLog(verbose()));
+  const auto ranked = fr::rankFillers(swaps,
+                                      anchor,
+                                      {direct},
+                                      window,
+                                      design,
+                                      fr::DebugLog(verbose()));
   std::vector<fr::InstanceId> order;
   for (const auto& domain : ranked) {
     order.push_back(domain.instanceId);
@@ -2949,7 +2713,12 @@ void testRankerDomainOrderIsolated()
   };
   fr::TargetPlace anchor;
   anchor.masterId = cellMaster(kVt2);
-  const auto ranked = fr::rankFillers(swaps, anchor, {}, {}, design, fr::DebugLog(verbose()));
+  const auto ranked = fr::rankFillers(swaps,
+                                      anchor,
+                                      {},
+                                      {},
+                                      design,
+                                      fr::DebugLog(verbose()));
   EXPECT_EQ(ranked.size(), 1u);
   if (ranked.size() != 1) {
     return;
@@ -2974,12 +2743,11 @@ void testRankerMajorityPerBand()
   fr::TestPlacementView design = makeLibrary();
   design.addMaster(fillerMaster(2, 4), 2, 1, /*isFiller=*/true, 4);
   design.addRow(0, 0, 12).addRow(1, 0, 12).addRow(2, 0, 12);
-  design
-      .place(900, cellMaster(kVt2), 1, 0)    // same row, abuts at x=4
-      .place(901, fillerMaster(2, 4), 1, 4)  // the ranked filler, span [4,6)
-      .place(902, cellMaster(kVt2), 1, 6)    // same row, abuts at x=6
-      .place(903, cellMaster(kVt1), 0, 4)    // row below, overlaps the span
-      .place(904, cellMaster(kVt1), 2, 4);   // row above, overlaps the span
+  design.place(900, cellMaster(kVt2), 1, 0)   // same row, abuts at x=4
+      .place(901, fillerMaster(2, 4), 1, 4)   // the ranked filler, span [4,6)
+      .place(902, cellMaster(kVt2), 1, 6)     // same row, abuts at x=6
+      .place(903, cellMaster(kVt1), 0, 4)     // row below, overlaps the span
+      .place(904, cellMaster(kVt1), 2, 4);    // row above, overlaps the span
 
   const std::vector<fr::Swap> swaps = {
       *fr::makeSwap(design, 901, fillerMaster(2, kVt1)),
@@ -2988,7 +2756,12 @@ void testRankerMajorityPerBand()
   };
   fr::TargetPlace anchor;
   anchor.masterId = cellMaster(kVt3);
-  const auto ranked = fr::rankFillers(swaps, anchor, {}, {}, design, fr::DebugLog(verbose()));
+  const auto ranked = fr::rankFillers(swaps,
+                                      anchor,
+                                      {},
+                                      {},
+                                      design,
+                                      fr::DebugLog(verbose()));
   EXPECT_EQ(ranked.size(), 1u);
   if (ranked.size() != 1 || ranked[0].options.size() != 3) {
     return;
@@ -3018,7 +2791,12 @@ void testRankerMajoritySkipsMissingMaster()
   };
   fr::TargetPlace anchor;
   anchor.masterId = cellMaster(kVt2);
-  const auto ranked = fr::rankFillers(swaps, anchor, {}, {}, design, fr::DebugLog(verbose()));
+  const auto ranked = fr::rankFillers(swaps,
+                                      anchor,
+                                      {},
+                                      {},
+                                      design,
+                                      fr::DebugLog(verbose()));
   EXPECT_EQ(ranked.size(), 1u);
   if (ranked.size() != 1 || ranked[0].options.size() != 2) {
     return;
@@ -3115,8 +2893,10 @@ void testSyntheticBottomPolarityDerived()
   fr::TestPlacementView design;
   design.setSiteWidth(1);
   provider.registerInto(design);
-  EXPECT_TRUE(design.masterInfo(500) != nullptr && design.masterInfo(500)->bottomBandPolarity == fr::BandPolarity::N);
-  EXPECT_TRUE(design.masterInfo(501) != nullptr && design.masterInfo(501)->bottomBandPolarity == fr::BandPolarity::P);
+  EXPECT_TRUE(design.masterInfo(500) != nullptr
+        && design.masterInfo(500)->bottomBandPolarity == fr::BandPolarity::N);
+  EXPECT_TRUE(design.masterInfo(501) != nullptr
+        && design.masterInfo(501)->bottomBandPolarity == fr::BandPolarity::P);
 }
 
 void testEnumerationOrderAndCompleteness()
@@ -3125,16 +2905,17 @@ void testEnumerationOrderAndCompleteness()
   // enumeration input is ranked filler domains.
   fr::FillerDomain d100;
   d100.instanceId = 100;
-  d100.options
-      = {*fr::makeSwap(f.design, 100, fillerMaster(4, kVt2)), *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3))};
+  d100.options = {*fr::makeSwap(f.design, 100, fillerMaster(4, kVt2)),
+                  *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3))};
   fr::FillerDomain d101;
   d101.instanceId = 101;
-  d101.options
-      = {*fr::makeSwap(f.design, 101, fillerMaster(2, kVt2)), *fr::makeSwap(f.design, 101, fillerMaster(2, kVt3))};
+  d101.options = {*fr::makeSwap(f.design, 101, fillerMaster(2, kVt2)),
+                  *fr::makeSwap(f.design, 101, fillerMaster(2, kVt3))};
   const std::vector<fr::FillerDomain> ranked = {d100, d101};
 
   fr::RepairConfig config;
-  const auto plan = fr::enumerateOverlays(ranked, config, 512, fr::DebugLog(verbose()));
+  const auto plan =
+      fr::enumerateOverlays(ranked, config, 512, fr::DebugLog(verbose()));
   // Space = (1+2)(1+2)-1 = 8: 4 singles + 4 cross-filler pairs.
   EXPECT_TRUE(plan.complete);
   EXPECT_EQ(plan.overlays.size(), 8u);
@@ -3153,7 +2934,8 @@ void testEnumerationOrderAndCompleteness()
   EXPECT_EQ(plan.overlays[5][1].newMasterId, fillerMaster(2, kVt3));
 
   // Tiny budget truncates and clears the completeness claim.
-  const auto truncated = fr::enumerateOverlays(ranked, config, 3, fr::DebugLog(verbose()));
+  const auto truncated =
+      fr::enumerateOverlays(ranked, config, 3, fr::DebugLog(verbose()));
   EXPECT_TRUE(!truncated.complete);
   EXPECT_EQ(truncated.overlays.size(), 3u);
 }
@@ -3168,23 +2950,24 @@ void testEnumerationFillerDomainNotCrowdedOut()
   RowFixture f = makeCoveredRow();
   fr::FillerDomain d100;
   d100.instanceId = 100;
-  d100.options
-      = {*fr::makeSwap(f.design, 100, fillerMaster(4, kVt2)), *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3))};
+  d100.options = {*fr::makeSwap(f.design, 100, fillerMaster(4, kVt2)),
+                  *fr::makeSwap(f.design, 100, fillerMaster(4, kVt3))};
   fr::FillerDomain d101;
   d101.instanceId = 101;
-  d101.options
-      = {*fr::makeSwap(f.design, 101, fillerMaster(2, kVt2)), *fr::makeSwap(f.design, 101, fillerMaster(2, kVt3))};
+  d101.options = {*fr::makeSwap(f.design, 101, fillerMaster(2, kVt2)),
+                  *fr::makeSwap(f.design, 101, fillerMaster(2, kVt3))};
   fr::FillerDomain d104;
   d104.instanceId = 104;
-  d104.options
-      = {*fr::makeSwap(f.design, 104, fillerMaster(4, kVt2)), *fr::makeSwap(f.design, 104, fillerMaster(4, kVt3))};
+  d104.options = {*fr::makeSwap(f.design, 104, fillerMaster(4, kVt2)),
+                  *fr::makeSwap(f.design, 104, fillerMaster(4, kVt3))};
   const std::vector<fr::FillerDomain> ranked = {d100, d101, d104};
 
   fr::RepairConfig config;
   config.memberCapSize2 = 2;
   config.memberCapSize3 = 2;  // size 3 needs 3 fillers -> none emitted
   // Space = 3*3*3-1 = 26 > budget 20 -> truncated mode, caps active.
-  const auto plan = fr::enumerateOverlays(ranked, config, 20, fr::DebugLog(verbose()));
+  const auto plan =
+      fr::enumerateOverlays(ranked, config, 20, fr::DebugLog(verbose()));
   EXPECT_TRUE(!plan.complete);
 
   // Size 1 is never capped: all three fillers' full domains appear --
@@ -3194,7 +2977,8 @@ void testEnumerationFillerDomainNotCrowdedOut()
   for (const auto& overlay : plan.overlays) {
     if (overlay.size() == 1) {
       ++singles;
-      saw104Second |= overlay[0].instanceId == 104 && overlay[0].newMasterId == fillerMaster(4, kVt3);
+      saw104Second |= overlay[0].instanceId == 104
+                      && overlay[0].newMasterId == fillerMaster(4, kVt3);
     }
   }
   EXPECT_EQ(singles, 6);
@@ -3254,10 +3038,10 @@ void testPlannerSolvesPairNonMonotone()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 16)
-      .place(102, cellMaster(kVt2), 0, 0)  // anchor (already at new VT)
+      .place(102, cellMaster(kVt2), 0, 0)    // anchor (already at new VT)
       .place(110, fillerMaster(2, kVt1), 0, 4)
       .place(111, fillerMaster(2, kVt1), 0, 6)
-      .place(112, cellMaster(kVt2), 0, 8)  // fixed std cell, not editable
+      .place(112, cellMaster(kVt2), 0, 8)    // fixed std cell, not editable
       .place(113, fillerMaster(4, kVt1), 0, 12);
   fr::PlannerTestRules rules;
   rules.msIntra = 5;
@@ -3265,7 +3049,9 @@ void testPlannerSolvesPairNonMonotone()
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
   fr::TestRepairOracle snapshotChecker(design, rules);
-  request.violations = snapshotChecker.checkPlaceWithOverlay(baselineRequest(design, 102, 0)).violations;
+  request.violations =
+      snapshotChecker.checkPlaceWithOverlay(baselineRequest(design, 102, 0))
+          .violations;
   EXPECT_EQ(request.violations.size(), 2u);  // VT2 MS + VT1 MS
 
   fr::TestRepairOracle checker(design, rules);
@@ -3294,17 +3080,24 @@ class RequiredChangesChecker : public fr::RepairOracle
   std::vector<fr::Violation> originals;
   dpl2::ipl::FillerChanges required;
 
-  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(
+      const fr::OracleRequest& request) override
   {
     ++request_count_;
     fr::OracleResult result;
     result.requestId = request.requestId;
     result.status = fr::OracleStatus::Checked;
-    const bool solved = std::all_of(required.begin(), required.end(), [&](const dpl2::CellChangeRecord& need) {
-      return std::any_of(
-          request.fillerChanges.begin(), request.fillerChanges.end(),
-          [&](const dpl2::CellChangeRecord& change) { return fr::sameCellChangeRecord(change, need); });
-    });
+    const bool solved = std::all_of(
+        required.begin(),
+        required.end(),
+        [&](const dpl2::CellChangeRecord& need) {
+          return std::any_of(
+              request.fillerChanges.begin(),
+              request.fillerChanges.end(),
+              [&](const dpl2::CellChangeRecord& change) {
+                return fr::sameCellChangeRecord(change, need);
+              });
+        });
     if (!solved) {
       result.violations = originals;
     }
@@ -3312,7 +3105,8 @@ class RequiredChangesChecker : public fr::RepairOracle
     return result;
   }
 
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     ++batch_count_;
     std::vector<fr::OracleResult> results;
@@ -3355,7 +3149,10 @@ ComplexSearchFixture makeComplexSearchFixture()
         .place(base + 0, fillerMaster(4, kVt1), row, 0)
         .place(base + 1, fillerMaster(2, kVt1), row, 4)
         .place(base + 2, fillerMaster(2, kVt1), row, 6)
-        .place(base + 3, cellMaster(row == 1 ? kVt2 : kVt1), row, 8)
+        .place(base + 3,
+               cellMaster(row == 1 ? kVt2 : kVt1),
+               row,
+               8)
         .place(base + 4, fillerMaster(2, kVt1), row, 12)
         .place(base + 5, fillerMaster(2, kVt1), row, 14)
         .place(base + 6, fillerMaster(4, kVt1), row, 16)
@@ -3373,12 +3170,22 @@ ComplexSearchFixture makeComplexSearchFixture()
     return value;
   };
 
-  fr::Violation left = makeViolation(31, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {0, 1}, {4, 8});
+  fr::Violation left = makeViolation(
+      31,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::InterRow,
+      {0, 1},
+      {4, 8});
   left.requiredValue = 2;
-  left.participants = {participant(101), participant(201), participant(102), participant(202)};
+  left.participants = {
+      participant(101), participant(201), participant(102), participant(202)};
 
-  fr::Violation right
-      = makeViolation(32, fr::ViolationKind::MinSpacing, fr::ViolationRelation::InterRow, {1, 2}, {12, 16});
+  fr::Violation right = makeViolation(
+      32,
+      fr::ViolationKind::MinSpacing,
+      fr::ViolationRelation::InterRow,
+      {1, 2},
+      {12, 16});
   right.requiredValue = 2;
   right.participants = {participant(104), participant(204)};
 
@@ -3399,7 +3206,8 @@ void testPlannerComplexRankedPairFast()
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
-  fr::internal::RepairPlanner planner(fixture.design, checker, config);
+  fr::internal::RepairPlanner planner(
+      fixture.design, checker, config);
 
   const fr::FillerRepairResult result = planner.repair(fixture.request);
   EXPECT_TRUE(result.hasSolution);
@@ -3418,20 +3226,22 @@ void testPlannerComplexRankedPairFast()
 
   // Reordering the incoming snapshot must not change success, solution, or
   // the deterministic checker-call transcript.
-  std::reverse(fixture.request.violations.begin(), fixture.request.violations.end());
+  std::reverse(fixture.request.violations.begin(),
+               fixture.request.violations.end());
   RequiredChangesChecker checkerAgain;
   checkerAgain.originals = fixture.request.violations;
   checkerAgain.required = checker.required;
-  fr::internal::RepairPlanner plannerAgain(fixture.design, checkerAgain, config);
+  fr::internal::RepairPlanner plannerAgain(
+      fixture.design, checkerAgain, config);
   const fr::FillerRepairResult again = plannerAgain.repair(fixture.request);
   EXPECT_TRUE(again.hasSolution);
   EXPECT_EQ(again.changes.size(), result.changes.size());
   if (again.changes.size() == result.changes.size()) {
     for (size_t index = 0; index < result.changes.size(); ++index) {
-      EXPECT_EQ(
-          fr::cellChangeRecordInstanceId(again.changes[index]), fr::cellChangeRecordInstanceId(result.changes[index]));
+      EXPECT_EQ(fr::cellChangeRecordInstanceId(again.changes[index]),
+               fr::cellChangeRecordInstanceId(result.changes[index]));
       EXPECT_EQ(fr::cellChangeRecordNewMasterId(again.changes[index]),
-                fr::cellChangeRecordNewMasterId(result.changes[index]));
+               fr::cellChangeRecordNewMasterId(result.changes[index]));
     }
   }
   EXPECT_EQ(checkerAgain.requestCount(), checker.requestCount());
@@ -3452,7 +3262,8 @@ void testPlannerComplexThirdVtStillSucceeds()
   config.batchSize = 4;
   config.checkerCallBudgetPerWindow = 128;
   config.verbose = verbose();
-  fr::internal::RepairPlanner planner(fixture.design, checker, config);
+  fr::internal::RepairPlanner planner(
+      fixture.design, checker, config);
 
   const fr::FillerRepairResult result = planner.repair(fixture.request);
   EXPECT_TRUE(result.hasSolution);
@@ -3479,11 +3290,11 @@ void testPlannerIgnoresUnrelatedHaloViolation()
       .place(131, fillerMaster(2, kVt1), 0, 3)
       .place(132, fillerMaster(3, kVt1), 0, 5)
       .place(101, fillerMaster(2, kVt1), 0, 8)
-      .place(102, cellMaster(kVt1), 0, 10)  // anchor, changes to VT2
+      .place(102, cellMaster(kVt1), 0, 10)   // anchor, changes to VT2
       .place(103, fillerMaster(2, kVt1), 0, 14)
       .addRow(1, 0, 16)
       .place(200, fillerMaster(2, kVt1), 1, 0)
-      .place(206, fillerMaster(2, kVt3), 1, 2)  // overlaps 130 by 1 -> MW
+      .place(206, fillerMaster(2, kVt3), 1, 2)   // overlaps 130 by 1 -> MW
       .place(201, fillerMaster(2, kVt1), 1, 4)
       .place(202, fillerMaster(3, kVt1), 1, 6)
       .place(203, fillerMaster(2, kVt2), 1, 9)
@@ -3505,7 +3316,8 @@ void testPlannerIgnoresUnrelatedHaloViolation()
   auto snapReq = baselineRequest(design, 102, 0);
   snapReq.targetPlace.masterId = cellMaster(kVt2);  // the opto change
   snapReq.guardRegion = fr::Region{fr::XInterval{8, 16}, 0, 1};
-  request.violations = snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
+  request.violations =
+      snapshotChecker.checkPlaceWithOverlay(snapReq).violations;
   EXPECT_EQ(request.violations.size(), 1u);  // only the anchor-caused MW
 
   fr::TestRepairOracle checker(design, rules);
@@ -3537,7 +3349,9 @@ void testPlannerNoSolutionDefinitive()
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 102);
   fr::TestRepairOracle snapshotChecker(design, rules);
-  request.violations = snapshotChecker.checkPlaceWithOverlay(baselineRequest(design, 102, 0)).violations;
+  request.violations =
+      snapshotChecker.checkPlaceWithOverlay(baselineRequest(design, 102, 0))
+          .violations;
   EXPECT_TRUE(!request.violations.empty());
 
   fr::TestRepairOracle checker(design, rules);
@@ -3554,7 +3368,8 @@ void testPlannerNoSolutionDefinitive()
   bool sawBest = false;
   for (const auto& diag : result.diagnostics) {
     sawNoClean |= diag.code == "NoCleanOverlay";
-    sawDefinitive |= diag.code == "NoCleanOverlay" && diag.message.find("definitively") != std::string::npos;
+    sawDefinitive |= diag.code == "NoCleanOverlay"
+                     && diag.message.find("definitively") != std::string::npos;
     sawCutoff |= diag.code == "ExpansionCutoff";
     sawBest |= diag.code == "BestOverlay";
   }
@@ -3572,10 +3387,13 @@ void testGateCacheSingleEvaluation()
   fr::TestRepairOracle checker(sc.design, sc.rules);
   fr::RepairConfig config;
   fr::DebugLog log(verbose());
-  fr::OracleGate gate(sc.design, checker, sc.request.targetPlace, sc.request.violations, 1, 2, config, log);
+  fr::OracleGate gate(sc.design, checker, sc.request.targetPlace, sc.request.violations,
+                      1, 2, config, log);
 
-  const auto normalized = fr::normalizeViolations(sc.request, log);
-  const auto window = fr::buildWindow(sc.request.targetPlace, normalized, sc.design, 2, log);
+  const auto normalized =
+      fr::normalizeViolations(sc.request, log);
+  const auto window = fr::buildWindow(sc.request.targetPlace, normalized,
+                                      sc.design, 2, log);
   auto swap = *fr::makeSwap(sc.design, 204, fillerMaster(2, kVt2));
   const fr::Overlay o1 = {swap};
 
@@ -3584,7 +3402,7 @@ void testGateCacheSingleEvaluation()
   EXPECT_TRUE(gate.runBaseline(window, budget));  // cache hit
   (void) gate.search({o1}, window, window.guardRegion, budget);
   (void) gate.search({o1}, window, window.guardRegion, budget);  // cache hit
-  EXPECT_EQ(checker.requestCount(), 2);                          // baseline + o1, each exactly once
+  EXPECT_EQ(checker.requestCount(), 2);  // baseline + o1, each exactly once
   EXPECT_TRUE(gate.cacheHits() >= 2);
 }
 
@@ -3598,7 +3416,8 @@ class MisbehavingChecker : public fr::RepairOracle
   {
     return inner_.checkPlaceWithOverlay(request);  // baseline stays honest
   }
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     auto results = inner_.checkPlaceWithOverlays(requests);
     for (auto& result : results) {
@@ -3606,7 +3425,6 @@ class MisbehavingChecker : public fr::RepairOracle
     }
     return results;
   }
-
  private:
   fr::TestRepairOracle& inner_;
 };
@@ -3640,13 +3458,13 @@ class ReversingChecker : public fr::RepairOracle
   {
     return inner_.checkPlaceWithOverlay(request);
   }
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     auto results = inner_.checkPlaceWithOverlays(requests);
     std::reverse(results.begin(), results.end());
     return results;
   }
-
  private:
   fr::TestRepairOracle& inner_;
 };
@@ -3667,7 +3485,8 @@ void testPlannerOrderIndependentBatches()
   EXPECT_EQ(fr::cellChangeRecordNewMasterId(result.changes[0]), fillerMaster(2, kVt1));
 }
 
-bool sameChanges(const dpl2::ipl::FillerChanges& a, const dpl2::ipl::FillerChanges& b)
+bool sameChanges(const dpl2::ipl::FillerChanges& a,
+                 const dpl2::ipl::FillerChanges& b)
 {
   if (a.size() != b.size()) {
     return false;
@@ -3680,13 +3499,15 @@ bool sameChanges(const dpl2::ipl::FillerChanges& a, const dpl2::ipl::FillerChang
   return true;
 }
 
-bool sameDiagnostics(const std::vector<fr::Diagnostic>& a, const std::vector<fr::Diagnostic>& b)
+bool sameDiagnostics(const std::vector<fr::Diagnostic>& a,
+                     const std::vector<fr::Diagnostic>& b)
 {
   if (a.size() != b.size()) {
     return false;
   }
   for (size_t i = 0; i < a.size(); ++i) {
-    if (a[i].severity != b[i].severity || a[i].code != b[i].code || a[i].message != b[i].message) {
+    if (a[i].severity != b[i].severity || a[i].code != b[i].code
+        || a[i].message != b[i].message) {
       return false;
     }
   }
@@ -3698,13 +3519,15 @@ class RecordingChecker : public fr::RepairOracle
  public:
   explicit RecordingChecker(fr::RepairOracle& inner) : inner_(inner) {}
 
-  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(
+      const fr::OracleRequest& request) override
   {
     requests.push_back(request);
     return inner_.checkPlaceWithOverlay(request);
   }
 
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& batch) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& batch) override
   {
     requests.insert(requests.end(), batch.begin(), batch.end());
     return inner_.checkPlaceWithOverlays(batch);
@@ -3763,12 +3586,18 @@ void testPlannerDeterminismFullTranscript()
 void testPlannerNeverEditsGuardOnly()
 {
   ScenarioA sc = makeScenarioA();
-  const auto normalized = fr::normalizeViolations(sc.request, fr::DebugLog(verbose()));
-  const auto l0 = fr::buildWindow(sc.request.targetPlace, normalized, sc.design, 2, fr::DebugLog(verbose()));
+  const auto normalized = fr::normalizeViolations(
+      sc.request, fr::DebugLog(verbose()));
+  const auto l0 = fr::buildWindow(
+                                  sc.request.targetPlace,
+                                  normalized,
+                                  sc.design,
+                                  2,
+                                  fr::DebugLog(verbose()));
   EXPECT_TRUE(!l0.containsEditable(100));
   EXPECT_TRUE(!l0.containsEditable(200));
-  EXPECT_TRUE(
-      sc.design.instance(100)->rowId >= l0.guardRegion.rowLo && sc.design.instance(100)->rowId <= l0.guardRegion.rowHi);
+  EXPECT_TRUE(sc.design.instance(100)->rowId >= l0.guardRegion.rowLo
+              && sc.design.instance(100)->rowId <= l0.guardRegion.rowHi);
   EXPECT_TRUE(l0.guardRegion.x.overlaps(fr::instanceSpan(sc.design, *sc.design.instance(100))));
   EXPECT_TRUE(l0.guardRegion.x.overlaps(fr::instanceSpan(sc.design, *sc.design.instance(200))));
 
@@ -3791,6 +3620,7 @@ void testPlannerNeverEditsGuardOnly()
   }
 }
 
+
 // Scripted checker: fixed violation sets per overlay key, honest protocol.
 // Lets us hit each delta-classification branch exactly.
 class ScriptedChecker : public fr::RepairOracle
@@ -3801,11 +3631,15 @@ class ScriptedChecker : public fr::RepairOracle
   static std::string keyOf(const dpl2::ipl::FillerChanges& changes)
   {
     dpl2::ipl::FillerChanges sorted = changes;
-    std::sort(sorted.begin(), sorted.end(), [](const dpl2::CellChangeRecord& a, const dpl2::CellChangeRecord& b) {
-      const fr::InstanceId aId = fr::cellChangeRecordInstanceId(a);
-      const fr::InstanceId bId = fr::cellChangeRecordInstanceId(b);
-      return aId != bId ? aId < bId : fr::cellChangeRecordNewMasterId(a) < fr::cellChangeRecordNewMasterId(b);
-    });
+    std::sort(sorted.begin(), sorted.end(),
+              [](const dpl2::CellChangeRecord& a, const dpl2::CellChangeRecord& b) {
+                const fr::InstanceId aId = fr::cellChangeRecordInstanceId(a);
+                const fr::InstanceId bId = fr::cellChangeRecordInstanceId(b);
+                return aId != bId
+                           ? aId < bId
+                           : fr::cellChangeRecordNewMasterId(a)
+                                 < fr::cellChangeRecordNewMasterId(b);
+              });
     std::string key;
     for (const auto& c : sorted) {
       key += std::to_string(fr::cellChangeRecordInstanceId(c)) + ">"
@@ -3823,7 +3657,8 @@ class ScriptedChecker : public fr::RepairOracle
     result.isLegal = result.violations.empty();
     return result;
   }
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     std::vector<fr::OracleResult> results;
     for (const auto& request : requests) {
@@ -3863,7 +3698,8 @@ class ResultScriptedChecker : public fr::RepairOracle
     return result;
   }
 
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     std::vector<fr::OracleResult> results;
     for (const auto& request : requests) {
@@ -3878,7 +3714,8 @@ class ResultScriptedChecker : public fr::RepairOracle
   }
 };
 
-bool hasDiagCode(const std::vector<fr::Diagnostic>& diagnostics, const std::string& code)
+bool hasDiagCode(const std::vector<fr::Diagnostic>& diagnostics,
+                 const std::string& code)
 {
   for (const auto& diag : diagnostics) {
     if (diag.code == code) {
@@ -3894,16 +3731,22 @@ bool hasDiagCode(const std::vector<fr::Diagnostic>& diagnostics, const std::stri
 void testGateDeltaClassificationBranches()
 {
   fr::TestPlacementView design = makeLibrary();
-  design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4).place(501, fillerMaster(2, kVt1), 0, 14);
+  design.addRow(0, 0, 20)
+      .place(500, fillerMaster(2, kVt1), 0, 4)
+      .place(501, fillerMaster(2, kVt1), 0, 14);
 
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
-  const auto newInWindow
-      = makeViolation(9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {5, 6});
+  const fr::Violation original =
+      makeViolation(1, fr::ViolationKind::MinWidth,
+                    fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const auto newInWindow =
+      makeViolation(9, fr::ViolationKind::MinSpacing,
+                    fr::ViolationRelation::IntraRow, {0}, {5, 6});
   const auto relatedInHalo =  // touches 501's span [14,16)
-      makeViolation(9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {15, 16});
+      makeViolation(9, fr::ViolationKind::MinSpacing,
+                    fr::ViolationRelation::IntraRow, {0}, {15, 16});
   const auto unrelatedInHalo =  // 12 sites away from 500's span [4,6)
-      makeViolation(9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {18, 19});
+      makeViolation(9, fr::ViolationKind::MinSpacing,
+                    fr::ViolationRelation::IntraRow, {0}, {18, 19});
 
   const fr::Overlay o1 = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
   const fr::Overlay o2 = {*fr::makeSwap(design, 501, fillerMaster(2, kVt2))};
@@ -3924,9 +3767,8 @@ void testGateDeltaClassificationBranches()
   const std::vector<fr::Violation> originals = {original};
   fr::RepairConfig config;
   fr::DebugLog log(verbose());
-  fr::OracleGate gate(
-      design, checker, anchor, originals, /*siteWidth=*/1,
-      /*ruleDistance=*/2, config, log);
+  fr::OracleGate gate(design, checker, anchor, originals, /*siteWidth=*/1,
+                      /*ruleDistance=*/2, config, log);
 
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));
@@ -3965,7 +3807,8 @@ class IllegalEmptyChecker : public fr::RepairOracle
     }
     return res;
   }
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& rs) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& rs) override
   {
     std::vector<fr::OracleResult> out;
     for (const auto& r : rs) {
@@ -3981,8 +3824,8 @@ void testGateRejectsUnexplainedIllegal()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
 
   IllegalEmptyChecker checker;
   checker.original = original;
@@ -4001,7 +3844,7 @@ void testGateRejectsUnexplainedIllegal()
   EXPECT_TRUE(gate.runBaseline(window, budget));
   const fr::Overlay o = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
   const auto sr = gate.search({o}, window, window.guardRegion, budget);
-  EXPECT_TRUE(!sr.foundClean);  // NOT accepted
+  EXPECT_TRUE(!sr.foundClean);               // NOT accepted
   EXPECT_TRUE(sr.hasBest);
   EXPECT_TRUE(sr.bestSummary.inconsistent);  // rejected for self-inconsistency
 }
@@ -4013,8 +3856,8 @@ void testGateBaselineMismatchAbortsSearch()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
 
   ScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] = {};  // baseline missing the original
@@ -4044,14 +3887,17 @@ void testGateBaselineMismatchAbortsSearch()
 void testGateMultisetNewViolationNotAbsorbed()
 {
   fr::TestPlacementView design = makeLibrary();
-  design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4).place(501, fillerMaster(2, kVt1), 0, 14);
-  const fr::Violation O = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  design.addRow(0, 0, 20)
+      .place(500, fillerMaster(2, kVt1), 0, 4)
+      .place(501, fillerMaster(2, kVt1), 0, 14);
+  const fr::Violation O = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   const fr::Violation H = makeViolation(  // halo finding, touches 501's span
       9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {15, 16});
 
   const fr::Overlay o = {*fr::makeSwap(design, 501, fillerMaster(2, kVt2))};
   ScriptedChecker checker;
-  checker.byKey[ScriptedChecker::keyOf({})] = {O, H};                              // baseline: original + one H
+  checker.byKey[ScriptedChecker::keyOf({})] = {O, H};  // baseline: original + one H
   checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(o, design))] = {H, H};  // O gone, two H
 
   fr::RepairWindow window;
@@ -4067,7 +3913,7 @@ void testGateMultisetNewViolationNotAbsorbed()
   int budget = 100;
   EXPECT_TRUE(gate.runBaseline(window, budget));  // H is out-of-window -> baseline consistent
   const auto sr = gate.search({o}, window, window.guardRegion, budget);
-  EXPECT_TRUE(!sr.foundClean);  // the second H is not absorbed
+  EXPECT_TRUE(!sr.foundClean);                     // the second H is not absorbed
   EXPECT_EQ(sr.bestSummary.relatedInHalo, 1);
 }
 
@@ -4078,7 +3924,8 @@ void testGatePerViolationRuleDistance()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
-  const fr::Violation O = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation O = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   fr::Violation N = makeViolation(  // new, 5 sites from the swap span [4,6)
       9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {11, 12});
   N.requiredValue = 6;  // larger-distance rule than the originals
@@ -4124,7 +3971,8 @@ class AlwaysUnsolvedChecker : public fr::RepairOracle
     res.isLegal = false;
     return res;
   }
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& rs) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& rs) override
   {
     std::vector<fr::OracleResult> out;
     for (const auto& r : rs) {
@@ -4139,8 +3987,11 @@ void testPlannerBudgetCeiling()
   // Vt Type: {1,2} | Widths: {2,4} | cell type: 1=std, 0=filler
   // One editable filler has exactly two options: baseline + 2 == budget 3.
   fr::TestPlacementView design = makeLibrary();
-  design.addRow(0, 0, 6).place(100, cellMaster(kVt2), 0, 0).place(140, fillerMaster(2, kVt1), 0, 4);
-  fr::Violation original = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {4, 6});
+  design.addRow(0, 0, 6)
+      .place(100, cellMaster(kVt2), 0, 0)
+      .place(140, fillerMaster(2, kVt1), 0, 4);
+  fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {4, 6});
   fr::ViolationParticipant participant;
   participant.instanceId = 140;
   participant.masterId = fillerMaster(2, kVt1);
@@ -4165,8 +4016,9 @@ void testPlannerBudgetCeiling()
   EXPECT_EQ(checker.requests.size(), 3u);
   bool sawDefinitive = false;
   for (const auto& diagnostic : result.diagnostics) {
-    sawDefinitive
-        |= diagnostic.code == "NoCleanOverlay" && diagnostic.message.find("definitively") != std::string::npos;
+    sawDefinitive |= diagnostic.code == "NoCleanOverlay"
+                     && diagnostic.message.find("definitively")
+                            != std::string::npos;
   }
   EXPECT_TRUE(sawDefinitive);
 }
@@ -4180,13 +4032,16 @@ class AdaptiveSolutionChecker : public fr::RepairOracle
   fr::Violation original;
   fr::InstanceId solutionInstance = 0;
 
-  fr::OracleResult checkPlaceWithOverlay(const fr::OracleRequest& request) override
+  fr::OracleResult checkPlaceWithOverlay(
+      const fr::OracleRequest& request) override
   {
     fr::OracleResult result;
     result.requestId = request.requestId;
     result.status = fr::OracleStatus::Checked;
     const bool solved = std::any_of(
-        request.fillerChanges.begin(), request.fillerChanges.end(), [&](const dpl2::CellChangeRecord& change) {
+        request.fillerChanges.begin(),
+        request.fillerChanges.end(),
+        [&](const dpl2::CellChangeRecord& change) {
           return fr::cellChangeRecordInstanceId(change) == solutionInstance;
         });
     if (!solved) {
@@ -4196,7 +4051,8 @@ class AdaptiveSolutionChecker : public fr::RepairOracle
     return result;
   }
 
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& requests) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& requests) override
   {
     std::vector<fr::OracleResult> results;
     for (const auto& request : requests) {
@@ -4221,8 +4077,8 @@ void testPlannerAdaptiveSolvesBeyondRing()
       .place(142, fillerMaster(2, kVt1), 0, 16)  // L0 bridge
       .place(103, cellMaster(kVt2), 0, 18);      // anchor
 
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {0, 4});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {0, 4});
   fr::FillerRepairRequest request;
   request.targetPlace = anchorPlace(design, 103);
   request.violations = {original};
@@ -4243,7 +4099,9 @@ void testPlannerAdaptiveSolvesBeyondRing()
   }
   bool sawAdaptiveSolution = false;
   for (const auto& diagnostic : result.diagnostics) {
-    sawAdaptiveSolution |= diagnostic.code == "Solution" && diagnostic.message.find("grown x") != std::string::npos;
+    sawAdaptiveSolution |= diagnostic.code == "Solution"
+                           && diagnostic.message.find("grown x")
+                                  != std::string::npos;
   }
   EXPECT_TRUE(sawAdaptiveSolution);
 }
@@ -4254,13 +4112,17 @@ void testPlannerAdaptiveL1FindsFarFiller()
   design.addRow(0, 0, 20)
       .place(100, fillerMaster(4, kVt1), 0, 0)
       .place(101, fillerMaster(4, kVt1), 0, 4)
-      .place(102, cellMaster(kVt2), 0, 8)        // anchor [8,12)
-      .place(140, fillerMaster(2, kVt1), 0, 12)  // L0 adjacent [12,14)
-      .place(141, fillerMaster(2, kVt1), 0, 14)  // adaptive solution
+      .place(102, cellMaster(kVt2), 0, 8)       // anchor [8,12)
+      .place(140, fillerMaster(2, kVt1), 0, 12) // L0 adjacent [12,14)
+      .place(141, fillerMaster(2, kVt1), 0, 14) // adaptive solution
       .place(142, fillerMaster(4, kVt1), 0, 16);
 
-  fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {11, 14});
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {11, 14});
   fr::ViolationParticipant participant;
   participant.instanceId = 140;
   participant.masterId = fillerMaster(2, kVt1);
@@ -4287,7 +4149,9 @@ void testPlannerAdaptiveL1FindsFarFiller()
   EXPECT_EQ(fr::cellChangeRecordInstanceId(result.changes.front()), 141);
   bool sawAdaptiveSolution = false;
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
-    sawAdaptiveSolution |= diagnostic.code == "Solution" && diagnostic.message.find("grown x1") != std::string::npos;
+    sawAdaptiveSolution |= diagnostic.code == "Solution"
+                           && diagnostic.message.find("grown x1")
+                                  != std::string::npos;
   }
   EXPECT_TRUE(sawAdaptiveSolution);
 }
@@ -4307,8 +4171,12 @@ void testPlannerAdaptiveLevelCapTruncates()
       .place(141, fillerMaster(2, kVt1), 0, 14)
       .place(142, fillerMaster(4, kVt1), 0, 16);
 
-  fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {11, 14});
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {11, 14});
   fr::ViolationParticipant participant;
   participant.instanceId = 140;
   participant.masterId = fillerMaster(2, kVt1);
@@ -4336,8 +4204,12 @@ void testPlannerAdaptiveLevelCapTruncates()
   bool sawCap = false;
   bool sawTruncated = false;
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
-    sawCap |= diagnostic.code == "ExpansionCutoff" && diagnostic.message.find("maxAdaptiveLevels") != std::string::npos;
-    sawTruncated |= diagnostic.code == "NoCleanOverlay" && diagnostic.message.find("truncated") != std::string::npos;
+    sawCap |= diagnostic.code == "ExpansionCutoff"
+              && diagnostic.message.find("maxAdaptiveLevels")
+                     != std::string::npos;
+    sawTruncated |= diagnostic.code == "NoCleanOverlay"
+                    && diagnostic.message.find("truncated")
+                           != std::string::npos;
   }
   EXPECT_TRUE(sawCap);
   EXPECT_TRUE(sawTruncated);
@@ -4364,7 +4236,12 @@ void testGateBaselineSurvivesCacheGrowth()
     design.place(100 + i, fillerMaster(2, kVt1), 0, 8 + 2 * i);
   }
 
-  fr::Violation original = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {8, 12});
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {8, 12});
   fr::ViolationParticipant participant;
   participant.instanceId = 100;
   participant.masterId = fillerMaster(2, kVt1);
@@ -4395,7 +4272,8 @@ void testGateBaselineSurvivesCacheGrowth()
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
     const auto at = diagnostic.message.find("checker requests=");
     if (at != std::string::npos) {
-      requests = std::atoi(diagnostic.message.c_str() + at + std::string("checker requests=").size());
+      requests = std::atoi(diagnostic.message.c_str() + at
+                           + std::string("checker requests=").size());
     }
   }
   EXPECT_TRUE(requests > 200);
@@ -4415,8 +4293,12 @@ void testPlannerPerRepairBudgetTruncates()
       .place(141, fillerMaster(2, kVt1), 0, 14)
       .place(142, fillerMaster(4, kVt1), 0, 16);
 
-  fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {11, 14});
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {11, 14});
   fr::ViolationParticipant participant;
   participant.instanceId = 140;
   participant.masterId = fillerMaster(2, kVt1);
@@ -4446,10 +4328,12 @@ void testPlannerPerRepairBudgetTruncates()
   bool sawBudget = false;
   bool sawTruncated = false;
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
-    sawBudget
-        |= diagnostic.code == "RepairBudgetExhausted"
-           && diagnostic.message.find("checkerCallBudgetPerRepair") != std::string::npos;
-    sawTruncated |= diagnostic.code == "NoCleanOverlay" && diagnostic.message.find("truncated") != std::string::npos;
+    sawBudget |= diagnostic.code == "RepairBudgetExhausted"
+                 && diagnostic.message.find("checkerCallBudgetPerRepair")
+                        != std::string::npos;
+    sawTruncated |= diagnostic.code == "NoCleanOverlay"
+                    && diagnostic.message.find("truncated")
+                           != std::string::npos;
   }
   EXPECT_TRUE(sawBudget);
   EXPECT_TRUE(sawTruncated);
@@ -4468,8 +4352,12 @@ void testPlannerPerRepairBudgetDisabledStillSolves()
       .place(141, fillerMaster(2, kVt1), 0, 14)
       .place(142, fillerMaster(4, kVt1), 0, 16);
 
-  fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {11, 14});
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {11, 14});
   fr::ViolationParticipant participant;
   participant.instanceId = 140;
   participant.masterId = fillerMaster(2, kVt1);
@@ -4509,8 +4397,12 @@ void testPlannerAdaptiveContinuesPastUnchangedBlocking()
       .place(141, fillerMaster(2, kVt1), 0, 14)
       .place(142, fillerMaster(4, kVt1), 0, 16);
 
-  fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {11, 14});
+  fr::Violation original = makeViolation(
+      1,
+      fr::ViolationKind::MinWidth,
+      fr::ViolationRelation::IntraRow,
+      {0},
+      {11, 14});
   fr::ViolationParticipant participant;
   participant.instanceId = 140;
   participant.rowId = 0;
@@ -4535,11 +4427,13 @@ void testPlannerAdaptiveContinuesPastUnchangedBlocking()
   bool sawUnchangedCutoff = false;
   bool sawNoNewFillerCutoff = false;
   for (const fr::Diagnostic& diagnostic : result.diagnostics) {
-    sawUnchangedCutoff
-        |= diagnostic.code == "ExpansionCutoff" && diagnostic.message.find("unchanged blocking") != std::string::npos;
-    sawNoNewFillerCutoff
-        |= diagnostic.code == "ExpansionCutoff"
-           && diagnostic.message.find("adds no new editable filler") != std::string::npos;
+    sawUnchangedCutoff |= diagnostic.code == "ExpansionCutoff"
+                          && diagnostic.message.find("unchanged blocking")
+                                 != std::string::npos;
+    sawNoNewFillerCutoff |= diagnostic.code == "ExpansionCutoff"
+                            && diagnostic.message.find(
+                                   "adds no new editable filler")
+                                   != std::string::npos;
   }
   EXPECT_TRUE(!sawUnchangedCutoff);
   EXPECT_TRUE(sawNoNewFillerCutoff);
@@ -4555,8 +4449,8 @@ void testPlannerDefinitiveReflectsLastWindow()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 18)
-      .place(102, cellMaster(kVt2), 0, 0)       // anchor [0,4)
-      .place(140, fillerMaster(2, kVt1), 0, 4)  // touches anchor -> in L0
+      .place(102, cellMaster(kVt2), 0, 0)   // anchor [0,4)
+      .place(140, fillerMaster(2, kVt1), 0, 4)   // touches anchor -> in L0
       .place(141, fillerMaster(2, kVt1), 0, 6)
       .place(142, fillerMaster(2, kVt1), 0, 8)
       .place(143, fillerMaster(2, kVt1), 0, 10)
@@ -4564,7 +4458,8 @@ void testPlannerDefinitiveReflectsLastWindow()
       .place(145, fillerMaster(2, kVt1), 0, 14)
       .place(146, fillerMaster(2, kVt1), 0, 16);
 
-  fr::Violation original = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {4, 6});
+  fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {4, 6});
   fr::ViolationParticipant pf;
   pf.instanceId = 140;
   pf.rowId = 0;
@@ -4603,10 +4498,10 @@ void testPlannerDefinitiveReflectsLastWindow()
 void testGateBaselineUnexpectedInWindowAborts()
 {
   fr::TestPlacementView design;
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
-  const fr::Violation extra
-      = makeViolation(2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {6, 7});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation extra = makeViolation(
+      2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {6, 7});
 
   ScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] = {original, extra};
@@ -4630,10 +4525,10 @@ void testGateBaselineHaloExtraAllowed()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
-  const fr::Violation haloExtra
-      = makeViolation(9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {16, 17});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation haloExtra = makeViolation(
+      9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {16, 17});
   const fr::Overlay overlay = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
 
   ScriptedChecker checker;
@@ -4660,10 +4555,10 @@ void testGateBaselineHaloExtraAllowed()
 void testGateBaselineOutsideGuardOriginalSkipped()
 {
   fr::TestPlacementView design;
-  const fr::Violation inGuard
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
-  const fr::Violation outsideGuard
-      = makeViolation(2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {50, 51});
+  const fr::Violation inGuard = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation outsideGuard = makeViolation(
+      2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {0}, {50, 51});
 
   ScriptedChecker checker;
   checker.byKey[ScriptedChecker::keyOf({})] = {inGuard};
@@ -4687,8 +4582,8 @@ void testGateResidualOneToOne()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   const fr::Overlay overlay = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
 
   ScriptedChecker checker;
@@ -4717,14 +4612,16 @@ void testGateBatchExtraResultRejected()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   const fr::Overlay overlay = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
 
   ResultScriptedChecker checker;
   checker.extraBatchResult = true;
-  checker.byKey[ScriptedChecker::keyOf({})] = ResultScriptedChecker::checked({original});
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay, design))] = ResultScriptedChecker::checked();
+  checker.byKey[ScriptedChecker::keyOf({})] =
+      ResultScriptedChecker::checked({original});
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay, design))] =
+      ResultScriptedChecker::checked();
 
   fr::RepairWindow window;
   window.rows = {0};
@@ -4746,11 +4643,12 @@ void testGateBatchExtraResultRejected()
 void testGateSingleWrongEchoOnBaseline()
 {
   fr::TestPlacementView design;
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   ResultScriptedChecker checker;
   checker.wrongSingleEcho = true;
-  checker.byKey[ScriptedChecker::keyOf({})] = ResultScriptedChecker::checked({original});
+  checker.byKey[ScriptedChecker::keyOf({})] =
+      ResultScriptedChecker::checked({original});
 
   fr::RepairWindow window;
   window.rows = {0};
@@ -4770,9 +4668,11 @@ void testGateSingleWrongEchoOnBaseline()
 void testGateStatusNotCheckedCarriesOn()
 {
   fr::TestPlacementView design = makeLibrary();
-  design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4).place(501, fillerMaster(2, kVt1), 0, 8);
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  design.addRow(0, 0, 20)
+      .place(500, fillerMaster(2, kVt1), 0, 4)
+      .place(501, fillerMaster(2, kVt1), 0, 8);
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   const fr::Overlay bad = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
   const fr::Overlay clean = {*fr::makeSwap(design, 501, fillerMaster(2, kVt2))};
 
@@ -4781,9 +4681,11 @@ void testGateStatusNotCheckedCarriesOn()
   invalid.isLegal = false;
 
   ResultScriptedChecker checker;
-  checker.byKey[ScriptedChecker::keyOf({})] = ResultScriptedChecker::checked({original});
+  checker.byKey[ScriptedChecker::keyOf({})] =
+      ResultScriptedChecker::checked({original});
   checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(bad, design))] = invalid;
-  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(clean, design))] = ResultScriptedChecker::checked();
+  checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(clean, design))] =
+      ResultScriptedChecker::checked();
 
   fr::RepairWindow window;
   window.rows = {0};
@@ -4809,15 +4711,17 @@ void testGateFatalDiagMakesUnusable()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
   const fr::Overlay overlay = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
 
   fr::OracleResult fatal = ResultScriptedChecker::checked();
-  fatal.diagnostics.push_back(fr::makeDiag(fr::Severity::Fatal, "CheckerFatal", "scripted fatal"));
+  fatal.diagnostics.push_back(
+      fr::makeDiag(fr::Severity::Fatal, "CheckerFatal", "scripted fatal"));
 
   ResultScriptedChecker checker;
-  checker.byKey[ScriptedChecker::keyOf({})] = ResultScriptedChecker::checked({original});
+  checker.byKey[ScriptedChecker::keyOf({})] =
+      ResultScriptedChecker::checked({original});
   checker.byKey[ScriptedChecker::keyOf(fr::toFillerChanges(overlay, design))] = fatal;
 
   fr::RepairWindow window;
@@ -4844,9 +4748,10 @@ void testGateNewViolationNoRowsGoesHalo()
 {
   fr::TestPlacementView design = makeLibrary();
   design.addRow(0, 0, 20).place(500, fillerMaster(2, kVt1), 0, 4);
-  const fr::Violation original
-      = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
-  fr::Violation noRows = makeViolation(9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {}, {6, 7});
+  const fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {2, 4});
+  fr::Violation noRows = makeViolation(
+      9, fr::ViolationKind::MinSpacing, fr::ViolationRelation::IntraRow, {}, {6, 7});
   const fr::Overlay overlay = {*fr::makeSwap(design, 500, fillerMaster(2, kVt2))};
 
   ScriptedChecker checker;
@@ -4874,7 +4779,9 @@ void testGateNewViolationNoRowsGoesHalo()
 
 void testSignatureFieldMismatchEach()
 {
-  const auto base = makeViolation(3, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {0, 1}, {10, 14});
+  const auto base = makeViolation(3, fr::ViolationKind::MinWidth,
+                                  fr::ViolationRelation::InterRow, {0, 1},
+                                  {10, 14});
   auto changed = base;
   changed.ruleId = 4;
   EXPECT_TRUE(!fr::sameSignature(base, changed, 1));
@@ -4897,7 +4804,9 @@ void testSignatureFieldMismatchEach()
 
 void testSignatureXwindowToleranceEdges()
 {
-  const auto base = makeViolation(3, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {0, 1}, {10, 14});
+  const auto base = makeViolation(3, fr::ViolationKind::MinWidth,
+                                  fr::ViolationRelation::InterRow, {0, 1},
+                                  {10, 14});
   auto halfOverlap = base;
   halfOverlap.xWindow = {12, 16};  // overlap 2, shorter 4 -> match
   EXPECT_TRUE(fr::sameSignature(base, halfOverlap, 1));
@@ -4921,7 +4830,8 @@ void testRelatednessRowAndDistanceEdges()
   const auto swap = *fr::makeSwap(f.design, 101, fillerMaster(2, kVt2));
   const fr::Overlay overlay = {swap};  // span [4,6) row 0
 
-  auto rowPlusOne = makeViolation(2, fr::ViolationKind::MinSpacing, fr::ViolationRelation::InterRow, {1}, {7, 8});
+  auto rowPlusOne = makeViolation(2, fr::ViolationKind::MinSpacing,
+                                  fr::ViolationRelation::InterRow, {1}, {7, 8});
   EXPECT_TRUE(fr::isRelatedToOverlay(rowPlusOne, overlay, 1));
 
   auto rowPlusTwo = rowPlusOne;
@@ -4940,7 +4850,8 @@ void testRelatednessRowAndDistanceEdges()
 
 void testRuleDistanceFallback()
 {
-  fr::Violation zero = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {0, 1});
+  fr::Violation zero = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {0, 1});
   zero.requiredValue = 0;
   fr::Violation smaller = zero;
   smaller.requiredValue = 2;
@@ -4952,8 +4863,9 @@ void testRuleDistanceFallback()
   EXPECT_EQ(fr::estimateRuleDistance({zero, smaller}, 3), 5);
 }
 
-fr::FillerDomain makeDomain(
-    const fr::TestPlacementView& design, fr::InstanceId id, std::initializer_list<fr::MasterId> targets)
+fr::FillerDomain makeDomain(const fr::TestPlacementView& design,
+                            fr::InstanceId id,
+                            std::initializer_list<fr::MasterId> targets)
 {
   fr::FillerDomain domain;
   domain.instanceId = id;
@@ -4981,7 +4893,10 @@ GateCounters parseGateCounters(const fr::FillerRepairResult& result)
     }
     const auto readAfter = [&](const std::string& tag) -> long {
       const size_t at = diagnostic.message.find(tag);
-      return at == std::string::npos ? -1 : std::strtol(diagnostic.message.c_str() + at + tag.size(), nullptr, 10);
+      return at == std::string::npos
+                 ? -1
+                 : std::strtol(diagnostic.message.c_str() + at + tag.size(),
+                               nullptr, 10);
     };
     counters.requests = readAfter("checker requests=");
     counters.cacheHits = readAfter("cacheHits=");
@@ -4997,7 +4912,8 @@ bool sameOverlay(const fr::Overlay& a, const fr::Overlay& b)
     return false;
   }
   for (size_t i = 0; i < a.size(); ++i) {
-    if (a[i].instanceId != b[i].instanceId || a[i].newMasterId != b[i].newMasterId) {
+    if (a[i].instanceId != b[i].instanceId
+        || a[i].newMasterId != b[i].newMasterId) {
       return false;
     }
   }
@@ -5022,7 +4938,8 @@ class RecordingUnsolvedChecker : public fr::RepairOracle
     res.isLegal = false;
     return res;
   }
-  std::vector<fr::OracleResult> checkPlaceWithOverlays(const std::vector<fr::OracleRequest>& rs) override
+  std::vector<fr::OracleResult> checkPlaceWithOverlays(
+      const std::vector<fr::OracleRequest>& rs) override
   {
     std::vector<fr::OracleResult> out;
     out.reserve(rs.size());
@@ -5042,11 +4959,13 @@ class RecordingUnsolvedChecker : public fr::RepairOracle
           static_cast<int>(fr::cellChangeRecordNewMasterId(change)));
     }
     std::sort(swaps.begin(), swaps.end());
-    std::string out
-        = "g[" + std::to_string(r.guardRegion.x.xl) + ',' + std::to_string(r.guardRegion.x.xh) + ")r"
-          + std::to_string(r.guardRegion.rowLo) + '-' + std::to_string(r.guardRegion.rowHi) + ':';
+    std::string out = "g[" + std::to_string(r.guardRegion.x.xl) + ','
+                      + std::to_string(r.guardRegion.x.xh) + ")r"
+                      + std::to_string(r.guardRegion.rowLo) + '-'
+                      + std::to_string(r.guardRegion.rowHi) + ':';
     for (const auto& [instanceId, masterId] : swaps) {
-      out += ' ' + std::to_string(instanceId) + "->" + std::to_string(masterId);
+      out += ' ' + std::to_string(instanceId) + "->"
+             + std::to_string(masterId);
     }
     return out;
   }
@@ -5055,21 +4974,26 @@ class RecordingUnsolvedChecker : public fr::RepairOracle
 void testEnumerateCompleteBudgetBoundary()
 {
   fr::TestPlacementView design = makeLibrary();
-  design.addRow(0, 0, 4).place(500, fillerMaster(2, kVt1), 0, 0).place(501, fillerMaster(2, kVt1), 0, 2);
+  design.addRow(0, 0, 4)
+      .place(500, fillerMaster(2, kVt1), 0, 0)
+      .place(501, fillerMaster(2, kVt1), 0, 2);
   const std::vector<fr::FillerDomain> domains = {
       makeDomain(design, 500, {fillerMaster(2, kVt2), fillerMaster(2, kVt3)}),
       makeDomain(design, 501, {fillerMaster(2, kVt2), fillerMaster(2, kVt3)}),
   };
   fr::RepairConfig config;
-  const auto exactBudget = fr::enumerateOverlays(domains, config, 8, fr::DebugLog(verbose()));
+  const auto exactBudget =
+      fr::enumerateOverlays(domains, config, 8, fr::DebugLog(verbose()));
   EXPECT_EQ(exactBudget.overlays.size(), 8u);
   EXPECT_TRUE(exactBudget.complete);
 
-  const auto complete = fr::enumerateOverlays(domains, config, 9, fr::DebugLog(verbose()));
+  const auto complete =
+      fr::enumerateOverlays(domains, config, 9, fr::DebugLog(verbose()));
   EXPECT_TRUE(complete.complete);
   EXPECT_EQ(complete.overlays.size(), 8u);
 
-  const auto truncated = fr::enumerateOverlays(domains, config, 7, fr::DebugLog(verbose()));
+  const auto truncated =
+      fr::enumerateOverlays(domains, config, 7, fr::DebugLog(verbose()));
   EXPECT_TRUE(!truncated.complete);
   EXPECT_EQ(truncated.overlays.size(), 7u);
 }
@@ -5083,10 +5007,12 @@ void testEnumerateOverflowClamp()
   design.addRow(0, 0, 80);
   std::vector<fr::FillerDomain> domains;
   for (int i = 0; i < 40; ++i) {
-    domains.push_back(makeDomain(design, 700 + i, {fillerMaster(2, kVt2), fillerMaster(2, kVt3)}));
+    domains.push_back(makeDomain(
+        design, 700 + i, {fillerMaster(2, kVt2), fillerMaster(2, kVt3)}));
   }
   fr::RepairConfig config;
-  const auto plan = fr::enumerateOverlays(domains, config, 32, fr::DebugLog(verbose()));
+  const auto plan =
+      fr::enumerateOverlays(domains, config, 32, fr::DebugLog(verbose()));
   EXPECT_TRUE(!plan.complete);
   EXPECT_EQ(plan.overlays.size(), 32u);
 }
@@ -5100,13 +5026,15 @@ void testEnumerateSize3CapAndProducts()
   design.addRow(0, 0, 10);
   std::vector<fr::FillerDomain> domains;
   for (int i = 0; i < 5; ++i) {
-    domains.push_back(makeDomain(design, 800 + i, {fillerMaster(2, kVt2), fillerMaster(2, kVt3)}));
+    domains.push_back(makeDomain(
+        design, 800 + i, {fillerMaster(2, kVt2), fillerMaster(2, kVt3)}));
   }
   fr::RepairConfig config;
   config.maxSubsetSize = 3;
   config.memberCapSize2 = 5;
   config.memberCapSize3 = 3;
-  const auto plan = fr::enumerateOverlays(domains, config, 100, fr::DebugLog(verbose()));
+  const auto plan =
+      fr::enumerateOverlays(domains, config, 100, fr::DebugLog(verbose()));
   EXPECT_TRUE(!plan.complete);
   EXPECT_EQ(plan.overlays.size(), 58u);  // size1:10, size2:40, size3 cap C(3,3)*8
   EXPECT_EQ(plan.overlays.back().size(), 3u);
@@ -5135,19 +5063,31 @@ void testEnumerateSkipsCheckedOverlays()
   config.maxSubsetSize = 3;
 
   // Full space over three single-option fillers: 3 + 3 + 1 = 7 subsets.
-  const auto full = fr::enumerateOverlays(domains, config, 100, fr::DebugLog(verbose()));
+  const auto full =
+      fr::enumerateOverlays(domains, config, 100, fr::DebugLog(verbose()));
   EXPECT_TRUE(full.complete);
   EXPECT_EQ(full.overlays.size(), 7u);
 
   // 802 is the only filler this level gained: exactly the subsets containing
   // it survive -- {802}, {800,802}, {801,802}, {800,801,802} = 4.
   const auto incremental = fr::enumerateOverlays(
-      domains, config, 100, fr::DebugLog(verbose()), [](const fr::Overlay& overlay) {
-        return std::none_of(overlay.begin(), overlay.end(), [](const fr::Swap& s) { return s.instanceId == 802; });
+      domains,
+      config,
+      100,
+      fr::DebugLog(verbose()),
+      [](const fr::Overlay& overlay) {
+        return std::none_of(
+            overlay.begin(), overlay.end(), [](const fr::Swap& s) {
+              return s.instanceId == 802;
+            });
       });
   EXPECT_EQ(incremental.overlays.size(), 4u);
   for (const fr::Overlay& overlay : incremental.overlays) {
-    EXPECT_TRUE(std::any_of(overlay.begin(), overlay.end(), [](const fr::Swap& s) { return s.instanceId == 802; }));
+    EXPECT_TRUE(std::any_of(overlay.begin(),
+                            overlay.end(),
+                            [](const fr::Swap& s) {
+                              return s.instanceId == 802;
+                            }));
   }
   // The skipped ones are covered, not lost: the level is still definitive.
   EXPECT_TRUE(incremental.complete);
@@ -5156,7 +5096,8 @@ void testEnumerateSkipsCheckedOverlays()
   // level cannot reorder the search.
   size_t f = 0;
   for (const fr::Overlay& overlay : full.overlays) {
-    if (f < incremental.overlays.size() && sameOverlay(overlay, incremental.overlays[f])) {
+    if (f < incremental.overlays.size()
+        && sameOverlay(overlay, incremental.overlays[f])) {
       ++f;
     }
   }
@@ -5172,9 +5113,10 @@ void testEnumerateAllCheckedEmitsNothing()
   };
   fr::RepairConfig config;
   // Both overlays have already been checked, so no budget is needed for them.
-  const auto plan = fr::enumerateOverlays(domains, config, 100, fr::DebugLog(verbose()), [](const fr::Overlay&) {
-    return true;
-  });
+  const auto plan = fr::enumerateOverlays(
+      domains, config, 100, fr::DebugLog(verbose()), [](const fr::Overlay&) {
+        return true;
+      });
   EXPECT_TRUE(plan.overlays.empty());
   EXPECT_TRUE(plan.complete);
 }
@@ -5193,7 +5135,9 @@ void testAdaptiveEscalationDoesNotReEnumerateAnsweredCandidates()
     design.place(140 + i, fillerMaster(2, kVt1), 0, 4 + 2 * i);
   }
 
-  fr::Violation original = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {0, 6});
+  fr::Violation original = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0},
+      {0, 6});
   fr::ViolationParticipant participant;
   participant.instanceId = 140;
   participant.masterId = fillerMaster(2, kVt1);
@@ -5218,7 +5162,8 @@ void testAdaptiveEscalationDoesNotReEnumerateAnsweredCandidates()
   // The cache still guarantees the checker is never asked twice ...
   std::set<std::string> seen;
   for (const std::string& question : checker.questions) {
-    EXPECT_TRUE(seen.insert(question).second) << "checker was asked the same question twice: " << question;
+    EXPECT_TRUE(seen.insert(question).second)
+        << "checker was asked the same question twice: " << question;
   }
   EXPECT_TRUE(checker.questions.size() > 1);
 
@@ -5230,8 +5175,8 @@ void testAdaptiveEscalationDoesNotReEnumerateAnsweredCandidates()
   EXPECT_TRUE(counters.found) << "NoCleanOverlay diagnostic is missing";
   EXPECT_TRUE(counters.requests > 100);
   EXPECT_TRUE(counters.cacheHits < counters.requests / 10)
-      << "the search re-enumerated answered candidates: requests=" << counters.requests
-      << " cacheHits=" << counters.cacheHits;
+      << "the search re-enumerated answered candidates: requests="
+      << counters.requests << " cacheHits=" << counters.cacheHits;
 }
 
 // --- OverlayKey storage -----------------------------------------------------
@@ -5261,7 +5206,9 @@ void testOverlayKeySpillsPastTheInlineBuffer()
 
   // One different master is a different question.
   fr::Overlay altered = overlay;
-  altered.back() = *fr::makeSwap(design, altered.back().instanceId, fillerMaster(2, kVt3));
+  altered.back() = *fr::makeSwap(design,
+                                 altered.back().instanceId,
+                                 fillerMaster(2, kVt3));
   EXPECT_TRUE(key != fr::overlayKey(guard, altered));
   // ... and so is the same set under a different guard.
   EXPECT_TRUE(key != fr::overlayKey(fr::Region{{0, 80}, 0, 0}, overlay));
@@ -5275,40 +5222,32 @@ void testOverlayKeySpillsPastTheInlineBuffer()
 // the classifier would silently start missing matches.
 void testSignatureClassMismatchImpliesSignatureMismatch()
 {
-  fr::Violation base = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {10, 14});
+  fr::Violation base = makeViolation(
+      1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0},
+      {10, 14});
   base.primaryLayer = 2;
   base.secondaryLayer = 5;
 
   std::vector<fr::Violation> variants;
   {
-    fr::Violation v = base;
-    v.ruleId = 2;
+    fr::Violation v = base; v.ruleId = 2; variants.push_back(v);
+  }
+  {
+    fr::Violation v = base; v.kind = fr::ViolationKind::MinSpacing;
     variants.push_back(v);
   }
   {
-    fr::Violation v = base;
-    v.kind = fr::ViolationKind::MinSpacing;
+    fr::Violation v = base; v.relation = fr::ViolationRelation::InterRow;
     variants.push_back(v);
   }
   {
-    fr::Violation v = base;
-    v.relation = fr::ViolationRelation::InterRow;
-    variants.push_back(v);
+    fr::Violation v = base; v.primaryLayer = 3; variants.push_back(v);
   }
   {
-    fr::Violation v = base;
-    v.primaryLayer = 3;
-    variants.push_back(v);
+    fr::Violation v = base; v.secondaryLayer = 6; variants.push_back(v);
   }
   {
-    fr::Violation v = base;
-    v.secondaryLayer = 6;
-    variants.push_back(v);
-  }
-  {
-    fr::Violation v = base;
-    v.secondaryLayer.reset();
-    variants.push_back(v);
+    fr::Violation v = base; v.secondaryLayer.reset(); variants.push_back(v);
   }
 
   for (const fr::Violation& v : variants) {
@@ -5337,14 +5276,8 @@ void testSignatureClassMismatchImpliesSignatureMismatch()
 
 namespace grid {
 
-fr::MasterId filler(int w, int vt)
-{
-  return static_cast<fr::MasterId>(w * 10 + vt);
-}
-fr::MasterId cell(int w, int vt)
-{
-  return static_cast<fr::MasterId>(900 + w * 10 + vt);
-}
+fr::MasterId filler(int w, int vt) { return static_cast<fr::MasterId>(w * 10 + vt); }
+fr::MasterId cell(int w, int vt) { return static_cast<fr::MasterId>(900 + w * 10 + vt); }
 
 // Vt Type: 0=vt type 0, 1=vt type 1  |  Widths: {2, 3, 4, 8}
 // cell type: 1=std cell, 0=filler    |  Format: (vt type, width, cell type)
@@ -5352,80 +5285,11 @@ fr::MasterId cell(int w, int vt)
 // 2004, ...). Std cells: 1008=(1,3,1), 1011=(1,2,1), 2004=(1,4,1),
 // 2011=(0,8,1). Rows exactly as supplied:
 const std::vector<std::vector<std::tuple<int, int, int>>> kRows = {
-    {{1, 3, 0},
-     {1, 8, 0},
-     {1, 4, 0},
-     {1, 2, 0},
-     {1, 8, 0},
-     {0, 2, 0},
-     {0, 2, 0},
-     {0, 2, 0},
-     {1, 4, 0},
-     {0, 4, 0},
-     {1, 3, 0},
-     {1, 3, 0},
-     {1, 2, 0},
-     {0, 3, 0},
-     {1, 4, 0},
-     {1, 2, 0},
-     {0, 3, 0},
-     {1, 3, 0},
-     {1, 2, 0}},
-    {{1, 2, 0}, {1, 3, 0}, {1, 3, 0}, {1, 4, 0}, {0, 2, 0}, {0, 4, 0}, {0, 2, 0},
-     {0, 8, 0}, {1, 3, 1}, {1, 3, 0}, {0, 2, 0}, {1, 2, 1}, {0, 4, 0}, {1, 3, 0},
-     {0, 3, 0}, {0, 2, 0}, {1, 2, 0}, {0, 2, 0}, {1, 4, 0}, {1, 2, 0}, {1, 4, 0}},
-    {{1, 3, 0},
-     {1, 3, 0},
-     {1, 4, 0},
-     {0, 3, 0},
-     {1, 4, 1},
-     {0, 3, 0},
-     {0, 4, 0},
-     {1, 8, 0},
-     {1, 3, 0},
-     {1, 3, 0},
-     {0, 3, 0},
-     {0, 8, 1},
-     {1, 4, 0},
-     {1, 4, 0},
-     {1, 3, 0},
-     {1, 4, 0}},
-    {{1, 3, 0},
-     {1, 3, 0},
-     {1, 3, 0},
-     {0, 8, 0},
-     {0, 2, 0},
-     {0, 2, 0},
-     {0, 2, 0},
-     {1, 4, 0},
-     {1, 3, 0},
-     {1, 3, 0},
-     {0, 4, 0},
-     {0, 4, 0},
-     {1, 8, 0},
-     {0, 8, 0},
-     {0, 2, 0},
-     {0, 2, 0},
-     {1, 3, 0}},
-    {{1, 3, 0},
-     {1, 8, 0},
-     {1, 4, 0},
-     {1, 2, 0},
-     {1, 2, 0},
-     {1, 3, 0},
-     {1, 8, 0},
-     {1, 4, 0},
-     {1, 3, 0},
-     {1, 4, 0},
-     {1, 3, 0},
-     {1, 3, 0},
-     {1, 2, 0},
-     {1, 3, 0},
-     {1, 3, 0},
-     {1, 2, 0},
-     {1, 2, 0},
-     {1, 3, 0},
-     {1, 2, 0}},
+    {{1,3,0},{1,8,0},{1,4,0},{1,2,0},{1,8,0},{0,2,0},{0,2,0},{0,2,0},{1,4,0},{0,4,0},{1,3,0},{1,3,0},{1,2,0},{0,3,0},{1,4,0},{1,2,0},{0,3,0},{1,3,0},{1,2,0}},
+    {{1,2,0},{1,3,0},{1,3,0},{1,4,0},{0,2,0},{0,4,0},{0,2,0},{0,8,0},{1,3,1},{1,3,0},{0,2,0},{1,2,1},{0,4,0},{1,3,0},{0,3,0},{0,2,0},{1,2,0},{0,2,0},{1,4,0},{1,2,0},{1,4,0}},
+    {{1,3,0},{1,3,0},{1,4,0},{0,3,0},{1,4,1},{0,3,0},{0,4,0},{1,8,0},{1,3,0},{1,3,0},{0,3,0},{0,8,1},{1,4,0},{1,4,0},{1,3,0},{1,4,0}},
+    {{1,3,0},{1,3,0},{1,3,0},{0,8,0},{0,2,0},{0,2,0},{0,2,0},{1,4,0},{1,3,0},{1,3,0},{0,4,0},{0,4,0},{1,8,0},{0,8,0},{0,2,0},{0,2,0},{1,3,0}},
+    {{1,3,0},{1,8,0},{1,4,0},{1,2,0},{1,2,0},{1,3,0},{1,8,0},{1,4,0},{1,3,0},{1,4,0},{1,3,0},{1,3,0},{1,2,0},{1,3,0},{1,3,0},{1,2,0},{1,2,0},{1,3,0},{1,2,0}},
 };
 
 // Instance id = row*1000 + column index. Std cells: 1008,1011,2004,2011.
@@ -5538,10 +5402,15 @@ TEST(RepairPlanner, cached_membership_is_independent_of_id_order)
     domains.push_back({id, {swap}});
   }
   const auto plan = fr::enumerateOverlays(
-      domains, fr::RepairConfig{}, 100, fr::DebugLog(false), [](const fr::Overlay& overlay) {
-        return std::all_of(overlay.begin(), overlay.end(), [](const fr::Swap& s) {
-          return s.instanceId == 2 || s.instanceId == 80;
-        });
+      domains,
+      fr::RepairConfig{},
+      100,
+      fr::DebugLog(false),
+      [](const fr::Overlay& overlay) {
+        return std::all_of(
+            overlay.begin(), overlay.end(), [](const fr::Swap& s) {
+              return s.instanceId == 2 || s.instanceId == 80;
+            });
       });
   std::set<int> singles;
   for (const auto& overlay : plan.overlays) {
@@ -5565,13 +5434,19 @@ TEST(RepairPlanner, truncated_level_does_not_hide_unasked_old_pair)
         .place(ids.second, fillerMaster(2, kVt1), 0, 10)
         .place(3, 9000, 0, 12)
         .place(502, cellMaster(kVt1), 0, 13)
-        .setFillerMasterIds({fillerMaster(2, kVt1), fillerMaster(2, kVt2), 9000});
-    const auto original = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {0}, {4, 12});
+        .setFillerMasterIds(
+            {fillerMaster(2, kVt1), fillerMaster(2, kVt2), 9000});
+    const auto original = makeViolation(1,
+                                        fr::ViolationKind::MinWidth,
+                                        fr::ViolationRelation::IntraRow,
+                                        {0},
+                                        {4, 12});
     fr::FillerRepairRequest request{anchorPlace(design, 500), {original}};
     RequiredChangesChecker checker;
     checker.originals = request.violations;
     for (const int id : {ids.first, ids.second}) {
-      checker.required.push_back(design.cellChangeRecord(id, fillerMaster(2, kVt2)));
+      checker.required.push_back(
+          design.cellChangeRecord(id, fillerMaster(2, kVt2)));
     }
     fr::RepairConfig config;
     config.verbose = false;
@@ -5599,11 +5474,18 @@ TEST(RepairPlanner, invalid_search_configuration_fails_without_checker_calls)
     EXPECT_EQ(result.diagnostics.front().code, "InvalidRepairConfig");
 
     const fr::DebugLog log(false);
-    fr::OracleGate gate(
-        scenario.design, checker, scenario.request.targetPlace, scenario.request.violations, 1, 1, config, log);
+    fr::OracleGate gate(scenario.design,
+                        checker,
+                        scenario.request.targetPlace,
+                        scenario.request.violations,
+                        1,
+                        1,
+                        config,
+                        log);
     fr::RepairWindow window;
     int budget = 10;
-    EXPECT_TRUE(gate.search({fr::Overlay{}}, window, window.guardRegion, budget).protocolError);
+    EXPECT_TRUE(gate.search({fr::Overlay{}}, window, window.guardRegion, budget)
+                    .protocolError);
     EXPECT_EQ(budget, 10);
     EXPECT_EQ(checker.requestCount(), 0);
   }
@@ -5622,13 +5504,19 @@ TEST(RepairPlanner, guard_keeps_rule_reach_and_multiline_footprint)
       design.place(row * 100 + x, row == 2 && x == 51 ? 1 : 0, row, x);
     }
   }
-  auto violation = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::IntraRow, {2}, {51, 52});
+  auto violation = makeViolation(1,
+                                 fr::ViolationKind::MinWidth,
+                                 fr::ViolationRelation::IntraRow,
+                                 {2},
+                                 {51, 52});
   violation.participants = {{251, 1, 2, {51, 52}, true, false}};
   const fr::FillerRepairRequest request{anchorPlace(design, 250), {violation}};
   const fr::DebugLog log(false);
   const auto normalized = fr::normalizeViolations(request, log);
-  const auto initial = fr::buildWindow(request.targetPlace, normalized, design, 10, log);
-  const auto grown = fr::expandWindowAdaptive(initial, request.targetPlace, {violation}, design, 1, 10, log);
+  const auto initial
+      = fr::buildWindow(request.targetPlace, normalized, design, 10, log);
+  const auto grown = fr::expandWindowAdaptive(
+      initial, request.targetPlace, {violation}, design, 1, 10, log);
   for (const auto& window : {initial, grown}) {
     EXPECT_LE(window.guardRegion.x.xl, window.x.xl - 10);
     EXPECT_GE(window.guardRegion.x.xh, window.x.xh + 10);
@@ -5652,15 +5540,21 @@ TEST(RepairPlanner, multiline_neighbors_vote_only_at_external_edges)
       .place(99, 0, 0, 10)
       .place(100, 1, 0, 4)
       .place(101, 4, 2, 4);
-  const fr::Overlay swaps{*fr::makeSwap(design, 100, 2), *fr::makeSwap(design, 100, 3)};
+  const fr::Overlay swaps{*fr::makeSwap(design, 100, 2),
+                          *fr::makeSwap(design, 100, 3)};
   fr::RepairWindow window;
   window.rows = {0, 1};
   window.x = {4, 6};
   window.editableFillers = {100};
-  const auto ranked = fr::rankFillers(swaps, anchorPlace(design, 99), {}, window, design, fr::DebugLog(false));
+  const auto ranked = fr::rankFillers(
+      swaps, anchorPlace(design, 99), {}, window, design, fr::DebugLog(false));
   ASSERT_EQ(ranked.size(), 1u);
   EXPECT_EQ(ranked.front().options.front().newMasterId, 3);
-  auto violation = makeViolation(1, fr::ViolationKind::MinWidth, fr::ViolationRelation::InterRow, {2}, {4, 6});
+  auto violation = makeViolation(1,
+                                 fr::ViolationKind::MinWidth,
+                                 fr::ViolationRelation::InterRow,
+                                 {2},
+                                 {4, 6});
   EXPECT_TRUE(fr::isRelatedToOverlay(violation, {swaps.front()}, 1));
   violation.rowIds = {3};
   EXPECT_FALSE(fr::isRelatedToOverlay(violation, {swaps.front()}, 1));
@@ -5672,19 +5566,26 @@ const std::vector<Test>& internalCases()
       {"swap_construction", testSwapConstruction},
       {"overlay_key_order_independent", testOverlayKeyOrderIndependent},
       {"wire_conversion", testWireConversion},
-      {"planner_does_not_run_placement_precheck", testPlannerDoesNotRunPlacementPrecheck},
-      {"planner_rejects_incomplete_placement_view", testPlannerRejectsIncompletePlacementView},
+      {"planner_does_not_run_placement_precheck",
+       testPlannerDoesNotRunPlacementPrecheck},
+      {"planner_rejects_incomplete_placement_view",
+       testPlannerRejectsIncompletePlacementView},
       {"candidate_provider", testCandidateProvider},
-      {"synthetic_catalog_describe_widths_and_vts", testSyntheticCatalogDescribeWidthsAndVts},
-      {"synthetic_catalog_rejects_malformed_masters", testSyntheticCatalogRejectsMalformedMasters},
-      {"synthetic_catalog_candidates_contract", testSyntheticCatalogCandidatesContract},
-      {"planner_solves_with_synthetic_catalog", testPlannerSolvesWithSyntheticCatalog},
+      {"synthetic_catalog_describe_widths_and_vts",
+       testSyntheticCatalogDescribeWidthsAndVts},
+      {"synthetic_catalog_rejects_malformed_masters",
+       testSyntheticCatalogRejectsMalformedMasters},
+      {"synthetic_catalog_candidates_contract",
+       testSyntheticCatalogCandidatesContract},
+      {"planner_solves_with_synthetic_catalog",
+       testPlannerSolvesWithSyntheticCatalog},
       {"checker_echo_and_order", testCheckerEchoAndOrder},
       {"checker_invalid_isolated", testCheckerInvalidIsolated},
       {"checker_intra_ms_detect_and_clear", testCheckerIntraMsDetectAndClear},
       {"checker_inter_row_rules", testCheckerInterRowRules},
       {"checker_guard_region_filter", testCheckerGuardRegionFilter},
-      {"checker_target_override_seeds_violation", testCheckerTargetOverrideSeedsViolation},
+      {"checker_target_override_seeds_violation",
+       testCheckerTargetOverrideSeedsViolation},
       {"normalize_violations", testNormalizeViolations},
       {"signature_matching", testSignatureMatching},
       {"relatedness", testRelatedness},
@@ -5692,11 +5593,15 @@ const std::vector<Test>& internalCases()
       {"window_L0_exact_membership", testWindowL0ExactMembership},
       {"window_bridge_conditions_each", testWindowBridgeConditionsEach},
       {"window_at_design_edges", testWindowAtDesignEdges},
-      {"guard_quantization_contains_window_and_is_stable", testGuardQuantizationContainsWindowAndIsStable},
-      {"window_adaptive_adds_k_on_blocking_side", testWindowAdaptiveAddsKOnBlockingSide},
-      {"window_adaptive_coupled_rows_and_fixed_boundary", testWindowAdaptiveCoupledRowsAndFixedBoundary},
+      {"guard_quantization_contains_window_and_is_stable",
+       testGuardQuantizationContainsWindowAndIsStable},
+      {"window_adaptive_adds_k_on_blocking_side",
+       testWindowAdaptiveAddsKOnBlockingSide},
+      {"window_adaptive_coupled_rows_and_fixed_boundary",
+       testWindowAdaptiveCoupledRowsAndFixedBoundary},
       {"guard_region_two_cell_ring", testGuardRegionTwoCellRing},
-      {"planner_no_editable_filler_zero_calls", testPlannerNoEditableFillerZeroCalls},
+      {"planner_no_editable_filler_zero_calls",
+       testPlannerNoEditableFillerZeroCalls},
       {"planner_reentrant_repair_refused", testPlannerReentrantRepairRefused},
       {"swap_generator_basic", testSwapGeneratorBasic},
       {"swap_generator_no_usable_master", testSwapGeneratorNoUsableMaster},
@@ -5705,61 +5610,95 @@ const std::vector<Test>& internalCases()
       {"ranker_filler_key_isolated", testRankerFillerKeyIsolated},
       {"ranker_domain_order_isolated", testRankerDomainOrderIsolated},
       {"ranker_majority_per_band", testRankerMajorityPerBand},
-      {"ranker_majority_skips_missing_master", testRankerMajoritySkipsMissingMaster},
-      {"candidates_band_polarity_layout_must_match", testCandidatesBandPolarityLayoutMustMatch},
-      {"candidates_polarity_only_filter_diagnosed", testCandidatesPolarityOnlyFilterDiagnosed},
-      {"placement_view_caches_follow_mutation", testTestPlacementViewCachesFollowMutation},
+      {"ranker_majority_skips_missing_master",
+       testRankerMajoritySkipsMissingMaster},
+      {"candidates_band_polarity_layout_must_match",
+       testCandidatesBandPolarityLayoutMustMatch},
+      {"candidates_polarity_only_filter_diagnosed",
+       testCandidatesPolarityOnlyFilterDiagnosed},
+      {"placement_view_caches_follow_mutation",
+       testTestPlacementViewCachesFollowMutation},
       {"synthetic_bottom_polarity_derived", testSyntheticBottomPolarityDerived},
-      {"enumeration_order_and_completeness", testEnumerationOrderAndCompleteness},
-      {"enumeration_filler_domain_not_crowded_out", testEnumerationFillerDomainNotCrowdedOut},
+      {"enumeration_order_and_completeness",
+       testEnumerationOrderAndCompleteness},
+      {"enumeration_filler_domain_not_crowded_out",
+       testEnumerationFillerDomainNotCrowdedOut},
       {"planner_solves_single_swap", testPlannerSolvesSingleSwap},
       {"planner_solves_pair_non_monotone", testPlannerSolvesPairNonMonotone},
       {"planner_complex_ranked_pair_fast", testPlannerComplexRankedPairFast},
-      {"planner_complex_third_vt_still_succeeds", testPlannerComplexThirdVtStillSucceeds},
-      {"planner_ignores_unrelated_halo_violation", testPlannerIgnoresUnrelatedHaloViolation},
+      {"planner_complex_third_vt_still_succeeds",
+       testPlannerComplexThirdVtStillSucceeds},
+      {"planner_ignores_unrelated_halo_violation",
+       testPlannerIgnoresUnrelatedHaloViolation},
       {"planner_no_solution_definitive", testPlannerNoSolutionDefinitive},
       {"gate_cache_single_evaluation", testGateCacheSingleEvaluation},
       {"planner_detects_protocol_error", testPlannerDetectsProtocolError},
       {"planner_order_independent_batches", testPlannerOrderIndependentBatches},
       {"planner_batch_size_invariance", testPlannerBatchSizeInvariance},
-      {"planner_determinism_full_transcript", testPlannerDeterminismFullTranscript},
+      {"planner_determinism_full_transcript",
+       testPlannerDeterminismFullTranscript},
       {"planner_never_edits_guard_only", testPlannerNeverEditsGuardOnly},
-      {"gate_delta_classification_branches", testGateDeltaClassificationBranches},
+      {"gate_delta_classification_branches",
+       testGateDeltaClassificationBranches},
       {"gate_rejects_unexplained_illegal", testGateRejectsUnexplainedIllegal},
-      {"gate_baseline_mismatch_aborts_search", testGateBaselineMismatchAbortsSearch},
-      {"gate_multiset_new_violation_not_absorbed", testGateMultisetNewViolationNotAbsorbed},
+      {"gate_baseline_mismatch_aborts_search",
+       testGateBaselineMismatchAbortsSearch},
+      {"gate_multiset_new_violation_not_absorbed",
+       testGateMultisetNewViolationNotAbsorbed},
       {"gate_per_violation_rule_distance", testGatePerViolationRuleDistance},
-      {"planner_definitive_reflects_last_window", testPlannerDefinitiveReflectsLastWindow},
+      {"planner_definitive_reflects_last_window",
+       testPlannerDefinitiveReflectsLastWindow},
       {"planner_budget_ceiling", testPlannerBudgetCeiling},
-      {"planner_adaptive_solves_beyond_ring", testPlannerAdaptiveSolvesBeyondRing},
-      {"planner_adaptive_l1_finds_far_filler", testPlannerAdaptiveL1FindsFarFiller},
-      {"planner_adaptive_level_cap_truncates", testPlannerAdaptiveLevelCapTruncates},
-      {"gate_baseline_survives_cache_growth", testGateBaselineSurvivesCacheGrowth},
-      {"planner_per_repair_budget_truncates", testPlannerPerRepairBudgetTruncates},
-      {"planner_per_repair_budget_disabled_still_solves", testPlannerPerRepairBudgetDisabledStillSolves},
-      {"planner_adaptive_continues_past_unchanged_blocking", testPlannerAdaptiveContinuesPastUnchangedBlocking},
-      {"gate_baseline_unexpected_inwindow_aborts", testGateBaselineUnexpectedInWindowAborts},
+      {"planner_adaptive_solves_beyond_ring",
+       testPlannerAdaptiveSolvesBeyondRing},
+      {"planner_adaptive_l1_finds_far_filler",
+       testPlannerAdaptiveL1FindsFarFiller},
+      {"planner_adaptive_level_cap_truncates",
+       testPlannerAdaptiveLevelCapTruncates},
+      {"gate_baseline_survives_cache_growth",
+       testGateBaselineSurvivesCacheGrowth},
+      {"planner_per_repair_budget_truncates",
+       testPlannerPerRepairBudgetTruncates},
+      {"planner_per_repair_budget_disabled_still_solves",
+       testPlannerPerRepairBudgetDisabledStillSolves},
+      {"planner_adaptive_continues_past_unchanged_blocking",
+       testPlannerAdaptiveContinuesPastUnchangedBlocking},
+      {"gate_baseline_unexpected_inwindow_aborts",
+       testGateBaselineUnexpectedInWindowAborts},
       {"gate_baseline_halo_extra_allowed", testGateBaselineHaloExtraAllowed},
-      {"gate_baseline_outside_guard_original_skipped", testGateBaselineOutsideGuardOriginalSkipped},
+      {"gate_baseline_outside_guard_original_skipped",
+       testGateBaselineOutsideGuardOriginalSkipped},
       {"gate_residual_one_to_one", testGateResidualOneToOne},
       {"gate_batch_extra_result_rejected", testGateBatchExtraResultRejected},
       {"gate_single_wrong_echo_on_baseline", testGateSingleWrongEchoOnBaseline},
       {"gate_status_not_checked_carries_on", testGateStatusNotCheckedCarriesOn},
       {"gate_fatal_diag_makes_unusable", testGateFatalDiagMakesUnusable},
-      {"gate_new_violation_no_rows_goes_halo", testGateNewViolationNoRowsGoesHalo},
+      {"gate_new_violation_no_rows_goes_halo",
+       testGateNewViolationNoRowsGoesHalo},
       {"signature_field_mismatch_each", testSignatureFieldMismatchEach},
       {"signature_xwindow_tolerance_edges", testSignatureXwindowToleranceEdges},
-      {"relatedness_row_and_distance_edges", testRelatednessRowAndDistanceEdges},
+      {"relatedness_row_and_distance_edges",
+       testRelatednessRowAndDistanceEdges},
       {"rule_distance_fallback", testRuleDistanceFallback},
-      {"enumerate_complete_budget_boundary", testEnumerateCompleteBudgetBoundary},
+      {"enumerate_complete_budget_boundary",
+       testEnumerateCompleteBudgetBoundary},
       {"enumerate_overflow_clamp", testEnumerateOverflowClamp},
       {"enumerate_size3_cap_and_products", testEnumerateSize3CapAndProducts},
       {"enumerate_skips_checked_overlays", testEnumerateSkipsCheckedOverlays},
-      {"enumerate_all_checked_emits_nothing", testEnumerateAllCheckedEmitsNothing},
-      {"adaptive_escalation_does_not_reenumerate_answered", testAdaptiveEscalationDoesNotReEnumerateAnsweredCandidates},
-      {"overlay_key_spills_past_inline_buffer", testOverlayKeySpillsPastTheInlineBuffer},
-      {"signature_class_mismatch_implies_signature_mismatch", testSignatureClassMismatchImpliesSignatureMismatch},
-      {"retiler_prefers_deterministic_largest_exact_cover", testRetilerPrefersDeterministicLargestExactCover},
+      {"enumerate_all_checked_emits_nothing",
+       testEnumerateAllCheckedEmitsNothing},
+      {"adaptive_escalation_does_not_reenumerate_answered",
+       testAdaptiveEscalationDoesNotReEnumerateAnsweredCandidates},
+      {"overlay_key_spills_past_inline_buffer",
+       testOverlayKeySpillsPastTheInlineBuffer},
+      {"signature_class_mismatch_implies_signature_mismatch",
+       testSignatureClassMismatchImpliesSignatureMismatch},
+      {"retiler_prefers_deterministic_largest_exact_cover",
+       testRetilerPrefersDeterministicLargestExactCover},
+      {"retiler_rejects_unfillable_released_area",
+       testRetilerRejectsUnfillableReleasedArea},
+      {"retiler_never_overlaps_or_fills_outside_released_sites",
+       testRetilerNeverOverlapsOrFillsOutsideReleasedSites},
       {"planner_user_grid_mw_ms_1", testPlannerUserGridMwMs1},
   };
 
@@ -5775,7 +5714,11 @@ TEST_P(FillerRepairInternalTest, ReplaysInternalCase)
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    InternalCases, FillerRepairInternalTest, ::testing::ValuesIn(internalCases()),
-    [](const ::testing::TestParamInfo<Test>& info) { return info.param.name; });
+    InternalCases,
+    FillerRepairInternalTest,
+    ::testing::ValuesIn(internalCases()),
+    [](const ::testing::TestParamInfo<Test>& info) {
+      return info.param.name;
+    });
 
 }  // namespace

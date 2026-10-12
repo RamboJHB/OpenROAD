@@ -2,7 +2,12 @@
 
 ## Current state
 
-Current migration tag: `filler-repair-port-20260922` (see dated validation below).
+Current migration tag: `filler-repair-port-20261012-unformatted`.
+The `fillerRepair2` payload uses the original pre-format layout at `828f991b0c`,
+with only the live filler-name collision fix added to its runtime sources.
+Both filler-setting changes remain: follow order (`7942e2024c`) and absolute
+site-width avoid patterns (`828f991b0c`). Existing configured name prefixes
+also remain unchanged. See the dated verification below for rollback scope.
 
 This handoff describes the second destination-port version of fillerRepair.
 Its checker-side marker is the two repair failure logs added in
@@ -61,7 +66,7 @@ small integration form, and its tests are split by responsibility:
 
 - `test/FillerRepairIntegrationTest.cpp` exercises the public checker/engine
   boundary with `ImplantLayerCheckerHelper`. Its five-row fixtures assert at
-  least ten cells per row and cover 50%, 75%, and 90% occupied-site
+  least six cells per row and cover 50%, 75%, and 90% occupied-site
   utilization;
 - `test/FillerRepairInternalTest.cpp` exercises planner behavior through
   in-memory `PlacementView` and `RepairOracle` doubles and also covers
@@ -167,124 +172,33 @@ other bad records and requests fail with empty changes and structured
 
 ## Verification
 
-### Mixed-width, interleaved internal layouts (2026-09-22)
+### Minimal unformatted re-port baseline (2026-10-12)
 
-The current migration baseline is `filler-repair-port-20260922`. Earlier tags
-remain fixed. This update replaces the eight density maps from 2026-09-21;
-it does not add duplicate cases or change runtime code or public interfaces.
+- Reverted `026e4f0b7b` (format) and the later layout/test-only expansions from
+  `8b6b77d301`, `20eacb7319` and `2530de1b3f`. The two module `.clang-format`
+  overrides were removed; all pre-format source and gtest layouts are restored.
+  These reversions are recorded in a new commit, not a rewritten branch.
+- Retained the generated-name fix from `8b6b77d301`: every repair reads live
+  instance names, and adds a deterministic suffix when either a live instance
+  or another Add in the same candidate already uses the generated name.
+  Collision-free names and the configured prefix do not change.
+- Relative to `828f991b0c`, `fillerRepair2/` differs only in the naming fix
+  in `FillerRepairEngine.cpp`. Its other files, including internal and
+  integration gtests, are byte-identical to that baseline. The exercised
+  `fillerRepair/` implementation carries the same minimal fix.
+- One local/fake-UDM regression is retained for repair, commit, filler move,
+  and repair/commit again. It reserves the first suffix and checks deterministic
+  selection of the second suffix. It uses the original fixture without the
+  later layout framework and is not part of the destination payload.
+- Earlier migration tags remain unchanged, including the removed expanded
+  layouts. Use `filler-repair-port-20261012-unformatted` for this re-port.
 
-- Each 12-by-40 map now contains 20 mixed-width cells per row (240 instances
-  total), with fillers interspersed among standard cells. Every layout includes
-  widths of 1, 2 and 3 sites for BOTH classes; selected Delete regions also use
-  4-site fillers. The placement grid's physical site width stays five DBU.
-- The four standard-cell ratios remain exact by BOTH instance count and site
-  area: 50% = 120/240 cells and 240/480 sites; 65% = 156/240 and 312/480;
-  80% = 192/240 and 384/480; 95% = 228/240 and 456/480. Each ratio has two
-  layouts. Every row has the same instance-count ratio; area ratios are checked
-  across the full layout, including all caller-deleted fillers before repair.
-- Map columns still correspond to physical sites. A, B-, C-- denote standard
-  cells of widths 1, 2, 3; a, b-, c-- denote retained fillers. Numeric tokens
-  1, 2-, 3--, 4--- mark caller-deleted fillers. A dash continues the SAME cell,
-  never a second instance or an empty site. The target rectangle is explicit,
-  independent of old cell boundaries. Comments retain site-level D/T sketches.
-- Assertions reject malformed width continuations, incorrect ratios, missing
-  width diversity and grouped backgrounds. Only the intentional multi-filler
-  Delete region may contain adjacent fillers (at most two); standard-cell run
-  lengths and class transitions are also bounded for each density. At 95%, one
-  filler per row necessarily leaves longer standard-cell runs; its column and
-  width vary across rows instead of forming one filler strip.
-- Deletes now remove instance IDs, not one ID per covered site. Their full
-  master footprints must contain the target, and released sites are computed
-  as Delete sites minus target sites. The eight existing retile shapes and
-  expected first tilings remain unchanged, including both unfillable cases.
-  Exact coverage, unchanged standard cells, added-filler swaps, deterministic
-  output and at least ten distinct cells per row/column remain checked.
-
-Validation: all eight revised layouts passed their targeted run. Full normal
-and ASan builds both passed all 417 CTest cases (22.65 and 71.27 seconds).
-Formatting checks and `git diff --check` passed. No production changes were
-needed; the old clustered, single-site density maps were replaced, not retained.
-
-### Internal density layouts and migration baseline (2026-09-21)
-
-The migration baseline for this update is `filler-repair-port-20260921`.
-The previous `filler-repair-port-20260915` tag is preserved, not moved. This
-update only changes tests and this handoff; runtime logic and public APIs
-remain unchanged from the tested live-name-collision fix.
-
-- Added eight explicit 12-row by 40-site internal layouts, two for each exact
-  standard-cell ratio: 50% (240/480), 65% (312/480), 80% (384/480), and 95%
-  (456/480). Ratios describe the initial placement, before Delete/target/Add.
-  Every initial cell occupies one site, so instance-count and site-area ratios
-  agree. The tests assert dimensions, cell counts and ratios.
-- Layout literals follow physical placement: y=11 at the top, y=0 at the bottom,
-  x=0..39 left to right. Comments show coordinates and each repair region.
-  S denotes fixed standard cells, F retained fillers, D deleted fillers outside
-  the target, and T deleted fillers underneath the target. D+T is the Delete
-  footprint; D alone is the exact Add coverage. One site is five DBU.
-- The eight cases cover split left/right gaps, a two-row pocket, disconnected
-  boundary gaps, a staggered staircase, exact cover with no Add, an untileable
-  one-site width remainder, vertical-only filling, and incompatible height.
-  Distinct distributed/clustered backgrounds exercise each requested ratio.
-- Retile checks compare the first tiling against explicit expected rectangles,
-  independently verify every returned tiling's exact/no-overlap site set, and
-  reverse both released-site and master order to check determinism. Impossible
-  cases must finish exhaustively without publishing a partial tiling.
-- Successful tilings are materialized in the existing in-memory planner view.
-  Non-exact cases start with a real synthetic min-width violation and require
-  an added-filler master swap; exact cover requires no change. Full-layout
-  oracle checks, unchanged standard cells, unchanged search input, same-size
-  swaps, preserved orientation/position and repeatability are asserted. The
-  completed layouts also retain at least ten distinct cells per row and column.
-  These portable tests do not replace real-checker/DePlace commit tests.
-- GoogleTest sources use the existing compact 120-column style. Spatial map
-  tables deliberately preserve one physical row per source line.
-
-Validation: all eight new cases passed their targeted run. Full normal and
-ASan builds both passed all 417 CTest cases (22.89 and 73.50 seconds), up from
-409. GoogleTest formatting checks and `git diff --check` also passed. No new
-runtime defect was found by these layouts; no production source was changed.
-
-### Expanded regression and deduplication (2026-09-20)
-
-- Found a reproducible lifecycle defect: after a committed generated filler
-  moved to another position, retiling its original position reused its name.
-  The checker accepted the geometry but `DePlace::commit` rejected the duplicate
-  name. The engine now reads current Network/DB names per repair and appends a
-  deterministic suffix only on collision. Prefixes and collision-free names,
-  public interfaces and caller-owned Delete semantics are unchanged.
-- The regression executes repair, full commit, a committed move/master change,
-  and a second repair/commit on the same engine. It reserves the first suffix
-  as well, checking both live-name lookup and deterministic suffix selection.
-- Local/fake-UDM policy and retile examples use 12 rows by 40 sites. Fixture
-  checks require at least ten distinct cells in every row AND every column.
-  A table retains 13 representative layouts: exact cover, both core boundaries,
-  symmetric/asymmetric gaps, several deleted fillers, lower/upper cuts of a
-  two-row filler, two-row targets, four single-row deletions, staggered and
-  disconnected gaps, and width/height divisibility failures.
-- Successful probes independently verify Add coverage equals deleted sites
-  minus target sites, no overlap/Delete output, deterministic output when Delete
-  order reverses, and a full real DePlace commit. DB/master/orientation/position
-  and full Grid occupancy are checked afterwards. Failed probes must leave
-  DB/Network/Grid unchanged. Implant legality is rechecked with the real checker.
-- Retiler internal tests independently enumerate all 256 two-by-four gap masks
-  against three master libraries (768 combinations), including translated sites,
-  and test nine solution/state-budget combinations with duplicate input sites
-  and invalid footprints. These algorithm-unit inputs intentionally stay small.
-- Deduplication removed two standalone retile cases subsumed by that exhaustive
-  check and the repeated density variants of eight density-independent contract
-  tests. Two initially added invalid-overlay examples were dropped because the
-  existing dedicated tests already cover them. The C++17 planner and isolated
-  migration builds remain separate gates, not interchangeable duplicate builds.
-- The migration tag `filler-repair-port-20260915` remains fixed at `026e4f0b7b`;
-  these are follow-up changes, not a retag of the previously delivered baseline.
-
-Validation: the new lifecycle regression failed before the fix with the reused
-Add name and `DePlace::commit == false`. After the fix and final deduplication,
-normal and ASan builds both passed all 409 CTest cases (24.50 seconds and
-71.95 seconds). Compared with the 412-case baseline, 15 independent cases were
-added and 18 redundant executions were removed; the retile mask test now covers
-768 combinations rather than 256. Formatting and `git diff --check` pass.
+Validation: the isolated naming regression failed without the retained fix
+(duplicate generated name and rejected commit), then passed with it. Full
+normal and ASan builds passed all 413 CTest cases (27.08 and 65.34 seconds).
+A Clang raw-token audit confirmed that all 20 runtime source/header files in
+the two modules have the same C++ tokens as `2530de1b3f`; only layout/comments
+differ. Baseline file comparisons and `git diff --check` also passed.
 
 The 2026-09-10 follow-up adds ordered gap filling and the local commit path:
 

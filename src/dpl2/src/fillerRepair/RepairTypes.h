@@ -73,8 +73,14 @@ struct XInterval
 
   DbCoord length() const { return xh - xl; }
   bool empty() const { return xh <= xl; }
-  bool overlaps(const XInterval& other) const { return xl < other.xh && other.xl < xh; }
-  bool operator==(const XInterval& other) const { return xl == other.xl && xh == other.xh; }
+  bool overlaps(const XInterval& other) const
+  {
+    return xl < other.xh && other.xl < xh;
+  }
+  bool operator==(const XInterval& other) const
+  {
+    return xl == other.xl && xh == other.xh;
+  }
 };
 
 // Which VT family a master belongs to. The search only ever asks "same or
@@ -118,7 +124,8 @@ struct Region
   bool containsRow(RowId r) const { return r >= rowLo && r <= rowHi; }
   bool operator==(const Region& other) const
   {
-    return x.xl == other.x.xl && x.xh == other.x.xh && rowLo == other.rowLo && rowHi == other.rowHi;
+    return x.xl == other.x.xl && x.xh == other.x.xh && rowLo == other.rowLo
+           && rowHi == other.rowHi;
   }
 };
 
@@ -203,7 +210,8 @@ struct Violation
 // Readers for the shared change record. Replace/Delete use a real LeafCellID;
 // Add uses a request-local name, so the id accessor intentionally returns -1
 // for Add rather than manufacturing a plausible instance id.
-inline const eUNL::LeafCellID* cellChangeRecordLeafCellId(const CellChangeRecord& change)
+inline const eUNL::LeafCellID* cellChangeRecordLeafCellId(
+    const CellChangeRecord& change)
 {
   return std::get_if<eUNL::LeafCellID>(&change.cell_data_);
 }
@@ -211,7 +219,9 @@ inline const eUNL::LeafCellID* cellChangeRecordLeafCellId(const CellChangeRecord
 inline InstanceId cellChangeRecordInstanceId(const CellChangeRecord& change)
 {
   const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(change);
-  return cellId != nullptr ? static_cast<InstanceId>(cellId->getIndexValue()) : static_cast<InstanceId>(-1);
+  return cellId != nullptr
+             ? static_cast<InstanceId>(cellId->getIndexValue())
+             : static_cast<InstanceId>(-1);
 }
 
 inline MasterId cellChangeRecordNewMasterId(const CellChangeRecord& change)
@@ -219,10 +229,14 @@ inline MasterId cellChangeRecordNewMasterId(const CellChangeRecord& change)
   return static_cast<MasterId>(change.new_lib_cell_.getIndexValue());
 }
 
-inline bool sameCellChangeRecord(const CellChangeRecord& left, const CellChangeRecord& right)
+inline bool sameCellChangeRecord(const CellChangeRecord& left,
+                                 const CellChangeRecord& right)
 {
-  return left.op_ == right.op_ && left.cell_data_ == right.cell_data_ && left.x_ == right.x_ && left.y_ == right.y_
-         && left.orig_lib_cell_ == right.orig_lib_cell_ && left.new_lib_cell_ == right.new_lib_cell_
+  return left.op_ == right.op_ && left.cell_data_ == right.cell_data_
+         && left.x_ == right.x_
+         && left.y_ == right.y_
+         && left.orig_lib_cell_ == right.orig_lib_cell_
+         && left.new_lib_cell_ == right.new_lib_cell_
          && left.orientation_.getValue() == right.orientation_.getValue();
 }
 
