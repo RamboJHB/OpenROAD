@@ -37,6 +37,7 @@
 
 #include <algorithm>
 #include <iostream>
+#include <stdexcept>
 
 #include <boost/icl/interval_set.hpp>
 
@@ -974,12 +975,11 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
         connection_attempts++;
         iterm0->connect(connect_net);
         if (iterm0->getNet() != connect_net) {
-          logger_->error(utl::PAD,
-                         35,
-                         "Failed to connect {}/{} to net {} by abutment",
-                         iterm0->getInst()->getName(),
-                         iterm0->getMTerm()->getName(),
-                         connect_net->getName());
+          std::cout << "[PAD][Connect][ERROR] Failed to connect "
+                    << iterm0->getInst()->getName() << "/"
+                    << iterm0->getMTerm()->getName() << " to net "
+                    << connect_net->getName() << " by abutment" << std::endl;
+          throw std::runtime_error("Failed to connect terminal by abutment");
         }
         special_nets.insert(connect_net);
         changed = true;
@@ -988,12 +988,11 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
         connection_attempts++;
         iterm1->connect(connect_net);
         if (iterm1->getNet() != connect_net) {
-          logger_->error(utl::PAD,
-                         35,
-                         "Failed to connect {}/{} to net {} by abutment",
-                         iterm1->getInst()->getName(),
-                         iterm1->getMTerm()->getName(),
-                         connect_net->getName());
+          std::cout << "[PAD][Connect][ERROR] Failed to connect "
+                    << iterm1->getInst()->getName() << "/"
+                    << iterm1->getMTerm()->getName() << " to net "
+                    << connect_net->getName() << " by abutment" << std::endl;
+          throw std::runtime_error("Failed to connect terminal by abutment");
         }
         special_nets.insert(connect_net);
         changed = true;
@@ -1011,21 +1010,17 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
               << std::endl;
 
     if (changed && connected_after <= connected_before) {
-      logger_->error(utl::PAD,
-                     36,
-                     "Abutment connection iteration {} made no progress "
-                     "after {} attempts",
-                     iter,
-                     connection_attempts);
+      std::cout << "[PAD][Connect][ERROR] Abutment connection iteration " << iter
+                << " made no progress after " << connection_attempts << " attempts"
+                << std::endl;
+      throw std::runtime_error("Abutment connection made no progress");
     }
     iter++;
     if (changed && iter > max_iterations) {
-      logger_->error(utl::PAD,
-                     37,
-                     "Abutment connection exceeded the {}-iteration limit "
-                     "for {} terminals",
-                     max_iterations,
-                     iterms.size());
+      std::cout << "[PAD][Connect][ERROR] Abutment connection exceeded the "
+                << max_iterations << "-iteration limit for " << iterms.size()
+                << " terminals" << std::endl;
+      throw std::runtime_error("Abutment connection exceeded iteration limit");
     }
   } while (changed);
 
