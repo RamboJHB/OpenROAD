@@ -37,7 +37,6 @@
 
 #include <algorithm>
 #include <iostream>
-#include <stdexcept>
 
 #include <boost/icl/interval_set.hpp>
 
@@ -874,6 +873,22 @@ void ICeWall::connectByAbutment()
           connections.end(), inst_connections.begin(), inst_connections.end());
     }
   }
+  const size_t connection_count = connections.size();
+  connections.erase(
+      std::remove_if(connections.begin(),
+                     connections.end(),
+                     [](const auto& connection) {
+                       return connection.first->getSigType().isSupply()
+                              || connection.second->getSigType().isSupply();
+                     }),
+      connections.end());
+  const size_t skipped_pg_connections
+      = connection_count - connections.size();
+  if (skipped_pg_connections > 0) {
+    std::cout << "[PAD][Connect] Skipping " << skipped_pg_connections
+              << " PG abutment connections because PG connection is unsupported"
+              << std::endl;
+  }
   debugPrint(logger_,
              utl::PAD,
              "Connect",
@@ -974,28 +989,28 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
       if (net0 != connect_net) {
         connection_attempts++;
         iterm0->connect(connect_net);
-        if (iterm0->getNet() != connect_net) {
-          std::cout << "[PAD][Connect][ERROR] Failed to connect "
+        if (iterm0->getNet() == connect_net) {
+          special_nets.insert(connect_net);
+          changed = true;
+        } else {
+          std::cout << "[PAD][Connect][WARNING] Failed to connect "
                     << iterm0->getInst()->getName() << "/"
                     << iterm0->getMTerm()->getName() << " to net "
                     << connect_net->getName() << " by abutment" << std::endl;
-          throw std::runtime_error("Failed to connect terminal by abutment");
         }
-        special_nets.insert(connect_net);
-        changed = true;
       }
       if (net1 != connect_net) {
         connection_attempts++;
         iterm1->connect(connect_net);
-        if (iterm1->getNet() != connect_net) {
-          std::cout << "[PAD][Connect][ERROR] Failed to connect "
+        if (iterm1->getNet() == connect_net) {
+          special_nets.insert(connect_net);
+          changed = true;
+        } else {
+          std::cout << "[PAD][Connect][WARNING] Failed to connect "
                     << iterm1->getInst()->getName() << "/"
                     << iterm1->getMTerm()->getName() << " to net "
                     << connect_net->getName() << " by abutment" << std::endl;
-          throw std::runtime_error("Failed to connect terminal by abutment");
         }
-        special_nets.insert(connect_net);
-        changed = true;
       }
     }
 
@@ -1009,18 +1024,18 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
               << " connected, " << iterms.size() - connected_after << " remaining"
               << std::endl;
 
-    if (changed && connected_after <= connected_before) {
-      std::cout << "[PAD][Connect][ERROR] Abutment connection iteration " << iter
-                << " made no progress after " << connection_attempts << " attempts"
-                << std::endl;
-      throw std::runtime_error("Abutment connection made no progress");
+    if (connection_attempts > 0 && connected_after <= connected_before) {
+      std::cout << "[PAD][Connect][WARNING] Abutment connection iteration "
+                << iter << " made no progress after " << connection_attempts
+                << " attempts; stopping propagation" << std::endl;
+      break;
     }
     iter++;
     if (changed && iter > max_iterations) {
-      std::cout << "[PAD][Connect][ERROR] Abutment connection exceeded the "
+      std::cout << "[PAD][Connect][WARNING] Abutment connection exceeded the "
                 << max_iterations << "-iteration limit for " << iterms.size()
-                << " terminals" << std::endl;
-      throw std::runtime_error("Abutment connection exceeded iteration limit");
+                << " terminals; stopping propagation" << std::endl;
+      break;
     }
   } while (changed);
 
