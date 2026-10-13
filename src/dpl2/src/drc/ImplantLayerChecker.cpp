@@ -892,6 +892,14 @@ bool ImplantLayerChecker::check(const Node* node,
     request.overlayChanges = overlayChanges;
     const CheckResult direct = checkDirect(request);
     if (direct.isLegal && isExactCover(request)) {
+        // The accepted filler transaction includes the caller's deletions even
+        // when no repair search is needed. Std-cell replacement stays separate.
+        for (const CellChangeRecord& overlay : request.overlayChanges) {
+            const Node* removed = network_->getNode(*cellChangeLeafCellId(overlay));
+            if (removed->isFiller()) {
+                cellChanges.push_back(overlay);
+            }
+        }
         return true;
     }
     if (!enableFillerRepair_.load(std::memory_order_acquire)) {
@@ -2098,7 +2106,8 @@ bool ImplantLayerChecker::isExactCover(const CheckRequest& request) const
 }
 
 // Validate a repair candidate. Existing instances may only be same-footprint
-// filler Replaces. Request-local Adds must exactly cover the sites released by
+// filler Replaces or exact echoes of caller-provided filler Deletes.
+// Request-local Adds must exactly cover the sites released by
 // caller-deleted fillers outside the temporary target.
 DiagVec ImplantLayerChecker::validateOverlayRequest(
     const CheckRequest& request,
@@ -2263,16 +2272,18 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
         }
 
         const LeafCellID* cellId = cellChangeLeafCellId(change);
-        if (change.op_ != OpType::Replace || cellId == nullptr
+        if ((change.op_ != OpType::Replace && change.op_ != OpType::Delete)
+            || cellId == nullptr
             || !cellId->isValid()) {
             diagnostics.push_back(
                 {"invalid_filler_change",
-                 "filler repair candidates may contain Add or Replace records only"});
+                 "filler repair candidates require Add, Replace or input filler Delete records"});
             continue;
         }
         const InstanceId instanceId = network_->getNodeId(*cellId);
         const Node* filler = network_->getNode(instanceId);
-        if (targetNodeIds.find(instanceId) != targetNodeIds.end()) {
+        if (change.op_ == OpType::Replace
+            && targetNodeIds.find(instanceId) != targetNodeIds.end()) {
             diagnostics.push_back(
                 {"target_cannot_be_changed_filler",
                  "caller-deleted target nodes cannot be changed by filler repair"});
@@ -2289,6 +2300,24 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
             diagnostics.push_back(
                 {"changed_instance_not_filler",
                  makeMessage("changed instance is not filler ", instanceId)});
+            continue;
+        }
+        if (change.op_ == OpType::Delete) {
+            const auto echoed = std::find_if(
+                request.overlayChanges.begin(), request.overlayChanges.end(),
+                [&](const CellChangeRecord& overlay) {
+                    return overlay.op_ == OpType::Delete
+                           && overlay.cell_data_ == change.cell_data_
+                           && overlay.x_ == change.x_ && overlay.y_ == change.y_
+                           && overlay.orig_lib_cell_ == change.orig_lib_cell_
+                           && overlay.new_lib_cell_ == change.new_lib_cell_
+                           && overlay.orientation_ == change.orientation_;
+                });
+            if (echoed == request.overlayChanges.end()) {
+                diagnostics.push_back(
+                    {"filler_delete_not_input_overlay",
+                     "repair may only echo an unchanged caller filler Delete"});
+            }
             continue;
         }
         if (change.orig_lib_cell_.isValid()

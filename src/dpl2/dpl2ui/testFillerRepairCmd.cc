@@ -102,10 +102,11 @@ bool validFillerChanges(const std::vector<CellChangeRecord>& changes,
           return name != nullptr && !name->empty()
                  && setting.isFillerCell(change.new_lib_cell_);
         }
-        return change.op_ == OpType::Replace
+        return (change.op_ == OpType::Replace || change.op_ == OpType::Delete)
                && std::holds_alternative<eUNL::LeafCellID>(change.cell_data_)
                && setting.isFillerCell(change.orig_lib_cell_)
-               && setting.isFillerCell(change.new_lib_cell_);
+               && (change.op_ == OpType::Delete
+                   || setting.isFillerCell(change.new_lib_cell_));
       });
 }
 
@@ -122,7 +123,8 @@ void printChanges(const std::vector<CellChangeRecord>& changes)
       continue;
     }
     const auto* id = std::get_if<eUNL::LeafCellID>(&change.cell_data_);
-    std::cout << "    filler=" << (id != nullptr ? id->getIndexValue() : -1)
+    std::cout << (change.op_ == OpType::Delete ? "    delete filler=" : "    swap filler=")
+              << (id != nullptr ? id->getIndexValue() : -1)
               << " master=" << change.orig_lib_cell_.getIndexValue() << " -> "
               << change.new_lib_cell_.getIndexValue() << '\n';
   }
@@ -279,7 +281,7 @@ bool TestFillerRepairCmd::exec()
       = checker->check(&temporary, x, y, *orientation, changes, overlayChanges);
   if (!changes.empty()
       && (setting == nullptr || !validFillerChanges(changes, *setting))) {
-    std::cout << "ERROR: repair returned an invalid Add/Replace filler record\n";
+    std::cout << "ERROR: repair returned an invalid Delete/Add/Replace filler record\n";
     return false;
   }
   std::cout << (accepted ? "LEGAL" : "NO REPAIR")
@@ -308,7 +310,7 @@ bool TestFillerRepairCmd::exec()
                          targetMaster->getDbMaster(),
                          *orientation});
   } else {
-    transaction = overlayChanges;
+    // Accepted changes already contain the input filler Deletes.
     std::set<std::string> names;
     for (const auto& [id, node] : network->getNodes()) {
       (void) id;
@@ -341,8 +343,8 @@ bool TestFillerRepairCmd::exec()
     std::cout << "ERROR: commit rejected; placement was not changed\n";
     return false;
   }
-  std::cout << "COMMITTED: target + " << overlayChanges.size()
-            << " overlay(s) + " << changes.size() << " filler change(s)\n";
+  std::cout << "COMMITTED: target + " << changes.size()
+            << " filler change(s), including input filler Deletes\n";
   for (const auto& record : transaction) {
     const auto* id = std::get_if<eUNL::LeafCellID>(&record.cell_data_);
     Node* node = id != nullptr

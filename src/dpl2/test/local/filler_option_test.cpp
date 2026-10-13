@@ -221,6 +221,11 @@ struct OptionFixture
     const auto result = engine->repair(request);
     EXPECT_EQ(snapshot(), before);
     if (result.hasSolution) {
+      EXPECT_FALSE(result.changes.empty());
+      if (!result.changes.empty()) {
+        EXPECT_EQ(result.changes.front().op_, OpType::Delete);
+        EXPECT_EQ(result.changes.front().cell_data_, request.overlayChanges.front().cell_data_);
+      }
       const auto checked = checker->checkPlaceWithOverlays(
           request,
           eUTL::Rect(eUTL::UvDist(0),
@@ -344,6 +349,9 @@ TEST(FillerAvoidPattern, TwoRowAddsCheckEveryRowOfTheirSideBoundary)
   ASSERT_TRUE(result.hasSolution);
   EXPECT_EQ(f.addWidths(result), (std::vector<int>{1, 2}));
   for (const auto& change : result.changes) {
+    if (change.op_ != OpType::Add) {
+      continue;
+    }
     EXPECT_EQ(f.db.design.getLibAcc()
                   .getPhysLibCell(change.new_lib_cell_)
                   .getHeight()
@@ -360,9 +368,10 @@ TEST(FillerAvoidPattern, MixedHeightAddsCheckTheirSharedRow)
   const auto seed = unrestricted.repair(0, 10, 0, 2);
   ASSERT_TRUE(seed.hasSolution);
   EXPECT_EQ(unrestricted.addWidths(seed), (std::vector<int>{1, 2}));
-  ASSERT_FALSE(seed.changes.empty());
+  ASSERT_EQ(seed.changes.size(), 3u);
+  ASSERT_EQ(seed.changes[1].op_, OpType::Add);
   EXPECT_EQ(unrestricted.db.design.getLibAcc()
-                .getPhysLibCell(seed.changes.front().new_lib_cell_)
+                .getPhysLibCell(seed.changes[1].new_lib_cell_)
                 .getHeight()
                 .getStorage(),
             2 * OptionFixture::kHeight);
@@ -402,7 +411,8 @@ TEST(FillerAvoidPattern, ExactCoverDoesNotRetileExistingForbiddenPairs)
   OptionFixture f("1:2", {{12, 2, 2}, {8, 2, 1}, {9, 2, 2}});
   const auto result = f.repair(0, 12, 2, 2);
   ASSERT_TRUE(result.hasSolution);
-  EXPECT_TRUE(result.changes.empty());
+  ASSERT_EQ(result.changes.size(), 1u);
+  EXPECT_EQ(result.changes.front().op_, OpType::Delete);
 }
 
 TEST(FillerRetileCommit, GeneratedNameRemainsUniqueAfterCommittedFillerMoves)
@@ -422,9 +432,7 @@ TEST(FillerRetileCommit, GeneratedNameRemainsUniqueAfterCommittedFillerMoves)
   };
   const auto commitRepair = [&](const fillerRepair::RepairOutcome& repair,
                                 const std::string& targetName) {
-    const Node* old = f.dp->getNetwork()->getNode(f.fillerIds[0]);
     ipl::FillerChanges changes{
-        record(OpType::Delete, old, 10, old->getMaster()->getDbMaster()),
         {OpType::Add,
          targetName,
          eUTL::UvDist(11 * f.siteWidth),
@@ -437,9 +445,9 @@ TEST(FillerRetileCommit, GeneratedNameRemainsUniqueAfterCommittedFillerMoves)
   };
   const auto first = f.repair(0, 11, 2);
   ASSERT_TRUE(first.hasSolution);
-  ASSERT_EQ(first.changes.size(), 1u);
+  ASSERT_EQ(first.changes.size(), 2u);
   const std::string originalName
-      = std::get<std::string>(first.changes.front().cell_data_);
+      = std::get<std::string>(first.changes.back().cell_data_);
   ASSERT_TRUE(commitRepair(first, "FIRST_TARGET"));
 
   auto* grid = f.dp->getGrid();
@@ -458,13 +466,13 @@ TEST(FillerRetileCommit, GeneratedNameRemainsUniqueAfterCommittedFillerMoves)
   f.fillerIds[0] = reopenedId;
   const auto second = f.repair(0, 11, 2);
   ASSERT_TRUE(second.hasSolution);
-  ASSERT_EQ(second.changes.size(), 1u);
-  EXPECT_EQ(std::get<std::string>(second.changes.front().cell_data_),
+  ASSERT_EQ(second.changes.size(), 2u);
+  EXPECT_EQ(std::get<std::string>(second.changes.back().cell_data_),
             originalName + "_2");
   const auto repeated = f.repair(0, 11, 2);
   ASSERT_TRUE(repeated.hasSolution);
-  ASSERT_EQ(repeated.changes.size(), 1u);
-  EXPECT_EQ(repeated.changes.front().cell_data_, second.changes.front().cell_data_);
+  ASSERT_EQ(repeated.changes.size(), 2u);
+  EXPECT_EQ(repeated.changes.back().cell_data_, second.changes.back().cell_data_);
   ASSERT_TRUE(commitRepair(second, "SECOND_TARGET"));
   EXPECT_NE(grid->gridPixel(GridX{10}, GridY{2})->cell, generated);
   EXPECT_EQ(grid->gridPixel(GridX{20}, GridY{2})->cell, generated);

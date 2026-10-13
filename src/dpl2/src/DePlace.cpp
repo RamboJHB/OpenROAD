@@ -470,7 +470,8 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   std::pair<int, int> Coordinate;
   // checkPixels() collects every target-intersecting filler Delete overlay.
   // Their union must cover the target; repair fills the remaining gaps and
-  // returns filler Add/Replace records from the accepted candidate.
+  // returns those filler Deletes plus Add/Replace records from the accepted
+  // candidate. The caller must not append the input filler Deletes again.
   if (va == nullptr) {
     Coordinate = legalCellInRect(rect, search_cell, &ccRecords);
   } else {
