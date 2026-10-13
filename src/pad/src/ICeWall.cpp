@@ -35,6 +35,8 @@
 
 #include "pad/ICeWall.h"
 
+#include <algorithm>
+
 #include <boost/icl/interval_set.hpp>
 
 #include "RDLRouter.h"
@@ -906,16 +908,31 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
     const
 {
   std::set<odb::dbNet*> special_nets;
+  std::set<odb::dbITerm*> iterms;
+  for (const auto& [iterm0, iterm1] : connections) {
+    iterms.insert(iterm0);
+    iterms.insert(iterm1);
+  }
+  const auto count_connected = [&iterms]() {
+    return std::count_if(iterms.begin(), iterms.end(), [](odb::dbITerm* iterm) {
+      return iterm->getNet() != nullptr;
+    });
+  };
+  const size_t max_iterations = iterms.size() + 1;
   bool changed = false;
-  int iter = 0;
+  size_t iter = 0;
   do {
     changed = false;
+    const size_t connected_before = count_connected();
+    size_t connection_attempts = 0;
     debugPrint(logger_,
                utl::PAD,
                "Connect",
                1,
-               "Start of connecting iteration {}",
-               iter);
+               "Start of connecting iteration {}: {}/{} terminals connected",
+               iter,
+               connected_before,
+               iterms.size());
 
     for (const auto& [iterm0, iterm1] : connections) {
       auto* net0 = iterm0->getNet();
@@ -958,17 +975,69 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
                  net1 != nullptr ? net1->getName() : "NULL");
 
       if (net0 != connect_net) {
+        connection_attempts++;
         iterm0->connect(connect_net);
+        if (iterm0->getNet() != connect_net) {
+          logger_->error(utl::PAD,
+                         35,
+                         "Failed to connect {}/{} to net {} by abutment",
+                         iterm0->getInst()->getName(),
+                         iterm0->getMTerm()->getName(),
+                         connect_net->getName());
+        }
         special_nets.insert(connect_net);
         changed = true;
       }
       if (net1 != connect_net) {
+        connection_attempts++;
         iterm1->connect(connect_net);
+        if (iterm1->getNet() != connect_net) {
+          logger_->error(utl::PAD,
+                         35,
+                         "Failed to connect {}/{} to net {} by abutment",
+                         iterm1->getInst()->getName(),
+                         iterm1->getMTerm()->getName(),
+                         connect_net->getName());
+        }
         special_nets.insert(connect_net);
         changed = true;
       }
     }
+
+    const size_t connected_after = count_connected();
+    const size_t newly_connected = connected_after > connected_before
+                                       ? connected_after - connected_before
+                                       : 0;
+    debugPrint(logger_,
+               utl::PAD,
+               "Connect",
+               1,
+               "End of connecting iteration {}: {} attempts, {} newly "
+               "connected, {}/{} connected, {} remaining",
+               iter,
+               connection_attempts,
+               newly_connected,
+               connected_after,
+               iterms.size(),
+               iterms.size() - connected_after);
+
+    if (changed && connected_after <= connected_before) {
+      logger_->error(utl::PAD,
+                     36,
+                     "Abutment connection iteration {} made no progress "
+                     "after {} attempts",
+                     iter,
+                     connection_attempts);
+    }
     iter++;
+    if (changed && iter > max_iterations) {
+      logger_->error(utl::PAD,
+                     37,
+                     "Abutment connection exceeded the {}-iteration limit "
+                     "for {} terminals",
+                     max_iterations,
+                     iterms.size());
+    }
   } while (changed);
 
   return special_nets;
