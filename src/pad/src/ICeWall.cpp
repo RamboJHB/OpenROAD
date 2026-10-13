@@ -36,6 +36,7 @@
 #include "pad/ICeWall.h"
 
 #include <algorithm>
+#include <iostream>
 
 #include <boost/icl/interval_set.hpp>
 
@@ -925,14 +926,9 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
     changed = false;
     const size_t connected_before = count_connected();
     size_t connection_attempts = 0;
-    debugPrint(logger_,
-               utl::PAD,
-               "Connect",
-               1,
-               "Start of connecting iteration {}: {}/{} terminals connected",
-               iter,
-               connected_before,
-               iterms.size());
+    std::cout << "[PAD][Connect] Start of connecting iteration " << iter << ": "
+              << connected_before << "/" << iterms.size()
+              << " terminals connected" << std::endl;
 
     for (const auto& [iterm0, iterm1] : connections) {
       auto* net0 = iterm0->getNet();
@@ -1008,18 +1004,11 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
     const size_t newly_connected = connected_after > connected_before
                                        ? connected_after - connected_before
                                        : 0;
-    debugPrint(logger_,
-               utl::PAD,
-               "Connect",
-               1,
-               "End of connecting iteration {}: {} attempts, {} newly "
-               "connected, {}/{} connected, {} remaining",
-               iter,
-               connection_attempts,
-               newly_connected,
-               connected_after,
-               iterms.size(),
-               iterms.size() - connected_after);
+    std::cout << "[PAD][Connect] End of connecting iteration " << iter << ": "
+              << connection_attempts << " attempts, " << newly_connected
+              << " newly connected, " << connected_after << "/" << iterms.size()
+              << " connected, " << iterms.size() - connected_after << " remaining"
+              << std::endl;
 
     if (changed && connected_after <= connected_before) {
       logger_->error(utl::PAD,
