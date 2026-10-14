@@ -227,8 +227,7 @@ struct OverlapInfo
 // Public pre-commit wire. The temporary Node is the proposed std cell; the
 // Delete overlays name either one committed std cell or selected fillers that
 // intersect a newly inserted buffer. Repair may fill released sites with Add
-// records. Accepted filler changes include these filler Deletes exactly once;
-// the caller must not append them again at commit. Std-cell Deletes stay here.
+// records; the wire itself is unchanged.
 struct CheckRequest
 {
     const Node* cell = nullptr;

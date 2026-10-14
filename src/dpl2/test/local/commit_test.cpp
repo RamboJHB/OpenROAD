@@ -229,16 +229,15 @@ TEST(DePlaceCommit, GapAddsAndSecondRepairUseTheSameLiveChecker)
   target.setPlaced(false);
   std::vector<CellChangeRecord> overlays{f.remove(103)};
   std::vector<CellChangeRecord> changes;
-  ASSERT_TRUE(f.dp->getPlacementDRC()->checkDRC(
+  ASSERT_TRUE(checker->check(
       &target, GridX{18}, GridY{0}, target.getOrient(), changes, overlays));
-  ASSERT_EQ(changes.size(), 2u);
-  EXPECT_EQ(changes.front().op_, OpType::Delete);
-  EXPECT_EQ(changes.front().cell_data_, overlays.front().cell_data_);
-  ASSERT_EQ(changes.back().op_, OpType::Add);
+  ASSERT_EQ(changes.size(), 1u);
+  ASSERT_EQ(changes.front().op_, OpType::Add);
   EXPECT_EQ(
-      std::get<std::string>(changes.back().cell_data_).find("TEST_FILL_"), 0u);
+      std::get<std::string>(changes.front().cell_data_).find("TEST_FILL_"), 0u);
   auto transaction = changes;  // order-independent final-occupancy preflight
   transaction.push_back(f.add("NEW_STD", 18, 18, 0));
+  transaction.insert(transaction.end(), overlays.begin(), overlays.end());
   ASSERT_TRUE(f.dp->commit(transaction));
   EXPECT_EQ(f.node(103), nullptr);
   EXPECT_EQ(f.dp->getNetwork()->getNode(oldNetworkId), nullptr);
@@ -254,13 +253,11 @@ TEST(DePlaceCommit, GapAddsAndSecondRepairUseTheSameLiveChecker)
   target.setPlaced(false);
   overlays = {f.remove(gapId.getIndexValue())};
   changes.clear();
-  ASSERT_TRUE(f.dp->getPlacementDRC()->checkDRC(
+  ASSERT_TRUE(checker->check(
       &target, GridX{19}, GridY{0}, target.getOrient(), changes, overlays));
   EXPECT_EQ(f.checker(), checker);
-  ASSERT_EQ(changes.size(), 1u);
-  EXPECT_EQ(changes.front().op_, OpType::Delete);
-  EXPECT_EQ(changes.front().cell_data_, overlays.front().cell_data_);
-  transaction = changes;
+  EXPECT_TRUE(changes.empty());
+  transaction = overlays;
   transaction.push_back(f.add("SECOND_STD", 18, 19, 0));
   ASSERT_TRUE(f.dp->commit(transaction));
   f.consistent();
@@ -289,6 +286,7 @@ TEST(DePlaceCommit, TwoRowDeletionCommitsTheEntireLShapedGap)
   ASSERT_FALSE(changes.empty());
   auto transaction = changes;
   transaction.push_back(f.add("NEW_STD", 18, 6, 2 * frt::kRowHeight));
+  transaction.insert(transaction.end(), overlays.begin(), overlays.end());
   ASSERT_TRUE(f.dp->commit(transaction));
   EXPECT_EQ(f.node(121), nullptr);
   int fillerSites = 0;
@@ -323,9 +321,10 @@ TEST(DePlaceCommit, TwoRowDeletionCommitsTheEntireLShapedGap)
       &target, GridX{7}, GridY{3}, *orientation, changes, overlays));
   ASSERT_FALSE(changes.empty());
   EXPECT_EQ(f.checker(), checker);
-  transaction = changes;
+  transaction = overlays;
   transaction.push_back(
       f.add("NEXT_STD", 18, 7, 3 * frt::kRowHeight, *orientation));
+  transaction.insert(transaction.end(), changes.begin(), changes.end());
   ASSERT_TRUE(f.dp->commit(transaction));
   EXPECT_EQ(f.dp->getNetwork()->getNode(addedId), nullptr);
   f.consistent();

@@ -551,8 +551,8 @@ class FillerRepairEngine::Impl final
     mutable std::map<RowId, std::vector<PlacedInstance>> by_row_;
   };
 
-  // One adapter for exact and retiled requests. Fixed Deletes/Adds and the
-  // effective view belong to this search; only the check count spans all searches in a
+  // One adapter for exact and retiled requests. Fixed Adds and the effective
+  // view belong to this search; only the check count spans all searches in a
   // repair. Neither placement nor layout state is retained by the engine.
   class RequestOracle final : public RepairOracle
   {
@@ -1385,13 +1385,11 @@ void FillerRepairEngine::Impl::logRepairSuccess(
       result.changes.begin(), result.changes.end(), [](const auto& change) {
         return change.op_ == OpType::Replace;
       });
-  const size_t deleteCount = result.changes.size() - addCount - swapCount;
   log_.section("engine", "REPAIR SUCCESS");
   log_.block("engine",
              "Repair result",
              {{"status", status},
               {"caller Delete overlays", cat(request.overlayChanges.size())},
-              {"returned Delete changes", cat(deleteCount)},
               {"returned Add changes", cat(addCount)},
               {"returned Swap changes", cat(swapCount)}});
 
@@ -1433,7 +1431,6 @@ void FillerRepairEngine::Impl::logRepairSuccess(
   for (size_t index = 0; index < result.changes.size(); ++index) {
     const CellChangeRecord& change = result.changes[index];
     const bool isAdd = change.op_ == OpType::Add;
-    const bool isDelete = change.op_ == OpType::Delete;
     const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(change);
     const InstanceId instanceId
         = cellId != nullptr ? network_->getNodeId(*cellId) : -1;
@@ -1451,12 +1448,11 @@ void FillerRepairEngine::Impl::logRepairSuccess(
         = isAdd ? "<none>"
                 : (instanceId >= 0 ? cat(instanceId) : "<unresolved>");
     const std::string newCellId
-        = isDelete ? "<none>" : (isAdd ? "<assigned on commit>" : oldCellId);
+        = isAdd ? "<assigned on commit>" : oldCellId;
     const std::string oldName = isAdd ? "<none>" : nodeName(oldNode);
     const std::string newName
-        = isDelete ? "<none>"
-                   : (isAdd ? (addedName != nullptr ? *addedName : "<invalid Add name>")
-                            : oldName);
+        = isAdd ? (addedName != nullptr ? *addedName : "<invalid Add name>")
+                : oldName;
     const std::string oldOrientation
         = isAdd || oldNode == nullptr
               ? (isAdd ? "<none>" : orientationName(change.orientation_))
@@ -1465,23 +1461,25 @@ void FillerRepairEngine::Impl::logRepairSuccess(
         "engine",
         cat("Returned repair change #", index + 1),
         {{"operation",
-          isDelete ? "DELETE (caller input)" : (isAdd ? "ADD" : "SWAP (Replace)")},
+          isAdd ? "ADD" : (change.op_ == OpType::Replace
+                                 ? "SWAP (Replace)"
+                                 : "UNEXPECTED")},
          {"old cell id", oldCellId},
          {"old DB cell id", isAdd ? "<none>" : dbCellId(cellId)},
          {"old cell name", oldName},
          {"new cell id", newCellId},
          {"new DB cell id",
-          isDelete ? "<none>" : (isAdd ? "<assigned on commit>" : dbCellId(cellId))},
+          isAdd ? "<assigned on commit>" : dbCellId(cellId)},
          {"new cell name", newName},
          {"old master id", isAdd ? "<none>" : cat(oldMasterId)},
          {"old master name", isAdd ? "<none>" : masterName(oldMasterId)},
          {"old site width",
           isAdd ? "<none>" : masterSiteWidth(oldMasterId)},
-         {"new master id", isDelete ? "<none>" : cat(newMasterId)},
-         {"new master name", isDelete ? "<none>" : masterName(newMasterId)},
-         {"new site width", isDelete ? "<none>" : masterSiteWidth(newMasterId)},
+         {"new master id", cat(newMasterId)},
+         {"new master name", masterName(newMasterId)},
+         {"new site width", masterSiteWidth(newMasterId)},
          {"old orientation", oldOrientation},
-         {"new orientation", isDelete ? "<none>" : orientationName(change.orientation_)},
+         {"new orientation", orientationName(change.orientation_)},
          {"origin (core DBU)",
           cat('(', change.x_.getStorage(), ',', change.y_.getStorage(), ')')}});
   }
@@ -1538,7 +1536,6 @@ RepairOutcome FillerRepairEngine::Impl::repair(
 
   const RequestPlacementView view(*this);
   std::set<InstanceId> overlayInstanceIds;
-  ipl::FillerChanges deletedFillers;
   for (const CellChangeRecord& overlay : request.overlayChanges) {
     const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(overlay);
     if (overlay.op_ != OpType::Delete || cellId == nullptr) {
@@ -1552,9 +1549,6 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       skip("InvalidOverlay",
            cat("target overlay has an unknown or duplicate node ", id));
       return result;
-    }
-    if (view.instance(id)->isFiller) {
-      deletedFillers.push_back(overlay);
     }
   }
 
@@ -1767,7 +1761,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
               {"released sites", cat(releasedSites.size())},
               {"guard", show(influence)}});
 
-  RequestOracle oracle(*this, request, view, checkerRequests, deletedFillers);
+  RequestOracle oracle(*this, request, view, checkerRequests);
   if (!releasedSites.empty()) {
     std::string addedFillerNamePrefix = "FILLER_REPAIR_";
     if (const fillerSetting* setting = network_->getFillerSetting();
@@ -2009,7 +2003,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
           break;
         }
         std::vector<LayoutAddition> seededAdditions = additions;
-        ipl::FillerChanges fixed = deletedFillers;
+        ipl::FillerChanges fixed;
         for (size_t index = 0; index < seededAdditions.size(); ++index) {
           LayoutAddition& addition = seededAdditions[index];
           const LayoutMasterOption& option
@@ -2111,8 +2105,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   }
   if (snapshot.violations.empty()) {
     result.hasSolution = true;
-    result.changes = std::move(deletedFillers);
-    logRepairSuccess(request, result, "no filler Add/Swap needed");
+    logRepairSuccess(request, result, "no filler change needed");
     return result;
   }
   if (!candidate_catalog_.hasCompatibleCandidate()) {
@@ -2150,7 +2143,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   }
 
   result.hasSolution = true;
-  result.changes = mergeFillerChanges(deletedFillers, planned.changes);
+  result.changes = planned.changes;
   logRepairSuccess(request, result, "solution");
   return result;
 }

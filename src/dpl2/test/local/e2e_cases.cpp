@@ -201,7 +201,7 @@ TEST(FillerRepairGapTest, SingleRowTargetRetilesEveryCornerOfTwoRowFiller)
       gaps.erase({row, col});
       for (const auto& change : outcome.changes) {
         if (change.op_ != dpl2::OpType::Add) {
-          EXPECT_TRUE(change.op_ == dpl2::OpType::Replace || change.op_ == dpl2::OpType::Delete);
+          EXPECT_EQ(change.op_, dpl2::OpType::Replace);
           continue;
         }
         const auto* added = fixture.network().getMaster(change.new_lib_cell_);
@@ -255,16 +255,14 @@ TEST(FillerRepairOptionTest, AddedMasterFollowsConfiguredOrderWhenEnabled)
     dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
     const auto outcome = engine.repair(request);
     ASSERT_TRUE(outcome.hasSolution);
-    ASSERT_EQ(outcome.changes.size(), 2u);
-    EXPECT_EQ(outcome.changes.front().op_, dpl2::OpType::Delete);
-    EXPECT_EQ(outcome.changes.front().cell_data_, request.overlayChanges.front().cell_data_);
-    EXPECT_EQ(outcome.changes.back().op_, dpl2::OpType::Add);
+    ASSERT_EQ(outcome.changes.size(), 1u);
+    EXPECT_EQ(outcome.changes.front().op_, dpl2::OpType::Add);
     const auto module = fixture.design().design()->getLibAcc().findModule(
         followOrder ? "FS1" : "FH1");
     const auto* expected
         = fixture.design().design()->getLibAcc().getLibCell(module);
     ASSERT_NE(expected, nullptr);
-    EXPECT_EQ(outcome.changes.back().new_lib_cell_,
+    EXPECT_EQ(outcome.changes.front().new_lib_cell_,
               fixture.design()
                   .design()
                   ->getLibAcc()
@@ -389,11 +387,8 @@ TEST_P(FillerRepairRuntimeE2E, FindLegalReplacesExactlyOneFiller)
   const auto outcome = engine.repair(request);
 
   ASSERT_TRUE(outcome.hasSolution);
-  ASSERT_FALSE(outcome.changes.empty());
-  EXPECT_EQ(outcome.changes.front().op_, dpl2::OpType::Delete);
-  EXPECT_EQ(outcome.changes.front().cell_data_, request.overlayChanges.front().cell_data_);
   EXPECT_TRUE(std::all_of(
-      outcome.changes.begin() + 1, outcome.changes.end(), [&](const auto& change) {
+      outcome.changes.begin(), outcome.changes.end(), [&](const auto& change) {
         const auto* id = std::get_if<eUNL::LeafCellID>(&change.cell_data_);
         return change.op_ == dpl2::OpType::Replace && id != nullptr
                && *id

@@ -2,10 +2,9 @@
 
 ## Current state
 
-Previous migration tag: `filler-repair-port-20261012-unformatted` (frozen).
+Current migration tag: `filler-repair-port-20261012-unformatted`.
 The `fillerRepair2` payload uses the original pre-format layout at `828f991b0c`,
-with the live filler-name collision fix and the complete filler transaction
-result contract described below added to its runtime sources.
+with only the live filler-name collision fix added to its runtime sources.
 Both filler-setting changes remain: follow order (`7942e2024c`) and absolute
 site-width avoid patterns (`828f991b0c`). Existing configured name prefixes
 also remain unchanged. See the dated verification below for rollback scope.
@@ -24,19 +23,15 @@ runs the existing checker-guided planner so the new fillers and surrounding
 fillers may receive master swaps. An unfillable or DRC-illegal released set
 returns no solution and no partial changes.
 
-The successful result is an atomic list of the input filler `Delete` records
-(unchanged, in caller order), followed by request-local filler `Add` and
-surrounding filler `Replace` records. The engine never invents deletions and
-does not echo a standard-cell Delete. Failed repair returns an empty list.
-The same complete filler candidate is passed to the final checker, which
-accepts only unchanged echoes of input filler Deletes and rejects duplicates.
-`CheckRequest::x/y/orientation` are
+The result is an atomic list of request-local filler `Add` and surrounding
+filler `Replace` records. It never contains `Delete`; those records remain
+caller-owned request overlays. `CheckRequest::x/y/orientation` are
 authoritative, and the public request/result wire is unchanged. There is no
 target movement, engine `update`, external engine setter, or numeric request
 API.
 
 Every successful repair emits a `REPAIR SUCCESS` transcript. It first lists
-each caller-owned `Delete` overlay, then each returned `Delete`, `Add` or `Swap
+each caller-owned `Delete` overlay, then each returned `Add` or `Swap
 (Replace)` change. The records include the old/new network and DB cell IDs,
 cell names, master IDs and names, site widths, orientations, and core-relative
 origins. A newly added cell reports its configured generated name and marks
@@ -62,10 +57,6 @@ covered by a deleted filler. A larger deleted area alone is insufficient. The
 Delete overlay and calls the checker without first mutating Grid or Network.
 `findLegal` remains a non-mutating probe. On acceptance, `test_filler_repair`
 commits the complete target/overlay/repair batch through `DePlace::commit`.
-Accepted exact-cover requests also return input filler Deletes when the direct
-check bypasses repair. Callers commit the returned filler changes plus the
-target standard-cell operation; they must not append the input filler Deletes
-again. One-to-one standard-cell replacement remains a separate target Replace.
 
 ## Files to migrate
 
@@ -113,7 +104,7 @@ The concrete destination touch points are:
 - `src/dpl2/src/Place.cpp`: collects all target-intersecting fillers for
   findLegal and passes their Delete overlays through the existing API;
 - `src/dpl2/dpl2ui/testFillerRepairCmd.cc`: direct checker call for selected
-  filler Deletes, with Delete/Add/Replace validation, reporting and full commit;
+  filler Deletes, with Add/Replace validation, reporting and full commit;
 - `src/dpl2/src/infrastructure/Objects.h`: shared `CellChangeRecord` wire, if
   the destination does not already have the same definition.
 
@@ -180,28 +171,6 @@ other bad records and requests fail with empty changes and structured
 `[fr]` logs.
 
 ## Verification
-
-### Complete filler transaction results (2026-10-13)
-
-`FillerRepairEngine` seeds both exact-cover and retile checker candidates with
-the unchanged input filler Deletes. Every success returns these records once,
-before Adds/Replaces; failures stay empty and standard-cell Deletes stay in the
-target request. The direct-legal checker path follows the same output contract.
-Delete logs now show the removed state explicitly. No public signatures,
-record fields, planner algorithms, or retiling algorithms changed.
-
-The checker validates echoed Delete identity and all record fields, rejecting
-duplicates, altered records, non-filler Deletes, and deletions absent from the
-request. `test_filler_repair` and commit tests now use the returned filler batch
-plus the target operation, without appending the original filler Deletes again.
-Port the checker and command changes together with the fillerRepair2 payload.
-
-Normal and ASan builds passed all 419 CTest cases (24.92 and 78.89 seconds).
-Coverage includes direct-legal single/multiple Deletes with repair enabled or
-disabled, exact/non-exact and two-row cover, Add-plus-Swap, invalid Delete
-echoes, unchanged standard-cell replacement, upper-layer dispatch, atomic
-commit, and a second repair after commit. These are local/fake-UDM harness
-results; real destination UDM validation remains separate.
 
 ### Minimal unformatted re-port baseline (2026-10-12)
 
@@ -389,9 +358,9 @@ The gate compiles:
 - Confirm destination `createNetwork()` imports every library master, including
   masters without a placed instance.
 - Confirm fillerSetting is complete before `initPlacementDRC()`.
-- Confirm opto commits the returned filler Delete/Add/Replace records plus the
-  target standard-cell operation in one transaction, without appending the
-  input filler Deletes again. `DePlace::commit` implements this flow against the local UDM
+- Confirm opto treats all Delete records as caller-owned target overlay input
+  and commits those deletions plus returned filler Add/Replace records in one
+  transaction. `DePlace::commit` implements this flow against the local UDM
   change contracts; map its Add/placement operations to real destination UDM
   APIs and verify that backend's mutation/error semantics before porting it.
 - Establish a commit/read barrier that keeps DB/Grid/Network synchronized;
