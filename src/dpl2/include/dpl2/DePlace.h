@@ -128,6 +128,11 @@ class DePlace {
   void setPaddingGlobal(int left, int right);
   void setPadding(PhysLibCell* master, int left, int right);
   void setPadding(LeafCellID cellId, int left, int right);
+  // Read-only probes append a complete transaction on success and leave
+  // ccRecords unchanged on failure. Commit the returned batch without adding
+  // target/filler operations again. Coordinates in records are core-relative.
+  // findLeg returns a named target Add; isLegal returns an identity-preserving
+  // target Replace. The checker/FR result itself contains only filler repairs.
   std::pair<int, int> findLeg(eUNL::PinID startLoc, \
                               eUNL::VoltageArea* va,
                               int diameter, \

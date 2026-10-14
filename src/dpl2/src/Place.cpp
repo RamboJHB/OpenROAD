@@ -699,8 +699,13 @@ bool DePlace::checkPixels(const Node* cell,
                            filler->getMaster()->getDbMaster(),
                            filler->getOrient()});
     }
-    return drc_engine_->checkDRC(
-        cell, x, y, orient, *fillerChanges, overlayChanges);
+    if (!drc_engine_->checkDRC(cell, x, y, orient, *fillerChanges, overlayChanges)) {
+      return false;
+    }
+    // FR returns only Add/Replace. Keep the accepted candidate's filler
+    // Deletes here; findLeg adds the new std cell to the same transaction.
+    fillerChanges->insert(fillerChanges->end(), overlayChanges.begin(), overlayChanges.end());
+    return true;
   }
   return drc_engine_->checkDRC(cell, x, y, orient, ccRecords);
 }

@@ -9,6 +9,7 @@
 #include <infrastructure/network.h>
 
 #include <set>
+#include <string>
 
 namespace dpl2 {
 
@@ -80,8 +81,8 @@ void DePlace::setPadding(PhysLibCell* master, const int left, const int right)
  *
  * @param  masterId    Target library cell master.
  * @param  target      The std-cell currently occupying the probe site.
- * @param  cellChanges [out] Atomic surrounding-filler Replace records when
- *                     repair succeeds; unchanged when the check fails.
+ * @param  cellChanges [out] Appends the target Replace and any filler repair
+ *                     records on success; unchanged when the check fails.
  * @retval true        The swap is DRC-legal at the current location.
  * @retval false       The swap violates DRC.
  */
@@ -111,16 +112,31 @@ bool DePlace::isLegalProbe(LibCellID masterId, const Node* target,
   const GridX x = grid_->gridX(probe.getLeft());
   const GridY y = grid_->gridSnapDownY(probe.getBottom());
   // isLegal is a one-to-one in-place std-cell replacement. The old Network
-  // node is the complete input overlay; filler repair may only return changes
-  // for surrounding fillers.
+  // node is the complete input overlay. The checker returns only filler repair
+  // records; this layer adds the target Replace, preserving its DB identity.
   std::vector<CellChangeRecord> overlayChanges;
   overlayChanges.push_back(CellChangeRecord{
       OpType::Delete, target->getDbInst(), UvDist(0), UvDist(0),
       LibCellID(), LibCellID(), PhysOrientationE::R0});
 
   const auto orient
-      = grid_->getSiteOrientation(x, y, new_pcell.getTechSite()->getName()).value();
-  return drc_engine_->checkDRC(&probe, x, y, orient, cellChanges, overlayChanges);
+      = grid_->getSiteOrientation(x, y, new_pcell.getTechSite()->getName());
+  if (!orient.has_value()) {
+    return false;
+  }
+  std::vector<CellChangeRecord> trial = cellChanges;
+  if (!drc_engine_->checkDRC(&probe, x, y, *orient, trial, overlayChanges)) {
+    return false;
+  }
+  trial.push_back(CellChangeRecord{OpType::Replace,
+                                   target->getDbInst(),
+                                   UvDist(target->getLeft().v),
+                                   UvDist(target->getBottom().v),
+                                   target->getMaster()->getDbMaster(),
+                                   masterId,
+                                   *orient});
+  cellChanges = std::move(trial);
+  return true;
 }
 
 /**
@@ -132,8 +148,9 @@ bool DePlace::isLegalProbe(LibCellID masterId, const Node* target,
  *
  * @param  instId    LeafCellID of the cell to test.
  * @param  masterId  Target library cell master to test-swap to.
- * @param  ccRecords [out] Atomic surrounding-filler Replace records when
- *                    repair succeeds; unchanged on failure.
+ * @param  ccRecords [out] Appends a complete target/filler transaction on
+ *                    success; unchanged on failure. Commit it without adding
+ *                    the target Replace again.
  * @retval true      The swap is DRC-legal at the current location.
  * @retval false     The swap violates DRC (insufficient space or
  * incompatible footprint).
@@ -408,15 +425,15 @@ void DePlace::initTempNode(Node& cell, Master* master,
  * (voltage area) is given, the search is restricted to the intersection
  * of the extended box with each VA rect.
  *
- * The temporary Node is discarded after the search; the returned coordinate
- * can be used by the caller to place the cell permanently.
+ * The temporary Node is discarded after the search. The returned transaction
+ * includes its named Add plus all filler changes; commit it as one batch.
  *
  * @param startLoc  Pin whose physical location anchors the search center.
  * @param va        Optional voltage-area to restrict placement to.
  * @param diameter  Search region extension (in uv units).
  * @param masterId  Target library cell master to place.
- * @param ccRecords [out] Atomic surrounding-filler Replace records for the
- *                  selected candidate; unchanged when no legal site exists.
+ * @param ccRecords [out] Appends the selected target Add, deleted fillers and
+ *                  filler repair records; unchanged when no legal site exists.
  * @return The (left, bottom) UV coordinates of the found site,
  * or (-1, -1) on failure.
  */
@@ -467,30 +484,57 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   // the node is never inserted into the grid or network; the rip-up fallback
   // inside legalCellInRect() is disabled.
   Node* search_cell = &cell;
-  std::pair<int, int> Coordinate;
+  std::pair<int, int> Coordinate{-1, -1};
   // checkPixels() collects every target-intersecting filler Delete overlay.
-  // Their union must cover the target; repair fills the remaining gaps and
-  // returns filler Add/Replace records from the accepted candidate.
+  // Only the accepted candidate publishes its Deletes and repair Add/Replaces.
+  // Keep the entire trial local until the target Add can also be returned.
+  std::vector<CellChangeRecord> trial = ccRecords;
   if (va == nullptr) {
-    Coordinate = legalCellInRect(rect, search_cell, &ccRecords);
+    Coordinate = legalCellInRect(rect, search_cell, &trial);
   } else {
     for (Rect va_rect : va->getRects()) {
       Coordinate = legalCellInRect(rect.overlap(va_rect, false),
-          search_cell, &ccRecords);
+          search_cell, &trial);
       if (Coordinate != std::pair<int, int>{-1, -1}) {
         break;
       }
     }
   }
 
-  // No post-filter here: the overlay DRC runs inside checkPixels() at the end
-  // of every candidate-site test during the search, so a non-{-1,-1}
-  // coordinate is already DRC-clean against the real neighbours.  ccRecords is
-  // the caller-supplied filler change list passed through unchanged.
-  if (Coordinate != std::pair<int, int>{-1, -1}) {
-    Coordinate = std::make_pair(Coordinate.first * grid_->getSiteWidth().v,
-                                grid_->gridYToDbu(GridY{Coordinate.second}).v);
+  if (Coordinate == std::pair<int, int>{-1, -1}) {
+    return Coordinate;
   }
+  const auto orient = grid_->getSiteOrientation(GridX{Coordinate.first}, GridY{Coordinate.second},
+                                                new_pcell_.getTechSite()->getName());
+  if (!orient.has_value()) {
+    return {-1, -1};
+  }
+  // A new std cell has no DB id yet. Reserve a deterministic request-local name
+  // against both live instances and pending Adds, including generated fillers.
+  std::set<std::string> names;
+  for (const auto& [id, node] : network_->getNodes()) {
+    (void) id;
+    if (node != nullptr && node->getDbInst().isValid()) {
+      names.insert(design_->getHierMgr()->getLeafCell(node->getDbInst()).getName());
+    }
+  }
+  for (const CellChangeRecord& change : trial) {
+    if (const auto* name = std::get_if<std::string>(&change.cell_data_)) {
+      names.insert(*name);
+    }
+  }
+  const std::string base = "DPL_STD_" + std::to_string(Coordinate.second) + "_"
+                           + std::to_string(Coordinate.first) + "_M"
+                           + std::to_string(masterId.getIndexValue());
+  std::string name = base;
+  for (size_t suffix = 1; names.count(name) != 0; ++suffix) {
+    name = base + "_" + std::to_string(suffix);
+  }
+  Coordinate = std::make_pair(Coordinate.first * grid_->getSiteWidth().v,
+                              grid_->gridYToDbu(GridY{Coordinate.second}).v);
+  trial.push_back(CellChangeRecord{OpType::Add, name, UvDist(Coordinate.first), UvDist(Coordinate.second),
+                                   LibCellID(), masterId, *orient});
+  ccRecords = std::move(trial);
   return Coordinate;
 }
 

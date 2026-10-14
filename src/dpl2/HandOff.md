@@ -3,6 +3,10 @@
 ## Current state
 
 Current migration tag: `filler-repair-port-20261012-unformatted`.
+The 2026-10-14 follow-up reverted `829a0b2ce2` in full and moved complete
+transaction assembly to DePlace. The tag remains the frozen module baseline;
+also migrate the DePlace/Place changes described below for the updated caller
+contract. No new fillerRepair2 API or runtime change is needed for this follow-up.
 The `fillerRepair2` payload uses the original pre-format layout at `828f991b0c`,
 with only the live filler-name collision fix added to its runtime sources.
 Both filler-setting changes remain: follow order (`7942e2024c`) and absolute
@@ -23,8 +27,8 @@ runs the existing checker-guided planner so the new fillers and surrounding
 fillers may receive master swaps. An unfillable or DRC-illegal released set
 returns no solution and no partial changes.
 
-The result is an atomic list of request-local filler `Add` and surrounding
-filler `Replace` records. It never contains `Delete`; those records remain
+The engine/checker result is an atomic list of request-local filler `Add` and
+surrounding filler `Replace` records. It never contains `Delete`; those records remain
 caller-owned request overlays. `CheckRequest::x/y/orientation` are
 authoritative, and the public request/result wire is unchanged. There is no
 target movement, engine `update`, external engine setter, or numeric request
@@ -49,14 +53,31 @@ DePlace
   -> ImplantLayerChecker::checkPlaceWithOverlays(...)
 ```
 
-`isLegal` overlays one old standard cell. DePlace `findLegal` collects every
+`isLegal` overlays one old standard cell. DePlace `findLeg` collects every
 filler intersecting the proposed target and passes those caller-owned Delete
 records directly through `PlacementDRC`; every target site must already be
 covered by a deleted filler. A larger deleted area alone is insufficient. The
 `test_filler_repair` command similarly resolves every `-inst` selection into a
 Delete overlay and calls the checker without first mutating Grid or Network.
-`findLegal` remains a non-mutating probe. On acceptance, `test_filler_repair`
-commits the complete target/overlay/repair batch through `DePlace::commit`.
+Both DePlace probes remain non-mutating. On success, their existing output
+vector now contains the complete transaction: `isLegal` appends the target
+std-cell `Replace` and filler repairs, while `findLeg` appends the target
+std-cell `Add`, all accepted filler `Delete` overlays and filler repairs.
+The caller can pass this batch directly to `DePlace::commit`; it must not
+append the target or Delete overlays again. Failed candidates leave the
+caller's vector unchanged. An existing output prefix is preserved, but is
+not treated as an input placement overlay for subsequent probes.
+
+`isLegal` retains the same-footprint restriction and preserves the std-cell
+DB identity. Different-size replacement is not implemented by this follow-up.
+`findLeg` names the new std cell `DPL_STD_<row>_<column>_M<master-id>` with a
+deterministic suffix for collisions with live Network names or pending Adds;
+the DB ID is assigned by commit. All record coordinates remain core-relative.
+
+Direct checker callers still own transaction assembly: `test_filler_repair`
+keeps merging its temporary target, input overlays and returned Add/Replace
+repairs before committing them. Its command path is not routed through the
+new DePlace output assembly.
 
 ## Files to migrate
 
@@ -97,12 +118,13 @@ The concrete destination touch points are:
 - `src/dpl2/src/PlacementDRC.h/.cpp`: direct versus overlay/repair-capable
   request dispatch and atomic trial publication across every checker;
 - `src/dpl2/src/DePlace.cpp` and `include/dpl2/DePlace.h`: the isLegal
-  temporary-node request;
+  temporary-node request and complete isLegal/findLeg output assembly;
 - `src/dpl2/src/dbToOpendp.cpp`: installs one Implant checker from
   `initPlacementDRC()` after importing the full master catalog and final
   fillerSetting;
 - `src/dpl2/src/Place.cpp`: collects all target-intersecting fillers for
-  findLegal and passes their Delete overlays through the existing API;
+  findLeg, passes their Delete overlays through the existing API, and appends
+  them to the accepted result only after all DRC checkers pass;
 - `src/dpl2/dpl2ui/testFillerRepairCmd.cc`: direct checker call for selected
   filler Deletes, with Add/Replace validation, reporting and full commit;
 - `src/dpl2/src/infrastructure/Objects.h`: shared `CellChangeRecord` wire, if
@@ -171,6 +193,32 @@ other bad records and requests fail with empty changes and structured
 `[fr]` logs.
 
 ## Verification
+
+### Complete transactions at the DePlace boundary (2026-10-14)
+
+- Revert commit `9c2d70fef8` exactly restores the tree before `829a0b2ce2`.
+  Both engine copies, the checker, command and associated tests/docs were
+  reverted, not partially patched. No history was rewritten.
+- Subsequent changes are limited to DePlace's existing probe/commit contract,
+  the accepted findLeg candidate in Place.cpp, local regressions and this
+  handoff. Engine/checker results again contain only filler Add/Replace;
+  no caller Delete is echoed from fillerRepair2 or its overlay oracle.
+- isLegal returns one identity-preserving target Replace, including when no
+  filler repair is necessary. findLeg returns one named target Add, unique
+  Delete records for its selected fillers, and any repair Adds/Replaces.
+- An empty voltage area now returns no location instead of default `(0,0)`;
+  it cannot publish a transaction for an unchecked candidate.
+- Six local regression tests cover direct commits of public probe outputs,
+  unchanged placement while probing, preserved output on failure, exact and
+  non-exact cover, single/two-row fillers, multiple Deletes, core offsets,
+  deterministic name collisions and a second insertion into a committed gap
+  using the same checker. The separate direct-checker command tests remain.
+
+Validation: full normal and ASan builds passed all 419 CTest cases (27.38 and
+67.09 seconds). `git diff --check` passed. Both fillerRepair engine copies,
+the checker and the direct test command are unchanged from `738b3f219c`.
+Validation uses the local/fake-UDM harness; real UDM linkage, net connectivity
+and source-ODB writeback retain the limitations documented below.
 
 ### Minimal unformatted re-port baseline (2026-10-12)
 

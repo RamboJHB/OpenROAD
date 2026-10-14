@@ -8,6 +8,7 @@
 #include <infrastructure/fillerSetting.h>
 #include <infrastructure/network.h>
 
+#include <algorithm>
 #include <limits>
 #include <memory>
 #include <set>
@@ -38,6 +39,10 @@ struct Fixture
     setup.implantRuleWidth = ruleWidth;
     setup.doubleHeightRepairLayout = doubleHeight;
     design = provider->createDesign(setup);
+    if (doubleHeight) {
+      // BUF2D must permit the MX orientation of the two-row filler at row 2.
+      const_cast<eLIB::PhysLibCell&>(design->design()->getLibAcc().getPhysLibCell(17)).symmetry_ = 3;
+    }
     if (singleton) {
       // Three adjacent fillers cover six sites; TX5 will release a one-site
       // gap.
@@ -212,6 +217,215 @@ TEST(DePlaceCommit, DefaultConstructorInitializesGridBeforeChecker)
                                     master,
                                     target->getOrient()}}};
   EXPECT_TRUE(checker->checkDirect(request).isLegal);
+}
+
+TEST(DePlaceCommit, IsLegalReturnsTheTargetAndFillerRepairsAsOneTransaction)
+{
+  for (int ruleWidth : {1, 6}) {
+    Fixture f(false, ruleWidth);
+    const auto before = f.snapshot();
+    const auto targetId = f.node(122)->getDbInst();
+    const int networkId = f.node(122)->getId();
+    std::vector<CellChangeRecord> changes;
+    ASSERT_TRUE(f.dp->isLegal(targetId, eLIB::LibCellID(0, 2), changes));
+    EXPECT_EQ(f.snapshot(), before);
+    ASSERT_EQ(changes.size(), ruleWidth == 1 ? 1u : 2u);
+    int targets = 0;
+    for (const auto& change : changes) {
+      EXPECT_EQ(change.op_, OpType::Replace);
+      const auto id = std::get<eUNL::LeafCellID>(change.cell_data_);
+      if (id == targetId) {
+        ++targets;
+        EXPECT_EQ(change.orig_lib_cell_, eLIB::LibCellID(0, 1));
+        EXPECT_EQ(change.new_lib_cell_, eLIB::LibCellID(0, 2));
+        EXPECT_EQ(change.x_, eUTL::UvDist(8));
+        EXPECT_EQ(change.y_, eUTL::UvDist(2 * frt::kRowHeight));
+        EXPECT_EQ(change.orientation_, f.node(122)->getOrient());
+      } else {
+        ASSERT_NE(f.dp->getNetwork()->getNode(id), nullptr);
+        EXPECT_TRUE(f.dp->getNetwork()->getNode(id)->isFiller());
+      }
+    }
+    EXPECT_EQ(targets, 1);
+    ASSERT_TRUE(f.dp->commit(changes));
+    EXPECT_EQ(f.node(122)->getId(), networkId);
+    EXPECT_EQ(f.node(122)->getDbInst(), targetId);
+    EXPECT_EQ(f.node(122)->getMaster()->getDbMaster(), eLIB::LibCellID(0, 2));
+    f.consistent();
+  }
+}
+
+TEST(DePlaceCommit, IsLegalPreservesExistingOutputAndDoesNotPublishRejectedChanges)
+{
+  Fixture f;
+  const auto before = f.snapshot();
+  const auto sentinel = f.add("PENDING", 18, 19, 0);
+  std::vector<CellChangeRecord> changes{sentinel};
+  EXPECT_FALSE(f.dp->isLegal(f.node(122)->getDbInst(), eLIB::LibCellID(0, 8), changes));
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.front().cell_data_, sentinel.cell_data_);
+  EXPECT_EQ(f.snapshot(), before);
+  ASSERT_TRUE(f.dp->isLegal(f.node(122)->getDbInst(), eLIB::LibCellID(0, 1), changes));
+  ASSERT_EQ(changes.size(), 2u);
+  EXPECT_EQ(changes.front().cell_data_, sentinel.cell_data_);
+  EXPECT_EQ(changes.back().op_, OpType::Replace);
+  EXPECT_EQ(changes.back().cell_data_, CellData{f.node(122)->getDbInst()});
+  EXPECT_EQ(f.snapshot(), before);
+}
+
+TEST(DePlaceCommit, FindLegReturnsCompleteExactAndNonExactTransactions)
+{
+  for (bool doubleHeight : {false, true}) {
+    for (bool exact : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "doubleHeight=" << doubleHeight << " exact=" << exact);
+      Fixture f(false, 1, doubleHeight);
+      const int x = doubleHeight ? 6 : 18;
+      const int row = doubleHeight ? 2 : 0;
+      const int targetMaster = exact ? (doubleHeight ? 17 : 16) : 18;
+      const auto pinId = eUNL::PinID(0, 900);
+      f.design->desMgr()->addPin(eUNL::PhysPinID(pinId), 17 + x, 20 + row * frt::kRowHeight);
+      const auto before = f.snapshot();
+      std::vector<CellChangeRecord> changes;
+      const auto position = f.dp->findLeg(pinId, nullptr, 0, eLIB::LibCellID(0, targetMaster), changes);
+      ASSERT_NE(position, (std::pair<int, int>{-1, -1}));
+      EXPECT_EQ(f.snapshot(), before);
+      // Search may select a neighboring row; validate the actual chosen footprint.
+      const Node* replaced = f.dp->getGrid()->gridPixel(GridX{position.first},
+          GridY{position.second / frt::kRowHeight})->cell;
+      ASSERT_NE(replaced, nullptr);
+      ASSERT_TRUE(replaced->isFiller());
+      const auto deletedId = replaced->getDbInst();
+      int targetAdds = 0;
+      int fillerAdds = 0;
+      int deletes = 0;
+      for (const auto& change : changes) {
+        if (change.op_ == OpType::Delete) {
+          ++deletes;
+          EXPECT_EQ(change.cell_data_, CellData{deletedId});
+        } else if (change.op_ == OpType::Add) {
+          EXPECT_TRUE(std::holds_alternative<std::string>(change.cell_data_));
+          if (change.new_lib_cell_ == eLIB::LibCellID(0, targetMaster)) {
+            ++targetAdds;
+            EXPECT_EQ(change.x_.getStorage(), position.first);
+            EXPECT_EQ(change.y_.getStorage(), position.second);
+          } else {
+            ++fillerAdds;
+            EXPECT_TRUE(f.dp->getNetwork()->getMaster(change.new_lib_cell_)->isFiller());
+          }
+        }
+      }
+      EXPECT_EQ(targetAdds, 1);
+      EXPECT_EQ(deletes, 1);
+      EXPECT_EQ(fillerAdds == 0, exact);
+      ASSERT_TRUE(f.dp->commit(changes));
+      EXPECT_EQ(f.dp->getNetwork()->getNode(deletedId), nullptr);
+      const auto* target = f.dp->getGrid()->gridPixel(GridX{position.first},
+          GridY{position.second / frt::kRowHeight})->cell;
+      ASSERT_NE(target, nullptr);
+      EXPECT_EQ(target->getMaster()->getDbMaster(), eLIB::LibCellID(0, targetMaster));
+      f.consistent();
+    }
+  }
+}
+
+TEST(DePlaceCommit, FindLegNamesAvoidLiveAndPendingAddsAndRemainDeterministic)
+{
+  Fixture f;
+  const auto pinId = eUNL::PinID(0, 900);
+  f.design->desMgr()->addPin(eUNL::PhysPinID(pinId), 35, 20);
+  std::vector<CellChangeRecord> first;
+  const auto position = f.dp->findLeg(pinId, nullptr, 0, eLIB::LibCellID(0, 18), first);
+  ASSERT_NE(position, (std::pair<int, int>{-1, -1}));
+  const auto target = std::find_if(first.begin(), first.end(), [](const auto& change) {
+    return change.op_ == OpType::Add && change.new_lib_cell_ == eLIB::LibCellID(0, 18);
+  });
+  ASSERT_NE(target, first.end());
+  const auto baseName = std::get<std::string>(target->cell_data_);
+  f.design->desMgr()->cells_.at(eUNL::LeafCellID(0, 100)).name = baseName;
+  const auto sentinel = f.add(baseName + "_1", 18, 0, 0);
+  std::vector<CellChangeRecord> changes{sentinel};
+  const auto before = f.snapshot();
+  ASSERT_EQ(f.dp->findLeg(pinId, nullptr, 0, eLIB::LibCellID(0, 18), changes), position);
+  ASSERT_EQ(changes.size(), first.size() + 1);
+  EXPECT_EQ(changes.front().cell_data_, sentinel.cell_data_);
+  EXPECT_EQ(std::get<std::string>(changes.back().cell_data_), baseName + "_2");
+  std::vector<CellChangeRecord> repeated{sentinel};
+  ASSERT_EQ(f.dp->findLeg(pinId, nullptr, 0, eLIB::LibCellID(0, 18), repeated), position);
+  EXPECT_EQ(repeated.back().cell_data_, changes.back().cell_data_);
+  EXPECT_EQ(f.snapshot(), before);
+}
+
+TEST(DePlaceCommit, FindLegMergesMultipleDeletesAndReusesTheCommittedGap)
+{
+  Fixture f;
+  auto& lib = f.design->design()->getLibAcc();
+  for (int id : {8, 18}) {
+    const_cast<eLIB::PhysLibCell&>(lib.getPhysLibCell(id)).symmetry_ = 3;
+  }
+  ASSERT_TRUE(f.dp->commit({f.remove(142), f.add("F0", 3, 12, 4 * frt::kRowHeight),
+      f.add("F1", 3, 14, 4 * frt::kRowHeight), f.add("F2", 3, 16, 4 * frt::kRowHeight)}));
+  const auto pinId = eUNL::PinID(0, 900);
+  f.design->desMgr()->addPin(eUNL::PhysPinID(pinId), 29, 20 + 4 * frt::kRowHeight);
+  const auto before = f.snapshot();
+  std::vector<CellChangeRecord> changes;
+  ASSERT_NE(f.dp->findLeg(pinId, nullptr, 0, eLIB::LibCellID(0, 8), changes),
+            (std::pair<int, int>{-1, -1}));
+  EXPECT_EQ(f.snapshot(), before);
+  std::set<eUNL::LeafCellID> deleted;
+  const CellChangeRecord* gap = nullptr;
+  for (const auto& change : changes) {
+    if (change.op_ == OpType::Delete) {
+      EXPECT_TRUE(deleted.insert(std::get<eUNL::LeafCellID>(change.cell_data_)).second);
+    } else if (change.op_ == OpType::Add && f.dp->getNetwork()->getMaster(change.new_lib_cell_)->isFiller()) {
+      ASSERT_EQ(gap, nullptr);
+      gap = &change;
+    }
+  }
+  EXPECT_EQ(deleted.size(), 3u);
+  ASSERT_NE(gap, nullptr);
+  const int gapX = gap->x_.getStorage();
+  const int gapY = gap->y_.getStorage();
+  auto* checker = f.checker();
+  ASSERT_TRUE(f.dp->commit(changes));
+  for (const auto id : deleted) {
+    EXPECT_EQ(f.dp->getNetwork()->getNode(id), nullptr);
+  }
+  f.consistent();
+  const auto gapId = f.dp->getGrid()->gridPixel(GridX{gapX}, GridY{gapY / frt::kRowHeight})->cell->getDbInst();
+  f.design->desMgr()->addPin(eUNL::PhysPinID(pinId), 17 + gapX, 20 + gapY);
+  changes.clear();
+  ASSERT_EQ(f.dp->findLeg(pinId, nullptr, 0, eLIB::LibCellID(0, 18), changes),
+            (std::pair<int, int>{gapX, gapY}));
+  ASSERT_EQ(changes.size(), 2u);
+  EXPECT_EQ(changes.front().op_, OpType::Delete);
+  EXPECT_EQ(changes.front().cell_data_, CellData{gapId});
+  ASSERT_TRUE(f.dp->commit(changes));
+  EXPECT_EQ(f.checker(), checker);
+  EXPECT_EQ(f.dp->getNetwork()->getNode(gapId), nullptr);
+  f.consistent();
+}
+
+TEST(DePlaceCommit, FindLegFailureLeavesPlacementAndExistingOutputUntouched)
+{
+  Fixture f;
+  const auto pinId = eUNL::PinID(0, 900);
+  f.design->desMgr()->addPin(eUNL::PhysPinID(pinId), 17, 20);
+  const auto sentinel = f.add("PENDING", 18, 19, 0);
+  std::vector<CellChangeRecord> changes{sentinel};
+  const auto before = f.snapshot();
+  EXPECT_EQ(f.dp->findLeg(pinId, nullptr, 0, eLIB::LibCellID(0, 18), changes),
+            (std::pair<int, int>{-1, -1}));
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.front().cell_data_, sentinel.cell_data_);
+  EXPECT_EQ(f.snapshot(), before);
+  // An empty voltage area has no candidate, even when the pin is over fillers.
+  eUNL::VoltageArea emptyArea;
+  f.design->desMgr()->addPin(eUNL::PhysPinID(pinId), 35, 20);
+  EXPECT_EQ(f.dp->findLeg(pinId, &emptyArea, 0, eLIB::LibCellID(0, 18), changes),
+            (std::pair<int, int>{-1, -1}));
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.front().cell_data_, sentinel.cell_data_);
+  EXPECT_EQ(f.snapshot(), before);
 }
 
 TEST(DePlaceCommit, GapAddsAndSecondRepairUseTheSameLiveChecker)
