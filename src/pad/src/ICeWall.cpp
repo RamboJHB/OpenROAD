@@ -901,14 +901,19 @@ void ICeWall::connectByAbutment()
 
   // make nets for newly formed nets
   for (const auto& [iterm0, iterm1] : connections) {
-    auto* net = iterm0->getNet();
-    if (net == nullptr) {
+    auto* net0 = iterm0->getNet();
+    auto* net1 = iterm1->getNet();
+    if (net0 == nullptr && net1 == nullptr) {
       const std::string netname = fmt::format("{}.{}_RING",
                                               iterm0->getInst()->getName(),
                                               iterm0->getMTerm()->getName());
       odb::dbNet* new_net = odb::dbNet::create(getBlock(), netname.c_str());
-      iterm0->connect(new_net);
-      iterm1->connect(new_net);
+      if (iterm0->getNet() == nullptr) {
+        iterm0->connect(new_net);
+      }
+      if (iterm1->getNet() == nullptr) {
+        iterm1->connect(new_net);
+      }
 
       const auto new_nets = connectByAbutment(connections);
       special_nets.insert(new_nets.begin(), new_nets.end());
@@ -986,7 +991,7 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
                  iterm1->getMTerm()->getName(),
                  net1 != nullptr ? net1->getName() : "NULL");
 
-      if (net0 != connect_net) {
+      if (net0 == nullptr) {
         connection_attempts++;
         iterm0->connect(connect_net);
         if (iterm0->getNet() == connect_net) {
@@ -999,7 +1004,7 @@ std::set<odb::dbNet*> ICeWall::connectByAbutment(
                     << connect_net->getName() << " by abutment" << std::endl;
         }
       }
-      if (net1 != connect_net) {
+      if (net1 == nullptr) {
         connection_attempts++;
         iterm1->connect(connect_net);
         if (iterm1->getNet() == connect_net) {
