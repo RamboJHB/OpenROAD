@@ -7,11 +7,11 @@
 // Each repair reads current Grid/Network placement through a request-local
 // PlacementView and feeds the pure search through a request-local RepairOracle.
 //
-// repair() accepts one temporary standard-cell Node plus Delete overlays naming
-// either one same-footprint std cell or selected fillers intersecting a new
-// buffer. Exact-cover requests retain the swap-only path. Non-exact requests
-// may return request-local filler Add records for released sites plus
-// surrounding filler Replaces. It never returns Deletes and changes nothing.
+// repair() accepts an optional temporary standard cell, one old standard-cell
+// Delete and/or filler Deletes. A null target prepares standard-cell removal.
+// Pending filler Adds are rebuilt around the final target; pending Replaces
+// seed the existing swap planner. The result is the complete filler transaction
+// (Delete/Add/Replace), excluding the old standard-cell Delete.
 // UDM, Grid and Network come out exactly as they went in; committing is the
 // caller's decision.
 
@@ -44,9 +44,9 @@ class FillerRepairEngine
 
   bool isReady() const;
 
-  // The checker already validates this request. The engine trusts its temporary
-  // Node and target overlay, then returns only checker-approved filler Adds
-  // and/or Replaces.
+  // Temporary Node identity/master and request placement describe the target;
+  // its stored position is ignored. All filler records are normalized and
+  // checker-approved before success; failure returns no partial transaction.
   // Placement commits must update Grid and Network before the next repair;
   // neither may be mutated during repair (concurrent read-only repairs are OK).
   RepairOutcome repair(const ipl::CheckRequest& request) const;

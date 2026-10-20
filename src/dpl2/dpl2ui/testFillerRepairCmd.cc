@@ -102,6 +102,10 @@ bool validFillerChanges(const std::vector<CellChangeRecord>& changes,
           return name != nullptr && !name->empty()
                  && setting.isFillerCell(change.new_lib_cell_);
         }
+        if (change.op_ == OpType::Delete) {
+          return std::holds_alternative<eUNL::LeafCellID>(change.cell_data_)
+                 && setting.isFillerCell(change.orig_lib_cell_);
+        }
         return change.op_ == OpType::Replace
                && std::holds_alternative<eUNL::LeafCellID>(change.cell_data_)
                && setting.isFillerCell(change.orig_lib_cell_)
@@ -216,9 +220,21 @@ bool TestFillerRepairCmd::exec()
 
   int left = std::numeric_limits<int>::max();
   int bottom = std::numeric_limits<int>::max();
+  const Node* replacedStd = nullptr;
   for (const Node* node : overlays) {
     left = std::min(left, node->getLeft().v);
     bottom = std::min(bottom, node->getBottom().v);
+    if (!node->isFiller()) {
+      if (replacedStd != nullptr) {
+        std::cout << "ERROR: at most one existing standard cell can be replaced\n";
+        return false;
+      }
+      replacedStd = node;
+    }
+  }
+  if (replacedStd != nullptr) {
+    left = replacedStd->getLeft().v;
+    bottom = replacedStd->getBottom().v;
   }
   const GridX x = grid->gridX(DbuX{left});
   const GridY y = grid->gridSnapDownY(DbuY{bottom});
@@ -247,7 +263,10 @@ bool TestFillerRepairCmd::exec()
   temporary.setBottom(DbuY{bottom});
   const Pixel* originPixel = grid->gridPixel(x, y);
   Node* anchor = originPixel != nullptr ? originPixel->cell : nullptr;
-  if (anchor != nullptr) {
+  if (replacedStd != nullptr) {
+    temporary.setId(replacedStd->getId());
+    temporary.setDbInst(replacedStd->getDbInst());
+  } else if (anchor != nullptr) {
     temporary.setId(anchor->getId());
     temporary.setDbInst(anchor->getDbInst());
   } else {
@@ -279,7 +298,7 @@ bool TestFillerRepairCmd::exec()
       = checker->check(&temporary, x, y, *orientation, changes, overlayChanges);
   if (!changes.empty()
       && (setting == nullptr || !validFillerChanges(changes, *setting))) {
-    std::cout << "ERROR: repair returned an invalid Add/Replace filler record\n";
+    std::cout << "ERROR: repair returned an invalid filler transaction record\n";
     return false;
   }
   std::cout << (accepted ? "LEGAL" : "NO REPAIR")
@@ -295,20 +314,19 @@ bool TestFillerRepairCmd::exec()
   }
 
   // The temporary Node's bound ID identifies an overlay, not a newly created
-  // instance. Only a one-to-one std replacement preserves that identity (and
-  // its existing net connections); filler insertion needs a fresh DB cell.
+  // instance. A std replacement preserves its identity and net connections;
+  // buffer insertion needs a fresh DB cell. FR supplies all filler operations.
   std::vector<CellChangeRecord> transaction;
-  if (overlays.size() == 1 && !overlays.front()->isFiller()) {
+  if (replacedStd != nullptr) {
     transaction.push_back(
         CellChangeRecord{OpType::Replace,
-                         overlays.front()->getDbInst(),
+                         replacedStd->getDbInst(),
                          UvDist(left),
                          UvDist(bottom),
-                         overlays.front()->getMaster()->getDbMaster(),
+                         replacedStd->getMaster()->getDbMaster(),
                          targetMaster->getDbMaster(),
                          *orientation});
   } else {
-    transaction = overlayChanges;
     std::set<std::string> names;
     for (const auto& [id, node] : network->getNodes()) {
       (void) id;

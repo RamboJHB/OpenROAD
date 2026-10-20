@@ -89,6 +89,24 @@ CellChangeRecord deleteRecord(const Node& node)
           node.getOrient()};
 }
 
+FillerChanges candidateChanges(const FillerChanges& transaction)
+{
+  FillerChanges changes;
+  for (const auto& change : transaction) {
+    if (change.op_ != OpType::Delete) {
+      changes.push_back(change);
+    }
+  }
+  return changes;
+}
+
+size_t countChanges(const FillerChanges& changes, OpType operation)
+{
+  return std::count_if(changes.begin(), changes.end(), [&](const auto& change) {
+    return change.op_ == operation;
+  });
+}
+
 bool hasDiagnostic(const CheckResult& result, const std::string& status)
 {
   return std::any_of(result.diagnostics.begin(), result.diagnostics.end(),
@@ -361,13 +379,13 @@ const std::vector<OverlayProbeCase>& overlayProbeCases()
        3,
        false,
        "target_master_is_filler"},
-      {"mixed_std_and_filler_overlays",
+      {"mixed_overlay_missing_filler_coverage",
        90,
        true,
        {nodeId(1, 3), nodeId(1, 6)},
        6,
        false,
-       "mixed_target_overlay"}};
+       "target_overlaps_unchanged_instance"}};
   return cases;
 }
 
@@ -635,12 +653,18 @@ TEST_P(FillerRepairIntegrationTest,
                             changes,
                             overlay));
   EXPECT_FALSE(changes.empty());
+  EXPECT_EQ(countChanges(changes, OpType::Delete), 2u);
   for (const CellChangeRecord& change : changes) {
     const LeafCellID* id = std::get_if<LeafCellID>(&change.cell_data_);
     ASSERT_NE(id, nullptr);
-    EXPECT_EQ(change.op_, OpType::Replace);
-    EXPECT_NE(*id, leftDeleted->getDbInst());
-    EXPECT_NE(*id, rightDeleted->getDbInst());
+    if (change.op_ == OpType::Delete) {
+      EXPECT_TRUE(*id == leftDeleted->getDbInst()
+                  || *id == rightDeleted->getDbInst());
+    } else {
+      EXPECT_EQ(change.op_, OpType::Replace);
+      EXPECT_NE(*id, leftDeleted->getDbInst());
+      EXPECT_NE(*id, rightDeleted->getDbInst());
+    }
   }
 
   constexpr size_t kWorkers = 8;
@@ -731,11 +755,11 @@ TEST_P(FillerRepairIntegrationTest,
   request.overlayChanges = {deleteRecord(*first), deleteRecord(*standardCell)};
   result = checker.checkDirect(request);
   EXPECT_FALSE(result.isLegal);
-  EXPECT_TRUE(hasDiagnostic(result, "mixed_target_overlay"));
+  EXPECT_TRUE(hasDiagnostic(result, "target_overlaps_unchanged_instance"));
 }
 
 TEST_P(FillerRepairIntegrationTest,
-       NonExactSingleFillerAddsReleasedSiteWithoutDeleteOutput)
+       NonExactSingleFillerReturnsDeleteAndReleasedSiteAddition)
 {
   const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
@@ -787,8 +811,11 @@ TEST_P(FillerRepairIntegrationTest,
   const std::string repairLog = ::testing::internal::GetCapturedStdout();
   EXPECT_TRUE(repaired);
 
-  ASSERT_EQ(changes.size(), 1U);
-  const CellChangeRecord& addition = changes.front();
+  ASSERT_EQ(changes.size(), 2U);
+  ASSERT_EQ(countChanges(changes, OpType::Delete), 1u);
+  ASSERT_EQ(countChanges(changes, OpType::Add), 1u);
+  EXPECT_EQ(changes.front().cell_data_, overlay.front().cell_data_);
+  const CellChangeRecord& addition = changes.back();
   EXPECT_EQ(addition.op_, OpType::Add);
   const std::string* name = std::get_if<std::string>(&addition.cell_data_);
   ASSERT_NE(name, nullptr);
@@ -813,9 +840,6 @@ TEST_P(FillerRepairIntegrationTest,
   EXPECT_TRUE(network.getMaster(
                   network.getMasterId(addition.new_lib_cell_))->isFiller());
   EXPECT_EQ(wideFiller->getMaster()->getId(), originalMaster);
-  EXPECT_TRUE(std::none_of(changes.begin(), changes.end(), [](const auto& item) {
-    return item.op_ == OpType::Delete;
-  }));
 }
 
 TEST_P(FillerRepairIntegrationTest,
@@ -857,10 +881,11 @@ TEST_P(FillerRepairIntegrationTest,
                             PhysOrientationE::MX,
                             changes,
                             overlay));
-  ASSERT_EQ(changes.size(), 1U);
-  EXPECT_EQ(changes.front().op_, OpType::Add);
-  EXPECT_EQ(changes.front().x_.getStorage(), 3 * kSiteWidth);
-  EXPECT_EQ(changes.front().y_.getStorage(), targetRow * kRowHeight);
+  ASSERT_EQ(changes.size(), 3U);
+  EXPECT_EQ(countChanges(changes, OpType::Delete), 2u);
+  EXPECT_EQ(changes.back().op_, OpType::Add);
+  EXPECT_EQ(changes.back().x_.getStorage(), 3 * kSiteWidth);
+  EXPECT_EQ(changes.back().y_.getStorage(), targetRow * kRowHeight);
 }
 
 TEST_P(FillerRepairIntegrationTest,
@@ -987,7 +1012,8 @@ TEST_P(FillerRepairIntegrationTest,
   const fillerRepair::RepairOutcome outcome = engine.repair(request);
 
   EXPECT_TRUE(outcome.hasSolution);
-  EXPECT_TRUE(outcome.changes.empty());
+  ASSERT_EQ(outcome.changes.size(), 2u);
+  EXPECT_EQ(countChanges(outcome.changes, OpType::Delete), 2u);
   EXPECT_EQ(first->getMaster()->getId(), firstMaster);
   EXPECT_EQ(second->getMaster()->getId(), secondMaster);
 }
@@ -1053,19 +1079,22 @@ TEST_P(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
   EXPECT_TRUE(hasDiagnostic(result, "target_original_master_mismatch"));
 
   request.cell = nullptr;
+  request.overlayChanges = {deleteRecord(*replaced)};
   result = checker.checkDirect(request);
-  EXPECT_TRUE(hasDiagnostic(result, "invalid_target_cell"));
+  EXPECT_FALSE(result.isLegal);
+  EXPECT_TRUE(hasDiagnostic(result, "removal_requires_filler_repair"));
   EXPECT_EQ(replaced->getMaster()->getId(), 2);
 }
 
 TEST_P(FillerRepairIntegrationTest,
-       StandardCellReplacementRejectsMoveAndFootprintChange)
+       StandardCellReplacementSupportsMoveAndFootprintChange)
 {
   const int utilization = GetParam();
   ImplantLayerCheckerHelper helper;
-  initializeFixture(helper, multiDeleteInput(utilization), utilization);
+  initializeFixture(helper, nonExactInput(utilization), utilization);
   ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
   helper.initChecker(checker);
+  checker.setFillerRepairEnabled(true);
 
   constexpr RowId targetRow = 1;
   constexpr ColId targetCol = 6;
@@ -1073,6 +1102,13 @@ TEST_P(FillerRepairIntegrationTest,
   Node* replaced = network.getNode(targetRow * kColCount + targetCol);
   ASSERT_NE(replaced, nullptr);
   ASSERT_FALSE(replaced->isFiller());
+  const MasterId oldMaster = replaced->getMaster()->getId();
+  Node* rightFiller = network.getNode(nodeId(targetRow, targetCol + 1));
+  Node* wideFiller = network.getNode(nodeId(targetRow, 3));
+  ASSERT_NE(rightFiller, nullptr);
+  ASSERT_NE(wideFiller, nullptr);
+  ASSERT_TRUE(rightFiller->isFiller());
+  ASSERT_TRUE(wideFiller->isFiller());
 
   Node temporary;
   temporary.setId(replaced->getId());
@@ -1087,17 +1123,54 @@ TEST_P(FillerRepairIntegrationTest,
                               replaced->getOrient(),
                               {deleteRecord(*replaced)}};
 
-  temporary.setMaster(network.getMaster(6));
+  temporary.setMaster(network.getMaster(7));
   temporary.setWidth(DbuX{2 * kSiteWidth});
   temporary.setHeight(DbuY{kRowHeight});
-  CheckResult result = checker.checkDirect(request);
-  EXPECT_TRUE(hasDiagnostic(result, "target_footprint_mismatch"));
+  // Size up keeps the old standard-cell identity and consumes its right filler.
+  request.overlayChanges.push_back(deleteRecord(*rightFiller));
+  EXPECT_TRUE(checker.checkDirect(request).isLegal);
+  FillerChanges resized;
+  ASSERT_TRUE(checker.check(&temporary, request.x, request.y,
+                            request.orientation, resized,
+                            request.overlayChanges));
+  ASSERT_EQ(resized.size(), 1u);
+  EXPECT_EQ(resized.front().op_, OpType::Delete);
+  EXPECT_EQ(resized.front().cell_data_, CellData{rightFiller->getDbInst()});
+
+  // Prepare removal, then place the narrower target at a disjoint wide filler.
+  // The pending Add is recomputed by FR together with the newly released site.
+  FillerChanges preparation;
+  std::vector<CellChangeRecord> removal{deleteRecord(*replaced)};
+  ASSERT_TRUE(checker.check(nullptr, GridX{0}, GridY{0}, PhysOrientationE::R0,
+                            preparation, removal));
+  ASSERT_EQ(countChanges(preparation, OpType::Add), 1u);
 
   temporary.setMaster(network.getMaster(0));
   temporary.setWidth(DbuX{kSiteWidth});
-  request.x = GridX{targetCol + 1};
-  result = checker.checkDirect(request);
-  EXPECT_TRUE(hasDiagnostic(result, "target_move_unsupported"));
+  request.x = GridX{3};
+  request.overlayChanges = {deleteRecord(*replaced), deleteRecord(*wideFiller)};
+  request.overlayChanges.insert(request.overlayChanges.end(),
+                                 preparation.begin(), preparation.end());
+  FillerChanges moved;
+  ASSERT_TRUE(checker.check(&temporary, request.x, request.y,
+                            request.orientation, moved,
+                            request.overlayChanges));
+  EXPECT_EQ(countChanges(moved, OpType::Delete), 1u);
+  EXPECT_EQ(countChanges(moved, OpType::Add), 2u);
+  std::vector<int64_t> filledX;
+  for (const auto& change : moved) {
+    if (change.op_ == OpType::Add) {
+      filledX.push_back(change.x_.getStorage());
+    } else {
+      EXPECT_EQ(change.cell_data_, CellData{wideFiller->getDbInst()});
+    }
+  }
+  std::sort(filledX.begin(), filledX.end());
+  EXPECT_EQ(filledX, (std::vector<int64_t>{4 * kSiteWidth,
+                                          targetCol * kSiteWidth}));
+  EXPECT_EQ(replaced->getMaster()->getId(), oldMaster);
+  EXPECT_EQ(replaced->getLeft().v, targetCol * kSiteWidth);
+  EXPECT_EQ(temporary.getDbInst(), replaced->getDbInst());
 }
 
 TEST_P(FillerRepairIntegrationTest,
@@ -1323,8 +1396,9 @@ TEST_P(FillerRepairIntegrationTest, ReusedEngineReadsCommittedAddAndDelete)
                        {removed}};
   const auto first = engine.repair(request);
   ASSERT_TRUE(first.hasSolution);
-  ASSERT_EQ(first.changes.size(), 1U);
-  ASSERT_EQ(first.changes.front().op_, OpType::Add);
+  ASSERT_EQ(first.changes.size(), 2U);
+  ASSERT_EQ(first.changes.front().op_, OpType::Delete);
+  ASSERT_EQ(first.changes.back().op_, OpType::Add);
 
   // Commit the target and generated filler with fresh sparse Network ids and
   // distinct DB ids; synthetic overlay ids must not survive into the next call.
@@ -1337,7 +1411,7 @@ TEST_P(FillerRepairIntegrationTest, ReusedEngineReadsCommittedAddAndDelete)
     node->setDbInst(LeafCellID(0, 2000 + offset));
     node->setMaster(network.getMaster(
         offset == 0 ? 0
-                    : network.getMasterId(first.changes.front().new_lib_cell_)));
+                    : network.getMasterId(first.changes.back().new_lib_cell_)));
     node->setType(offset == 0 ? Node::CELL : Node::FILLER);
     node->setWidth(DbuX{kSiteWidth});
     node->setHeight(DbuY{kRowHeight});
@@ -1359,7 +1433,9 @@ TEST_P(FillerRepairIntegrationTest, ReusedEngineReadsCommittedAddAndDelete)
   ASSERT_TRUE(checker.checkDirect(request).isLegal);
   const auto second = engine.repair(request);
   EXPECT_TRUE(second.hasSolution);
-  EXPECT_TRUE(second.changes.empty());
+  ASSERT_EQ(second.changes.size(), 1u);
+  EXPECT_EQ(second.changes.front().op_, OpType::Delete);
+  EXPECT_EQ(second.changes.front().cell_data_, CellData{added->getDbInst()});
   EXPECT_EQ(network.getNodeId(added->getDbInst()), 1001);
 }
 
@@ -1479,12 +1555,10 @@ TEST_P(FillerRepairIntegrationTest, NonExactRepairReturnsVerifiedAddAndSwap)
                     result.changes.end(),
                     [](const auto& c) { return c.op_ == OpType::Replace; }),
       0);
-  EXPECT_TRUE(std::none_of(
-      result.changes.begin(), result.changes.end(), [](const auto& c) {
-        return c.op_ == OpType::Delete;
-      }));
+  EXPECT_EQ(countChanges(result.changes, OpType::Delete), 1u);
   const auto checked
-      = checker.checkPlaceWithOverlays(request, fullGuard, {result.changes});
+      = checker.checkPlaceWithOverlays(
+          request, fullGuard, {candidateChanges(result.changes)});
   ASSERT_EQ(checked.size(), 1u);
   EXPECT_TRUE(checked.front().isLegal);
   EXPECT_EQ(removed->getMaster()->getId(), 6);
@@ -1553,8 +1627,9 @@ TEST_P(FillerRepairIntegrationTest, RetilingCanChangeTheSeedAddMasterInPlace)
   fillerRepair::FillerRepairEngine engine(checker);
   const auto result = engine.repair(request);
   ASSERT_TRUE(result.hasSolution);
-  ASSERT_EQ(result.changes.size(), 1u);
-  const auto& addition = result.changes.front();
+  ASSERT_EQ(result.changes.size(), 2u);
+  EXPECT_EQ(result.changes.front().op_, OpType::Delete);
+  const auto& addition = result.changes.back();
   EXPECT_EQ(addition.op_, OpType::Add);
   EXPECT_EQ(addition.new_lib_cell_, network.getMaster(5)->getDbMaster());
   EXPECT_EQ(addition.x_.getStorage(), 3 * kSiteWidth);
@@ -1563,7 +1638,8 @@ TEST_P(FillerRepairIntegrationTest, RetilingCanChangeTheSeedAddMasterInPlace)
   ASSERT_NE(name, nullptr);
   EXPECT_EQ(*name, "FILLER_REPAIR_1_3_W10_H1_0");
   const auto checked
-      = checker.checkPlaceWithOverlays(request, fullGuard, {result.changes});
+      = checker.checkPlaceWithOverlays(
+          request, fullGuard, {candidateChanges(result.changes)});
   ASSERT_EQ(checked.size(), 1u);
   EXPECT_TRUE(checked.front().isLegal);
   EXPECT_EQ(removed->getMaster()->getId(), 6);

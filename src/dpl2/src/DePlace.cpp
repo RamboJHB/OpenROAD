@@ -70,99 +70,116 @@ void DePlace::setPadding(PhysLibCell* master, const int left, const int right)
   padding_->setPadding(master, GridX{left}, GridX{right});
 }
 
-/**
- * @brief Read-only overlay DRC of swapping @p target to master @p masterId at
- *        its current location.
- *
- * Builds a throw-away node with the target master at the target's current
- * coordinates (never inserted into the network, never painted), feeds the
- * node plus the one old Network std cell as the replacement overlay, and
- * returns the verdict. No in-memory placement state is mutated.
- *
- * @param  masterId    Target library cell master.
- * @param  target      The std-cell currently occupying the probe site.
- * @param  cellChanges [out] Appends the target Replace and any filler repair
- *                     records on success; unchanged when the check fails.
- * @retval true        The swap is DRC-legal at the current location.
- * @retval false       The swap violates DRC.
- */
-bool DePlace::isLegalProbe(LibCellID masterId, const Node* target,
-                           std::vector<CellChangeRecord>& cellChanges)
+bool DePlace::isLegal(LeafCellID instId, LibCellID masterId,
+                      std::vector<CellChangeRecord>& changes)
 {
-  if (target == nullptr) {
-    return false;
-  }
-  const PhysLibCell& new_pcell = design_->getLibAcc().getPhysLibCell(masterId);
-
-  if (drc_engine_ == nullptr) {
-    return false;
-  }
-  Master* const master = this->network_->getMaster(masterId);
-  if (master == nullptr || target->getMaster() == nullptr
-      || target->getWidth().v != new_pcell.getWidth().getStorage()
-      || target->getHeight().v != new_pcell.getHeight().getStorage()) {
-    return false;
-  }
-
-  // Throw-away node anchored at the target's current coordinates.
-  Node probe;
-  Point2D origin(UvDist{target->getLeft().v}, UvDist{target->getBottom().v});
-  initTempNode(probe, master, new_pcell, origin);
-
-  const GridX x = grid_->gridX(probe.getLeft());
-  const GridY y = grid_->gridSnapDownY(probe.getBottom());
-  // isLegal is a one-to-one in-place std-cell replacement. The old Network
-  // node is the complete input overlay. The checker returns only filler repair
-  // records; this layer adds the target Replace, preserving its DB identity.
-  std::vector<CellChangeRecord> overlayChanges;
-  overlayChanges.push_back(CellChangeRecord{
-      OpType::Delete, target->getDbInst(), UvDist(0), UvDist(0),
-      LibCellID(), LibCellID(), PhysOrientationE::R0});
-
-  const auto orient
-      = grid_->getSiteOrientation(x, y, new_pcell.getTechSite()->getName());
-  if (!orient.has_value()) {
-    return false;
-  }
-  std::vector<CellChangeRecord> trial = cellChanges;
-  if (!drc_engine_->checkDRC(&probe, x, y, *orient, trial, overlayChanges)) {
-    return false;
-  }
-  trial.push_back(CellChangeRecord{OpType::Replace,
-                                   target->getDbInst(),
-                                   UvDist(target->getLeft().v),
-                                   UvDist(target->getBottom().v),
-                                   target->getMaster()->getDbMaster(),
-                                   masterId,
-                                   *orient});
-  cellChanges = std::move(trial);
-  return true;
+  return isLegal(instId, masterId, nullptr, 0, changes);
 }
 
-/**
- * @brief Check DRC legality of swapping a cell to a given master at its current
- *        location.
- *
- * Builds a temporary same-footprint node and checks it against an overlay of
- * the committed cell. The cell is not moved or mutated.
- *
- * @param  instId    LeafCellID of the cell to test.
- * @param  masterId  Target library cell master to test-swap to.
- * @param  ccRecords [out] Appends a complete target/filler transaction on
- *                    success; unchanged on failure. Commit it without adding
- *                    the target Replace again.
- * @retval true      The swap is DRC-legal at the current location.
- * @retval false     The swap violates DRC (insufficient space or
- * incompatible footprint).
- */
 bool DePlace::isLegal(LeafCellID instId, LibCellID masterId,
-    std::vector<CellChangeRecord>& ccRecords)
+                      eUNL::VoltageArea* va, int diameter,
+                      std::vector<CellChangeRecord>& changes)
 {
-  Node* cell = this->network_->getNode(instId);
-  if (cell == nullptr) {
+  if (diameter < 0 || design_ == nullptr || network_ == nullptr
+      || grid_ == nullptr || drc_engine_ == nullptr) {
     return false;
   }
-  return isLegalProbe(masterId, cell, ccRecords);
+  Node* const old = network_->getNode(instId);
+  Master* const master = network_->getMaster(masterId);
+  if (old == nullptr || old->getMaster() == nullptr || old->isFiller()
+      || old->isFixed() || old->isTerminal() || old->getGroup() != nullptr
+      || master == nullptr || master->isFiller()
+      || master->getPhysLibCell() == nullptr) {
+    return false;
+  }
+  const PhysLibCell& physical = *master->getPhysLibCell();
+  if (physical.getTechSite() == nullptr || physical.getType().isBlock()
+      || physical.getType().isPad() || physical.getType().isCover()
+      || physical.getWidth().getStorage() <= 0
+      || physical.getHeight().getStorage() <= 0) {
+    return false;
+  }
+
+  const GridX oldX = grid_->gridX(old);
+  const GridY oldY = grid_->gridSnapDownY(old);
+  std::vector<CellChangeRecord> removed{
+      {OpType::Delete, old->getDbInst(), UvDist(old->getLeft().v),
+       UvDist(old->getBottom().v), old->getMaster()->getDbMaster(),
+       old->getMaster()->getDbMaster(), old->getOrient()}};
+  std::vector<CellChangeRecord> pending;
+  // Prepare a virtual removal/filler layout. It is only a seed: a new target
+  // can make an otherwise unfillable old footprint tileable.
+  drc_engine_->checkDRC(
+      nullptr, oldX, oldY, old->getOrient(), pending, removed);
+
+  Node probe;
+  initTempNode(probe, master, physical,
+               Point2D(UvDist(old->getLeft().v), UvDist(old->getBottom().v)));
+  probe.setId(old->getId());
+  probe.setDbInst(old->getDbInst());
+  const auto inVoltageArea = [&](GridX x, GridY y) {
+    if (va == nullptr) {
+      return true;
+    }
+    const UvDist xl(x.v * grid_->getSiteWidth().v
+                    + core_.getXL().getStorage());
+    const UvDist yl(grid_->gridYToDbu(y).v + core_.getYL().getStorage());
+    for (const Rect& rect : va->getRects()) {
+      if (xl >= rect.getXL() && yl >= rect.getYL()
+          && xl + physical.getWidth() <= rect.getXH()
+          && yl + physical.getHeight() <= rect.getYH()) {
+        return true;
+      }
+    }
+    return false;
+  };
+
+  std::vector<CellChangeRecord> trial = pending;
+  std::pair<int, int> location{-1, -1};
+  if (inVoltageArea(oldX, oldY)
+      && canBePlaced(&probe, oldX, oldY, &trial, old)) {
+    location = {oldX.v, oldY.v};
+  } else if (diameter > 0) {
+    const int64_t xl = int64_t{old->getLeft().v}
+                       + core_.getXL().getStorage();
+    const int64_t yl = int64_t{old->getBottom().v}
+                       + core_.getYL().getStorage();
+    const Rect search(UvDist(xl - diameter), UvDist(yl - diameter),
+                      UvDist(xl + physical.getWidth().getStorage() + diameter),
+                      UvDist(yl + physical.getHeight().getStorage() + diameter));
+    const auto searchRect = [&](const Rect& rect) {
+      trial = pending;
+      probe.setLeft(old->getLeft());
+      probe.setBottom(old->getBottom());
+      return legalCellInRect(rect, &probe, &trial, old);
+    };
+    if (va == nullptr) {
+      location = searchRect(search.overlap(core_, false));
+    } else {
+      for (const Rect& rect : va->getRects()) {
+        location = searchRect(search.overlap(rect, false).overlap(core_, false));
+        if (location != std::pair<int, int>{-1, -1}) {
+          break;
+        }
+      }
+    }
+  }
+  if (location == std::pair<int, int>{-1, -1}) {
+    return false;
+  }
+  const GridX x{location.first};
+  const GridY y{location.second};
+  const auto orientation
+      = grid_->getSiteOrientation(x, y, physical.getTechSite()->getName());
+  if (!orientation.has_value()) {
+    return false;
+  }
+  trial.push_back({OpType::Replace, old->getDbInst(),
+                   UvDist(x.v * grid_->getSiteWidth().v),
+                   UvDist(grid_->gridYToDbu(y).v),
+                   old->getMaster()->getDbMaster(), masterId, *orientation});
+  changes.insert(changes.end(), trial.begin(), trial.end());
+  return true;
 }
 
 /**

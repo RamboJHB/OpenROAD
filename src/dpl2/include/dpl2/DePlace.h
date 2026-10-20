@@ -140,6 +140,11 @@ class DePlace {
                               std::vector<CellChangeRecord>& ccRecords);
   bool isLegal(LeafCellID instId, LibCellID masterId,
       std::vector<CellChangeRecord>& ccRecords);
+  // diameter is the DBU search-box extension around the old origin; zero
+  // checks that origin only. The target Replace preserves instance identity.
+  bool isLegal(LeafCellID instId, LibCellID masterId,
+      eUNL::VoltageArea* va, int diameter,
+      std::vector<CellChangeRecord>& ccRecords);
   bool commit(const std::vector<CellChangeRecord>& ccRecords);
   Rect getBoundingBox(const Rect& operableRect);
   PhysDesMgr* getDesMgr() {return desMgr_;};
@@ -188,7 +193,8 @@ class DePlace {
 
   // Placement methods
   bool canBePlaced(const Node* cell, GridX x, GridY y,
-                   std::vector<CellChangeRecord>* fillerChanges = nullptr) const;
+                   std::vector<CellChangeRecord>* fillerChanges = nullptr,
+                   const Node* replacedCell = nullptr) const;
   bool moveHopeless(const Node* cell, GridX& grid_x, GridY& grid_y) const;
   bool diamondMove(Node* cell);
   bool diamondMove(Node* cell, const GridPt& grid_pt);
@@ -200,12 +206,14 @@ class DePlace {
                    GridY y,
                    GridX x_end,
                    GridY y_end,
-                   std::vector<CellChangeRecord>* fillerChanges = nullptr) const;
+                   std::vector<CellChangeRecord>* fillerChanges = nullptr,
+                   const Node* replacedCell = nullptr) const;
   unsigned getMasterSymmetry(int symmetry) const;
   bool checkMasterSym(unsigned masterSym, eUTL::PhysOrientation cellOri) const;
 
   PixelPt diamondSearch(const Node* cell, GridX x, GridY y,
-                        std::vector<CellChangeRecord>* fillerChanges = nullptr) const;
+                        std::vector<CellChangeRecord>* fillerChanges = nullptr,
+                        const Node* replacedCell = nullptr) const;
   // Search methods
   PixelPt diamondSearch(const Node* cell,
                         GridX x,
@@ -214,7 +222,8 @@ class DePlace {
                         GridX x_max,
                         GridY y_min,
                         GridY y_max,
-                        std::vector<CellChangeRecord>* fillerChanges = nullptr) const;
+                        std::vector<CellChangeRecord>* fillerChanges = nullptr,
+                        const Node* replacedCell = nullptr) const;
   int calcDist(const GridPt& p1, const GridPt& p2) const;
 
   // Rip-up and replace
@@ -222,19 +231,14 @@ class DePlace {
                                     const GridRect& target_grid_rect,
                                     const GridPt& start_pt);
   std::pair<int, int> legalCellInRect(const Rect& rect, Node* cell,
-                    std::vector<CellChangeRecord>* fillerChanges = nullptr);
+                    std::vector<CellChangeRecord>* fillerChanges = nullptr,
+                    const Node* replacedCell = nullptr);
 
   // Read-only probe helpers (no in-memory placement mutation):
   // Initialize a throw-away stack Node for @p master at @p origin, binding a
   // valid db instance id from the occupied origin site if any.
   void initTempNode(Node& cell, Master* master, const PhysLibCell& pcell,
                     const Point2D& origin) const;
-
-  // Read-only overlay DRC of replacing @p target with master @p masterId at
-  // the same location and footprint. The old Network target is the sole
-  // overlay record; returned records may change surrounding fillers only.
-  bool isLegalProbe(LibCellID masterId, const Node* target,
-                    std::vector<CellChangeRecord>& cellChanges);
 
   // Grid initialization
   void initGrid();

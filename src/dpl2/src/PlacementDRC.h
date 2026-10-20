@@ -31,6 +31,8 @@ class PlacementDRC
                 std::vector<CellChangeRecord>& ccRecords) const;
 
   // Runs every checker through its explicit overlay/repair-capable interface.
+  // A null cell prepares a tentative std removal using the Implant checker;
+  // all checkers run when a final non-null placement is tested.
   // Repair records are published only if every checker accepts the request.
   bool checkDRC(const Node* cell,
                 GridX x,

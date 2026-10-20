@@ -166,97 +166,14 @@ class FillerCandidateCatalog
   CandidateStats aggregate_;
 };
 
-// Per-request view that removes caller-deleted fillers from every hot row
-// query without mutating the current Grid/Network. The anchor
-// remains addressable for the planner's target metadata check, but it is not
-// an editable row member.
-class OverlayPlacementView final : public PlacementView
-{
- public:
-  OverlayPlacementView(const PlacementView& base,
-                       const std::set<InstanceId>& excluded,
-                       InstanceId anchor)
-      : base_(base), excluded_(excluded), anchor_(anchor)
-  {
-  }
-
-  const std::vector<RowId>& rows() const override { return base_.rows(); }
-  DbCoord siteWidth() const override { return base_.siteWidth(); }
-  const std::vector<PlacedInstance>& instancesInRow(
-      RowId rowId) const override
-  {
-    const std::vector<PlacedInstance>& source = base_.instancesInRow(rowId);
-    const auto cached = filteredRows_.find(rowId);
-    if (cached != filteredRows_.end()) {
-      return cached->second;
-    }
-    if (passthroughRows_.find(rowId) != passthroughRows_.end()) {
-      return source;
-    }
-    if (std::none_of(source.begin(), source.end(), [this](const auto& inst) {
-          return excluded_.find(inst.id) != excluded_.end();
-        })) {
-      passthroughRows_.insert(rowId);
-      return source;
-    }
-    auto [found, inserted] = filteredRows_.try_emplace(rowId);
-    (void) inserted;
-    found->second.reserve(source.size());
-    std::copy_if(source.begin(), source.end(),
-                 std::back_inserter(found->second), [this](const auto& inst) {
-                   return excluded_.find(inst.id) == excluded_.end();
-                 });
-    return found->second;
-  }
-  const PlacedInstance* instance(InstanceId id) const override
-  {
-    return id != anchor_ && excluded_.find(id) != excluded_.end()
-               ? nullptr
-               : base_.instance(id);
-  }
-  const MasterInfo* masterInfo(MasterId id) const override
-  {
-    return base_.masterInfo(id);
-  }
-  const std::vector<MasterId>& fillerMasterIds() const override
-  {
-    return base_.fillerMasterIds();
-  }
-  CellChangeRecord cellChangeRecord(InstanceId id,
-                                    MasterId masterId) const override
-  {
-    return base_.cellChangeRecord(id, masterId);
-  }
-  MasterCandidateResult getUsableMasterCandidates(
-      InstanceId id) const override
-  {
-    if (excluded_.find(id) != excluded_.end()) {
-      MasterCandidateResult result;
-      result.diagnostics.push_back(makeDiag(
-          Severity::Warning,
-          "CallerDeletedFiller",
-          cat("caller-deleted filler ", id, " is not editable")));
-      return result;
-    }
-    return base_.getUsableMasterCandidates(id);
-  }
-
- private:
-  const PlacementView& base_;
-  const std::set<InstanceId>& excluded_;
-  InstanceId anchor_ = -1;
-  mutable std::unordered_map<RowId, std::vector<PlacedInstance>> filteredRows_;
-  mutable std::unordered_set<RowId> passthroughRows_;
-};
-
 struct LayoutMasterOption
 {
   MasterId masterId = -1;
   eUTL::PhysOrientation orientation{eUTL::PhysOrientationE::R0};
 };
 
-// A filler introduced only in this request. Negative ids keep it disjoint
-// from the immutable Network snapshot until the caller commits the result.
+// A request-local filler: a negative id names an uncommitted Add; a real id
+// carries a preparation swap that may be kept, replaced, or cancelled.
 struct LayoutAddition
 {
   InstanceId instanceId = -1;
@@ -318,6 +235,16 @@ ipl::FillerChanges mergeFillerChanges(const ipl::FillerChanges& fixed,
         *existing = change;
         continue;
       }
+    } else if (const eUNL::LeafCellID* id = cellChangeRecordLeafCellId(change)) {
+      const auto existing = std::find_if(
+          merged.begin(), merged.end(), [&](const CellChangeRecord& item) {
+            const eUNL::LeafCellID* itemId = cellChangeRecordLeafCellId(item);
+            return itemId != nullptr && *itemId == *id;
+          });
+      if (existing != merged.end()) {
+        *existing = change;
+        continue;
+      }
     }
     merged.push_back(change);
   }
@@ -334,7 +261,8 @@ class LayoutPlacementView final : public PlacementView
                       TargetPlace target,
                       std::set<InstanceId> removed,
                       std::vector<LayoutAddition> additions,
-                      const PlacementMetadata& metadata)
+                      const PlacementMetadata& metadata,
+                      bool hasTarget = true)
       : base_(base),
         target_(target),
         removed_(std::move(removed)),
@@ -347,8 +275,13 @@ class LayoutPlacementView final : public PlacementView
                          target_.orientation,
                          false}
   {
-    appendToRows(target_instance_, masterInfo(target_.masterId));
+    if (hasTarget) {
+      appendToRows(target_instance_, masterInfo(target_.masterId));
+    }
     for (const LayoutAddition& addition : additions_) {
+      if (addition.instanceId >= 0) {
+        removed_.insert(addition.instanceId);
+      }
       synthetic_.emplace(addition.instanceId, addition.placed);
       appendToRows(addition.placed, masterInfo(addition.placed.masterId));
     }
@@ -384,12 +317,11 @@ class LayoutPlacementView final : public PlacementView
     if (id == target_.instanceId) {
       return &target_instance_;
     }
-    if (removed_.count(id) != 0) {
-      return nullptr;
-    }
     const auto synthetic = synthetic_.find(id);
-    return synthetic != synthetic_.end() ? &synthetic->second
-                                         : base_.instance(id);
+    if (synthetic != synthetic_.end()) {
+      return &synthetic->second;
+    }
+    return removed_.count(id) != 0 ? nullptr : base_.instance(id);
   }
   const MasterInfo* masterInfo(MasterId id) const override
   {
@@ -402,7 +334,7 @@ class LayoutPlacementView final : public PlacementView
   MasterCandidateResult getUsableMasterCandidates(
       InstanceId instanceId) const override
   {
-    if (instanceId >= 0) {
+    if (synthetic_.count(instanceId) == 0) {
       return base_.getUsableMasterCandidates(instanceId);
     }
     MasterCandidateResult result;
@@ -423,7 +355,7 @@ class LayoutPlacementView final : public PlacementView
   CellChangeRecord cellChangeRecord(InstanceId instanceId,
                                     MasterId newMasterId) const override
   {
-    if (instanceId >= 0) {
+    if (synthetic_.count(instanceId) == 0) {
       return base_.cellChangeRecord(instanceId, newMasterId);
     }
     const auto addition = std::find_if(
@@ -1272,7 +1204,8 @@ FillerRepairEngine::Impl::RequestOracle::checkPlaceWithOverlays(
       const InstanceId checkerTargetId
           = target_.cell != nullptr ? target_.cell->getId() : -1;
       for (ViolationParticipant& participant : converted.participants) {
-        if (participant.instanceId != checkerTargetId) {
+        if (target_.cell == nullptr
+            || participant.instanceId != checkerTargetId) {
           continue;
         }
         participant.instanceId = first.targetPlace.instanceId;
@@ -1385,11 +1318,16 @@ void FillerRepairEngine::Impl::logRepairSuccess(
       result.changes.begin(), result.changes.end(), [](const auto& change) {
         return change.op_ == OpType::Replace;
       });
+  const size_t deleteCount = std::count_if(
+      result.changes.begin(), result.changes.end(), [](const auto& change) {
+        return change.op_ == OpType::Delete;
+      });
   log_.section("engine", "REPAIR SUCCESS");
   log_.block("engine",
              "Repair result",
              {{"status", status},
               {"caller Delete overlays", cat(request.overlayChanges.size())},
+              {"returned Delete changes", cat(deleteCount)},
               {"returned Add changes", cat(addCount)},
               {"returned Swap changes", cat(swapCount)}});
 
@@ -1431,6 +1369,7 @@ void FillerRepairEngine::Impl::logRepairSuccess(
   for (size_t index = 0; index < result.changes.size(); ++index) {
     const CellChangeRecord& change = result.changes[index];
     const bool isAdd = change.op_ == OpType::Add;
+    const bool isDelete = change.op_ == OpType::Delete;
     const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(change);
     const InstanceId instanceId
         = cellId != nullptr ? network_->getNodeId(*cellId) : -1;
@@ -1448,11 +1387,13 @@ void FillerRepairEngine::Impl::logRepairSuccess(
         = isAdd ? "<none>"
                 : (instanceId >= 0 ? cat(instanceId) : "<unresolved>");
     const std::string newCellId
-        = isAdd ? "<assigned on commit>" : oldCellId;
+        = isDelete ? "<none>" : (isAdd ? "<assigned on commit>" : oldCellId);
     const std::string oldName = isAdd ? "<none>" : nodeName(oldNode);
     const std::string newName
-        = isAdd ? (addedName != nullptr ? *addedName : "<invalid Add name>")
-                : oldName;
+        = isDelete ? "<none>"
+                   : (isAdd ? (addedName != nullptr ? *addedName
+                                                   : "<invalid Add name>")
+                            : oldName);
     const std::string oldOrientation
         = isAdd || oldNode == nullptr
               ? (isAdd ? "<none>" : orientationName(change.orientation_))
@@ -1461,32 +1402,33 @@ void FillerRepairEngine::Impl::logRepairSuccess(
         "engine",
         cat("Returned repair change #", index + 1),
         {{"operation",
-          isAdd ? "ADD" : (change.op_ == OpType::Replace
-                                 ? "SWAP (Replace)"
-                                 : "UNEXPECTED")},
+          isAdd ? "ADD" : (isDelete ? "DELETE" : "SWAP (Replace)")},
          {"old cell id", oldCellId},
          {"old DB cell id", isAdd ? "<none>" : dbCellId(cellId)},
          {"old cell name", oldName},
          {"new cell id", newCellId},
          {"new DB cell id",
-          isAdd ? "<assigned on commit>" : dbCellId(cellId)},
+          isDelete ? "<none>"
+                   : (isAdd ? "<assigned on commit>" : dbCellId(cellId))},
          {"new cell name", newName},
          {"old master id", isAdd ? "<none>" : cat(oldMasterId)},
          {"old master name", isAdd ? "<none>" : masterName(oldMasterId)},
          {"old site width",
           isAdd ? "<none>" : masterSiteWidth(oldMasterId)},
-         {"new master id", cat(newMasterId)},
-         {"new master name", masterName(newMasterId)},
-         {"new site width", masterSiteWidth(newMasterId)},
+         {"new master id", isDelete ? "<none>" : cat(newMasterId)},
+         {"new master name", isDelete ? "<none>" : masterName(newMasterId)},
+         {"new site width",
+          isDelete ? "<none>" : masterSiteWidth(newMasterId)},
          {"old orientation", oldOrientation},
-         {"new orientation", orientationName(change.orientation_)},
+         {"new orientation",
+          isDelete ? "<none>" : orientationName(change.orientation_)},
          {"origin (core DBU)",
           cat('(', change.x_.getStorage(), ',', change.y_.getStorage(), ')')}});
   }
 }
 
 RepairOutcome FillerRepairEngine::Impl::repair(
-    const ipl::CheckRequest& request) const
+    const ipl::CheckRequest& input) const
 {
   RepairOutcome result;
   int checkerRequests = 0;
@@ -1525,38 +1467,72 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     skip("EngineNotReady", "required Grid/Network geometry is unavailable");
     return result;
   }
-  if (request.cell == nullptr || request.cell->getMaster() == nullptr) {
+  if (input.cell != nullptr && input.cell->getMaster() == nullptr) {
     skip("MissingTarget", "CheckRequest has no temporary Node/master");
     return result;
   }
-  if (request.overlayChanges.empty()) {
+  if (input.overlayChanges.empty()) {
     skip("MissingOverlay", "CheckRequest has no replaced Network node");
     return result;
   }
 
   const RequestPlacementView view(*this);
+  ipl::CheckRequest request = input;
+  request.overlayChanges.clear();
   std::set<InstanceId> overlayInstanceIds;
-  for (const CellChangeRecord& overlay : request.overlayChanges) {
+  ipl::FillerChanges fillerDeletes;
+  std::map<InstanceId, CellChangeRecord> pendingReplaces;
+  InstanceId oldStdId = -1;
+  for (const CellChangeRecord& overlay : input.overlayChanges) {
+    // Preparation Adds are a tentative tiling of the real Delete footprints.
+    // Rebuild D-T below so partially consumed Adds need no temporary identity.
+    if (overlay.op_ == OpType::Add) {
+      continue;
+    }
     const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(overlay);
-    if (overlay.op_ != OpType::Delete || cellId == nullptr) {
+    if (cellId == nullptr) {
       skip("InvalidOverlay",
-           "every target overlay must be a Delete carrying LeafCellID");
+           "existing-node overlays must carry LeafCellID");
       return result;
     }
     const InstanceId id = network_->getNodeId(*cellId);
-    if (id < 0 || view.instance(id) == nullptr
-        || !overlayInstanceIds.insert(id).second) {
+    const PlacedInstance* placed = view.instance(id);
+    if (id < 0 || placed == nullptr) {
       skip("InvalidOverlay",
-           cat("target overlay has an unknown or duplicate node ", id));
+           cat("target overlay has an unknown node ", id));
       return result;
     }
+    if (overlay.op_ == OpType::Replace && placed->isFiller) {
+      pendingReplaces.insert_or_assign(id, overlay);
+      continue;
+    }
+    if (overlay.op_ != OpType::Delete
+        || !overlayInstanceIds.insert(id).second) {
+      skip("InvalidOverlay", cat("invalid or duplicate Delete node ", id));
+      return result;
+    }
+    request.overlayChanges.push_back(overlay);
+    if (placed->isFiller) {
+      fillerDeletes.push_back(overlay);
+    } else if (oldStdId < 0) {
+      oldStdId = id;
+    } else {
+      skip("InvalidOverlay", "only one old standard cell may be removed");
+      return result;
+    }
+  }
+  if (overlayInstanceIds.empty()
+      || (request.cell == nullptr && oldStdId < 0)) {
+    skip("MissingOverlay", "repair has no real target Delete overlay");
+    return result;
   }
 
   const DbCoord targetX
       = static_cast<DbCoord>(request.x.v) * placement_.siteWidth;
-  InstanceId targetId = -1;
-  const InstanceId requestedId = request.cell->getId();
-  if (overlayInstanceIds.count(requestedId) != 0
+  InstanceId targetId = oldStdId;
+  const InstanceId requestedId
+      = request.cell != nullptr ? request.cell->getId() : oldStdId;
+  if (targetId < 0 && overlayInstanceIds.count(requestedId) != 0
       && view.instance(requestedId) != nullptr) {
     targetId = requestedId;
   }
@@ -1596,7 +1572,9 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
-  const MasterId replacementId = request.cell->getMaster()->getId();
+  const bool hasTarget = request.cell != nullptr;
+  const MasterId replacementId
+      = hasTarget ? request.cell->getMaster()->getId() : current->masterId;
   const MasterInfo* replacement = masterInfo(replacementId);
   if (replacement == nullptr) {
     skip("TargetMasterUnavailable",
@@ -1609,21 +1587,20 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   TargetPlace target;
   target.instanceId = current->id;
   target.masterId = replacementId;
-  target.rowId = request.y.v;
-  target.x = targetX;
-  target.orientation = toPlannerOrient(request.orientation);
+  target.rowId = hasTarget ? request.y.v : current->rowId;
+  target.x = hasTarget ? targetX : current->x;
+  target.orientation
+      = hasTarget ? toPlannerOrient(request.orientation) : current->orientation;
+  if (!hasTarget) {
+    request.x = GridX{static_cast<int>(current->x / placement_.siteWidth)};
+    request.y = GridY{current->rowId};
+    request.orientation = network_->getNode(current->id)->getOrient();
+  }
 
   Region influence = snapshotGuard(target);
-  const bool allFillerOverlays
-      = std::all_of(overlayInstanceIds.begin(),
-                    overlayInstanceIds.end(),
-                    [&view](InstanceId id) {
-                      const PlacedInstance* placed = view.instance(id);
-                      return placed != nullptr && placed->isFiller;
-                    });
   std::set<internal::SiteCell> releasedSites;
   bool exactCover = true;
-  if (allFillerOverlays) {
+  {
     if (replacement->width <= 0
         || replacement->width % placement_.siteWidth != 0
         || replacement->height < 1) {
@@ -1632,14 +1609,17 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       return result;
     }
     const int targetWidthSites
-        = static_cast<int>(replacement->width / placement_.siteWidth);
-    const int targetHeightRows = static_cast<int>(replacement->height);
+        = hasTarget ? static_cast<int>(replacement->width / placement_.siteWidth)
+                    : 0;
+    const int targetHeightRows
+        = hasTarget ? static_cast<int>(replacement->height) : 0;
     const int targetCol = request.x.v;
     const int rowCount = grid_->getRowCount().v;
     const int colCount = grid_->getRowSiteCount().v;
-    if (targetCol < 0 || target.rowId < 0
-        || targetCol + targetWidthSites > colCount
-        || target.rowId + targetHeightRows > rowCount) {
+    if (hasTarget
+        && (targetCol < 0 || target.rowId < 0
+            || targetCol + targetWidthSites > colCount
+            || target.rowId + targetHeightRows > rowCount)) {
       skip("TargetFootprintOutOfGrid",
            "temporary target footprint extends outside the placement grid");
       return result;
@@ -1657,13 +1637,13 @@ RepairOutcome FillerRepairEngine::Impl::repair(
       const PlacedInstance* filler = view.instance(id);
       const MasterInfo* master
           = filler != nullptr ? masterInfo(filler->masterId) : nullptr;
-      if (filler == nullptr || master == nullptr || !master->isFiller
+      if (filler == nullptr || master == nullptr
           || master->width <= 0
           || master->width % placement_.siteWidth != 0
           || master->height < 1 || master->height > 2
           || filler->x < 0 || filler->x % placement_.siteWidth != 0) {
-        skip("UnsupportedDeletedFiller",
-             cat("Delete overlay filler ", id,
+        skip("UnsupportedDeletedFootprint",
+             cat("Delete overlay node ", id,
                  " has an unsupported footprint"));
         return result;
       }
@@ -1678,18 +1658,20 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                                         fillerCol + colOffset};
           if (site.rowId < 0 || site.rowId >= rowCount || site.colId < 0
               || site.colId >= colCount) {
-            skip("DeletedFillerOutOfGrid",
-                 cat("Delete overlay filler ", id,
+            skip("DeletedFootprintOutOfGrid",
+                 cat("Delete overlay node ", id,
                      " extends outside the placement grid"));
             return result;
           }
           const Pixel* pixel
               = grid_->gridPixel(GridX{site.colId}, GridY{site.rowId});
           if (pixel == nullptr || !pixel->is_valid
-              || pixel->padding_reserved_by != nullptr
+              || (pixel->padding_reserved_by != nullptr
+                  && overlayInstanceIds.count(
+                         pixel->padding_reserved_by->getId()) == 0)
               || pixel->cell == nullptr || pixel->cell->getId() != id) {
-            skip("InvalidDeletedFillerFootprint",
-                 cat("Delete overlay filler ", id,
+            skip("InvalidDeletedFootprint",
+                 cat("Delete overlay node ", id,
                      " does not own its complete legal footprint"));
             return result;
           }
@@ -1698,7 +1680,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
               = intersectsTarget || targetSites.count(site) != 0;
         }
       }
-      if (!intersectsTarget) {
+      if (filler->isFiller && !intersectsTarget) {
         skip("UnrelatedDeletedFiller",
              cat("Delete overlay filler ", id,
                  " does not intersect the temporary target"));
@@ -1718,14 +1700,14 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                    filler->rowId + static_cast<RowId>(master->height)));
     }
 
-    // findLegal supplies a union of Delete fillers covering the whole target.
-    // A larger area is not sufficient: every target site must be included.
+    // D is every old footprint, including a removed std cell at another
+    // location. The target must fit D; only D-T is returned as filler Adds.
     if (!std::includes(deletedSites.begin(),
                        deletedSites.end(),
                        targetSites.begin(),
                        targetSites.end())) {
-      skip("IncompleteFillerCoverage",
-           "Delete fillers must cover every site of the temporary target");
+      skip("IncompleteTargetCoverage",
+           "Delete footprints must cover every site of the temporary target");
       return result;
     }
     for (const internal::SiteCell& site : targetSites) {
@@ -1733,7 +1715,9 @@ RepairOutcome FillerRepairEngine::Impl::repair(
           = grid_->gridPixel(GridX{site.colId}, GridY{site.rowId});
       const Node* occupant = pixel != nullptr ? pixel->cell : nullptr;
       if (pixel == nullptr || !pixel->is_valid
-          || pixel->padding_reserved_by != nullptr
+          || (pixel->padding_reserved_by != nullptr
+              && overlayInstanceIds.count(
+                     pixel->padding_reserved_by->getId()) == 0)
           || (occupant != nullptr
               && overlayInstanceIds.count(occupant->getId()) == 0)) {
         skip("TargetOverlapsUnchangedInstance",
@@ -1749,6 +1733,72 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                         std::inserter(releasedSites, releasedSites.end()));
     exactCover = deletedSites == targetSites;
   }
+
+  // Keep preparation swaps as seeds. A target that consumes one of those
+  // fillers supersedes the swap with its Delete; later planner swaps replace
+  // the seed by LeafCellID rather than appending a second record.
+  std::vector<LayoutAddition> replacementSeeds;
+  ipl::FillerChanges fixedReplacements;
+  for (const auto& [id, change] : pendingReplaces) {
+    if (overlayInstanceIds.count(id) != 0) {
+      continue;
+    }
+    const PlacedInstance* placed = view.instance(id);
+    const MasterId newId = network_->getMasterId(change.new_lib_cell_);
+    const MasterInfo* oldMaster = masterInfo(placed->masterId);
+    const MasterInfo* newMaster = masterInfo(newId);
+    if (oldMaster == nullptr || newMaster == nullptr || !newMaster->isFiller
+        || oldMaster->width != newMaster->width
+        || oldMaster->height != newMaster->height) {
+      skip("InvalidPendingFillerSwap",
+           cat("preparation swap for filler ", id,
+               " must preserve its footprint"));
+      return result;
+    }
+    LayoutAddition seed;
+    seed.instanceId = id;
+    seed.placed = *placed;
+    seed.placed.masterId = newId;
+    seed.placed.orientation = toPlannerOrient(change.orientation_);
+    seed.record = change;
+    seed.masterOptions.push_back({newId, change.orientation_});
+    for (const MasterId candidate : candidate_catalog_.candidates(newId)) {
+      seed.masterOptions.push_back({candidate, change.orientation_});
+    }
+    if (std::none_of(seed.masterOptions.begin(), seed.masterOptions.end(),
+                     [&](const auto& option) {
+                       return option.masterId == placed->masterId;
+                     })) {
+      seed.masterOptions.push_back(
+          {placed->masterId, network_->getNode(id)->getOrient()});
+    }
+    fixedReplacements.push_back(change);
+    replacementSeeds.push_back(std::move(seed));
+    const Region seedGuard = snapshotGuard(
+        TargetPlace{id, newId, placed->rowId, placed->x, placed->orientation});
+    influence.x.xl = std::min(influence.x.xl, seedGuard.x.xl);
+    influence.x.xh = std::max(influence.x.xh, seedGuard.x.xh);
+    influence.rowLo = std::min(influence.rowLo, seedGuard.rowLo);
+    influence.rowHi = std::max(influence.rowHi, seedGuard.rowHi);
+  }
+  const auto finish = [&](ipl::FillerChanges changes,
+                          const std::string& status) {
+    std::erase_if(changes, [&](const CellChangeRecord& change) {
+      const auto* id = cellChangeRecordLeafCellId(change);
+      const Node* node = id != nullptr ? network_->getNode(*id) : nullptr;
+      return change.op_ == OpType::Replace && node != nullptr
+             && node->getMaster() != nullptr
+             && change.new_lib_cell_ == node->getMaster()->getDbMaster()
+             && change.x_.getStorage() == node->getLeft().v
+             && change.y_.getStorage() == node->getBottom().v
+             && change.orientation_ == node->getOrient();
+    });
+    RepairOutcome complete;
+    complete.hasSolution = true;
+    complete.changes = mergeFillerChanges(fillerDeletes, changes);
+    logRepairSuccess(request, complete, status);
+    return complete;
+  };
   log_.block("engine",
              "Target",
              {{"overlay node", cat(target.instanceId)},
@@ -1761,7 +1811,10 @@ RepairOutcome FillerRepairEngine::Impl::repair(
               {"released sites", cat(releasedSites.size())},
               {"guard", show(influence)}});
 
-  RequestOracle oracle(*this, request, view, checkerRequests);
+  LayoutPlacementView effectiveView(
+      view, target, overlayInstanceIds, replacementSeeds, placement_, hasTarget);
+  RequestOracle oracle(
+      *this, request, effectiveView, checkerRequests, fixedReplacements);
   if (!releasedSites.empty()) {
     std::string addedFillerNamePrefix = "FILLER_REPAIR_";
     if (const fillerSetting* setting = network_->getFillerSetting();
@@ -1913,7 +1966,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         tilePreference);
     log_.block("engine",
                "Retiling search",
-               {{"deleted fillers", cat(overlayInstanceIds.size())},
+               {{"deleted nodes", cat(overlayInstanceIds.size())},
                 {"released sites", cat(releasedSites.size())},
                 {"tilings", cat(tilings.solutions.size())},
                 {"search states", cat(tilings.searchStates)},
@@ -2003,7 +2056,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
           break;
         }
         std::vector<LayoutAddition> seededAdditions = additions;
-        ipl::FillerChanges fixed;
+        ipl::FillerChanges fixed = fixedReplacements;
         for (size_t index = 0; index < seededAdditions.size(); ++index) {
           LayoutAddition& addition = seededAdditions[index];
           const LayoutMasterOption& option
@@ -2015,8 +2068,15 @@ RepairOutcome FillerRepairEngine::Impl::repair(
           addition.record.orientation_ = option.orientation;
           fixed.push_back(addition.record);
         }
-        LayoutPlacementView layoutView(
-            view, target, overlayInstanceIds, seededAdditions, placement_);
+        seededAdditions.insert(seededAdditions.end(),
+                               replacementSeeds.begin(),
+                               replacementSeeds.end());
+        LayoutPlacementView layoutView(view,
+                                       target,
+                                       overlayInstanceIds,
+                                       seededAdditions,
+                                       placement_,
+                                       hasTarget);
         RequestOracle layoutOracle(
             *this, request, layoutView, checkerRequests, fixed);
         OracleRequest layoutSnapshotRequest;
@@ -2046,10 +2106,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
           continue;
         }
         if (layoutSnapshot.violations.empty()) {
-          result.hasSolution = true;
-          result.changes = std::move(fixed);
-          logRepairSuccess(request, result, "retiled solution");
-          return result;
+          return finish(std::move(fixed), "retiled solution");
         }
 
         FillerRepairRequest plannerRequest;
@@ -2064,10 +2121,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         const FillerRepairResult planned = planner.repair(plannerRequest);
         const bool plannerFailed = logPlannerResult(planned);
         if (planned.hasSolution) {
-          result.hasSolution = true;
-          result.changes = mergeFillerChanges(fixed, planned.changes);
-          logRepairSuccess(request, result, "retiled and repaired");
-          return result;
+          return finish(mergeFillerChanges(fixed, planned.changes),
+                        "retiled and repaired");
         }
         if (plannerFailed) {
           skip("PlannerFailed", "planner rejected the checker/search context");
@@ -2104,9 +2159,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
   if (snapshot.violations.empty()) {
-    result.hasSolution = true;
-    logRepairSuccess(request, result, "no filler change needed");
-    return result;
+    return finish(fixedReplacements, "no additional filler change needed");
   }
   if (!candidate_catalog_.hasCompatibleCandidate()) {
     const CandidateStats& stats = candidate_catalog_.aggregateStats();
@@ -2118,19 +2171,12 @@ RepairOutcome FillerRepairEngine::Impl::repair(
   FillerRepairRequest plannerRequest;
   plannerRequest.targetPlace = target;
   plannerRequest.violations = snapshot.violations;
-  std::optional<OverlayPlacementView> overlayView;
-  const PlacementView& baseView = view;
-  const PlacementView* plannerView = &baseView;
-  if (overlayInstanceIds.size() > 1) {
-    overlayView.emplace(baseView, overlayInstanceIds, target.instanceId);
-    plannerView = &*overlayView;
-  }
   if (budgetExhausted()) {
     skip("RepairBudgetExhausted",
          "snapshot consumed the remaining checker budget");
     return result;
   }
-  internal::RepairPlanner planner(*plannerView, oracle, plannerConfig());
+  internal::RepairPlanner planner(effectiveView, oracle, plannerConfig());
   const FillerRepairResult planned = planner.repair(plannerRequest);
   const bool plannerFailed = logPlannerResult(planned);
   if (!planned.hasSolution) {
@@ -2142,10 +2188,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
-  result.hasSolution = true;
-  result.changes = planned.changes;
-  logRepairSuccess(request, result, "solution");
-  return result;
+  return finish(mergeFillerChanges(fixedReplacements, planned.changes),
+                "solution");
 }
 
 FillerRepairEngine::FillerRepairEngine(const ipl::ImplantLayerChecker& checker)

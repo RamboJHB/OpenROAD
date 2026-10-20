@@ -4,13 +4,14 @@
 
 Filler repair evaluates one proposed standard-cell placement before commit.
 It may swap surrounding filler masters and insert fillers into sites released
-by the caller's selected filler deletions. Checker and engine calls do not
+by a removed standard cell or selected filler deletions. Checker and engine calls do not
 modify UDM, Grid, Network, Nodes, or fillerSetting.
 
 Supported target forms:
 
-- `isLegal`: replace one committed standard cell at its existing origin with
-  a master of the same width and height, optionally changing orientation.
+- `isLegal`: replace one committed standard cell with a larger, smaller, or
+  same-size master, at its original position or a searched position. The old
+  instance ID and connections are preserved.
 - `findLeg` / buffer insertion: place a temporary standard cell over one or
   more selected committed fillers. Every target site must be covered by those
   fillers, and every selected filler must intersect the target. Selected
@@ -18,9 +19,9 @@ Supported target forms:
 
 One- and two-row target/filler masters and `R0`, `R180`, `MX`, and `MY`
 orientations are supported, subject to legal site/orientation and checker
-constraints. Existing standard-cell movement, different-footprint standard-cell
-replacement, mixed standard-cell/filler Delete overlays, unrelated filler
-deletions, and target coverage containing empty sites are outside this contract.
+constraints. Target coverage containing empty sites and unrelated filler
+deletions are outside this contract. A removed old standard cell may be disjoint
+from the new target; every selected real filler must intersect the target.
 
 ## Request and result
 
@@ -42,8 +43,12 @@ use the temporary Node's stored left, bottom, or orientation. The checker
 removes the committed Network nodes named by `overlayChanges` and evaluates the
 temporary target at the request placement.
 
-Every overlay is an `OpType::Delete` carrying a unique committed `LeafCellID`.
-The list contains either one standard cell or only fillers. The checker checks
+Real removal overlays are `OpType::Delete` records carrying unique committed
+`LeafCellID`s: at most one old standard cell, plus intersecting fillers. A null
+`cell` with exactly one standard-cell Delete prepares removal-only refill.
+The repair-capable entry also accepts tentative filler Add/Replace records
+from that preparation step; FR normalizes them before invoking its checker
+oracle. The checker checks
 the target form, registered masters, original-master consistency when supplied,
 grid ownership, legal target sites, and complete target coverage. Coverage is
 a site-set containment test, not an area comparison: a larger deleted area
@@ -56,8 +61,9 @@ RepairOutcome repair(const ipl::CheckRequest& request) const;
 ```
 
 `RepairOutcome` contains `hasSolution` and `ipl::FillerChanges changes`. Checker
-and engine output contains only filler `Add` and `Replace`, never the target or
-the caller's `Delete` overlays. Existing filler Replaces preserve width, height,
+and engine output is the complete filler transaction: unique real filler
+`Delete`, final `Add`, and surrounding `Replace` records. It never contains the
+old standard-cell Delete or the new target operation. Existing filler Replaces preserve width, height,
 origin, and orientation. Added fillers carry request-local names that honor the
 configured prefix and avoid live-instance name collisions; IDs are assigned
 at commit. Failure returns no solution and no partial changes. Setup and
@@ -66,11 +72,12 @@ bind, update, precheck, adapter, or numeric-request API.
 
 ## Repair behavior
 
-Let `D` be all sites owned by the selected deleted fillers and `T` the target
-sites. Filler insertion requests require `T` to be a subset of `D`.
+Let `D` be all sites owned by the old standard cell and selected deleted fillers,
+and `T` the target sites (empty for removal-only preparation). Require `T` to be
+a subset of `D`.
 
 - Exact cover (`D == T`) uses the existing surrounding-filler swap search.
-  Direct DRC success returns no filler changes.
+  Direct DRC success still returns any required real filler Deletes.
 - Non-exact cover (`D != T`) exactly tiles `D - T` using configured,
   site-aligned one- or two-row filler masters. Added fillers use legal site
   orientations and cannot overlap the target or unchanged instances. Released
@@ -78,6 +85,19 @@ sites. Filler insertion requests require `T` to be a subset of `D`.
 - A tiling may pass directly or require changing its new fillers' masters and
   swapping surrounding fillers. Master alternatives preserve each footprint.
   Every accepted batch passes `ImplantLayerChecker::checkPlaceWithOverlays`.
+
+For resize/move, DePlace first prepares a virtual std-cell removal and refill,
+then reuses the findLeg diamond search. Each candidate supplies the old std
+Delete, preparation fillers, and real intersecting filler Deletes to FR.
+FR cancels the tentative Adds and rebuilds `D - T`; it does not emit Deletes
+for never-committed fillers. Preparation swaps are seeds that may be kept,
+changed, or cancelled. Duplicate real-cell operations and no-op swaps are
+removed internally. Preparation failure does not preclude a valid final target.
+Nothing is removed, painted, or committed between the two steps.
+
+Resized/moved/removal overlays are compared against the committed placement
+over both old and new regions, including surrounding swap effects. A hole
+introduced by removal is not a baseline violation that can be grandfathered.
 
 The planner retains adaptive-L1 window growth, ranking, subset search,
 request-local caching, and baseline-delta acceptance. Caller-deleted fillers
@@ -122,15 +142,19 @@ The ordinary direct-check overload does not repair. The explicit overlay
 overload publishes a local trial output only if every registered checker
 succeeds. ImplantLayerChecker constructs its engine once with `std::call_once`
 when repair is needed and enabled; checker-helper use disables repair.
-Exact-cover direct success needs no engine. Non-exact filler coverage requires
-the engine to fill released sites.
+Only exact standard-cell replacement with direct success can bypass the engine.
+Real filler Deletes and non-exact coverage use the engine to publish a complete
+filler transaction.
 
 DePlace probes assemble complete transactions without mutating placement:
 
-- `isLegal` appends one identity-preserving target `Replace` plus filler repairs,
-  including a target-only transaction when no repair is needed.
-- `findLeg` appends the accepted candidate's unique filler `Delete` records,
-  returned filler `Add`/`Replace` records, and one named target `Add`. Its target
+- `isLegal(inst, master, changes)` checks the original position, including
+  size up/down. The overload `(inst, master, va, diameter, changes)` also searches
+  within a DBU extension and optional absolute-coordinate voltage area; zero
+  diameter is strict original-position only. The outer relocation search is
+  capped at 256 candidate sites per search rectangle. It appends one
+  identity-preserving target `Replace` plus FR's complete filler transaction.
+- `findLeg` appends FR's complete filler transaction and one named target `Add`. Its target
   name is `DPL_STD_<row>_<column>_M<LibCellID-index>` with a deterministic
   suffix for collisions with live names or pending Adds.
 
@@ -138,8 +162,12 @@ Pass this batch to `DePlace::commit` without appending target/Delete operations
 again. Failure leaves the caller's output unchanged. An existing output prefix
 is preserved but is not used as a placement overlay for later probes; separately
 successful probes are not jointly DRC-validated. Direct checker callers,
-including `test_filler_repair`, assemble their own target, Delete overlays, and
-returned repairs into one transaction.
+including `test_filler_repair`, append only their target operation to the
+returned filler transaction; they must not append the input filler Deletes.
+
+Before publishing success, DePlace checks final target/filler padded footprints
+together. A body-only tiling that conflicts with padding fails safely rather
+than returning a transaction that commit would reject.
 
 Records use core-relative coordinates; database origins are absolute.
 `DePlace::commit` preflights operation IDs, names, masters, geometry, final
@@ -175,7 +203,10 @@ real infrastructure, and executable DePlace/command transactions. Cases include
 one/two-row masters, rotation, exact/non-exact multi-filler coverage, released-site
 tiling, Add-plus-Swap repair, configured order/avoid patterns, bounded failure,
 engine reuse after commits, concurrency, unchanged checker goldens, and probe
-non-mutation. Integration fixtures cover 50%, 75%, and 90% occupied sites;
+non-mutation. Resize/move tests include partial/disjoint moves, shifted core
+coordinates, one/two-row height changes, pending Add cancellation, preparation
+failure followed by final success, padding rejection, and preserved Node/DB
+identity and pin/edge bindings after commit. Integration fixtures cover 50%, 75%, and 90% occupied sites;
 internal cases also exercise larger mixed-width standard-cell/filler layouts.
 Fake UDM testing does not establish destination ABI/link compatibility or
 source-ODB writeback.

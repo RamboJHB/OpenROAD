@@ -279,7 +279,8 @@ std::pair<int, int> DePlace::ripUpAndReplaceInRect(Node* target_cell,
 PixelPt DePlace::diamondSearch(const Node* cell,
                                const GridX x,
                                const GridY y,
-                               std::vector<CellChangeRecord>* fillerChanges) const
+                               std::vector<CellChangeRecord>* fillerChanges,
+                               const Node* replacedCell) const
 {
   // Diamond search limits.
   GridX x_min = x - max_displacement_x_;
@@ -298,7 +299,8 @@ PixelPt DePlace::diamondSearch(const Node* cell,
   //   y_max = max.y;
   // }
 
-  return diamondSearch(cell, x, y, x_min, x_max, y_min, y_max, fillerChanges);
+  return diamondSearch(cell, x, y, x_min, x_max, y_min, y_max,
+                       fillerChanges, replacedCell);
 }
 
 /**
@@ -324,13 +326,17 @@ PixelPt DePlace::diamondSearch(const Node* cell,
                                const GridX x_max_in,
                                const GridY y_min_in,
                                const GridY y_max_in,
-                               std::vector<CellChangeRecord>* fillerChanges) const
+                               std::vector<CellChangeRecord>* fillerChanges,
+                               const Node* replacedCell) const
 {
   // Clip search limits to grid bounds.
   const GridX x_min = std::max(GridX{0}, x_min_in);
   const GridY y_min = std::max(GridY{0}, y_min_in);
   const GridX x_max = std::min(grid_->getRowSiteCount(), x_max_in);
   const GridY y_max = std::min(grid_->getRowCount(), y_max_in);
+  if (x_min > x_max || y_min > y_max) {
+    return PixelPt();
+  }
 
   struct PQ_entry
   {
@@ -348,7 +354,8 @@ PixelPt DePlace::diamondSearch(const Node* cell,
       positionsHeap;
   std::unordered_set<GridPt> visited;
   int sequence = 0;
-  const GridPt center{x, y};
+  const GridPt center{std::clamp(x, x_min, x_max),
+                      std::clamp(y, y_min, y_max)};
   positionsHeap.push(
       {.manhattan_distance = 0, .p = center, .sequence = sequence++});
   visited.insert(center);
@@ -357,13 +364,19 @@ PixelPt DePlace::diamondSearch(const Node* cell,
                                          {GridX(1), GridY(0)},
                                          {GridX(0), GridY(-1)},
                                          {GridX(0), GridY(1)}};
+  int candidates = 0;
   while (!positionsHeap.empty()) {
+    // Bound the outer relocation search as well as each individual FR search.
+    if (replacedCell != nullptr && candidates++ == 256) {
+      std::cout << "[isLegal search] candidate budget exhausted (256)\n";
+      return PixelPt();
+    }
     const GridPt nearest = positionsHeap.top().p;
     positionsHeap.pop();
     if (fillerChanges != nullptr) {
       std::cout << "[findLeg BFS] try ("<< nearest.x.v<<","<< nearest.y.v << ")";
     }
-    if (canBePlaced(cell, nearest.x, nearest.y, fillerChanges)) {
+    if (canBePlaced(cell, nearest.x, nearest.y, fillerChanges, replacedCell)) {
       if (fillerChanges != nullptr) {
         std::cout << " -> ACCEPT\n";
       }
@@ -431,7 +444,8 @@ int DePlace::calcDist(const GridPt& p1, const GridPt& p2) const
  * @return (grid_x, grid_y) of the placed cell, or (-1, -1) on failure.
  */
 std::pair<int, int> DePlace::legalCellInRect(const Rect& target_rect, Node* cell,
-                                             std::vector<CellChangeRecord>* fillerChanges)
+                                             std::vector<CellChangeRecord>* fillerChanges,
+                                             const Node* replacedCell)
 {
   if (!cell) {
     // logger_->error(
@@ -454,6 +468,10 @@ std::pair<int, int> DePlace::legalCellInRect(const Rect& target_rect, Node* cell
                                      target_rect.getYL() - core_.getYL(),
                                      target_rect.getXH() - core_.getXL(),
                                      target_rect.getYH() - core_.getYL()));
+  if (target_rect.getXH() - target_rect.getXL() < UvDist(cell->getWidth().v)
+      || target_rect.getYH() - target_rect.getYL() < UvDist(cell->getHeight().v)) {
+    return {-1, -1};
+  }
 
   // Find the nearest point inside the target rect to the cell's current
   // position, then snap to a legal grid point.
@@ -467,12 +485,14 @@ std::pair<int, int> DePlace::legalCellInRect(const Rect& target_rect, Node* cell
 
   const GridX x_min = std::max(GridX{0}, target_grid_rect.xlo);
   const GridY y_min = std::max(GridY{0}, target_grid_rect.ylo);
-  const GridX x_max = std::min(grid_->getRowSiteCount(), target_grid_rect.xhi);
-  const GridY y_max = std::min(grid_->getRowCount(), target_grid_rect.yhi);
+  const GridX x_max = std::min(grid_->getRowSiteCount(), target_grid_rect.xhi)
+                       - grid_->gridWidth(cell);
+  const GridY y_max = std::min(grid_->getRowCount(), target_grid_rect.yhi)
+                       - grid_->gridHeight(cell);
 
   const PixelPt pixel_pt
       = diamondSearch((cell), start_pt.x, start_pt.y, x_min, x_max, y_min, y_max,
-                      fillerChanges);
+                      fillerChanges, replacedCell);
 
   if (pixel_pt.pixel) {
     // placeCell((cell), pixel_pt.x, pixel_pt.y);
@@ -554,9 +574,10 @@ void DePlace::unplaceCell(Node* cell)
  * @return true if the placement is legal, false otherwise.
  */
 bool DePlace::canBePlaced(const Node* cell, GridX bin_x, GridY bin_y,
-                          std::vector<CellChangeRecord>* fillerChanges) const
+                          std::vector<CellChangeRecord>* fillerChanges,
+                          const Node* replacedCell) const
 {
-  if (bin_y >= grid_->getRowCount()) {
+  if (bin_x.v < 0 || bin_y.v < 0 || bin_y >= grid_->getRowCount()) {
     return false;
   }
 
@@ -564,10 +585,10 @@ bool DePlace::canBePlaced(const Node* cell, GridX bin_x, GridY bin_y,
   const GridY y_end
       = grid_->gridEndY(grid_->gridYToDbu(bin_y) + cell->getHeight());
 
-  // With fillerChanges, findLeg admits a target over whitespace and/or one or
-  // more intersecting fillers. The checker may return gap-filling Adds plus
-  // surrounding filler Replaces. Ordinary placement paths pass nullptr.
-  return checkPixels(cell, bin_x, bin_y, x_end, y_end, fillerChanges);
+  // Repair probes admit the old standard cell and selected filler footprints.
+  // FR returns their complete filler transaction. Ordinary paths pass nullptr.
+  return checkPixels(cell, bin_x, bin_y, x_end, y_end,
+                     fillerChanges, replacedCell);
 }
 
 /**
@@ -592,9 +613,10 @@ bool DePlace::checkPixels(const Node* cell,
                           const GridY y,
                           const GridX x_end,
                           const GridY y_end,
-                          std::vector<CellChangeRecord>* fillerChanges) const
+                          std::vector<CellChangeRecord>* fillerChanges,
+                          const Node* replacedCell) const
 {
-  if (x_end > grid_->getRowSiteCount()) {
+  if (x_end > grid_->getRowSiteCount() || y_end > grid_->getRowCount()) {
     return false;
   }
   // if (!checkRegionOverlap(cell, x, y, x_end, y_end)) {
@@ -606,7 +628,9 @@ bool DePlace::checkPixels(const Node* cell,
     const bool first_row = (y1 == y);
     for (GridX x1 = x; x1 < x_end; x1++) {
       const Pixel* pixel = grid_->gridPixel(x1, y1);
-      if (pixel == nullptr || (pixel->cell && !pixel->cell->isFiller())
+      if (pixel == nullptr
+          || (pixel->cell && pixel->cell != replacedCell
+              && !pixel->cell->isFiller())
           || !pixel->is_valid
           || (cell->inGroup() && pixel->group != cell->getGroup())
           || (!cell->inGroup() && pixel->group)
@@ -656,10 +680,8 @@ bool DePlace::checkPixels(const Node* cell,
 
   std::vector<CellChangeRecord> ccRecords;
   if (fillerChanges != nullptr) {
-    // Describe every filler intersected by the temporary target as a caller-
-    // owned Delete overlay. Every target site must be covered by these fillers;
-    // the repair engine retiles their released sites outside the target. Grid
-    // and Network remain unchanged during this probe.
+    // The pending removal layout is input to FR, never a mutation of Grid.
+    // FR owns cancelling/retiling its Adds and merging actual filler Deletes.
     setGridLoc(const_cast<Node*>(cell), x, y);
     std::vector<Node*> replacedFillers;
     std::set<int> seenFillerIds;
@@ -667,16 +689,16 @@ bool DePlace::checkPixels(const Node* cell,
       for (GridX x1 = x; x1 < x_end; ++x1) {
         const Pixel* pixel = grid_->gridPixel(x1, y1);
         if (pixel == nullptr || pixel->cell == nullptr
-            || !pixel->cell->isFiller()) {
+            || (pixel->cell != replacedCell && !pixel->cell->isFiller())) {
           return false;
         }
-        if (pixel->cell != nullptr
+        if (pixel->cell != replacedCell
             && seenFillerIds.insert(pixel->cell->getId()).second) {
           replacedFillers.push_back(pixel->cell);
         }
       }
     }
-    if (replacedFillers.empty()) {
+    if (replacedFillers.empty() && replacedCell == nullptr) {
       return false;
     }
     std::sort(replacedFillers.begin(),
@@ -685,7 +707,17 @@ bool DePlace::checkPixels(const Node* cell,
                 return left->getId() < right->getId();
               });
     std::vector<CellChangeRecord> overlayChanges;
-    overlayChanges.reserve(replacedFillers.size());
+    overlayChanges.reserve(replacedFillers.size()
+                            + (replacedCell != nullptr ? fillerChanges->size() + 1 : 0));
+    if (replacedCell != nullptr) {
+      overlayChanges.push_back(
+          {OpType::Delete, replacedCell->getDbInst(),
+           UvDist(replacedCell->getLeft().v), UvDist(replacedCell->getBottom().v),
+           replacedCell->getMaster()->getDbMaster(),
+           replacedCell->getMaster()->getDbMaster(), replacedCell->getOrient()});
+      overlayChanges.insert(overlayChanges.end(),
+                            fillerChanges->begin(), fillerChanges->end());
+    }
     for (const Node* filler : replacedFillers) {
       if (filler == nullptr || filler->getMaster() == nullptr) {
         return false;
@@ -699,12 +731,92 @@ bool DePlace::checkPixels(const Node* cell,
                            filler->getMaster()->getDbMaster(),
                            filler->getOrient()});
     }
-    if (!drc_engine_->checkDRC(cell, x, y, orient, *fillerChanges, overlayChanges)) {
+    const auto padded = grid_->gridCoveringPadded(cell);
+    for (GridY row = padded.ylo; row < padded.yhi; ++row) {
+      for (GridX col = padded.xlo; col < padded.xhi; ++col) {
+        const Pixel* pixel = grid_->gridPixel(col, row);
+        if (pixel == nullptr || !pixel->is_valid) {
+          return false;
+        }
+        for (const Node* owner : {pixel->cell, pixel->padding_reserved_by}) {
+          if (owner != nullptr && owner != replacedCell
+              && seenFillerIds.count(owner->getId()) == 0) {
+            return false;
+          }
+        }
+      }
+    }
+    std::vector<CellChangeRecord> accepted
+        = replacedCell != nullptr ? std::vector<CellChangeRecord>{} : *fillerChanges;
+    const size_t preservedPrefix = accepted.size();
+    if (!drc_engine_->checkDRC(cell, x, y, orient, accepted, overlayChanges)) {
       return false;
     }
-    // FR returns only Add/Replace. Keep the accepted candidate's filler
-    // Deletes here; findLeg adds the new std cell to the same transaction.
-    fillerChanges->insert(fillerChanges->end(), overlayChanges.begin(), overlayChanges.end());
+    // Check the final padded layout, including newly tiled fillers. A valid
+    // body-only overlay must not publish a transaction commit would reject.
+    std::set<const Node*> removedOwners;
+    if (replacedCell != nullptr) {
+      removedOwners.insert(replacedCell);
+    }
+    for (size_t index = preservedPrefix; index < accepted.size(); ++index) {
+      const CellChangeRecord& change = accepted[index];
+      if (change.op_ != OpType::Add) {
+        const auto* id = std::get_if<LeafCellID>(&change.cell_data_);
+        const Node* old = id != nullptr ? network_->getNode(*id) : nullptr;
+        if (old == nullptr) {
+          return false;
+        }
+        removedOwners.insert(old);
+      }
+    }
+    std::set<std::pair<int, int>> claimed;
+    const auto claim = [&](const Node* proposed) {
+      const auto footprint = grid_->gridCoveringPadded(proposed);
+      for (GridY row = footprint.ylo; row < footprint.yhi; ++row) {
+        for (GridX col = footprint.xlo; col < footprint.xhi; ++col) {
+          const Pixel* pixel = grid_->gridPixel(col, row);
+          if (pixel == nullptr || !pixel->is_valid
+              || !claimed.emplace(row.v, col.v).second) {
+            return false;
+          }
+          for (const Node* owner : {pixel->cell, pixel->padding_reserved_by}) {
+            if (owner != nullptr && removedOwners.count(owner) == 0) {
+              return false;
+            }
+          }
+        }
+      }
+      return true;
+    };
+    if (!claim(cell)) {
+      return false;
+    }
+    for (size_t index = preservedPrefix; index < accepted.size(); ++index) {
+      const CellChangeRecord& change = accepted[index];
+      if (change.op_ == OpType::Delete) {
+        continue;
+      }
+      Master* master = network_->getMaster(change.new_lib_cell_);
+      const PhysLibCell* physical = master != nullptr ? master->getPhysLibCell() : nullptr;
+      if (physical == nullptr) {
+        return false;
+      }
+      Node proposed;
+      proposed.setMaster(master);
+      proposed.setType(Node::FILLER);
+      if (const auto* id = std::get_if<LeafCellID>(&change.cell_data_)) {
+        proposed.setDbInst(*id);
+      }
+      proposed.setLeft(DbuX{change.x_.getStorage()});
+      proposed.setBottom(DbuY{change.y_.getStorage()});
+      proposed.setWidth(DbuX{physical->getWidth().getStorage()});
+      proposed.setHeight(DbuY{physical->getHeight().getStorage()});
+      proposed.setOrient(change.orientation_);
+      if (!claim(&proposed)) {
+        return false;
+      }
+    }
+    *fillerChanges = std::move(accepted);
     return true;
   }
   return drc_engine_->checkDRC(cell, x, y, orient, ccRecords);

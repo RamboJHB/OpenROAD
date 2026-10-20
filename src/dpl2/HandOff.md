@@ -10,18 +10,20 @@ verification counts are available in Git history.
 - The checker accepts one temporary standard-cell `Node` through
   `CheckRequest`. Request `x/y/orientation` override the temporary node's
   stored placement.
-- `isLegal` replaces one committed standard cell at its current origin with
-  the same footprint. Buffer insertion replaces one or more intersecting
+- `isLegal` supports master size up/down and movement, retaining the original
+  standard-cell ID and connections. It prepares removal/refill virtually,
+  then reuses findLeg's diamond search. Buffer insertion replaces one or more intersecting
   fillers; every target site must be covered by those selected fillers.
 - Exact cover uses the filler-swap planner. Non-exact cover tiles exactly
-  `deleted filler sites - target sites`, then checks the added fillers and
+  `(old std sites + deleted filler sites) - target sites`, then checks the added fillers and
   surrounding swaps through the real ImplantLayerChecker.
-- The engine/checker returns filler `Add` and/or `Replace` records. Input
-  filler `Delete` overlays remain caller-owned. Failure returns no partial
-  repair.
+- The engine/checker returns complete filler `Delete`/`Add`/`Replace` records.
+  FR owns cancellation/retiling of tentative preparation Adds and deduplication
+  of real Deletes/swaps. No Delete is emitted for an uncommitted Add. The old
+  std Delete is overlay-only. Failure returns no partial repair.
 - DePlace assembles complete transactions: `isLegal` appends the target
-  `Replace`; `findLeg` appends the target `Add`, selected filler `Delete`
-  records and filler repairs. Pass that result to `commit` once without
+  `Replace`; `findLeg` appends the target `Add` to FR's filler transaction.
+  Pass that result to `commit` once without
   appending the target or Deletes again.
 - Probes do not mutate DB, Grid or Network. An existing output-vector prefix
   is preserved but is not a placement overlay for later probes. Independently
@@ -37,6 +39,19 @@ explicit FillerRepairEngine(const ipl::ImplantLayerChecker& checker);
 bool isReady() const;
 RepairOutcome repair(const ipl::CheckRequest& request) const;
 ```
+
+`isLegal(inst, master, changes)` now permits resizing at the original position.
+Use `isLegal(inst, master, va, diameter, changes)` to allow position search;
+`diameter` is a nonnegative DBU extension, zero forbids movement, and `va` uses
+absolute design coordinates. Records remain core-relative DBU. At most 256
+positions are tried per relocation search rectangle.
+
+Removal preparation is `CheckRequest{nullptr, ..., {oldStdDelete}}`; only
+ImplantLayerChecker sees this intermediate request. A failed preparation does
+not block the final search. Every final target candidate runs the full
+registered checker set. FR rebuilds the released site union minus that target,
+including disjoint old/new regions, against a committed-placement DRC baseline.
+DePlace rejects final target/filler padding collisions before reporting success.
 
 ## Ownership and call sequence
 
@@ -74,8 +89,9 @@ DePlace::isLegal / findLeg
 
 The ordinary checkDRC overload is direct-only. The two-vector overload stages
 changes locally and publishes them only when all registered checkers pass.
-Non-exact coverage invokes repair even if direct implant DRC is already legal,
-because released sites still need fillers.
+Real filler Deletes invoke FR even for exact direct-legal coverage, so their
+output is not lost. Non-exact coverage also invokes repair because released
+sites still need fillers.
 
 ## Lifetime and configuration
 
@@ -183,10 +199,14 @@ initialization, before main, even for a minimal program. The installed Command
 Line Tools clang 21 with its matching SDK runs that program successfully;
 the ASan validation therefore uses that toolchain without changing xcode-select.
 
-Verification on 2026-10-19, from fresh build directories:
+Verification on 2026-10-20, complete default-target builds:
 
-- Normal: 419/419 passed with AppleClang 17 (CTest time 3.37 seconds).
-- ASan: 419/419 passed with Command Line Tools AppleClang 21 (23.43 seconds).
+- Normal: 434/434 passed with AppleClang 17.
+- ASan: 434/434 passed with Command Line Tools AppleClang 21.
+- Fifteen added tests cover checker old/new-region validation and DePlace
+  resize/move, height changes, pending transaction normalization, connectivity,
+  padding, and concurrent probes. The migration integration tests also exercise
+  the new flow at 50%, 75%, and 90% utilization.
 - Both builds compiled every default target, including commit/command tests,
   destination wiring and the migration-copy gate. `git diff --check` passed.
 
@@ -201,15 +221,19 @@ real UDM ABI compatibility or source-ODB writeback.
   field/ID variants and preserve target connectivity on Replace.
 - Run isLegal, findLeg, mixed commits and subsequent repairs on a real UDM
   design with the complete destination checker set. Local registration does
-  not validate the missing checkers' interaction with filler changes.
+  not validate the missing checkers' interaction with filler changes. Those
+  checkers must understand mixed/staged overlays and validate final fillers;
+  removal-only preparation is routed exclusively to ImplantLayerChecker.
 - Provide the commit/read barrier and keep DB, Grid and Network synchronized.
   The preflight rejects ordinary invalid batches before mutation; commit has
   no rollback journal for allocation failures or unexpected UDM exceptions.
 - The local OpenROAD importer projects ODB into fake UDM. Its commits modify
   that projection, not the source ODB or a later write_def. Source-ODB writeback
   remains separate work.
-- Existing std-cell movement/footprint changes and buffer placement over empty
-  sites are outside the probe contract. The new buffer is geometrically added;
+- Placement over empty sites is outside the probe contract. Selected old std
+  and real filler footprints must cover every target site. Padding-constrained
+  tilings may fail safely instead of searching alternative padding-aware tilings.
+  The new buffer is geometrically added;
   real opto net connections still need destination integration.
 - Search is bounded: defaults include 16 tilings, 100000 geometric states,
   512 checker candidates per planner window and 2048 per repair. Any returned

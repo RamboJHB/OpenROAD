@@ -224,10 +224,10 @@ struct OverlapInfo
     std::optional<Diagnostic> diags;
 };
 
-// Public pre-commit wire. The temporary Node is the proposed std cell; the
-// Delete overlays name either one committed std cell or selected fillers that
-// intersect a newly inserted buffer. Repair may fill released sites with Add
-// records; the wire itself is unchanged.
+// Public pre-commit wire. Delete overlays name at most one old std cell plus
+// target-intersecting fillers. Public repair calls may also carry staged filler
+// Add/Replace records; the internal batch oracle receives normalized Deletes.
+// A null cell with one old std Delete prepares its removal/refill transaction.
 struct CheckRequest
 {
     const Node* cell = nullptr;
@@ -323,6 +323,7 @@ private:
     bool hasUsableInfrastructure() const;
     const MasterItem* masterItem(MasterId masterId) const;
     DiagVec validateCheckRequest(const CheckRequest& request) const;
+    bool usesCommittedBaseline(const CheckRequest& request) const;
     std::set<InstanceId> overlayNodeIds(const CheckRequest& request) const;
     const fillerRepair::FillerRepairEngine* fillerRepairEngine() const;
     bool repairOverlay(const CheckRequest& request,

@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <set>
@@ -46,6 +47,19 @@ bool sameChanges(const dpl2::ipl::FillerChanges& left,
     }
   }
   return true;
+}
+
+// Real Deletes stay in CheckRequest; only the final Add/Replace overlay is
+// passed to the checker's candidate array for independent revalidation.
+dpl2::ipl::FillerChanges candidateChanges(
+    const dpl2::ipl::FillerChanges& transaction)
+{
+  dpl2::ipl::FillerChanges changes;
+  std::copy_if(transaction.begin(), transaction.end(),
+               std::back_inserter(changes), [](const auto& change) {
+                 return change.op_ != dpl2::OpType::Delete;
+               });
+  return changes;
 }
 
 const dpl2::EdgeTypeTable& noEdgeTypes()
@@ -197,11 +211,19 @@ TEST(FillerRepairGapTest, SingleRowTargetRetilesEveryCornerOfTwoRowFiller)
       const auto before = fixture.design().snapshot();
       const auto outcome = engine.repair(request);
       ASSERT_TRUE(outcome.hasSolution);
+      EXPECT_EQ(std::count_if(outcome.changes.begin(), outcome.changes.end(),
+                              [](const auto& change) {
+                                return change.op_ == dpl2::OpType::Delete;
+                              }), 1);
       std::set<std::pair<int, int>> gaps{{2, 6}, {2, 7}, {3, 6}, {3, 7}};
       gaps.erase({row, col});
       for (const auto& change : outcome.changes) {
         if (change.op_ != dpl2::OpType::Add) {
-          EXPECT_EQ(change.op_, dpl2::OpType::Replace);
+          if (change.op_ == dpl2::OpType::Delete) {
+            EXPECT_EQ(change.cell_data_, request.overlayChanges.front().cell_data_);
+          } else {
+            EXPECT_EQ(change.op_, dpl2::OpType::Replace);
+          }
           continue;
         }
         const auto* added = fixture.network().getMaster(change.new_lib_cell_);
@@ -225,7 +247,7 @@ TEST(FillerRepairGapTest, SingleRowTargetRetilesEveryCornerOfTwoRowFiller)
                      eUTL::UvDist(0),
                      eUTL::UvDist(frt::kRowSites * frt::kSiteWidth),
                      eUTL::UvDist(frt::kStandardRows * frt::kRowHeight - 1)),
-          {outcome.changes});
+          {candidateChanges(outcome.changes)});
       ASSERT_EQ(checked.size(), 1u);
       EXPECT_TRUE(checked.front().isLegal);
       EXPECT_EQ(fixture.design().snapshot(), before);
@@ -255,14 +277,22 @@ TEST(FillerRepairOptionTest, AddedMasterFollowsConfiguredOrderWhenEnabled)
     dpl2::fillerRepair::FillerRepairEngine engine(fixture.checker());
     const auto outcome = engine.repair(request);
     ASSERT_TRUE(outcome.hasSolution);
-    ASSERT_EQ(outcome.changes.size(), 1u);
-    EXPECT_EQ(outcome.changes.front().op_, dpl2::OpType::Add);
+    ASSERT_EQ(outcome.changes.size(), 2u);
+    EXPECT_EQ(outcome.changes.front().op_, dpl2::OpType::Delete);
+    EXPECT_EQ(outcome.changes.front().cell_data_,
+              request.overlayChanges.front().cell_data_);
+    const auto addition = std::find_if(outcome.changes.begin(),
+                                       outcome.changes.end(),
+                                       [](const auto& change) {
+                                         return change.op_ == dpl2::OpType::Add;
+                                       });
+    ASSERT_NE(addition, outcome.changes.end());
     const auto module = fixture.design().design()->getLibAcc().findModule(
         followOrder ? "FS1" : "FH1");
     const auto* expected
         = fixture.design().design()->getLibAcc().getLibCell(module);
     ASSERT_NE(expected, nullptr);
-    EXPECT_EQ(outcome.changes.front().new_lib_cell_,
+    EXPECT_EQ(addition->new_lib_cell_,
               fixture.design()
                   .design()
                   ->getLibAcc()
@@ -274,7 +304,7 @@ TEST(FillerRepairOptionTest, AddedMasterFollowsConfiguredOrderWhenEnabled)
                    eUTL::UvDist(0),
                    eUTL::UvDist(frt::kRowSites * frt::kSiteWidth),
                    eUTL::UvDist(frt::kStandardRows * frt::kRowHeight - 1)),
-        {outcome.changes});
+        {candidateChanges(outcome.changes)});
     ASSERT_EQ(checked.size(), 1u);
     EXPECT_TRUE(checked.front().isLegal);
   }
@@ -370,7 +400,7 @@ TEST_P(FillerRepairRuntimeE2E, RotationDoesNotMutateTheExistingCell)
   EXPECT_EQ(fixture.design().snapshot(), before);
 }
 
-TEST_P(FillerRepairRuntimeE2E, FindLegalReplacesExactlyOneFiller)
+TEST_P(FillerRepairRuntimeE2E, FindLegalReturnsCompleteFillerTransaction)
 {
   RuntimeFixture fixture(GetParam().setup);
   ASSERT_TRUE(fixture.ready());
@@ -387,13 +417,20 @@ TEST_P(FillerRepairRuntimeE2E, FindLegalReplacesExactlyOneFiller)
   const auto outcome = engine.repair(request);
 
   ASSERT_TRUE(outcome.hasSolution);
+  EXPECT_EQ(std::count_if(outcome.changes.begin(), outcome.changes.end(),
+                          [](const auto& change) {
+                            return change.op_ == dpl2::OpType::Delete;
+                          }), 1);
   EXPECT_TRUE(std::all_of(
       outcome.changes.begin(), outcome.changes.end(), [&](const auto& change) {
         const auto* id = std::get_if<eUNL::LeafCellID>(&change.cell_data_);
-        return change.op_ == dpl2::OpType::Replace && id != nullptr
-               && *id
-                      != fixture.design().cell(
-                          frt::CellRole::TargetLeftFiller);
+        if (id == nullptr) {
+          return false;
+        }
+        const bool isDeletedTarget
+            = *id == fixture.design().cell(frt::CellRole::TargetLeftFiller);
+        return isDeletedTarget ? change.op_ == dpl2::OpType::Delete
+                               : change.op_ == dpl2::OpType::Replace;
       }));
   EXPECT_EQ(fixture.design().snapshot(), before);
 }

@@ -60,11 +60,22 @@ bool PlacementDRC::checkDRC(const Node* cell,
                             std::vector<CellChangeRecord>& cellChanges,
                             std::vector<CellChangeRecord>& overlayChanges) const
 {
-  if (cell == nullptr || grid_ == nullptr) {
+  if (grid_ == nullptr) {
     return false;
   }
 
   std::vector<CellChangeRecord> trial = cellChanges;
+  if (cell == nullptr) {
+    // Removal is tentative filler preparation. Every checker still runs on
+    // the final non-null placement before its transaction is published.
+    const DRCChecker* implant = getChecker(DRCCheckerType::ImplantLayer);
+    if (implant == nullptr
+        || !implant->check(nullptr, x, y, orient, trial, overlayChanges)) {
+      return false;
+    }
+    cellChanges = std::move(trial);
+    return true;
+  }
   for (const auto& checker : checkers_) {
     if (checker != nullptr
         && !checker->check(cell, x, y, orient, trial, overlayChanges)) {

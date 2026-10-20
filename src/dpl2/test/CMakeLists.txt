@@ -288,6 +288,7 @@ dpl2_configure_chain_target(dpl2_filler_repair_compile_check delivered)
 add_executable(
   dpl2_implant_checker_simple_test
   "${DPL2_SRC}/drc/ImplantLayerCheckerHelper.cpp"
+  "${CMAKE_CURRENT_LIST_DIR}/local/checker_resize_test.cpp"
   "${DPL2_SRC}/drc/test/ImplantLayerCheckerSimpleTests.cpp")
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
   set_source_files_properties(
@@ -331,6 +332,7 @@ gtest_discover_tests(
 if(DPL2_TEST_USE_FAKE_UDM)
   add_executable(dpl2_commit_test
     "${CMAKE_CURRENT_LIST_DIR}/local/commit_test.cpp"
+    "${CMAKE_CURRENT_LIST_DIR}/local/resize_move_test.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/local/filler_option_test.cpp"
     "${CMAKE_CURRENT_LIST_DIR}/local/FakeUdmE2ETestProvider.cpp")
   target_include_directories(dpl2_commit_test PRIVATE

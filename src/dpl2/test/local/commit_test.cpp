@@ -39,9 +39,9 @@ struct Fixture
     setup.implantRuleWidth = ruleWidth;
     setup.doubleHeightRepairLayout = doubleHeight;
     design = provider->createDesign(setup);
-    if (doubleHeight) {
-      // BUF2D must permit the MX orientation of the two-row filler at row 2.
-      const_cast<eLIB::PhysLibCell&>(design->design()->getLibAcc().getPhysLibCell(17)).symmetry_ = 3;
+    for (int id = 0; id <= 19; ++id) {
+      // The placement fixtures use both alternating-row orientations.
+      const_cast<eLIB::PhysLibCell&>(design->design()->getLibAcc().getPhysLibCell(id)).symmetry_ = 3;
     }
     if (singleton) {
       // Three adjacent fillers cover six sites; TX5 will release a one-site
@@ -261,7 +261,7 @@ TEST(DePlaceCommit, IsLegalPreservesExistingOutputAndDoesNotPublishRejectedChang
   const auto before = f.snapshot();
   const auto sentinel = f.add("PENDING", 18, 19, 0);
   std::vector<CellChangeRecord> changes{sentinel};
-  EXPECT_FALSE(f.dp->isLegal(f.node(122)->getDbInst(), eLIB::LibCellID(0, 8), changes));
+  EXPECT_FALSE(f.dp->isLegal(f.node(122)->getDbInst(), eLIB::LibCellID(0, 12), changes));
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes.front().cell_data_, sentinel.cell_data_);
   EXPECT_EQ(f.snapshot(), before);
@@ -445,13 +445,17 @@ TEST(DePlaceCommit, GapAddsAndSecondRepairUseTheSameLiveChecker)
   std::vector<CellChangeRecord> changes;
   ASSERT_TRUE(checker->check(
       &target, GridX{18}, GridY{0}, target.getOrient(), changes, overlays));
-  ASSERT_EQ(changes.size(), 1u);
-  ASSERT_EQ(changes.front().op_, OpType::Add);
-  EXPECT_EQ(
-      std::get<std::string>(changes.front().cell_data_).find("TEST_FILL_"), 0u);
+  ASSERT_EQ(changes.size(), 2u);
+  const auto added = std::find_if(changes.begin(), changes.end(), [](const auto& change) {
+    return change.op_ == OpType::Add;
+  });
+  ASSERT_NE(added, changes.end());
+  EXPECT_EQ(std::get<std::string>(added->cell_data_).find("TEST_FILL_"), 0u);
+  EXPECT_EQ(std::count_if(changes.begin(), changes.end(), [](const auto& change) {
+    return change.op_ == OpType::Delete;
+  }), 1);
   auto transaction = changes;  // order-independent final-occupancy preflight
   transaction.push_back(f.add("NEW_STD", 18, 18, 0));
-  transaction.insert(transaction.end(), overlays.begin(), overlays.end());
   ASSERT_TRUE(f.dp->commit(transaction));
   EXPECT_EQ(f.node(103), nullptr);
   EXPECT_EQ(f.dp->getNetwork()->getNode(oldNetworkId), nullptr);
@@ -470,8 +474,10 @@ TEST(DePlaceCommit, GapAddsAndSecondRepairUseTheSameLiveChecker)
   ASSERT_TRUE(checker->check(
       &target, GridX{19}, GridY{0}, target.getOrient(), changes, overlays));
   EXPECT_EQ(f.checker(), checker);
-  EXPECT_TRUE(changes.empty());
-  transaction = overlays;
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.front().op_, OpType::Delete);
+  EXPECT_EQ(changes.front().cell_data_, CellData{gapId});
+  transaction = changes;
   transaction.push_back(f.add("SECOND_STD", 18, 19, 0));
   ASSERT_TRUE(f.dp->commit(transaction));
   f.consistent();
@@ -500,7 +506,6 @@ TEST(DePlaceCommit, TwoRowDeletionCommitsTheEntireLShapedGap)
   ASSERT_FALSE(changes.empty());
   auto transaction = changes;
   transaction.push_back(f.add("NEW_STD", 18, 6, 2 * frt::kRowHeight));
-  transaction.insert(transaction.end(), overlays.begin(), overlays.end());
   ASSERT_TRUE(f.dp->commit(transaction));
   EXPECT_EQ(f.node(121), nullptr);
   int fillerSites = 0;
@@ -535,10 +540,9 @@ TEST(DePlaceCommit, TwoRowDeletionCommitsTheEntireLShapedGap)
       &target, GridX{7}, GridY{3}, *orientation, changes, overlays));
   ASSERT_FALSE(changes.empty());
   EXPECT_EQ(f.checker(), checker);
-  transaction = overlays;
+  transaction = changes;
   transaction.push_back(
       f.add("NEXT_STD", 18, 7, 3 * frt::kRowHeight, *orientation));
-  transaction.insert(transaction.end(), changes.begin(), changes.end());
   ASSERT_TRUE(f.dp->commit(transaction));
   EXPECT_EQ(f.dp->getNetwork()->getNode(addedId), nullptr);
   f.consistent();
@@ -666,6 +670,18 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   }
   ASSERT_TRUE(
       f.dp->getGrid()->gridPixel(GridX{17}, GridY{4})->cell->isFiller());
+  f.consistent();
+  Node* originalStd = f.node(122);
+  ASSERT_TRUE(command.run({"-inst", "I123 I122", "-master", "TH5"}, error));
+  EXPECT_EQ(f.node(122), originalStd);
+  EXPECT_EQ(f.node(122)->getDbInst(), originalId);
+  EXPECT_EQ(f.node(123), nullptr);
+  EXPECT_EQ(f.node(122)->getMaster()->getDbMaster(), eLIB::LibCellID(0, 9));
+  f.consistent();
+  ASSERT_TRUE(command.run({"-inst", "I122", "-master", "BUF2"}, error));
+  EXPECT_EQ(f.node(122), originalStd);
+  EXPECT_EQ(f.node(122)->getDbInst(), originalId);
+  EXPECT_EQ(f.node(122)->getMaster()->getDbMaster(), eLIB::LibCellID(0, 16));
   f.consistent();
   const auto before = f.snapshot();
   EXPECT_FALSE(command.run({"-inst", "I103", "-master", "BUF1"}, error));

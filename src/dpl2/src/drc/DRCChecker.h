@@ -54,10 +54,10 @@ class DRCChecker
                      const eUTL::PhysOrientation& orient) const = 0;
 
   // Two-list pre-commit variant:
-  //    - cellChanges: in/out atomic repair transaction. ImplantLayer appends
-  //      only surrounding filler Replace records after a complete solution;
-  //    - overlayChanges: input containing one replaced standard cell, or all
-  //      exact-cover fillers deleted for the temporary cell.
+  //    - cellChanges: in/out atomic filler Delete/Add/Replace transaction;
+  //    - overlayChanges: input real Deletes and optional tentative filler
+  //      Add/Replaces from removal preparation. ImplantLayer handles null
+  //      cell as removal-only preparation; final checks use a temporary cell.
   // A checker ignores whichever list is not part of its rule.
   virtual bool check(const Node* cell,
                      GridX x,

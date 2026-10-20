@@ -1381,7 +1381,7 @@ TEST(ImplantCheckerNullSafetyTest,
   ASSERT_EQ(outOfGridResults.size(), 1u);
   EXPECT_FALSE(outOfGridResults.front().isLegal);
   EXPECT_TRUE(hasDiagnostic(outOfGridResults.front().diagnostics,
-                            "target_move_unsupported"));
+                            "placement_out_of_grid"));
 
   const std::vector<CheckResult> overlayResults =
       checker.checkPlaceWithOverlays(
