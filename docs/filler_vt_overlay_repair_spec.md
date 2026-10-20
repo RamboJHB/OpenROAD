@@ -179,6 +179,13 @@ successful probes are not jointly DRC-validated. Direct checker callers,
 including `test_filler_repair`, append only their target operation to the
 returned filler transaction; they must not append the input filler Deletes.
 
+`test_filler_repair -inst U1` (or `-master {}`) tests removal of exactly one
+movable, ungrouped standard cell. It checks a null target with the old std
+Delete, then commits that Delete plus FR's refill transaction once. One- and
+two-row cells are supported. A nonempty `-master` keeps the placement/swap
+behavior. Invalid requests or failed repair/commit leave placement unchanged.
+This command exercises ImplantLayerChecker/FR, not the complete DRC checker set.
+
 Before publishing success, DePlace checks final target/filler padded footprints
 together. A body-only tiling that conflicts with padding fails safely rather
 than returning a transaction that commit would reject.

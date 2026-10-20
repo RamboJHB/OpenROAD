@@ -11,7 +11,6 @@
 #include <exception>
 #include <iostream>
 #include <limits>
-#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -162,9 +161,11 @@ bool TestFillerRepairCmd::exec()
       = splitIdentifiers(instOpt_.getValue());
   const std::vector<std::string> masterIds
       = splitIdentifiers(masterOpt_.getValue());
-  if (instanceIds.empty() || masterIds.size() != 1) {
-    std::cout << "ERROR: -inst and -master are both required; -inst accepts "
-                 "one or more names/Network ids and -master accepts one\n";
+  const bool removeOnly
+      = masterOpt_.getValue().find_first_not_of(" \t\r\n\f\v") == std::string::npos;
+  if (instanceIds.empty() || (!removeOnly && masterIds.size() != 1)) {
+    std::cout << "ERROR: -inst is required; -master accepts one name/Network id "
+                 "or no value for std-cell removal\n";
     return false;
   }
 
@@ -192,8 +193,10 @@ bool TestFillerRepairCmd::exec()
     return false;
   }
 
-  Master* targetMaster = findMaster(*design, *network, masterIds.front());
-  if (targetMaster == nullptr || targetMaster->getPhysLibCell() == nullptr) {
+  Master* targetMaster = removeOnly ? nullptr
+      : findMaster(*design, *network, masterIds.front());
+  if (!removeOnly
+      && (targetMaster == nullptr || targetMaster->getPhysLibCell() == nullptr)) {
     std::cout << "ERROR: unknown or unregistered -master value '"
               << masterIds.front() << "'\n";
     return false;
@@ -236,47 +239,54 @@ bool TestFillerRepairCmd::exec()
     left = replacedStd->getLeft().v;
     bottom = replacedStd->getBottom().v;
   }
+  if (removeOnly
+      && (overlays.size() != 1 || replacedStd == nullptr
+          || (!replacedStd->isStdCell() && replacedStd->getType() != Node::CELL)
+          || replacedStd->isFixed() || replacedStd->isTerminal()
+          || replacedStd->inGroup() || replacedStd->isBlock())) {
+    std::cout << "ERROR: removal requires one movable, ungrouped standard cell\n";
+    return false;
+  }
   const GridX x = grid->gridX(DbuX{left});
   const GridY y = grid->gridSnapDownY(DbuY{bottom});
-  const eLIB::PhysLibCell& targetCell = *targetMaster->getPhysLibCell();
-  const eLIB::TechSite* targetSite = targetCell.getTechSite();
-  if (targetSite == nullptr) {
-    std::cout << "ERROR: target master has no placement site\n";
-    return false;
-  }
-  const std::optional<eUTL::PhysOrientation> orientation
-      = grid->getSiteOrientation(x, y, targetSite->getName());
-  if (!orientation.has_value()) {
-    std::cout << "ERROR: target origin has no compatible site orientation\n";
-    return false;
-  }
-
   Node temporary;
-  temporary.setMaster(targetMaster);
-  temporary.setType(targetMaster->isFiller() ? Node::FILLER : Node::CELL);
-  temporary.setWidth(DbuX{targetCell.getWidth().getStorage()});
-  temporary.setHeight(DbuY{targetCell.getHeight().getStorage()});
-  temporary.setOrient(*orientation);
-  temporary.setFixed(false);
-  temporary.setPlaced(false);
-  temporary.setLeft(DbuX{left});
-  temporary.setBottom(DbuY{bottom});
-  const Pixel* originPixel = grid->gridPixel(x, y);
-  Node* anchor = originPixel != nullptr ? originPixel->cell : nullptr;
-  if (replacedStd != nullptr) {
-    temporary.setId(replacedStd->getId());
-    temporary.setDbInst(replacedStd->getDbInst());
-  } else if (anchor != nullptr) {
+  eUTL::PhysOrientation orientation = PhysOrientationE::R0;
+  if (removeOnly) {
+    orientation = replacedStd->getOrient();
+  } else {
+    const eLIB::PhysLibCell& targetCell = *targetMaster->getPhysLibCell();
+    const eLIB::TechSite* targetSite = targetCell.getTechSite();
+    if (targetSite == nullptr) {
+      std::cout << "ERROR: target master has no placement site\n";
+      return false;
+    }
+    const auto siteOrientation = grid->getSiteOrientation(x, y, targetSite->getName());
+    if (!siteOrientation.has_value()) {
+      std::cout << "ERROR: target origin has no compatible site orientation\n";
+      return false;
+    }
+    orientation = *siteOrientation;
+    temporary.setMaster(targetMaster);
+    temporary.setType(targetMaster->isFiller() ? Node::FILLER : Node::CELL);
+    temporary.setWidth(DbuX{targetCell.getWidth().getStorage()});
+    temporary.setHeight(DbuY{targetCell.getHeight().getStorage()});
+    temporary.setOrient(orientation);
+    temporary.setFixed(false);
+    temporary.setPlaced(false);
+    temporary.setLeft(DbuX{left});
+    temporary.setBottom(DbuY{bottom});
+    const Pixel* originPixel = grid->gridPixel(x, y);
+    const Node* anchor = replacedStd != nullptr ? replacedStd
+        : originPixel != nullptr && originPixel->cell != nullptr
+              ? originPixel->cell : overlays.front();
     temporary.setId(anchor->getId());
     temporary.setDbInst(anchor->getDbInst());
-  } else {
-    temporary.setId(overlays.front()->getId());
-    temporary.setDbInst(overlays.front()->getDbInst());
   }
 
   std::vector<CellChangeRecord> overlayChanges;
   overlayChanges.reserve(overlays.size());
-  std::cout << "checker request: targetMaster=" << targetMaster->getId()
+  std::cout << "checker request: operation=" << (removeOnly ? "remove" : "place")
+            << " targetMaster=" << (targetMaster != nullptr ? targetMaster->getId() : -1)
             << " overlays=" << overlays.size() << " origin=(" << left << ','
             << bottom << ")\n";
   for (const Node* node : overlays) {
@@ -294,21 +304,23 @@ bool TestFillerRepairCmd::exec()
   }
 
   std::vector<CellChangeRecord> changes;
+  const Node* target = removeOnly ? nullptr : &temporary;
   const bool accepted
-      = checker->check(&temporary, x, y, *orientation, changes, overlayChanges);
+      = checker->check(target, x, y, orientation, changes, overlayChanges);
   if (!changes.empty()
       && (setting == nullptr || !validFillerChanges(changes, *setting))) {
     std::cout << "ERROR: repair returned an invalid filler transaction record\n";
     return false;
   }
   std::cout << (accepted ? "LEGAL" : "NO REPAIR")
-            << ": targetMaster=" << targetMaster->getId()
+            << ": operation=" << (removeOnly ? "remove" : "place")
+            << " targetMaster=" << (targetMaster != nullptr ? targetMaster->getId() : -1)
             << " overlays=" << overlays.size()
             << " fillerChanges=" << changes.size() << '\n';
   printChanges(changes);
   if (!accepted) {
     const ipl::CheckRequest request{
-        &temporary, x, y, *orientation, overlayChanges};
+        target, x, y, orientation, overlayChanges};
     printRejectedRequest(checker->checkDirect(request));
     return false;
   }
@@ -317,7 +329,9 @@ bool TestFillerRepairCmd::exec()
   // instance. A std replacement preserves its identity and net connections;
   // buffer insertion needs a fresh DB cell. FR supplies all filler operations.
   std::vector<CellChangeRecord> transaction;
-  if (replacedStd != nullptr) {
+  if (removeOnly) {
+    transaction = overlayChanges;  // The old std Delete is owned by the caller.
+  } else if (replacedStd != nullptr) {
     transaction.push_back(
         CellChangeRecord{OpType::Replace,
                          replacedStd->getDbInst(),
@@ -325,7 +339,7 @@ bool TestFillerRepairCmd::exec()
                          UvDist(bottom),
                          replacedStd->getMaster()->getDbMaster(),
                          targetMaster->getDbMaster(),
-                         *orientation});
+                         orientation});
   } else {
     std::set<std::string> names;
     for (const auto& [id, node] : network->getNodes()) {
@@ -352,14 +366,15 @@ bool TestFillerRepairCmd::exec()
                                            UvDist(bottom),
                                            eLIB::LibCellID(),
                                            targetMaster->getDbMaster(),
-                                           *orientation});
+                                           orientation});
   }
   transaction.insert(transaction.end(), changes.begin(), changes.end());
   if (!dePlace->commit(transaction)) {
     std::cout << "ERROR: commit rejected; placement was not changed\n";
     return false;
   }
-  std::cout << "COMMITTED: target + " << overlayChanges.size()
+  std::cout << "COMMITTED: " << (removeOnly ? "std removal + " : "target + ")
+            << overlayChanges.size()
             << " overlay(s) + " << changes.size() << " filler change(s)\n";
   for (const auto& record : transaction) {
     const auto* id = std::get_if<eUNL::LeafCellID>(&record.cell_data_);

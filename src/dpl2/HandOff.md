@@ -242,6 +242,15 @@ Small Debug microbenchmark (21 nodes, five rows, FR_VERBOSE=0; 500 warmups and
 500 timed calls per path, excluding setup): same-footprint isLegal decreased
 from about 482 to 81 microseconds/call. This is not a large-design benchmark.
 
+The test command also supports std removal/refill:
+`test_filler_repair -inst U1`, equivalently `-inst U1 -master {}`.
+An empty/whitespace master requests exactly one movable, ungrouped std cell;
+nonempty master keeps placement/swap semantics. The command submits a null
+target to ImplantLayerChecker and commits the old std Delete plus FR's refill
+once. It tests Implant/FR, not every registered DRC rule. Regression coverage
+includes repeated option use, invalid/fixed/grouped requests, failed calls
+without mutation, and complete one/two-row refill after removal.
+
 ## Remaining destination work and limits
 
 - Map `DePlace::commit` Add/place operations to real UDM APIs. The local

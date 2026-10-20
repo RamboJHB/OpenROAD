@@ -688,6 +688,70 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   EXPECT_EQ(f.snapshot(), before);
   EXPECT_FALSE(command.run({"-inst", "I122", "-master", "TH5"}, error));
   EXPECT_EQ(f.snapshot(), before);
+
+  // Removal mode accepts exactly one standard cell. Rejections must leave the
+  // whole placement intact, including when a valid identifier precedes a bad one.
+  for (const auto* instances : {"I121", "I110 I111", "I110 I110",
+                                 "UNKNOWN", "I110 UNKNOWN"}) {
+    SCOPED_TRACE(instances);
+    EXPECT_FALSE(command.run({"-inst", instances}, error));
+    EXPECT_EQ(f.snapshot(), before);
+  }
+  for (const char* master : {",", "BUF2 TH4", "UNKNOWN_MASTER"}) {
+    EXPECT_FALSE(command.run({"-inst", "I110", "-master", master}, error));
+    EXPECT_EQ(f.snapshot(), before);
+  }
+  f.node(110)->setFixed(true);
+  EXPECT_FALSE(command.run({"-inst", "I110"}, error));
+  f.node(110)->setFixed(false);
+  EXPECT_EQ(f.snapshot(), before);
+  Group group;
+  f.node(110)->setGroup(&group);
+  EXPECT_FALSE(command.run({"-inst", "I110"}, error));
+  f.node(110)->setGroup(nullptr);
+  EXPECT_EQ(f.snapshot(), before);
+  const auto expectRefilled = [&](int id, int x, int row, int width, int height = 1) {
+    EXPECT_EQ(f.node(id), nullptr);
+    EXPECT_FALSE(f.design->desMgr()->getPhysCell(eUNL::LeafCellID(0, id)).isValid());
+    for (int r = row; r < row + height; ++r) {
+      for (int col = x; col < x + width; ++col) {
+        const Node* filler = f.dp->getGrid()->gridPixel(GridX{col}, GridY{r})->cell;
+        ASSERT_NE(filler, nullptr);
+        EXPECT_TRUE(filler->isFiller());
+        const auto orientation = f.dp->getGrid()->getSiteOrientation(
+            f.dp->getGrid()->gridX(filler), f.dp->getGrid()->gridSnapDownY(filler),
+            filler->getMaster()->getPhysLibCell()->getTechSite()->getName());
+        ASSERT_TRUE(orientation.has_value());
+        EXPECT_EQ(filler->getOrient(), *orientation);
+      }
+    }
+    f.consistent();
+  };
+  // Reuse the command after a populated -master option: omission must clear it.
+  ASSERT_TRUE(command.run({"-inst", "I122", "-master", "BUF2"}, error));
+  ASSERT_TRUE(command.run({"-inst", "I110"}, error));
+  expectRefilled(110, 0, 1, 6);
+  ASSERT_TRUE(command.run({"-inst", "I111", "-master", ""}, error));
+  expectRefilled(111, 6, 1, 6);
+  ASSERT_TRUE(command.run({"-inst", "I112", "-master", " \t\n "}, error));
+  expectRefilled(112, 12, 1, 6);
+
+  // Prepare one two-row std cell through the real commit path, then remove it
+  // through the same command and verify both released rows are filled.
+  auto twoRow = f.remove(120);
+  twoRow.op_ = OpType::Replace;
+  twoRow.new_lib_cell_ = eLIB::LibCellID(0, 12);
+  ASSERT_TRUE(f.dp->commit({twoRow, f.remove(130),
+      f.add("REMOVE_PREP_R2", 3, 4, 2 * frt::kRowHeight),
+      f.add("REMOVE_PREP_R3", 3, 4, 3 * frt::kRowHeight,
+            eUTL::PhysOrientationE::R0)}));
+  f.consistent();
+  ASSERT_EQ(f.node(120)->getHeight().v, 2 * frt::kRowHeight);
+  ASSERT_TRUE(command.run({"-inst", "I120"}, error));
+  expectRefilled(120, 0, 2, 4, 2);
+  const auto afterRemovals = f.snapshot();
+  EXPECT_FALSE(command.run({"-inst", "I120"}, error));
+  EXPECT_EQ(f.snapshot(), afterRemovals);
 }
 
 TEST(DePlaceCommit, StdReplacementCommitsTheReturnedFillerSwap)
