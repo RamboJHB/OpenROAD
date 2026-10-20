@@ -30,7 +30,9 @@ class PlacementDRC
                 const eUTL::PhysOrientation& orient,
                 std::vector<CellChangeRecord>& ccRecords) const;
 
-  // Runs every checker through its explicit overlay/repair-capable interface.
+  // ImplantLayer first produces the final filler transaction. Other checkers
+  // validate that transaction read-only, independent of registration order;
+  // their overlay input contains real Deletes, not staged preparation records.
   // A null cell prepares a tentative std removal using the Implant checker;
   // all checkers run when a final non-null placement is tested.
   // Repair records are published only if every checker accepts the request.

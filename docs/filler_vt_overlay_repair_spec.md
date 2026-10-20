@@ -86,7 +86,9 @@ a subset of `D`.
   swapping surrounding fillers. Master alternatives preserve each footprint.
   Every accepted batch passes `ImplantLayerChecker::checkPlaceWithOverlays`.
 
-For resize/move, DePlace first prepares a virtual std-cell removal and refill,
+Same-footprint original-position checks first use the existing direct/swap
+path, without preparing a removal that would immediately be cancelled.
+For resize/move, DePlace prepares a virtual std-cell removal and refill,
 then reuses the findLeg diamond search. Each candidate supplies the old std
 Delete, preparation fillers, and real intersecting filler Deletes to FR.
 FR cancels the tentative Adds and rebuilds `D - T`; it does not emit Deletes
@@ -98,6 +100,8 @@ Nothing is removed, painted, or committed between the two steps.
 Resized/moved/removal overlays are compared against the committed placement
 over both old and new regions, including surrounding swap effects. A hole
 introduced by removal is not a baseline violation that can be grandfathered.
+Each candidate has its own committed baseline and affected guard; batching or
+reordering candidates must not change its result.
 
 The planner retains adaptive-L1 window growth, ranking, subset search,
 request-local caching, and baseline-delta acceptance. Caller-deleted fillers
@@ -108,6 +112,12 @@ and search-state caps. A legal solution may remain undiscovered when a cap is
 reached. Without a checker-approved solution within those caps, repair fails
 without partial changes or placement mutation. Truncated enumeration may still
 return a complete checked solution from the candidates it retained.
+
+Before expensive subset search on a retiling, the engine cheaply checks the
+preferred assignment and coherent assignments for each VT supported by every
+tile. Snapshots are reused by the subsequent search and charged to the same
+2048-candidate budget. This prevents one poor seed from starving an immediately
+legal uniform-VT layout; it does not make the bounded search complete.
 
 `fillerSetting::getFollowOrder()` controls new-filler candidate order, including
 footprint preference before the tiling cap. Site/orientation filtering precedes
@@ -132,15 +142,19 @@ destination-checker registrations remain commented out.
 ```text
 DePlace::isLegal / findLeg
   -> PlacementDRC::checkDRC(temp, x, y, orientation, fillerChanges, overlayChanges)
-  -> registered DRC checkers
   -> ImplantLayerChecker::check
   -> lazy FillerRepairEngine::repair(CheckRequest)
   -> ImplantLayerChecker::checkPlaceWithOverlays
+  -> other registered DRC checkers validate the finalized filler transaction
 ```
 
 The ordinary direct-check overload does not repair. The explicit overlay
-overload publishes a local trial output only if every registered checker
-succeeds. ImplantLayerChecker constructs its engine once with `std::call_once`
+overload runs ImplantLayerChecker first, independent of registration order,
+then gives each remaining checker the finalized filler transaction and real
+Delete overlays. Tentative preparation Add/Replace records do not reach those
+validators. They must not edit either vector; edits or rejection fail the whole
+probe without publishing output. Existing caller output is preserved but is
+not part of the candidate being validated. ImplantLayerChecker constructs its engine once with `std::call_once`
 when repair is needed and enabled; checker-helper use disables repair.
 Only exact standard-cell replacement with direct success can bypass the engine.
 Real filler Deletes and non-exact coverage use the engine to publish a complete
@@ -179,6 +193,9 @@ allocation failures or unexpected UDM exceptions. Fixed/group-owned cells and
 non-core changes are rejected. Destination UDM Add/placement signatures and
 error semantics still require verification. The local OpenROAD wire mutates
 its UDM projection rather than writing back to the source ODB block.
+The identity tests establish stable DB IDs, Node pointers, names and Pin/Edge
+references; fake UDM does not model logical nets. Real UDM size-cell port
+mapping and net connectivity require a destination regression.
 
 ## Lifetime and concurrency
 
@@ -189,6 +206,8 @@ placement and instance names through request-local state. Ordinary committed
 Add/Replace/Delete changes are visible to the next repair on the same engine.
 
 Concurrent read-only checks and repairs use request-local search/oracle state.
+PlacementDRC publishes its process-lifetime shared TBB arena once during setup;
+destroying one PlacementDRC does not tear down another owner's worker arena.
 The owner must establish a barrier between placement readers and commits:
 UDM, Grid, and Network cannot change during a check/repair, and all three must
 describe the same committed revision before checks resume. Master catalogs,

@@ -2048,13 +2048,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         continue;
       }
 
-      std::vector<size_t> assignment(additions.size(), 0);
-      bool haveAssignment = true;
-      while (haveAssignment) {
-        if (budgetExhausted()) {
-          searchTruncated = true;
-          break;
-        }
+      const auto seedLayout = [&](const std::vector<size_t>& assignment) {
         std::vector<LayoutAddition> seededAdditions = additions;
         ipl::FillerChanges fixed = fixedReplacements;
         for (size_t index = 0; index < seededAdditions.size(); ++index) {
@@ -2071,6 +2065,58 @@ RepairOutcome FillerRepairEngine::Impl::repair(
         seededAdditions.insert(seededAdditions.end(),
                                replacementSeeds.begin(),
                                replacementSeeds.end());
+        return std::make_pair(std::move(seededAdditions), std::move(fixed));
+      };
+      const auto snapshotLayout = [&](RequestOracle& layoutOracle) {
+        OracleRequest snapshot;
+        snapshot.requestId = 0;
+        snapshot.targetPlace = target;
+        snapshot.guardRegion = influence;
+        OracleResult checked = layoutOracle.checkPlaceWithOverlay(snapshot);
+        log_.block("engine",
+                   "Retiling checker result",
+                   {{"status", cat(static_cast<int>(checked.status))},
+                    {"violations", cat(checked.violations.size())},
+                    {"diagnostics", cat(checked.diagnostics.size())}});
+        return checked;
+      };
+
+      // Give coherent VT layouts a cheap check before one bad seed spends the
+      // whole budget on subset search. The configured/preferred all-zero seed
+      // stays first. Cache these few snapshots for the original search below.
+      std::vector<std::vector<size_t>> quickAssignments{
+          std::vector<size_t>(additions.size(), 0)};
+      std::vector<VtId> families;
+      for (const auto& option : additions.front().masterOptions) {
+        const VtId vt = masterInfo(option.masterId)->vt;
+        if (std::find(families.begin(), families.end(), vt) == families.end()) {
+          families.push_back(vt);
+        }
+      }
+      for (const VtId vt : families) {
+        std::vector<size_t> uniform;
+        for (const auto& addition : additions) {
+          const auto option = std::find_if(
+              addition.masterOptions.begin(), addition.masterOptions.end(),
+              [&](const auto& item) { return masterInfo(item.masterId)->vt == vt; });
+          if (option == addition.masterOptions.end()) {
+            break;
+          }
+          uniform.push_back(option - addition.masterOptions.begin());
+        }
+        if (uniform.size() == additions.size()
+            && std::find(quickAssignments.begin(), quickAssignments.end(), uniform)
+                   == quickAssignments.end()) {
+          quickAssignments.push_back(std::move(uniform));
+        }
+      }
+      std::map<std::vector<size_t>, OracleResult> quickSnapshots;
+      for (const auto& assignment : quickAssignments) {
+        if (budgetExhausted()) {
+          searchTruncated = true;
+          break;
+        }
+        auto [seededAdditions, fixed] = seedLayout(assignment);
         LayoutPlacementView layoutView(view,
                                        target,
                                        overlayInstanceIds,
@@ -2079,17 +2125,32 @@ RepairOutcome FillerRepairEngine::Impl::repair(
                                        hasTarget);
         RequestOracle layoutOracle(
             *this, request, layoutView, checkerRequests, fixed);
-        OracleRequest layoutSnapshotRequest;
-        layoutSnapshotRequest.requestId = 0;
-        layoutSnapshotRequest.targetPlace = target;
-        layoutSnapshotRequest.guardRegion = influence;
-        const OracleResult layoutSnapshot
-            = layoutOracle.checkPlaceWithOverlay(layoutSnapshotRequest);
-        log_.block("engine",
-                   "Retiling checker result",
-                   {{"status", cat(static_cast<int>(layoutSnapshot.status))},
-                    {"violations", cat(layoutSnapshot.violations.size())},
-                    {"diagnostics", cat(layoutSnapshot.diagnostics.size())}});
+        OracleResult snapshot = snapshotLayout(layoutOracle);
+        if (snapshot.status == OracleStatus::Checked && snapshot.violations.empty()) {
+          return finish(std::move(fixed), "retiled solution");
+        }
+        if (snapshot.status == OracleStatus::CheckerError) {
+          skip("CheckerFailed", "checker could not evaluate the retiling");
+          return result;
+        }
+        quickSnapshots.emplace(assignment, std::move(snapshot));
+      }
+
+      std::vector<size_t> assignment(additions.size(), 0);
+      bool haveAssignment = true;
+      while (haveAssignment) {
+        if (budgetExhausted()) {
+          searchTruncated = true;
+          break;
+        }
+        auto [seededAdditions, fixed] = seedLayout(assignment);
+        LayoutPlacementView layoutView(view, target, overlayInstanceIds,
+                                       seededAdditions, placement_, hasTarget);
+        RequestOracle layoutOracle(
+            *this, request, layoutView, checkerRequests, fixed);
+        const auto cached = quickSnapshots.find(assignment);
+        const OracleResult layoutSnapshot = cached != quickSnapshots.end()
+            ? cached->second : snapshotLayout(layoutOracle);
         if (layoutSnapshot.status != OracleStatus::Checked) {
           for (const Diagnostic& diagnostic : layoutSnapshot.diagnostics) {
             log_.block("engine",

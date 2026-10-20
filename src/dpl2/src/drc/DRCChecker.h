@@ -59,6 +59,8 @@ class DRCChecker
   //      Add/Replaces from removal preparation. ImplantLayer handles null
   //      cell as removal-only preparation; final checks use a temporary cell.
   // A checker ignores whichever list is not part of its rule.
+  // With ImplantLayer repair enabled, it is the sole transaction producer;
+  // other checkers receive the finalized filler changes and must not edit them.
   virtual bool check(const Node* cell,
                      GridX x,
                      GridY y,

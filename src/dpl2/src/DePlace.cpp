@@ -8,7 +8,9 @@
 #include <infrastructure/fillerSetting.h>
 #include <infrastructure/network.h>
 
+#include <cstdio>
 #include <set>
+#include <sstream>
 #include <string>
 
 namespace dpl2 {
@@ -102,16 +104,6 @@ bool DePlace::isLegal(LeafCellID instId, LibCellID masterId,
 
   const GridX oldX = grid_->gridX(old);
   const GridY oldY = grid_->gridSnapDownY(old);
-  std::vector<CellChangeRecord> removed{
-      {OpType::Delete, old->getDbInst(), UvDist(old->getLeft().v),
-       UvDist(old->getBottom().v), old->getMaster()->getDbMaster(),
-       old->getMaster()->getDbMaster(), old->getOrient()}};
-  std::vector<CellChangeRecord> pending;
-  // Prepare a virtual removal/filler layout. It is only a seed: a new target
-  // can make an otherwise unfillable old footprint tileable.
-  drc_engine_->checkDRC(
-      nullptr, oldX, oldY, old->getOrient(), pending, removed);
-
   Node probe;
   initTempNode(probe, master, physical,
                Point2D(UvDist(old->getLeft().v), UvDist(old->getBottom().v)));
@@ -134,32 +126,52 @@ bool DePlace::isLegal(LeafCellID instId, LibCellID masterId,
     return false;
   };
 
-  std::vector<CellChangeRecord> trial = pending;
+  const bool originalInArea = inVoltageArea(oldX, oldY);
+  const bool sameFootprint
+      = old->getWidth().v == physical.getWidth().getStorage()
+        && old->getHeight().v == physical.getHeight().getStorage();
+  std::vector<CellChangeRecord> trial;
   std::pair<int, int> location{-1, -1};
-  if (inVoltageArea(oldX, oldY)
+  // Preserve the original swap fast path: a legal unchanged footprint has no
+  // released area to prepare or retile.
+  if (sameFootprint && originalInArea
       && canBePlaced(&probe, oldX, oldY, &trial, old)) {
     location = {oldX.v, oldY.v};
-  } else if (diameter > 0) {
-    const int64_t xl = int64_t{old->getLeft().v}
-                       + core_.getXL().getStorage();
-    const int64_t yl = int64_t{old->getBottom().v}
-                       + core_.getYL().getStorage();
-    const Rect search(UvDist(xl - diameter), UvDist(yl - diameter),
-                      UvDist(xl + physical.getWidth().getStorage() + diameter),
-                      UvDist(yl + physical.getHeight().getStorage() + diameter));
-    const auto searchRect = [&](const Rect& rect) {
-      trial = pending;
-      probe.setLeft(old->getLeft());
-      probe.setBottom(old->getBottom());
-      return legalCellInRect(rect, &probe, &trial, old);
-    };
-    if (va == nullptr) {
-      location = searchRect(search.overlap(core_, false));
-    } else {
-      for (const Rect& rect : va->getRects()) {
-        location = searchRect(search.overlap(rect, false).overlap(core_, false));
-        if (location != std::pair<int, int>{-1, -1}) {
-          break;
+  } else {
+    std::vector<CellChangeRecord> removed{
+        {OpType::Delete, old->getDbInst(), UvDist(old->getLeft().v),
+         UvDist(old->getBottom().v), old->getMaster()->getDbMaster(),
+         old->getMaster()->getDbMaster(), old->getOrient()}};
+    std::vector<CellChangeRecord> pending;
+    // This virtual removal layout is only a seed: the final target can make
+    // an otherwise unfillable old footprint tileable.
+    drc_engine_->checkDRC(
+        nullptr, oldX, oldY, old->getOrient(), pending, removed);
+    trial = pending;
+    if (originalInArea && canBePlaced(&probe, oldX, oldY, &trial, old)) {
+      location = {oldX.v, oldY.v};
+    } else if (diameter > 0) {
+      const int64_t xl = int64_t{old->getLeft().v}
+                         + core_.getXL().getStorage();
+      const int64_t yl = int64_t{old->getBottom().v}
+                         + core_.getYL().getStorage();
+      const Rect search(UvDist(xl - diameter), UvDist(yl - diameter),
+                        UvDist(xl + physical.getWidth().getStorage() + diameter),
+                        UvDist(yl + physical.getHeight().getStorage() + diameter));
+      const auto searchRect = [&](const Rect& rect) {
+        trial = pending;
+        probe.setLeft(old->getLeft());
+        probe.setBottom(old->getBottom());
+        return legalCellInRect(rect, &probe, &trial, old);
+      };
+      if (va == nullptr) {
+        location = searchRect(search.overlap(core_, false));
+      } else {
+        for (const Rect& rect : va->getRects()) {
+          location = searchRect(search.overlap(rect, false).overlap(core_, false));
+          if (location != std::pair<int, int>{-1, -1}) {
+            break;
+          }
         }
       }
     }
@@ -484,7 +496,8 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
                   eUTL::UvDist(cell.getLeft().v + cell.getWidth().v + diameter), \
                   eUTL::UvDist(cell.getBottom().v + cell.getHeight().v + diameter));
 
-  std::cout << "[findLeg] target master id=" << masterId.getValue()
+  std::ostringstream record;
+  record << "[findLeg] target master id=" << masterId.getValue()
         // << " name=" << master->getMasterName()
         << " w=" << new_pcell_.getWidth().getStorage()
         << " h=" << new_pcell_.getHeight().getStorage()
@@ -495,6 +508,8 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
         << " yl=" << rect.getYL().getStorage()
         << " yh=" << rect.getYH().getStorage()
         << " diameter=" << diameter << "\n";
+  const auto message = record.str();
+  std::fwrite(message.data(), 1, message.size(), stdout);
 
   // legalCellInRect() performs the search.  The temporary node is not placed
   // / painted (setPlaced(false) above), so its unplaceCell() is a no-op and

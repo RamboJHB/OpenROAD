@@ -4,26 +4,27 @@
 #include <infrastructure/Grid.h>
 #include <infrastructure/network.h>
 
+#include <algorithm>
+#include <cstdio>
+#include <iterator>
+#include <mutex>
+#include <tuple>
+
 namespace dpl2 {
 
 PlacementDRC::PlacementDRC(Grid* grid) : grid_(grid)
 {
-  if (!DrcUtil::getArena()) {
-    // todo: set global thread count
-    // int threadCount = uv3d::Uv3d::uv3d()->getThreadCount();
-    int threadCount = 32;
-    std::cout << "available thread number: " << threadCount << std::endl;
-    DrcUtil::setArena(new tbb::task_arena(threadCount));
-  }
+  // The shared arena outlives every PlacementDRC owner. Setup publishes it
+  // before workers start; destroying one owner must not interrupt another.
+  static tbb::task_arena arena(32);
+  static std::once_flag published;
+  std::call_once(published, [] {
+    std::fputs("available thread number: 32\n", stdout);
+    DrcUtil::setArena(&arena);
+  });
 }
 
-PlacementDRC::~PlacementDRC()
-{
-  if (DrcUtil::getArena()) {
-    delete DrcUtil::getArena();
-    DrcUtil::setArena(nullptr);
-  }
-}
+PlacementDRC::~PlacementDRC() = default;
 
 bool PlacementDRC::checkDRC(const Node* cell,
     std::vector<CellChangeRecord>& ccRecords) const
@@ -64,18 +65,57 @@ bool PlacementDRC::checkDRC(const Node* cell,
     return false;
   }
 
-  std::vector<CellChangeRecord> trial = cellChanges;
+  const DRCChecker* implant = getChecker(DRCCheckerType::ImplantLayer);
+  std::vector<CellChangeRecord> trial;
   if (cell == nullptr) {
     // Removal is tentative filler preparation. Every checker still runs on
     // the final non-null placement before its transaction is published.
-    const DRCChecker* implant = getChecker(DRCCheckerType::ImplantLayer);
     if (implant == nullptr
         || !implant->check(nullptr, x, y, orient, trial, overlayChanges)) {
       return false;
     }
-    cellChanges = std::move(trial);
+    cellChanges.insert(cellChanges.end(), trial.begin(), trial.end());
     return true;
   }
+  if (implant != nullptr) {
+    // FR is the sole filler-transaction producer. Every other rule must see
+    // the finalized layout, irrespective of checker registration order.
+    if (!implant->check(cell, x, y, orient, trial, overlayChanges)) {
+      return false;
+    }
+    std::vector<CellChangeRecord> removals;
+    std::copy_if(overlayChanges.begin(), overlayChanges.end(),
+                 std::back_inserter(removals), [](const auto& change) {
+                   return change.op_ == OpType::Delete;
+                 });
+    const auto sameRecord = [](const auto& a, const auto& b) {
+      return std::tie(a.op_, a.cell_data_, a.x_, a.y_, a.orig_lib_cell_,
+                       a.new_lib_cell_, a.orientation_)
+             == std::tie(b.op_, b.cell_data_, b.x_, b.y_, b.orig_lib_cell_,
+                          b.new_lib_cell_, b.orientation_);
+    };
+    const auto unchanged = [&](const auto& a, const auto& b) {
+      return a.size() == b.size()
+             && std::equal(a.begin(), a.end(), b.begin(), sameRecord);
+    };
+    for (const auto& checker : checkers_) {
+      if (checker == nullptr || checker.get() == implant) {
+        continue;
+      }
+      auto verified = trial;
+      auto input = removals;
+      if (!checker->check(cell, x, y, orient, verified, input)) {
+        return false;
+      }
+      if (!unchanged(verified, trial) || !unchanged(input, removals)) {
+        std::fputs("[dpl2][drc] rejected: checker modified the finalized filler transaction\n", stdout);
+        return false;
+      }
+    }
+    cellChanges.insert(cellChanges.end(), trial.begin(), trial.end());
+    return true;
+  }
+  trial = cellChanges;
   for (const auto& checker : checkers_) {
     if (checker != nullptr
         && !checker->check(cell, x, y, orient, trial, overlayChanges)) {

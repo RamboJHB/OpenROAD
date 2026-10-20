@@ -14,6 +14,8 @@ verification counts are available in Git history.
   standard-cell ID and connections. It prepares removal/refill virtually,
   then reuses findLeg's diamond search. Buffer insertion replaces one or more intersecting
   fillers; every target site must be covered by those selected fillers.
+- Same-footprint original-position probes retain the direct/swap fast path;
+  removal preparation is deferred until that path fails or the footprint changes.
 - Exact cover uses the filler-swap planner. Non-exact cover tiles exactly
   `(old std sites + deleted filler sites) - target sites`, then checks the added fillers and
   surrounding swaps through the real ImplantLayerChecker.
@@ -79,16 +81,20 @@ the checker after Grid initialization. An owner using the explicit
 ```text
 DePlace::isLegal / findLeg
   -> PlacementDRC::checkDRC(temp, x, y, orientation, changes, overlayChanges)
-  -> every registered checker
   -> ImplantLayerChecker::check
   -> lazy FillerRepairEngine::repair(CheckRequest), when needed
   -> ImplantLayerChecker::checkPlaceWithOverlays
+  -> remaining checkers validate the final filler transaction read-only
   -> DePlace assembles the complete accepted transaction
   -> caller serializes DePlace::commit against placement readers
 ```
 
-The ordinary checkDRC overload is direct-only. The two-vector overload stages
-changes locally and publishes them only when all registered checkers pass.
+The ordinary checkDRC overload is direct-only. The two-vector overload runs
+ImplantLayer first, irrespective of registration order, then validates its
+finalized filler transaction with every other checker. Those checkers receive
+only real Delete overlays, not staged preparation Add/Replace records. Editing
+either validation vector is rejected. Results are published only after all
+validators pass; the caller's preserved output prefix is not a new overlay.
 Real filler Deletes invoke FR even for exact direct-legal coverage, so their
 output is not lost. Non-exact coverage also invokes repair because released
 sites still need fillers.
@@ -103,6 +109,8 @@ Every repair reads current nodes, masters, coordinates, orientation, DB IDs
 and names through request-local placement caches. Concurrent read-only repairs
 are supported; DB/Grid/Network mutation must not overlap them. Commit must
 finish synchronizing all three before subsequent repair calls.
+PlacementDRC's shared TBB arena is published once during setup and lives until
+process shutdown, rather than being deleted by an arbitrary PlacementDRC owner.
 
 Configured filler order controls Add choices when follow-order is enabled.
 Avoid patterns are absolute positive site-width pairs: `1:2` forbids
@@ -201,28 +209,51 @@ the ASan validation therefore uses that toolchain without changing xcode-select.
 
 Verification on 2026-10-20, complete default-target builds:
 
-- Normal: 434/434 passed with AppleClang 17.
-- ASan: 434/434 passed with Command Line Tools AppleClang 21.
-- Fifteen added tests cover checker old/new-region validation and DePlace
-  resize/move, height changes, pending transaction normalization, connectivity,
-  padding, and concurrent probes. The migration integration tests also exercise
-  the new flow at 50%, 75%, and 90% utilization.
+- Normal: 443/443 passed with AppleClang 17.
+- ASan: 443/443 passed with Command Line Tools AppleClang 21.
+- TSan: 8/8 lifecycle/concurrent-probe tests passed with AppleClang 21 and
+  a locally TSan-instrumented oneTBB 2023.0.0; no race suppressions were used.
+  The four-worker concurrent probe also passed 20 repeated runs.
+  The uninstrumented Homebrew TBB reports scheduler races even for the atomic
+  counter control test, so it is not used for the TSan verdict.
+- Coverage includes checker old/new-region validation, DePlace resize/move,
+  height changes, pending transaction normalization, identity/Pin references,
+  padding and concurrent probes. Migration tests exercise 50/75/90% utilization.
 - Both builds compiled every default target, including commit/command tests,
   destination wiring and the migration-copy gate. `git diff --check` passed.
 
 These results use the test-only fake UDM provider; they do not establish
 real UDM ABI compatibility or source-ODB writeback.
 
+Review corrections on 2026-10-20:
+
+- Generate the final filler transaction before other DRC validators; reject
+  validator edits and publish nothing on failure, regardless of registry order.
+- Keep the shared TBB arena alive across PlacementDRC owner destruction.
+- Use candidate-local committed baselines/guards: a candidate checked alone,
+  batched, or reordered must have the same result.
+- Probe coherent VT tilings before a poor seed spends the shared search budget;
+  cache those snapshots. A width-12 removal with unit fillers now reaches the
+  independently verified all-LVT solution without exhausting 2048 candidates.
+- Retain the same-footprint fast path and emit probe logs as complete stdio
+  records rather than formatting a shared ostream from multiple callers.
+
+Small Debug microbenchmark (21 nodes, five rows, FR_VERBOSE=0; 500 warmups and
+500 timed calls per path, excluding setup): same-footprint isLegal decreased
+from about 482 to 81 microseconds/call. This is not a large-design benchmark.
+
 ## Remaining destination work and limits
 
 - Map `DePlace::commit` Add/place operations to real UDM APIs. The local
   `UnlChange_addCell/placeCell` signatures and error behavior are test
   contracts, not verified real UDM declarations. Confirm CellChangeRecord
-  field/ID variants and preserve target connectivity on Replace.
+  field/ID variants and preserve target connectivity on Replace. Local tests
+  prove stable IDs/Node/Pin/Edge references; fake UDM has no logical net model,
+  so real size-cell port mapping and connectivity need destination coverage.
 - Run isLegal, findLeg, mixed commits and subsequent repairs on a real UDM
   design with the complete destination checker set. Local registration does
   not validate the missing checkers' interaction with filler changes. Those
-  checkers must understand mixed/staged overlays and validate final fillers;
+  checkers must validate final fillers and real mixed Delete overlays read-only;
   removal-only preparation is routed exclusively to ImplantLayerChecker.
 - Provide the commit/read barrier and keep DB, Grid and Network synchronized.
   The preflight rejects ordinary invalid batches before mutation; commit has
@@ -239,3 +270,6 @@ real UDM ABI compatibility or source-ODB writeback.
   512 checker candidates per planner window and 2048 per repair. Any returned
   solution must pass the checker. If none is found within the caps, the result
   has no solution and no partial changes; truncation does not prove infeasibility.
+- Large-design latency still needs profiling: relocation repeats name/placement
+  reads and guard checks for each candidate, and the shared arena currently uses
+  32 workers. Tune total opto/TBB concurrency against destination workloads.

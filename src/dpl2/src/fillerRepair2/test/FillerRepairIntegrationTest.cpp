@@ -1645,6 +1645,94 @@ TEST_P(FillerRepairIntegrationTest, RetilingCanChangeTheSeedAddMasterInPlace)
   EXPECT_EQ(removed->getMaster()->getId(), 6);
 }
 
+TEST_P(FillerRepairIntegrationTest, CoherentVtSeedPreventsWideRemovalBudgetStarvation)
+{
+  constexpr int columns = 60;
+  constexpr int oldWidth = 12;
+  constexpr int oldColumn = 4;
+  constexpr int destination = 15;
+  constexpr int oldId = 2004;
+  auto data = input(GetParam());
+  data.colCount = columns;
+  data.masters.push_back(master(6, 0, false, oldWidth * kSiteWidth));
+  data.rules.clear();
+  for (LayerId layer = 0; layer < 6; ++layer) {
+    data.rules.emplace_back(layer, RuleSource::Width, layer, 13 * kSiteWidth);
+  }
+  data.placedInsts.clear();
+  for (int row = 0; row < kRowCount; ++row) {
+    for (int col = 0; col < columns * GetParam() / 100; ++col) {
+      if (row == 2 && col > oldColumn && col < oldColumn + oldWidth) {
+        continue;
+      }
+      const bool oldCell = row == 2 && col == oldColumn;
+      const bool removedFiller = row == 0 && col == destination;
+      data.placedInsts.push_back(
+          {1000 * row + col,
+           oldCell ? 6 : removedFiller ? 4 : row == 0 ? 1 : 0,
+           row, col,
+           row % 2 == 0 ? PhysOrientationE::R0 : PhysOrientationE::MX,
+           removedFiller});
+    }
+  }
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, data, GetParam());
+  Network& network = *helper.getNetwork();
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, &network);
+  helper.initChecker(checker);
+  const Node* oldCell = network.getNode(oldId);
+  const Node* removedFiller = network.getNode(destination);
+  ASSERT_NE(oldCell, nullptr);
+  ASSERT_NE(removedFiller, nullptr);
+  Node temporary;
+  temporary.setId(oldCell->getId());
+  temporary.setDbInst(oldCell->getDbInst());
+  temporary.setMaster(network.getMaster(1));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(DbuX{kSiteWidth});
+  temporary.setHeight(DbuY{kRowHeight});
+  const CheckRequest request{&temporary, GridX{destination}, GridY{0},
+                             PhysOrientationE::R0,
+                             {deleteRecord(*oldCell), deleteRecord(*removedFiller)}};
+  const auto fullGuard = rect(0, 0, columns * kSiteWidth,
+                              kRowCount * kRowHeight - 1);
+
+  // An all-HVT old-area seed has width 12 under WIDTH=13. Turning all twelve
+  // unit fillers back to LVT exceeds the planner's subset cap. The coherent
+  // LVT seed is already legal, so test it before spending the repair budget.
+  FillerChanges knownSolution;
+  for (int col = oldColumn; col < oldColumn + oldWidth; ++col) {
+    knownSolution.push_back(
+        {OpType::Add, std::string("KNOWN_") + std::to_string(col),
+         UvDist(col * kSiteWidth), UvDist(2 * kRowHeight), LibCellID(),
+         network.getMaster(3)->getDbMaster(), PhysOrientationE::R0});
+  }
+  const auto verified = checker.checkPlaceWithOverlays(request, fullGuard, {knownSolution});
+  ASSERT_EQ(verified.size(), 1u);
+  ASSERT_TRUE(verified.front().isLegal);
+  fillerRepair::FillerRepairEngine engine(checker);
+  const CheckRequest removal{nullptr, GridX{0}, GridY{0}, PhysOrientationE::R0,
+                             {deleteRecord(*oldCell)}};
+  const auto prepared = engine.repair(removal);
+  ASSERT_TRUE(prepared.hasSolution);
+  ASSERT_EQ(countChanges(prepared.changes, OpType::Add), oldWidth);
+  CheckRequest finalRequest = request;
+  finalRequest.overlayChanges.insert(finalRequest.overlayChanges.end(),
+                                      prepared.changes.begin(), prepared.changes.end());
+  const auto repaired = engine.repair(finalRequest);
+  ASSERT_TRUE(repaired.hasSolution);
+  EXPECT_EQ(countChanges(repaired.changes, OpType::Delete), 1u);
+  EXPECT_EQ(countChanges(repaired.changes, OpType::Add), oldWidth);
+  EXPECT_EQ(countChanges(repaired.changes, OpType::Replace), 0u);
+  const auto checked = checker.checkPlaceWithOverlays(
+      request, fullGuard, {candidateChanges(repaired.changes)});
+  ASSERT_EQ(checked.size(), 1u);
+  EXPECT_TRUE(checked.front().isLegal);
+  EXPECT_EQ(oldCell->getMaster()->getId(), 6);
+  EXPECT_EQ(helper.getGrid()->gridPixel(GridX{destination}, GridY{0})->cell,
+            removedFiller);
+}
+
 TEST(FillerRepairBudgetTest, NonExactRepairSharesOneCheckerBudget)
 {
   auto data = nonExactInput(kDefaultUtilization);

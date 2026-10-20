@@ -182,5 +182,43 @@ TEST(CheckerResize, VacatedSiteViolationsCannotHideOutsideTheNewTargetGuard)
         }));
 }
 
+TEST(CheckerResize, CandidateBaselineDoesNotDependOnOtherBatchMembers)
+{
+    Fixture f(true);
+    for (const int id : {108, 208, 209, 210, 211}) {
+        f.node(id)->setMaster(f.helper.getNetwork()->getMaster(4));
+    }
+    const CheckRequest request{nullptr, GridX{4}, GridY{2}, PhysOrientationE::R0, {f.remove(204)}};
+    FillerChanges first;
+    FillerChanges second;
+    for (int offset = 0; offset < 4; ++offset) {
+        first.push_back(f.add(4 + offset, 2, offset));
+        second.push_back(f.add(4 + offset, 2, offset, 4));
+    }
+    auto firstSwap = f.remove(208);
+    firstSwap.op_ = OpType::Replace;
+    firstSwap.new_lib_cell_ = f.helper.getNetwork()->getMaster(4)->getDbMaster();
+    first.push_back(firstSwap);
+    auto secondSwap = f.remove(211);
+    secondSwap.op_ = OpType::Replace;
+    secondSwap.new_lib_cell_ = f.helper.getNetwork()->getMaster(3)->getDbMaster();
+    second.push_back(secondSwap);
+
+    const auto firstOnly = f.checker->checkPlaceWithOverlays(request, box(0, 0, 20, 40), {first});
+    const auto secondOnly = f.checker->checkPlaceWithOverlays(request, box(0, 0, 20, 40), {second});
+    ASSERT_TRUE(firstOnly.front().isLegal);
+    for (bool reverse : {false, true}) {
+        const auto batch = f.checker->checkPlaceWithOverlays(request, box(0, 0, 20, 40),
+            reverse ? std::vector<FillerChanges>{second, first} : std::vector<FillerChanges>{first, second});
+        ASSERT_EQ(batch.size(), 2u);
+        const auto& checkedFirst = batch[reverse ? 1 : 0];
+        const auto& checkedSecond = batch[reverse ? 0 : 1];
+        EXPECT_EQ(checkedFirst.isLegal, firstOnly.front().isLegal);
+        EXPECT_EQ(checkedFirst.violations.size(), firstOnly.front().violations.size());
+        EXPECT_EQ(checkedSecond.isLegal, secondOnly.front().isLegal);
+        EXPECT_EQ(checkedSecond.violations.size(), secondOnly.front().violations.size());
+    }
+}
+
 } // namespace
 } // namespace dpl2::ipl

@@ -2711,62 +2711,68 @@ std::vector<CheckResult> ImplantLayerChecker::checkPlaceWithOverlays(
         return results;
     }
     Rect effectiveGuard = guardRegion;
-    FillerChanges baselineChanges;
     const bool committedBaseline = usesCommittedBaseline(request);
+    int64_t halo = siteWidth_;
+    if (committedBaseline) {
+        for (const Rule& rule : rules_) {
+            halo = std::max<int64_t>(halo, queryRadius(rule));
+        }
+    }
+    const auto include = [&](Rect& guard, int64_t x, int64_t y, int64_t width, int64_t height) {
+        guard = Rect(UvDist(std::min<int64_t>(guard.getXL().getStorage(), std::max<int64_t>(0, x - halo))),
+                     UvDist(std::min<int64_t>(guard.getYL().getStorage(), std::max<int64_t>(0, y - 2 * rowHeight_))),
+                     UvDist(std::max<int64_t>(guard.getXH().getStorage(), x + width + halo)),
+                     UvDist(std::max<int64_t>(guard.getYH().getStorage(), y + height + 2 * rowHeight_)));
+    };
     if (committedBaseline) {
         // A moved/resized/removed cell affects both its old and new regions.
         // Compare their final overlay with the real committed placement, not
         // with an intermediate layout containing a hole at the old location.
-        int64_t xl = guardRegion.getXL().getStorage();
-        int64_t yl = guardRegion.getYL().getStorage();
-        int64_t xh = guardRegion.getXH().getStorage();
-        int64_t yh = guardRegion.getYH().getStorage();
-        int64_t halo = siteWidth_;
-        for (const Rule& rule : rules_) {
-            halo = std::max<int64_t>(halo, queryRadius(rule));
-        }
-        const auto include = [&](int64_t x, int64_t y, int64_t width, int64_t height) {
-            xl = std::min(xl, std::max<int64_t>(0, x - halo));
-            yl = std::min(yl, std::max<int64_t>(0, y - 2 * rowHeight_));
-            xh = std::max(xh, x + width + halo);
-            yh = std::max(yh, y + height + 2 * rowHeight_);
-        };
         for (const InstanceId id : overlayNodeIds(request)) {
             const Node* node = network_->getNode(id);
             if (node != nullptr) {
-                include(node->getLeft().v, node->getBottom().v,
+                include(effectiveGuard, node->getLeft().v, node->getBottom().v,
                         node->getWidth().v, node->getHeight().v);
             }
         }
         if (request.cell != nullptr) {
             const MasterItem* master = masterItem(request.cell->getMaster()->getId());
-            include(int64_t{request.x.v} * siteWidth_, int64_t{request.y.v} * rowHeight_,
+            include(effectiveGuard, int64_t{request.x.v} * siteWidth_, int64_t{request.y.v} * rowHeight_,
                     master->width, master->height);
         }
-        for (const FillerChanges& candidate : fillerChanges) {
-            baselineChanges.insert(baselineChanges.end(), candidate.begin(), candidate.end());
-            for (const CellChangeRecord& change : candidate) {
+    }
+    const std::vector<Violation> sharedBaseline = committedBaseline ? std::vector<Violation>{}
+        : checkOverlayRegion(request, effectiveGuard, {}, false).violations;
+    auto run_job = [&](int i) {
+        Rect candidateGuard = effectiveGuard;
+        std::vector<Violation> candidateBaseline;
+        if (committedBaseline) {
+            const DiagVec diagnostics = validateOverlayRequest(request, fillerChanges[i]);
+            if (!diagnostics.empty()) {
+                results[i].diagnostics = diagnostics_;
+                results[i].diagnostics.insert(results[i].diagnostics.end(), diagnostics.begin(), diagnostics.end());
+                return;
+            }
+            for (const CellChangeRecord& change : fillerChanges[i]) {
                 if (change.op_ == OpType::Add) {
                     const MasterItem* master = masterItem(network_->getMasterId(change.new_lib_cell_));
                     if (master != nullptr) {
-                        include(change.x_.getStorage(), change.y_.getStorage(), master->width, master->height);
+                        include(candidateGuard, change.x_.getStorage(), change.y_.getStorage(), master->width, master->height);
                     }
                 } else if (const LeafCellID* id = cellChangeLeafCellId(change)) {
                     const Node* node = network_->getNode(*id);
                     if (node != nullptr) {
-                        include(node->getLeft().v, node->getBottom().v,
+                        include(candidateGuard, node->getLeft().v, node->getBottom().v,
                                 node->getWidth().v, node->getHeight().v);
                     }
                 }
             }
+            // Candidate flags affect shape merging. A different candidate's
+            // old instances must never change this candidate's baseline.
+            candidateBaseline = checkOverlayRegion(request, candidateGuard, fillerChanges[i], false).violations;
         }
-        effectiveGuard = Rect(UvDist(xl), UvDist(yl), UvDist(xh), UvDist(yh));
-    }
-    const std::vector<Violation> oldViolations
-        = checkOverlayRegion(request, effectiveGuard, baselineChanges, false).violations;
-    auto run_job = [&](int i) {
         results[i] = checkPlaceWithOverlay(
-            request, effectiveGuard, fillerChanges[i], oldViolations);
+            request, candidateGuard, fillerChanges[i], committedBaseline ? candidateBaseline : sharedBaseline);
     };
     if (DrcUtil::getArena()) {
         DrcUtil::parallelFor(size, run_job);

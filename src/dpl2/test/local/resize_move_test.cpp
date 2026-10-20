@@ -235,6 +235,47 @@ TEST(DePlaceResizeMove, OriginalPositionSupportsSizeDownAndSizeUp)
   }
 }
 
+TEST(DePlaceResizeMove, SameFootprintSwapSkipsRemovalPreparation)
+{
+  struct CountingChecker : DRCChecker
+  {
+    CountingChecker(Grid* grid, eUNL::Design* design, Network* network)
+        : DRCChecker(grid, design), checker(grid, design, network) {}
+    ipl::ImplantLayerChecker checker;
+    mutable int removals = 0;
+    bool check(const Node* node, GridX x, GridY y,
+                const eUTL::PhysOrientation& orientation) const override
+    {
+      return checker.check(node, x, y, orientation);
+    }
+    bool check(const Node* node, GridX x, GridY y,
+                const eUTL::PhysOrientation& orientation,
+                std::vector<CellChangeRecord>& changes,
+                std::vector<CellChangeRecord>& overlays) const override
+    {
+      removals += node == nullptr;
+      return checker.check(node, x, y, orientation, changes, overlays);
+    }
+  };
+  ResizeMoveFixture fixture;
+  auto counted = std::make_unique<CountingChecker>(fixture.dp().getGrid(),
+      fixture.checker()->getDesign(), fixture.dp().getNetwork());
+  auto* const checker = counted.get();
+  fixture.dp().getPlacementDRC()->addChecker(DRCCheckerType::ImplantLayer, std::move(counted));
+  const auto before = fixture.snapshot();
+  std::vector<CellChangeRecord> changes;
+  ASSERT_TRUE(fixture.dp().isLegal(fixture.target()->getDbInst(), eLIB::LibCellID(0, 2), changes));
+  fixture.expectNormalized(changes, 2, 8, 2);
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(checker->removals, 0);
+  EXPECT_EQ(fixture.snapshot(), before);
+  changes.clear();
+  ASSERT_TRUE(fixture.dp().isLegal(fixture.target()->getDbInst(), eLIB::LibCellID(0, 16), changes));
+  fixture.expectNormalized(changes, 16, 8, 2);
+  EXPECT_EQ(checker->removals, 1);
+  EXPECT_EQ(fixture.snapshot(), before);
+}
+
 TEST(DePlaceResizeMove, PartialMoveCancelsPendingFillersAndRetilesOldFootprint)
 {
   for (bool shifted : {false, true}) {

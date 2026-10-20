@@ -10,6 +10,8 @@
 #include <PlacementDRC.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <sstream>
 #include <vector>
 #include <queue>
 #include <unordered_set>
@@ -368,23 +370,19 @@ PixelPt DePlace::diamondSearch(const Node* cell,
   while (!positionsHeap.empty()) {
     // Bound the outer relocation search as well as each individual FR search.
     if (replacedCell != nullptr && candidates++ == 256) {
-      std::cout << "[isLegal search] candidate budget exhausted (256)\n";
+      std::fputs("[isLegal search] candidate budget exhausted (256)\n", stdout);
       return PixelPt();
     }
     const GridPt nearest = positionsHeap.top().p;
     positionsHeap.pop();
+    const bool legal = canBePlaced(cell, nearest.x, nearest.y, fillerChanges, replacedCell);
     if (fillerChanges != nullptr) {
-      std::cout << "[findLeg BFS] try ("<< nearest.x.v<<","<< nearest.y.v << ")";
+      std::printf("[findLeg BFS] try (%d,%d) -> %s\n", nearest.x.v, nearest.y.v,
+                    legal ? "ACCEPT" : "reject");
     }
-    if (canBePlaced(cell, nearest.x, nearest.y, fillerChanges, replacedCell)) {
-      if (fillerChanges != nullptr) {
-        std::cout << " -> ACCEPT\n";
-      }
+    if (legal) {
       return PixelPt(
           grid_->gridPixel(nearest.x, nearest.y), nearest.x, nearest.y);
-    }
-    if (fillerChanges != nullptr) {
-      std::cout << " -> reject\n";
     }
     // Put neighbors in the queue
     for (GridPt offset : neighbors) {
@@ -406,10 +404,9 @@ PixelPt DePlace::diamondSearch(const Node* cell,
     }
   }
   if (fillerChanges != nullptr) {
-    std::cout << "[findLeg BFS] exhausted " << sequence
-              << " enqueued candidate(s) in box "
-              << "x=[" << x_min.v << "," << x_max.v << "]"
-              << " y=[" << y_min.v << "," << y_max.v << "], no legal site\n";
+    std::printf("[findLeg BFS] exhausted %d enqueued candidate(s) in box "
+                  "x=[%d,%d] y=[%d,%d], no legal site\n",
+                  sequence, x_min.v, x_max.v, y_min.v, y_max.v);
   }
   return PixelPt();
 }
@@ -636,27 +633,30 @@ bool DePlace::checkPixels(const Node* cell,
           || (!cell->inGroup() && pixel->group)
           || (first_row && !grid_->getSiteOrientation(x1, y1, site->getName()))) {
         if (fillerChanges != nullptr) {
-          std::cout << "  [findLeg pixels] (" << x1.v << "," << y1.v << ") reject:";
+          std::ostringstream record;
+          record << "  [findLeg pixels] (" << x1.v << "," << y1.v << ") reject:";
           if (pixel == nullptr) {
-            std::cout << " pixel==null";
+            record << " pixel==null";
           } else {
             if (pixel->cell && !pixel->cell->isFiller()) {
-              std::cout << " occupied-by-std-cell";
+              record << " occupied-by-std-cell";
             }
             if (!pixel->is_valid) {
-              std::cout << " !valid";
+              record << " !valid";
             }
             if (cell->inGroup() && pixel->group != cell->getGroup()) {
-              std::cout << " group-mismatch";
+              record << " group-mismatch";
             }
             if (!cell->inGroup() && pixel->group) {
-              std::cout << " in-foreign-group";
+              record << " in-foreign-group";
             }
           }
           if (first_row && !grid_->getSiteOrientation(x1, y1, site->getName())) {
-            std::cout << " bad-site-orient";
+            record << " bad-site-orient";
           }
-          std::cout << "\n";
+          record << '\n';
+          const auto message = record.str();
+          std::fwrite(message.data(), 1, message.size(), stdout);
         }
         return false;
       }
@@ -671,9 +671,8 @@ bool DePlace::checkPixels(const Node* cell,
 
   if (!checkMasterSym(masterSym, orient)) {
     if (fillerChanges != nullptr) {
-      std::cout << "  [findLeg checkPixels] (" << x.v << "," << y.v
-                << ") reject: symmetry masterSym=" << masterSym
-                << " orient=" << static_cast<uint>(orient) << "\n";
+      std::printf("  [findLeg checkPixels] (%d,%d) reject: symmetry masterSym=%u orient=%u\n",
+                    x.v, y.v, masterSym, static_cast<unsigned>(orient));
     }
     return false;
   }
