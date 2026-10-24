@@ -1027,15 +1027,15 @@ std::set<std::pair<fr::RowId, int>> coveredRetilerSites(
   return sites;
 }
 
-class FillerRemovalRetilerTest : public ::testing::TestWithParam<int>
+class RemovalRetilerFixture
 {
- protected:
-  void preparePlacement(int height)
+ public:
+  RemovalRetilerFixture(int utilization, int height)
   {
     design_.setSiteWidth(1)
         .addMaster(1, 3, height, false, 1)
         .addMaster(2, 1, 1, true, 1);
-    const int occupiedColumns = 20 * GetParam() / 100;
+    const int occupiedColumns = 20 * utilization / 100;
     int occupiedSites = 0;
     for (int row = 0; row < 5; ++row) {
       design_.addRow(row, 0, 20);
@@ -1053,7 +1053,7 @@ class FillerRemovalRetilerTest : public ::testing::TestWithParam<int>
         occupiedSites += static_cast<int>(design_.masterInfo(cell.masterId)->width);
       }
     }
-    EXPECT_EQ(100 * occupiedSites, GetParam() * 5 * 20);
+    EXPECT_EQ(100 * occupiedSites, utilization * 5 * 20);
     before_ = placementSnapshot();
   }
 
@@ -1083,10 +1083,16 @@ class FillerRemovalRetilerTest : public ::testing::TestWithParam<int>
     for (const auto& tiling : result.solutions) {
       EXPECT_EQ(coveredRetilerSites(tiling, footprints), expected);
     }
+    expectPlacementUnchanged();
+  }
+
+  void expectPlacementUnchanged() const
+  {
     EXPECT_EQ(placementSnapshot(), before_);
     EXPECT_FALSE(design_.instance(kRemovedCell)->isFiller);
   }
 
+ private:
   using PlacementSnapshot = std::vector<
       std::tuple<fr::RowId, fr::InstanceId, fr::MasterId, fr::DbCoord, fr::Orient, bool>>;
 
@@ -1110,78 +1116,76 @@ class FillerRemovalRetilerTest : public ::testing::TestWithParam<int>
   PlacementSnapshot before_;
 };
 
-TEST_P(FillerRemovalRetilerTest, SingleRowRemovalRefillsOnlyOldFootprint)
+template <int Utilization>
+void testSingleRowRemovalRefillsOnlyOldFootprint()
 {
-  preparePlacement(1);
+  RemovalRetilerFixture fixture(Utilization, 1);
   const std::vector<fr::internal::FillerFootprint> footprints{
       {10, 1, 1}, {11, 2, 1}};
-  const auto released = releasedSites();
+  const auto released = fixture.releasedSites();
   const auto result = fr::internal::enumerateRetilings(released, footprints);
 
-  expectExactRefill(result, footprints);
+  fixture.expectExactRefill(result, footprints);
   ASSERT_FALSE(result.solutions.empty());
   EXPECT_EQ(result.solutions.front().size(), 2U);
-  EXPECT_EQ(released, releasedSites());
+  EXPECT_EQ(released, fixture.releasedSites());
 }
 
-TEST_P(FillerRemovalRetilerTest, TwoRowRemovalPrefersMultiHeightFiller)
+template <int Utilization>
+void testTwoRowRemovalPrefersMultiHeightFiller()
 {
-  preparePlacement(2);
+  RemovalRetilerFixture fixture(Utilization, 2);
   const std::vector<fr::internal::FillerFootprint> footprints{
       {10, 1, 1}, {11, 2, 1}, {12, 3, 2}};
-  const auto result = fr::internal::enumerateRetilings(releasedSites(), footprints);
+  const auto result = fr::internal::enumerateRetilings(fixture.releasedSites(), footprints);
 
-  expectExactRefill(result, footprints);
+  fixture.expectExactRefill(result, footprints);
   ASSERT_FALSE(result.solutions.empty());
   ASSERT_EQ(result.solutions.front().size(), 1U);
   EXPECT_EQ(result.solutions.front().front().masterId, 12);
 }
 
-TEST_P(FillerRemovalRetilerTest, TwoRowRemovalFallsBackToSingleHeightFillers)
+template <int Utilization>
+void testTwoRowRemovalFallsBackToSingleHeightFillers()
 {
-  preparePlacement(2);
+  RemovalRetilerFixture fixture(Utilization, 2);
   const std::vector<fr::internal::FillerFootprint> footprints{
       {10, 1, 1}, {11, 2, 1}};
-  const auto result = fr::internal::enumerateRetilings(releasedSites(), footprints);
+  const auto result = fr::internal::enumerateRetilings(fixture.releasedSites(), footprints);
 
-  expectExactRefill(result, footprints);
+  fixture.expectExactRefill(result, footprints);
   ASSERT_FALSE(result.solutions.empty());
   EXPECT_EQ(result.solutions.front().size(), 4U);
 }
 
-TEST_P(FillerRemovalRetilerTest, UnfillableRemovalReturnsNoPartialTiling)
+template <int Utilization>
+void testUnfillableRemovalReturnsNoPartialTiling()
 {
-  preparePlacement(1);
-  const auto result = fr::internal::enumerateRetilings(releasedSites(), {{11, 2, 1}});
+  RemovalRetilerFixture fixture(Utilization, 1);
+  const auto result = fr::internal::enumerateRetilings(fixture.releasedSites(), {{11, 2, 1}});
 
   EXPECT_TRUE(result.solutions.empty());
   EXPECT_FALSE(result.truncated);
   EXPECT_GT(result.searchStates, 1U);
-  EXPECT_EQ(placementSnapshot(), before_);
+  fixture.expectPlacementUnchanged();
 }
 
-TEST_P(FillerRemovalRetilerTest, RemovalBudgetExhaustionReturnsNoPartialTiling)
+template <int Utilization>
+void testRemovalBudgetExhaustionReturnsNoPartialTiling()
 {
-  preparePlacement(2);
+  RemovalRetilerFixture fixture(Utilization, 2);
   const std::vector<fr::internal::FillerFootprint> footprints{{10, 1, 1}};
   const auto result = fr::internal::enumerateRetilings(
-      releasedSites(), footprints, {16, 2});
+      fixture.releasedSites(), footprints, {16, 2});
 
   EXPECT_TRUE(result.solutions.empty());
   EXPECT_TRUE(result.truncated);
   EXPECT_EQ(result.searchStates, 2U);
-  EXPECT_EQ(placementSnapshot(), before_);
-  expectExactRefill(fr::internal::enumerateRetilings(releasedSites(), footprints),
-                    footprints);
+  fixture.expectPlacementUnchanged();
+  fixture.expectExactRefill(
+      fr::internal::enumerateRetilings(fixture.releasedSites(), footprints),
+      footprints);
 }
-
-INSTANTIATE_TEST_SUITE_P(
-    PlacementUtilizations,
-    FillerRemovalRetilerTest,
-    ::testing::Values(50, 75, 90),
-    [](const ::testing::TestParamInfo<int>& info) {
-      return "Utilization" + std::to_string(info.param);
-    });
 
 void testRetilerPrefersDeterministicLargestExactCover()
 {
@@ -5595,6 +5599,36 @@ TEST(RepairPlanner, multiline_neighbors_vote_only_at_external_edges)
 void registerPlannerTests()
 {
   const std::vector<Test> tests = {
+      {"removal_single_row_exact_refill_utilization50",
+       testSingleRowRemovalRefillsOnlyOldFootprint<50>},
+      {"removal_single_row_exact_refill_utilization75",
+       testSingleRowRemovalRefillsOnlyOldFootprint<75>},
+      {"removal_single_row_exact_refill_utilization90",
+       testSingleRowRemovalRefillsOnlyOldFootprint<90>},
+      {"removal_two_row_multi_height_filler_utilization50",
+       testTwoRowRemovalPrefersMultiHeightFiller<50>},
+      {"removal_two_row_multi_height_filler_utilization75",
+       testTwoRowRemovalPrefersMultiHeightFiller<75>},
+      {"removal_two_row_multi_height_filler_utilization90",
+       testTwoRowRemovalPrefersMultiHeightFiller<90>},
+      {"removal_two_row_single_height_fillers_utilization50",
+       testTwoRowRemovalFallsBackToSingleHeightFillers<50>},
+      {"removal_two_row_single_height_fillers_utilization75",
+       testTwoRowRemovalFallsBackToSingleHeightFillers<75>},
+      {"removal_two_row_single_height_fillers_utilization90",
+       testTwoRowRemovalFallsBackToSingleHeightFillers<90>},
+      {"removal_unfillable_no_partial_utilization50",
+       testUnfillableRemovalReturnsNoPartialTiling<50>},
+      {"removal_unfillable_no_partial_utilization75",
+       testUnfillableRemovalReturnsNoPartialTiling<75>},
+      {"removal_unfillable_no_partial_utilization90",
+       testUnfillableRemovalReturnsNoPartialTiling<90>},
+      {"removal_budget_exhaustion_no_partial_utilization50",
+       testRemovalBudgetExhaustionReturnsNoPartialTiling<50>},
+      {"removal_budget_exhaustion_no_partial_utilization75",
+       testRemovalBudgetExhaustionReturnsNoPartialTiling<75>},
+      {"removal_budget_exhaustion_no_partial_utilization90",
+       testRemovalBudgetExhaustionReturnsNoPartialTiling<90>},
       {"swap_construction", testSwapConstruction},
       {"overlay_key_order_independent", testOverlayKeyOrderIndependent},
       {"wire_conversion", testWireConversion},

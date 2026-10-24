@@ -208,6 +208,8 @@ single-row-high filler masters. Both released rows must be filled using real
 Grid site orientations; the database-free helper lacks that row/site context.
 Both use five-row fixtures with at least six cells per row at 50/75/90%
 utilization; no runtime dependencies were added to the internal test target.
+The 15 internal removal variants are registered in `internalCases()` under
+`FillerRepairInternalCases/FillerRepairInternalTest`, not a separate suite.
 
 On macOS the harness disables ASan container-overflow annotations because
 Homebrew GoogleTest is an uninstrumented static library; other configured
