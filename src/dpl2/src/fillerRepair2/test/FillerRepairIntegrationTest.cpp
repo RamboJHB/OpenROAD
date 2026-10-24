@@ -9,6 +9,7 @@
 #include <array>
 #include <limits>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -321,6 +322,94 @@ ImplantInput twoRowMultiDeleteInput(int utilization = kDefaultUtilization)
   data.fillerSetting.present = true;
   data.fillerSetting.fillerMasterIds = {0};
   return data;
+}
+
+ImplantInput removalInput(int utilization, RowId row, int width, int height = 1)
+{
+  ImplantInput data = input(utilization);
+  data.masters.push_back(height == 1
+      ? master(6, 0, false, width * kSiteWidth)
+      : twoRowMaster(6, false, width * kSiteWidth));
+  data.placedInsts.erase(std::remove_if(data.placedInsts.begin(), data.placedInsts.end(),
+      [=](const PlacedInst& placed) {
+        return placed.rowId >= row && placed.rowId < row + height
+            && placed.colId >= 4 && placed.colId < 4 + width;
+      }), data.placedInsts.end());
+  data.placedInsts.push_back({nodeId(row, 4), 6, row, 4,
+      row % 2 == 0 ? PhysOrientationE::R0 : PhysOrientationE::MX, false});
+  return data;
+}
+
+std::string placementSnapshot(const Grid& grid, const Network& network)
+{
+  std::ostringstream state;
+  for (const auto& [id, item] : network.getMasters()) {
+    state << id << ',' << item.get() << ',' << item->getDbMaster().getIndexValue()
+          << ',' << item->isFiller() << ';';
+  }
+  for (const auto& [id, node] : network.getNodes()) {
+    state << id << ',' << node.get() << ',' << node->getDbInst().getIndexValue()
+          << ',' << node->getMaster() << ',' << node->getLeft().v << ','
+          << node->getBottom().v << ',' << node->getWidth().v << ','
+          << node->getHeight().v << ',' << static_cast<int>(node->getOrient().getValue())
+          << ',' << static_cast<int>(node->getType()) << ',' << node->isPlaced()
+          << ',' << node->isFixed() << ';';
+  }
+  for (GridY row{0}; row < grid.getRowCount(); ++row) {
+    for (GridX col{0}; col < grid.getRowSiteCount(); ++col) {
+      const Pixel* pixel = grid.gridPixel(col, row);
+      state << pixel->cell << ',' << pixel->padding_reserved_by << ',' << pixel->group
+            << ',' << pixel->util << ',' << pixel->is_valid << ',' << pixel->is_hopeless
+            << ',' << static_cast<unsigned>(pixel->blocked_layers) << ';';
+    }
+  }
+  return state.str();
+}
+
+void expectRemovalTiling(const fillerRepair::RepairOutcome& outcome,
+                         const CheckRequest& request, const Node& removed,
+                         ImplantLayerChecker& checker)
+{
+  ASSERT_TRUE(outcome.hasSolution);
+  ASSERT_FALSE(outcome.changes.empty());
+  EXPECT_EQ(countChanges(outcome.changes, OpType::Delete), 0u);
+  EXPECT_EQ(countChanges(outcome.changes, OpType::Replace), 0u);
+  const Grid& grid = *checker.getGrid();
+  Network& network = *checker.getNetwork();
+  std::set<std::pair<int, int>> released;
+  const auto oldFootprint = grid.gridCovering(&removed);
+  for (GridY row = oldFootprint.ylo; row < oldFootprint.yhi; ++row) {
+    for (GridX col = oldFootprint.xlo; col < oldFootprint.xhi; ++col) {
+      released.emplace(row.v, col.v);
+    }
+  }
+  std::set<std::string> names;
+  for (const auto& change : outcome.changes) {
+    ASSERT_EQ(change.op_, OpType::Add);
+    ASSERT_TRUE(std::holds_alternative<std::string>(change.cell_data_));
+    const auto& name = std::get<std::string>(change.cell_data_);
+    EXPECT_FALSE(name.empty());
+    EXPECT_TRUE(names.insert(name).second);
+    const Master* added = network.getMaster(change.new_lib_cell_);
+    ASSERT_NE(added, nullptr);
+    ASSERT_TRUE(added->isFiller());
+    const auto& item = checker.getMasterItems().at(added->getId());
+    const int x = change.x_.getStorage() / kSiteWidth;
+    const int y = change.y_.getStorage() / kRowHeight;
+    EXPECT_EQ(change.x_.getStorage() % kSiteWidth, 0);
+    EXPECT_EQ(change.y_.getStorage() % kRowHeight, 0);
+    EXPECT_EQ(change.orientation_, y % 2 == 0 ? PhysOrientationE::R0 : PhysOrientationE::MX);
+    for (int row = y; row < y + item.height / kRowHeight; ++row) {
+      for (int col = x; col < x + item.width / kSiteWidth; ++col) {
+        EXPECT_EQ(released.erase({row, col}), 1u) << "site (" << col << ',' << row << ')';
+      }
+    }
+  }
+  EXPECT_TRUE(released.empty());
+  const auto checked = checker.checkPlaceWithOverlays(request,
+      rect(0, 0, kColCount * kSiteWidth, kRowCount * kRowHeight - 1), {outcome.changes});
+  ASSERT_EQ(checked.size(), 1u);
+  EXPECT_TRUE(checked.front().isLegal);
 }
 
 struct OverlayProbeCase
@@ -1084,6 +1173,100 @@ TEST_P(FillerRepairIntegrationTest, MalformedOverlayRecordsFailClosed)
   EXPECT_FALSE(result.isLegal);
   EXPECT_TRUE(hasDiagnostic(result, "removal_requires_filler_repair"));
   EXPECT_EQ(replaced->getMaster()->getId(), 2);
+}
+
+TEST_P(FillerRepairIntegrationTest,
+       RemoveOnlySingleRowStandardCellReturnsAnUncommittedCompleteTiling)
+{
+  for (RowId row : {1, 2}) {
+    SCOPED_TRACE(row);
+    ImplantLayerCheckerHelper helper;
+    initializeFixture(helper, removalInput(GetParam(), row, 2), GetParam());
+    Grid& grid = *helper.getGrid();
+    Network& network = *helper.getNetwork();
+    ImplantLayerChecker checker(&grid, nullptr, &network);
+    helper.initChecker(checker);
+    const Node* old = network.getNode(nodeId(row, 4));
+    ASSERT_NE(old, nullptr);
+    ASSERT_FALSE(old->isFiller());
+    const auto before = placementSnapshot(grid, network);
+    const fillerRepair::FillerRepairEngine engine(checker);
+    ASSERT_TRUE(engine.isReady());
+    const CheckRequest request{nullptr, GridX{4}, GridY{row}, old->getOrient(),
+                               {deleteRecord(*old)}};
+    const auto outcome = engine.repair(request);
+    ASSERT_TRUE(outcome.hasSolution);
+    EXPECT_EQ(countChanges(outcome.changes, OpType::Add), 2u);
+    expectRemovalTiling(outcome, request, *old, checker);
+    EXPECT_EQ(placementSnapshot(grid, network), before);
+    EXPECT_EQ(network.getNode(old->getDbInst()), old);
+  }
+}
+
+TEST_P(FillerRepairIntegrationTest,
+       RemoveOnlyTwoRowStandardCellUsesAlignedTwoRowFillersWithoutMutation)
+{
+  auto data = removalInput(GetParam(), 2, 2, 2);
+  data.masters.push_back(twoRowMaster(7, true, kSiteWidth));
+  data.fillerSetting.fillerMasterIds = {7};
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, data, GetParam());
+  Grid& grid = *helper.getGrid();
+  Network& network = *helper.getNetwork();
+  ImplantLayerChecker checker(&grid, nullptr, &network);
+  helper.initChecker(checker);
+  const Node* old = network.getNode(nodeId(2, 4));
+  ASSERT_NE(old, nullptr);
+  ASSERT_FALSE(old->isFiller());
+  const auto before = placementSnapshot(grid, network);
+  const fillerRepair::FillerRepairEngine engine(checker);
+  ASSERT_TRUE(engine.isReady());
+  const CheckRequest request{nullptr, GridX{4}, GridY{2}, old->getOrient(),
+                             {deleteRecord(*old)}};
+  const auto outcome = engine.repair(request);
+  ASSERT_TRUE(outcome.hasSolution);
+  EXPECT_EQ(countChanges(outcome.changes, OpType::Add), 2u);
+  for (const auto& change : outcome.changes) {
+    EXPECT_EQ(change.new_lib_cell_, network.getMaster(7)->getDbMaster());
+    EXPECT_EQ(change.orientation_, PhysOrientationE::R0);
+  }
+  expectRemovalTiling(outcome, request, *old, checker);
+  EXPECT_EQ(placementSnapshot(grid, network), before);
+}
+
+TEST_P(FillerRepairIntegrationTest,
+       RemoveOnlyUnfillableStandardCellReturnsNoPartialChanges)
+{
+  auto data = removalInput(GetParam(), 1, 3);
+  data.rules.clear();
+  data.masters.push_back(master(7, 0, true, 2 * kSiteWidth));
+  data.fillerSetting.fillerMasterIds = {7};
+  for (MasterId id : {3, 4, 5}) {
+    data.masters[static_cast<size_t>(id)].isFiller = false;
+  }
+  for (PlacedInst& placed : data.placedInsts) {
+    if (placed.masterId >= 3 && placed.masterId <= 5) {
+      placed.isFiller = false;
+    }
+  }
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, data, GetParam());
+  Grid& grid = *helper.getGrid();
+  Network& network = *helper.getNetwork();
+  ImplantLayerChecker checker(&grid, nullptr, &network);
+  helper.initChecker(checker);
+  const Node* old = network.getNode(nodeId(1, 4));
+  ASSERT_NE(old, nullptr);
+  const auto before = placementSnapshot(grid, network);
+  const fillerRepair::FillerRepairEngine engine(checker);
+  ASSERT_TRUE(engine.isReady());
+  const CheckRequest request{nullptr, GridX{4}, GridY{1}, old->getOrient(),
+                             {deleteRecord(*old)}};
+  const auto outcome = engine.repair(request);
+  EXPECT_FALSE(outcome.hasSolution);
+  EXPECT_TRUE(outcome.changes.empty());
+  EXPECT_EQ(placementSnapshot(grid, network), before);
+  EXPECT_EQ(network.getNode(old->getDbInst()), old);
 }
 
 TEST_P(FillerRepairIntegrationTest,

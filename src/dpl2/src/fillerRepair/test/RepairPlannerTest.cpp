@@ -1027,6 +1027,162 @@ std::set<std::pair<fr::RowId, int>> coveredRetilerSites(
   return sites;
 }
 
+class FillerRemovalRetilerTest : public ::testing::TestWithParam<int>
+{
+ protected:
+  void preparePlacement(int height)
+  {
+    design_.setSiteWidth(1)
+        .addMaster(1, 3, height, false, 1)
+        .addMaster(2, 1, 1, true, 1);
+    const int occupiedColumns = 20 * GetParam() / 100;
+    int occupiedSites = 0;
+    for (int row = 0; row < 5; ++row) {
+      design_.addRow(row, 0, 20);
+      for (int col = 0; col < occupiedColumns; ++col) {
+        if (row >= 2 && row < 2 + height && col >= 3 && col < 6) {
+          if (row == 2 && col == 3) {
+            design_.place(kRemovedCell, 1, row, col);
+          }
+        } else {
+          design_.place(row * 20 + col, 2, row, col);
+        }
+      }
+      EXPECT_GE(design_.instancesInRow(row).size(), 6U);
+      for (const auto& cell : design_.instancesInRow(row)) {
+        occupiedSites += static_cast<int>(design_.masterInfo(cell.masterId)->width);
+      }
+    }
+    EXPECT_EQ(100 * occupiedSites, GetParam() * 5 * 20);
+    before_ = placementSnapshot();
+  }
+
+  std::vector<fr::internal::SiteCell> releasedSites() const
+  {
+    const auto* cell = design_.instance(kRemovedCell);
+    const auto* master = design_.masterInfo(cell->masterId);
+    std::vector<fr::internal::SiteCell> sites;
+    for (int row = 0; row < master->height; ++row) {
+      for (int col = 0; col < master->width; ++col) {
+        sites.push_back({cell->rowId + row, static_cast<int>(cell->x) + col});
+      }
+    }
+    return sites;
+  }
+
+  void expectExactRefill(
+      const fr::internal::RetileResult& result,
+      const std::vector<fr::internal::FillerFootprint>& footprints) const
+  {
+    const auto released = releasedSites();
+    std::set<std::pair<fr::RowId, int>> expected;
+    for (const auto& site : released) {
+      expected.emplace(site.rowId, site.colId);
+    }
+    ASSERT_FALSE(result.solutions.empty());
+    for (const auto& tiling : result.solutions) {
+      EXPECT_EQ(coveredRetilerSites(tiling, footprints), expected);
+    }
+    EXPECT_EQ(placementSnapshot(), before_);
+    EXPECT_FALSE(design_.instance(kRemovedCell)->isFiller);
+  }
+
+  using PlacementSnapshot = std::vector<
+      std::tuple<fr::RowId, fr::InstanceId, fr::MasterId, fr::DbCoord, fr::Orient, bool>>;
+
+  PlacementSnapshot placementSnapshot() const
+  {
+    PlacementSnapshot snapshot;
+    for (const auto row : design_.rows()) {
+      for (const auto& cell : design_.instancesInRow(row)) {
+        snapshot.emplace_back(row, cell.id, cell.masterId, cell.x,
+                              cell.orientation, cell.isFiller);
+      }
+    }
+    return snapshot;
+  }
+
+  // The retiler receives only the old standard cell's released sites.
+  // Null-target requests and returned CellChangeRecords are tested by the
+  // engine integration suite, not by this database-free geometry fixture.
+  static constexpr fr::InstanceId kRemovedCell = 1000;
+  fr::TestPlacementView design_;
+  PlacementSnapshot before_;
+};
+
+TEST_P(FillerRemovalRetilerTest, SingleRowRemovalRefillsOnlyOldFootprint)
+{
+  preparePlacement(1);
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {10, 1, 1}, {11, 2, 1}};
+  const auto released = releasedSites();
+  const auto result = fr::internal::enumerateRetilings(released, footprints);
+
+  expectExactRefill(result, footprints);
+  ASSERT_FALSE(result.solutions.empty());
+  EXPECT_EQ(result.solutions.front().size(), 2U);
+  EXPECT_EQ(released, releasedSites());
+}
+
+TEST_P(FillerRemovalRetilerTest, TwoRowRemovalPrefersMultiHeightFiller)
+{
+  preparePlacement(2);
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {10, 1, 1}, {11, 2, 1}, {12, 3, 2}};
+  const auto result = fr::internal::enumerateRetilings(releasedSites(), footprints);
+
+  expectExactRefill(result, footprints);
+  ASSERT_FALSE(result.solutions.empty());
+  ASSERT_EQ(result.solutions.front().size(), 1U);
+  EXPECT_EQ(result.solutions.front().front().masterId, 12);
+}
+
+TEST_P(FillerRemovalRetilerTest, TwoRowRemovalFallsBackToSingleHeightFillers)
+{
+  preparePlacement(2);
+  const std::vector<fr::internal::FillerFootprint> footprints{
+      {10, 1, 1}, {11, 2, 1}};
+  const auto result = fr::internal::enumerateRetilings(releasedSites(), footprints);
+
+  expectExactRefill(result, footprints);
+  ASSERT_FALSE(result.solutions.empty());
+  EXPECT_EQ(result.solutions.front().size(), 4U);
+}
+
+TEST_P(FillerRemovalRetilerTest, UnfillableRemovalReturnsNoPartialTiling)
+{
+  preparePlacement(1);
+  const auto result = fr::internal::enumerateRetilings(releasedSites(), {{11, 2, 1}});
+
+  EXPECT_TRUE(result.solutions.empty());
+  EXPECT_FALSE(result.truncated);
+  EXPECT_GT(result.searchStates, 1U);
+  EXPECT_EQ(placementSnapshot(), before_);
+}
+
+TEST_P(FillerRemovalRetilerTest, RemovalBudgetExhaustionReturnsNoPartialTiling)
+{
+  preparePlacement(2);
+  const std::vector<fr::internal::FillerFootprint> footprints{{10, 1, 1}};
+  const auto result = fr::internal::enumerateRetilings(
+      releasedSites(), footprints, {16, 2});
+
+  EXPECT_TRUE(result.solutions.empty());
+  EXPECT_TRUE(result.truncated);
+  EXPECT_EQ(result.searchStates, 2U);
+  EXPECT_EQ(placementSnapshot(), before_);
+  expectExactRefill(fr::internal::enumerateRetilings(releasedSites(), footprints),
+                    footprints);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    PlacementUtilizations,
+    FillerRemovalRetilerTest,
+    ::testing::Values(50, 75, 90),
+    [](const ::testing::TestParamInfo<int>& info) {
+      return "Utilization" + std::to_string(info.param);
+    });
+
 void testRetilerPrefersDeterministicLargestExactCover()
 {
   const std::vector<fr::internal::SiteCell> released{

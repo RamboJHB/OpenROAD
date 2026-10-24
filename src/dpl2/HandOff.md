@@ -198,6 +198,17 @@ after commit. FillerRepair and migration payload targets use
 warnings without treating all of them as errors. The pure planner also
 compiles at C++17.
 
+Removal coverage is split at the existing test boundary: internal tests call
+the real retiler on the released standard-cell footprint (one/two rows,
+multi-height preference, single-height fallback, no exact cover and budget
+exhaustion). Integration tests call the actual null-target engine API and
+check filler transactions, row orientation and unchanged Network/Grid state.
+The fake-UDM runtime additionally removes a two-row standard cell with only
+single-row-high filler masters. Both released rows must be filled using real
+Grid site orientations; the database-free helper lacks that row/site context.
+Both use five-row fixtures with at least six cells per row at 50/75/90%
+utilization; no runtime dependencies were added to the internal test target.
+
 On macOS the harness disables ASan container-overflow annotations because
 Homebrew GoogleTest is an uninstrumented static library; other configured
 AddressSanitizer checks remain enabled.
@@ -207,18 +218,22 @@ initialization, before main, even for a minimal program. The installed Command
 Line Tools clang 21 with its matching SDK runs that program successfully;
 the ASan validation therefore uses that toolchain without changing xcode-select.
 
-Verification on 2026-10-20, complete default-target builds:
+Verification on 2026-10-24, complete default-target builds:
 
-- Normal: 443/443 passed with AppleClang 17.
-- ASan: 443/443 passed with Command Line Tools AppleClang 21.
-- TSan: 8/8 lifecycle/concurrent-probe tests passed with AppleClang 21 and
+- Normal: 485/485 passed with AppleClang 17.
+- ASan: 485/485 passed with Command Line Tools AppleClang 21.
+- Previous TSan validation (2026-10-20): 8/8 lifecycle/concurrent-probe tests
+  passed with AppleClang 21 and
   a locally TSan-instrumented oneTBB 2023.0.0; no race suppressions were used.
   The four-worker concurrent probe also passed 20 repeated runs.
   The uninstrumented Homebrew TBB reports scheduler races even for the atomic
   counter control test, so it is not used for the TSan verdict.
 - Coverage includes checker old/new-region validation, DePlace resize/move,
   height changes, pending transaction normalization, identity/Pin references,
-  padding and concurrent probes. Migration tests exercise 50/75/90% utilization.
+  padding and concurrent probes. This update adds 15 removal-retiler cases in
+  each internal/planner suite, 9 remove-only engine integration cases, and
+  3 real-infra/fake-UDM cases for two-row std cells with only single-row fillers.
+  Migration tests exercise 50/75/90% utilization. Engine/checker code is unchanged.
 - Both builds compiled every default target, including commit/command tests,
   destination wiring and the migration-copy gate. `git diff --check` passed.
 

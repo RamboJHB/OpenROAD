@@ -234,5 +234,13 @@ coordinates, one/two-row height changes, pending Add cancellation, preparation
 failure followed by final success, padding rejection, and preserved Node/DB
 identity and pin/edge bindings after commit. Integration fixtures cover 50%, 75%, and 90% occupied sites;
 internal cases also exercise larger mixed-width standard-cell/filler layouts.
+Removal-specific internal cases verify exact one/two-row released-site filling,
+multi-height preference, single-height fallback, unfillable areas and budget
+exhaustion without partial tilings. These database-free cases test the retiler;
+integration cases exercise the actual null-target remove-only engine API,
+orientation, complete filler transactions and unchanged Network/Grid state.
+The fake-UDM runtime also removes a two-row standard cell with only one-row-high
+filler masters, checking independent filling of both rows against real Grid site
+orientations. The database-free helper cannot supply that row/site context.
 Fake UDM testing does not establish destination ABI/link compatibility or
 source-ODB writeback.

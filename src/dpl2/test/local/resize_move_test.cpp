@@ -3,6 +3,7 @@
 #include <dpl2/DePlace.h>
 #include <drc/ImplantLayerChecker.h>
 #include <fake_udm.h>
+#include <fillerRepair/FillerRepairEngine.h>
 #include <gtest/gtest.h>
 #include <infrastructure/Grid.h>
 #include <infrastructure/fillerSetting.h>
@@ -491,5 +492,140 @@ TEST(DePlaceResizeMove, ConcurrentProbesKeepRemovalAndFinalTransactionsRequestLo
     }
   }
 }
+
+class SingleHeightFillerRemovalTest : public ::testing::TestWithParam<int>
+{
+};
+
+TEST_P(SingleHeightFillerRemovalTest, TwoRowStandardCellUsesFourSingleRowFillers)
+{
+  constexpr int rows = 5;
+  constexpr int columns = 20;
+  constexpr int rowHeight = 8;
+  constexpr int offsetX = 17;
+  constexpr int offsetY = 20;
+  fake_udm::DesignDb db;
+  db.coreSite.name_ = "core";
+  db.coreSite.width_ = eUTL::UvDist(1);
+  db.coreSite.height_ = eUTL::UvDist(rowHeight);
+  db.tech().addLayer("VTL_N", true, 0, 1, 1);
+  db.tech().addLayer("VTL_P", true, 1, 1, 1);
+  auto& filler = db.addMaster("FILL1", 0, 1, rowHeight, true);
+  filler.symmetry_ = 3;
+  fake_udm::DesignDb::addShape(filler, 0, 0, rowHeight / 2);
+  fake_udm::DesignDb::addShape(filler, 1, rowHeight / 2, rowHeight);
+  auto& standard = db.addMaster("STD2H", 1, 2, 2 * rowHeight, false);
+  standard.symmetry_ = 3;
+  fake_udm::DesignDb::addShape(standard, 1, 0, rowHeight / 2);
+  fake_udm::DesignDb::addShape(standard, 0, rowHeight / 2, rowHeight);
+  fake_udm::DesignDb::addShape(standard, 0, rowHeight, 3 * rowHeight / 2);
+  fake_udm::DesignDb::addShape(standard, 1, 3 * rowHeight / 2, 2 * rowHeight);
+  const int occupiedColumns = columns * GetParam() / 100;
+  for (int row = 0; row < rows; ++row) {
+    const eUTL::PhysOrientation orientation
+        = row % 2 == 0 ? eUTL::PhysOrientationE::MX : eUTL::PhysOrientationE::R0;
+    auto& physicalRow = db.desMgr().addRow(offsetX, offsetY + row * rowHeight,
+                                           1, rowHeight, columns);
+    physicalRow.site_.name_ = db.coreSite.name_;
+    physicalRow.orient_ = orientation;
+    for (int col = 0; col < occupiedColumns; ++col) {
+      if ((row == 2 || row == 3) && (col == 4 || col == 5)) {
+        continue;
+      }
+      db.desMgr().addCell(eUNL::LeafCellID(0, 100 + row * columns + col),
+          &filler, offsetX + col, offsetY + row * rowHeight, orientation);
+    }
+    EXPECT_GE(occupiedColumns - ((row == 2 || row == 3) ? 1 : 0), 6);
+  }
+  const eUNL::LeafCellID oldId(0, 900);
+  db.desMgr().addCell(oldId, &standard, offsetX + 4, offsetY + 2 * rowHeight,
+                        eUTL::PhysOrientationE::MX, eUNL::PhysObjStatus::PLACED, "TARGET_2H");
+  EXPECT_EQ(100 * (static_cast<int>(db.desMgr().cells_.size()) - 1 + 4),
+            GetParam() * rows * columns);
+  db.activate();
+  DePlace dp;
+  dp.getFillerSetting()->addFillerCell("FILL1");
+  dp.getNetwork()->updateFillerClassification(*dp.getFillerSetting());
+  ipl::ImplantLayerChecker checker(dp.getGrid(), &db.design, dp.getNetwork());
+  const Node* old = dp.getNetwork()->getNode(oldId);
+  ASSERT_NE(old, nullptr);
+  ASSERT_EQ(old->getHeight().v, 2 * rowHeight);
+  for (const auto& [id, master] : dp.getNetwork()->getMasters()) {
+    (void) id;
+    if (master->isFiller()) {
+      EXPECT_EQ(master->getPhysLibCell()->getHeight().getStorage(), rowHeight);
+    }
+  }
+  const auto snapshot = [&] {
+    std::ostringstream state;
+    for (const auto& [id, cell] : db.desMgr().cells_) {
+      state << id.getIndexValue() << ',' << cell.valid << ',' << cell.master << ','
+            << cell.name << ',' << cell.origin.getX().getStorage() << ','
+            << cell.origin.getY().getStorage() << ',' << static_cast<int>(cell.orient.getValue())
+            << ',' << static_cast<int>(cell.status) << ';';
+    }
+    for (const auto& [id, master] : dp.getNetwork()->getMasters()) {
+      state << id << ',' << master.get() << ',' << master->getDbMaster().getIndexValue()
+            << ',' << master->isFiller() << ';';
+    }
+    for (const auto& [id, node] : dp.getNetwork()->getNodes()) {
+      state << id << ',' << node.get() << ',' << node->getMaster() << ','
+            << node->getDbInst().getIndexValue() << ',' << node->getLeft().v << ','
+            << node->getBottom().v << ',' << node->getWidth().v << ',' << node->getHeight().v
+            << ',' << static_cast<int>(node->getOrient().getValue()) << ','
+            << static_cast<int>(node->getType()) << ',' << node->isPlaced() << ';';
+    }
+    for (GridY row{0}; row < dp.getGrid()->getRowCount(); ++row) {
+      for (GridX col{0}; col < dp.getGrid()->getRowSiteCount(); ++col) {
+        const Pixel* pixel = dp.getGrid()->gridPixel(col, row);
+        state << pixel->cell << ',' << pixel->padding_reserved_by << ',' << pixel->util
+              << ',' << pixel->is_valid << ',' << pixel->group << ',' << pixel->is_hopeless
+              << ',' << static_cast<unsigned>(pixel->blocked_layers) << ';';
+      }
+    }
+    return state.str();
+  };
+  const auto before = snapshot();
+  const fillerRepair::FillerRepairEngine engine(checker);
+  ASSERT_TRUE(engine.isReady());
+  const auto oldMaster = old->getMaster()->getDbMaster();
+  const ipl::CheckRequest request{nullptr, GridX{4}, GridY{2}, old->getOrient(),
+      {{OpType::Delete, oldId, eUTL::UvDist(old->getLeft().v), eUTL::UvDist(old->getBottom().v),
+        oldMaster, oldMaster, old->getOrient()}}};
+  const auto outcome = engine.repair(request);
+  ASSERT_TRUE(outcome.hasSolution);
+  ASSERT_EQ(outcome.changes.size(), 4u);
+  std::set<std::pair<int, int>> released{{2, 4}, {2, 5}, {3, 4}, {3, 5}};
+  std::set<int> orientations;
+  for (const auto& change : outcome.changes) {
+    ASSERT_EQ(change.op_, OpType::Add);
+    EXPECT_EQ(change.new_lib_cell_, filler.getLibCellId());
+    const int x = change.x_.getStorage();
+    const int row = change.y_.getStorage() / rowHeight;
+    EXPECT_EQ(change.y_.getStorage() % rowHeight, 0);
+    EXPECT_EQ(released.erase({row, x}), 1u);
+    const auto orientation = dp.getGrid()->getSiteOrientation(GridX{x}, GridY{row},
+                                                               db.coreSite.getName());
+    ASSERT_TRUE(orientation.has_value());
+    EXPECT_EQ(change.orientation_, *orientation);
+    EXPECT_EQ(change.orientation_, row == 2 ? eUTL::PhysOrientationE::MX
+                                           : eUTL::PhysOrientationE::R0);
+    orientations.insert(static_cast<int>(change.orientation_.getValue()));
+  }
+  EXPECT_TRUE(released.empty());
+  EXPECT_EQ(orientations.size(), 2u);
+  const auto checked = checker.checkPlaceWithOverlays(request,
+      eUTL::Rect(eUTL::UvDist(0), eUTL::UvDist(0), eUTL::UvDist(columns),
+                  eUTL::UvDist(rows * rowHeight - 1)), {outcome.changes});
+  ASSERT_EQ(checked.size(), 1u);
+  EXPECT_TRUE(checked.front().isLegal);
+  EXPECT_EQ(snapshot(), before);
+  EXPECT_EQ(dp.getNetwork()->getNode(oldId), old);
+}
+
+INSTANTIATE_TEST_SUITE_P(PlacementUtilizations, SingleHeightFillerRemovalTest,
+    ::testing::Values(50, 75, 90), [](const ::testing::TestParamInfo<int>& info) {
+      return "Utilization" + std::to_string(info.param);
+    });
 
 }  // namespace
