@@ -25,7 +25,29 @@
 
 namespace {
 
-std::unique_ptr<fake_udm::DesignDb> openroad_design;
+struct OpenDbProjection : fake_udm::DesignDb
+{
+  // Keep the name and geometry of each master's actual SITE. Treating all
+  // masters as the first row's site hides mismatches in multi-site designs.
+  const eLIB::TechSite* projectSite(odb::dbSite* site)
+  {
+    if (site == nullptr) {
+      return nullptr;
+    }
+    auto [entry, inserted] = sites.try_emplace(site);
+    if (inserted) {
+      entry->second.name_ = site->getName();
+      entry->second.width_ = eUTL::UvDist(site->getWidth());
+      entry->second.height_ = eUTL::UvDist(site->getHeight());
+      entry->second.is_pad_ = site->getClass() == odb::dbSiteClass::PAD;
+    }
+    return &entry->second;
+  }
+
+  std::unordered_map<odb::dbSite*, eLIB::TechSite> sites;
+};
+
+std::unique_ptr<OpenDbProjection> openroad_design;
 bool deplace_constructed = false;
 
 eUTL::PhysOrientation toUdmOrientation(odb::dbOrientType orientation)
@@ -81,7 +103,7 @@ bool buildUdmProjection(odb::dbDatabase* database,
     return false;
   }
 
-  auto projection = std::make_unique<fake_udm::DesignDb>();
+  auto projection = std::make_unique<OpenDbProjection>();
   std::unordered_map<odb::dbTechLayer*, int> layerIds;
   int nextLayerId = 0;
   if (odb::dbTech* tech = database->getTech()) {
@@ -146,9 +168,7 @@ bool buildUdmProjection(odb::dbDatabase* database,
       projected.symmetry_ = master->getSymmetryX() ? 3
                             : master->getSymmetryY() ? 2
                             : master->getSymmetryR90() ? 5 : 0;
-      if (master->getSite() != nullptr) {
-        projected.site_ = &projection->coreSite;
-      }
+      projected.site_ = projection->projectSite(master->getSite());
       for (odb::dbBox* obstruction : master->getObstructions()) {
         const auto layer = layerIds.find(obstruction->getTechLayer());
         if (layer == layerIds.end()) {

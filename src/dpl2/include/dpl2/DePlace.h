@@ -2,6 +2,8 @@
 // Copyright (c) 2018-2025, The OpenROAD Authors
 #pragma once
 
+#include <optional>
+
 #include <boost/geometry/core/cs.hpp>
 #include <boost/geometry/geometries/box.hpp>
 #include <boost/geometry/geometries/point_xy.hpp>
@@ -219,6 +221,8 @@ class DePlace {
                    const Node* replacedCell = nullptr) const;
   unsigned getMasterSymmetry(int symmetry) const;
   bool checkMasterSym(unsigned masterSym, eUTL::PhysOrientation cellOri) const;
+  std::optional<PhysOrientation> getLegalPlacementOrientation(
+      GridX x, GridY y, const PhysLibCell& master) const;
 
   PixelPt diamondSearch(const Node* cell, GridX x, GridY y,
                         std::vector<CellChangeRecord>* fillerChanges = nullptr,

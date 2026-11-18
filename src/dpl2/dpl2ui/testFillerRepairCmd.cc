@@ -156,6 +156,56 @@ void printRejectedRequest(const ipl::CheckResult& result)
 
 }  // namespace
 
+bool TestFillerRepairCmd::probeResize(
+    DePlace& placement,
+    const Node& old,
+    Node& target,
+    int diameter,
+    std::vector<CellChangeRecord>& changes) const
+{
+  const Grid& grid = *placement.getGrid();
+  const Master& master = *target.getMaster();
+  const eLIB::PhysLibCell& physical = *master.getPhysLibCell();
+  std::vector<CellChangeRecord> removals{deleteRecord(old)};
+  std::vector<CellChangeRecord> trial;
+  // The virtual deletion seeds the search. Failure to refill the whole old
+  // footprint here need not reject a target that will cover part of it.
+  placement.getPlacementDRC()->checkDRC(nullptr,
+                                        grid.gridX(&old),
+                                        grid.gridSnapDownY(&old),
+                                        old.getOrient(),
+                                        trial,
+                                        removals);
+
+  const Rect core = grid.getCore();
+  const int64_t xl = int64_t{core.getXL().getStorage()} + old.getLeft().v;
+  const int64_t yl = int64_t{core.getYL().getStorage()} + old.getBottom().v;
+  const Rect box(
+      UvDist(std::max<int64_t>(core.getXL().getStorage(), xl - diameter)),
+      UvDist(std::max<int64_t>(core.getYL().getStorage(), yl - diameter)),
+      UvDist(std::min<int64_t>(core.getXH().getStorage(),
+                              xl + physical.getWidth().getStorage() + diameter)),
+      UvDist(std::min<int64_t>(core.getYH().getStorage(),
+                              yl + physical.getHeight().getStorage() + diameter)));
+  // The command checks its own temporary node through the lower-level search.
+  const auto [col, row] = placement.legalCellInRect(box, &target, &trial, &old);
+  if (col < 0 || row < 0) {
+    std::cout << "NO REPAIR: operation=resize targetMaster=" << master.getId()
+              << " diameter=" << diameter << '\n';
+    return false;
+  }
+  const auto orientation = placement.getLegalPlacementOrientation(
+      GridX{col}, GridY{row}, physical);
+  if (!orientation.has_value()) {
+    return false;
+  }
+  target.setLeft(DbuX{col * grid.getSiteWidth().v});
+  target.setBottom(grid.gridYToDbu(GridY{row}));
+  target.setOrient(*orientation);
+  changes = std::move(trial);
+  return true;
+}
+
 bool TestFillerRepairCmd::exec()
 {
   const std::vector<std::string> instanceIds
@@ -266,20 +316,19 @@ bool TestFillerRepairCmd::exec()
     std::cout << "ERROR: removal/resize requires one movable, ungrouped standard cell\n";
     return false;
   }
-  GridX x = grid->gridX(DbuX{left});
-  GridY y = grid->gridSnapDownY(DbuY{bottom});
+  const GridX x = grid->gridX(DbuX{left});
+  const GridY y = grid->gridSnapDownY(DbuY{bottom});
   Node temporary;
   eUTL::PhysOrientation orientation = PhysOrientationE::R0;
   if (removeOnly) {
     orientation = replacedStd->getOrient();
   } else {
-    const eLIB::TechSite* targetSite = targetCell->getTechSite();
-    if (targetSite == nullptr) {
+    if (targetCell->getTechSite() == nullptr) {
       std::cout << "ERROR: target master has no placement site\n";
       return false;
     }
     if (!resize) {
-      const auto siteOrientation = grid->getSiteOrientation(x, y, targetSite->getName());
+      const auto siteOrientation = grid->getPlacementSiteOrientation(x, y, *targetCell);
       if (!siteOrientation.has_value()) {
         std::cout << "ERROR: target origin has no compatible site orientation\n";
         return false;
@@ -333,37 +382,12 @@ bool TestFillerRepairCmd::exec()
   const Node* target = removeOnly ? nullptr : &temporary;
   bool accepted = false;
   if (resize) {
-    // Prepare a virtual deletion. Its filler edits seed candidate checks but
-    // do not need to succeed on their own: the final target may close the gap.
-    placementDrc->checkDRC(nullptr, x, y, replacedStd->getOrient(),
-                           changes, overlayChanges);
-    const Rect core = grid->getCore();
-    const int64_t xl = int64_t{core.getXL().getStorage()} + left;
-    const int64_t yl = int64_t{core.getYL().getStorage()} + bottom;
-    const Rect box(
-        UvDist(std::max<int64_t>(core.getXL().getStorage(), xl - diameter)),
-        UvDist(std::max<int64_t>(core.getYL().getStorage(), yl - diameter)),
-        UvDist(std::min<int64_t>(core.getXH().getStorage(),
-                                xl + targetCell->getWidth().getStorage() + diameter)),
-        UvDist(std::min<int64_t>(core.getYH().getStorage(),
-                                yl + targetCell->getHeight().getStorage() + diameter)));
-    // Keep this command independent of the public placement probe APIs.
-    const auto [col, row] = dePlace->legalCellInRect(
-        box, &temporary, &changes, replacedStd);
-    if (col < 0 || row < 0) {
-      std::cout << "NO REPAIR: operation=resize targetMaster="
-                << targetMaster->getId() << " diameter=" << diameter << '\n';
+    if (!probeResize(*dePlace, *replacedStd, temporary, diameter, changes)) {
       return false;
     }
-    x = GridX{col};
-    y = GridY{row};
-    const auto siteOrientation = grid->getSiteOrientation(x, y, targetCell->getTechSite()->getName());
-    if (!siteOrientation.has_value()) {
-      return false;
-    }
-    orientation = *siteOrientation;
-    left = col * grid->getSiteWidth().v;
-    bottom = grid->gridYToDbu(y).v;
+    left = temporary.getLeft().v;
+    bottom = temporary.getBottom().v;
+    orientation = temporary.getOrient();
     accepted = true;
   } else {
     accepted = checker->check(target, x, y, orientation, changes, overlayChanges);

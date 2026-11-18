@@ -26,6 +26,14 @@ namespace fillerRepair {
 
 namespace {
 
+// Keep noneditable fillers in the layout for DRC, but never emit edits that
+// the placement transaction cannot commit.
+bool isEditableFiller(const Node* node)
+{
+  return node != nullptr && node->isFiller() && node->getDbInst().isValid()
+         && !node->isFixed() && !node->isTerminal() && node->getGroup() == nullptr;
+}
+
 // Immutable master and grid geometry shared across repair calls.
 // Placed instances live only in the caller-owned Grid/Network.
 struct PlacementMetadata
@@ -965,6 +973,13 @@ FillerRepairEngine::Impl::RequestPlacementView::getUsableMasterCandidates(
                  cat("instance ", fillerInstanceId, " is not a filler")));
     return result;
   }
+  if (!isEditableFiller(impl_.network_->getNode(fillerInstanceId))) {
+    result.diagnostics.push_back(makeDiag(
+        Severity::Info,
+        "NoneditableFiller",
+        cat("filler ", fillerInstanceId, " is fixed or otherwise not editable")));
+    return result;
+  }
   const MasterInfo* current = masterInfo(placed->masterId);
   if (current == nullptr || !current->isFiller) {
     result.diagnostics.push_back(makeDiag(
@@ -1502,6 +1517,11 @@ RepairOutcome FillerRepairEngine::Impl::repair(
            cat("target overlay has an unknown node ", id));
       return result;
     }
+    if (placed->isFiller && !isEditableFiller(network_->getNode(id))) {
+      skip("NoneditableFillerOverlay",
+           cat("overlay requests changing noneditable filler ", id));
+      return result;
+    }
     if (overlay.op_ == OpType::Replace && placed->isFiller) {
       pendingReplaces.insert_or_assign(id, overlay);
       continue;
@@ -1875,8 +1895,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
             = physCell != nullptr ? physCell->getTechSite() : nullptr;
         std::optional<eUTL::PhysOrientation> orientation;
         if (site != nullptr) {
-          orientation = grid_->getSiteOrientation(
-              GridX{tile.colId}, GridY{tile.rowId}, site->getName());
+          orientation = grid_->getPlacementSiteOrientation(
+              GridX{tile.colId}, GridY{tile.rowId}, *physCell);
         } else {
           // Database-free fixtures retain the deleted filler as row context.
           const Pixel* released

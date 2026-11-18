@@ -155,8 +155,7 @@ std::pair<int, int> DePlace::findLegToReplace(
   }
   const GridX x{location.first};
   const GridY y{location.second};
-  const auto orientation
-      = grid_->getSiteOrientation(x, y, physical.getTechSite()->getName());
+  const auto orientation = getLegalPlacementOrientation(x, y, physical);
   if (!orientation.has_value()) {
     return notFound;
   }
@@ -342,6 +341,18 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
         || grid_->gridYToDbu(box.ylo) != entry.proposed.getBottom()
         || grid_->gridYToDbu(box.yhi)
                != entry.proposed.getBottom() + entry.proposed.getHeight()) {
+      return false;
+    }
+    const auto& master = *entry.proposed.getMaster()->getPhysLibCell();
+    const bool hasPattern = master.hasSitePattern();
+    const auto siteOrient = grid_->getPlacementSiteOrientation(
+        box.xlo, box.ylo, master,
+        hasPattern ? std::make_optional(entry.proposed.getOrient()) : std::nullopt);
+    const auto flipsRows = [](PhysOrientation orientation) {
+      return orientation == PhysOrientationE::MX || orientation == PhysOrientationE::R180;
+    };
+    if (!siteOrient || (!hasPattern
+                        && flipsRows(*siteOrient) != flipsRows(entry.proposed.getOrient()))) {
       return false;
     }
     const auto padded = grid_->gridCoveringPadded(&entry.proposed);
@@ -538,8 +549,7 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   if (col == -1) {
     return {-1, -1};
   }
-  const auto orient = grid_->getSiteOrientation(GridX{col}, GridY{row},
-                                                physical->getTechSite()->getName());
+  const auto orient = getLegalPlacementOrientation(GridX{col}, GridY{row}, *physical);
   if (!orient.has_value()) {
     return {-1, -1};
   }

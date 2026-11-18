@@ -10,6 +10,7 @@
 #include <PlacementDRC.h>
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <sstream>
 #include <vector>
@@ -19,6 +20,14 @@
 #include <tuple>
 #include <fstream>
 namespace dpl2 {
+
+namespace {
+bool canReplaceFiller(const Node* node)
+{
+  return node->isFiller() && node->getDbInst().isValid()
+         && !node->isFixed() && !node->isTerminal() && node->getGroup() == nullptr;
+}
+}  // namespace
 
 /**
  * @brief Computes the initial (pre-legalization) location of a cell.
@@ -532,12 +541,12 @@ void DePlace::setGridLoc(Node* cell, const GridX x, const GridY y) const
  */
 void DePlace::placeCell(Node* cell, const GridX x, const GridY y)
 {
+  const auto orientation = getLegalPlacementOrientation(
+      x, y, *cell->getMaster()->getPhysLibCell()).value();
   setGridLoc(cell, x, y);
   grid_->paintPixel(cell, x, y);
   cell->setPlaced(true);
-  std::string site_name =
-      cell->getMaster()->getPhysLibCell()->getTechSite()->getName();
-  cell->setOrient(grid_->getSiteOrientation(x, y, site_name).value());
+  cell->setOrient(orientation);
 }
 
 /**
@@ -593,8 +602,8 @@ bool DePlace::canBePlaced(const Node* cell, GridX bin_x, GridY bin_y,
  * are free and valid for @p cell.
  *
  * Each pixel must exist, be unoccupied, marked valid, belong to the
- * correct group (if any), and support the required site orientation on
- * the first row. When disallow_one_site_gaps_ is set, additionally
+ * correct group (if any), and support the master's entire site stack.
+ * When disallow_one_site_gaps_ is set, additionally
  * rejects placements that would create single-site gaps at the left or
  * right boundary.
  *
@@ -619,27 +628,25 @@ bool DePlace::checkPixels(const Node* cell,
   // if (!checkRegionOverlap(cell, x, y, x_end, y_end)) {
   //   return false;
   // }
-  const TechSite* site = cell->getMaster()->getPhysLibCell()->getTechSite();
-
   for (GridY y1 = y; y1 < y_end; y1++) {
-    const bool first_row = (y1 == y);
     for (GridX x1 = x; x1 < x_end; x1++) {
       const Pixel* pixel = grid_->gridPixel(x1, y1);
       if (pixel == nullptr
           || (pixel->cell && pixel->cell != replacedCell
-              && !pixel->cell->isFiller())
+              && !canReplaceFiller(pixel->cell))
           || !pixel->is_valid
           || (cell->inGroup() && pixel->group != cell->getGroup())
-          || (!cell->inGroup() && pixel->group)
-          || (first_row && !grid_->getSiteOrientation(x1, y1, site->getName()))) {
+          || (!cell->inGroup() && pixel->group)) {
         if (fillerChanges != nullptr) {
           std::ostringstream record;
           record << "  [findLeg pixels] (" << x1.v << "," << y1.v << ") reject:";
           if (pixel == nullptr) {
             record << " pixel==null";
           } else {
-            if (pixel->cell && !pixel->cell->isFiller()) {
-              record << " occupied-by-std-cell";
+            if (pixel->cell && pixel->cell != replacedCell
+                && !canReplaceFiller(pixel->cell)) {
+              record << (pixel->cell->isFiller() ? " noneditable-filler"
+                                                 : " occupied-by-std-cell");
             }
             if (!pixel->is_valid) {
               record << " !valid";
@@ -651,9 +658,6 @@ bool DePlace::checkPixels(const Node* cell,
               record << " in-foreign-group";
             }
           }
-          if (first_row && !grid_->getSiteOrientation(x1, y1, site->getName())) {
-            record << " bad-site-orient";
-          }
           record << '\n';
           const auto message = record.str();
           std::fwrite(message.data(), 1, message.size(), stdout);
@@ -663,19 +667,24 @@ bool DePlace::checkPixels(const Node* cell,
     }
   }
 
-  const auto orient = grid_->getSiteOrientation(x, y, site->getName()).value();
-
-  // Check for symmetry
   const PhysLibCell* master = cell->getMaster()->getPhysLibCell();
-  unsigned masterSym = getMasterSymmetry((int)master->getSymmetry());
-
-  if (!checkMasterSym(masterSym, orient)) {
+  const auto placementOrientation = master != nullptr
+      ? getLegalPlacementOrientation(x, y, *master) : std::nullopt;
+  if (!placementOrientation) {
     if (fillerChanges != nullptr) {
-      std::printf("  [findLeg checkPixels] (%d,%d) reject: symmetry masterSym=%u orient=%u\n",
-                    x.v, y.v, masterSym, static_cast<unsigned>(orient));
+      const auto site = master != nullptr
+          ? grid_->getPlacementSiteOrientation(x, y, *master) : std::nullopt;
+      if (site) {
+        std::printf("  [findLeg checkPixels] (%d,%d) reject: symmetry masterSym=%u orient=%u\n",
+                    x.v, y.v, getMasterSymmetry(static_cast<int>(master->getSymmetry())),
+                    static_cast<unsigned>(*site));
+      } else {
+        std::printf("  [findLeg pixels] (%d,%d) reject: incompatible site pattern\n", x.v, y.v);
+      }
     }
     return false;
   }
+  const auto orient = *placementOrientation;
 
   std::vector<CellChangeRecord> ccRecords;
   if (fillerChanges != nullptr) {
@@ -688,7 +697,7 @@ bool DePlace::checkPixels(const Node* cell,
       for (GridX x1 = x; x1 < x_end; ++x1) {
         const Pixel* pixel = grid_->gridPixel(x1, y1);
         if (pixel == nullptr || pixel->cell == nullptr
-            || (pixel->cell != replacedCell && !pixel->cell->isFiller())) {
+            || (pixel->cell != replacedCell && !canReplaceFiller(pixel->cell))) {
           return false;
         }
         if (pixel->cell != replacedCell
@@ -762,7 +771,7 @@ bool DePlace::checkPixels(const Node* cell,
       if (change.op_ != OpType::Add) {
         const auto* id = std::get_if<LeafCellID>(&change.cell_data_);
         const Node* old = id != nullptr ? network_->getNode(*id) : nullptr;
-        if (old == nullptr) {
+        if (old == nullptr || !canReplaceFiller(old)) {
           return false;
         }
         removedOwners.insert(old);
@@ -881,6 +890,32 @@ bool DePlace::checkMasterSym(unsigned masterSym,
     default:
       return false;
   }
+}
+
+std::optional<PhysOrientation> DePlace::getLegalPlacementOrientation(
+    GridX x, GridY y, const PhysLibCell& master) const
+{
+  const auto first = grid_->getPlacementSiteOrientation(x, y, master);
+  if (!first) {
+    return std::nullopt;
+  }
+  const unsigned symmetry = getMasterSymmetry(static_cast<int>(master.getSymmetry()));
+  if (checkMasterSym(symmetry, *first)) {
+    return first;
+  }
+  if (master.hasSitePattern()) {
+    // A reflected symmetric site stack can admit more than one orientation.
+    constexpr std::array<PhysOrientationE, 4> orientations{
+        PhysOrientationE::R0, PhysOrientationE::MX, PhysOrientationE::MY,
+        PhysOrientationE::R180};
+    for (const PhysOrientation alternative : orientations) {
+      if (checkMasterSym(symmetry, alternative)
+          && grid_->getPlacementSiteOrientation(x, y, master, alternative)) {
+        return alternative;
+      }
+    }
+  }
+  return std::nullopt;
 }
 
 ////////////////////////////////////////////////////////////////////////

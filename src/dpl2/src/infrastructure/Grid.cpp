@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 // Copyright (c) 2018-2025, The OpenROAD Authors
 #include <algorithm>
+#include <array>
 #include <cmath>
+#include <iterator>
 #include <Grid.h>
 
 // [fillerRepair-fix] tbb::task_arena is used below (iterateAllPhysNets) but
@@ -180,10 +182,14 @@ void Grid::markHopeless(PhysDesMgr* desMgr,
     if (y_row.v < 0 || static_cast<size_t>(y_row.v) >= row_sites_.size()) {
       return;
     }
-    for (GridX x{x_start}; x < x_end; x++) {
-      Pixel* pixel = gridPixel(x, y_row);
-      if (pixel != nullptr) {
-        pixel->is_valid = true;
+    const GridY y_end = gridEndY(
+        gridYToDbu(y_row) + DbuY{db_row.getSite().getHeight().getStorage()});
+    for (GridY y = y_row; y < std::min(row_count_, y_end); ++y) {
+      for (GridX x{x_start}; x < x_end; x++) {
+        Pixel* pixel = gridPixel(x, y);
+        if (pixel != nullptr) {
+          pixel->is_valid = true;
+        }
       }
     }
     row_sites_[y_row.v].add(
@@ -1032,6 +1038,158 @@ Grid::getSiteOrientation(GridX x, GridY y, std::string site_name) const
 
   if (auto it = sites_orient.find(site_name); it != sites_orient.end()) {
     return it->second;
+  }
+  return {};
+}
+
+namespace {
+
+using SitePatternRow = std::pair<const TechSite*, PhysOrientation>;
+
+// Boundary for UDM's site pattern representation: ordered bottom to top,
+// each with a physical TechSite and orientation relative to the R0 master.
+// Other destination encodings must be converted here before use.
+template <typename Pattern>
+std::vector<SitePatternRow> normalizeSitePattern(const Pattern& pattern)
+{
+  std::vector<SitePatternRow> rows;
+  if constexpr (requires { std::begin(pattern); std::end(pattern); }) {
+    for (const auto& row : pattern) {
+      if constexpr (requires {
+          static_cast<const TechSite*>(row.first);
+          static_cast<PhysOrientation>(row.second);
+        }) {
+        rows.emplace_back(static_cast<const TechSite*>(row.first),
+                          static_cast<PhysOrientation>(row.second));
+      } else {
+        return {};
+      }
+    }
+  }
+  return rows;
+}
+
+constexpr std::array<PhysOrientationE, 4> kAxisOrientations{
+    PhysOrientationE::R0, PhysOrientationE::MX, PhysOrientationE::MY,
+    PhysOrientationE::R180};
+
+}  // namespace
+
+std::optional<PhysOrientation> Grid::getPlacementSiteOrientation(
+    GridX x, GridY y, const PhysLibCell& master,
+    std::optional<PhysOrientation> required) const
+{
+  const TechSite* site = master.getTechSite();
+  const int width = master.getWidth().getStorage();
+  const int height = master.getHeight().getStorage();
+  if (site == nullptr || site_width_.v <= 0 || width <= 0 || height <= 0
+      || width % site_width_.v != 0 || x.v < 0 || y.v < 0 || y >= row_count_
+      || width / site_width_.v > row_site_count_.v - x.v) {
+    return {};
+  }
+  const int xEnd = x.v + width / site_width_.v;
+  const auto yTop = int64_t{gridYToDbu(y).v} + height;
+  if (yTop > gridYToDbu(row_count_).v) {
+    return {};
+  }
+  const auto accepts = [&](PhysOrientation orientation) {
+    return !required || required->getValue() == orientation.getValue();
+  };
+
+  // A physical row declaration may span multiple Grid rows (a hybrid parent
+  // site). Match only the declaration at the bottom of each required band.
+  const auto matchBand = [&](GridY& row, const TechSite* required)
+      -> std::optional<PhysOrientation> {
+    if (required == nullptr || required->getIsPad() || row >= row_count_
+        || static_cast<size_t>(row.v) >= row_sites_.size()
+        || required->getWidth().getStorage() != site_width_.v
+        || required->getHeight().getStorage() <= 0) {
+      return {};
+    }
+    const auto top = int64_t{gridYToDbu(row).v} + required->getHeight().getStorage();
+    if (top > yTop) {
+      return {};
+    }
+    const GridY next = gridEndY(DbuY{static_cast<int>(top)});
+    if (next > row_count_ || gridYToDbu(next).v != top) {
+      return {};
+    }
+    const auto& intervals = row_sites_[row.v];
+    std::optional<PhysOrientation> orientation;
+    for (int col = x.v; col < xEnd;) {
+      const auto interval = intervals.find(col);
+      if (interval == intervals.end()) {
+        return {};
+      }
+      const auto entry = interval->second.find(required->getName());
+      if (entry == interval->second.end()
+          || (orientation && orientation->getValue() != entry->second.getValue())) {
+        return {};
+      }
+      orientation = entry->second;
+      col = boost::icl::last(interval->first) + 1;
+    }
+    row = next;
+    return orientation;
+  };
+
+  if (!master.hasSitePattern()) {
+    std::optional<PhysOrientation> anchor;
+    for (GridY row = y; gridYToDbu(row).v < yTop;) {
+      const auto orientation = matchBand(row, site);
+      if (!orientation) {
+        return {};
+      }
+      if (!anchor) {
+        anchor = orientation;
+      }
+    }
+    return anchor && accepts(*anchor) ? anchor : std::nullopt;
+  }
+
+  const auto pattern = normalizeSitePattern(master.getSitePatterns());
+  int64_t patternHeight = 0;
+  for (const auto& [child, orientation] : pattern) {
+    if (child == nullptr || child->getIsPad()
+        || child->getWidth().getStorage() != site_width_.v
+        || child->getHeight().getStorage() <= 0
+        || std::find(kAxisOrientations.begin(), kAxisOrientations.end(),
+                     orientation.getValue()) == kAxisOrientations.end()) {
+      return {};
+    }
+    patternHeight += child->getHeight().getStorage();
+  }
+  if (patternHeight != height) {
+    return {};
+  }
+  if (site->getHeight().getStorage() == height) {
+    GridY row = y;
+    if (const auto orientation = matchBand(row, site);
+        orientation && accepts(*orientation)) {
+      // This named parent site already represents the whole site pattern.
+      return orientation;
+    }
+  }
+  for (size_t mirror = 0; mirror < kAxisOrientations.size(); ++mirror) {
+    if (!accepts(kAxisOrientations[mirror])) {
+      continue;
+    }
+    GridY row = y;
+    bool matches = true;
+    for (size_t index = 0; index < pattern.size(); ++index) {
+      const size_t band = (mirror & 1) != 0 ? pattern.size() - 1 - index : index;
+      const auto& [child, childOrient] = pattern[band];
+      const auto component = std::find(kAxisOrientations.begin(), kAxisOrientations.end(),
+                                       childOrient.getValue()) - kAxisOrientations.begin();
+      const auto actual = matchBand(row, child);
+      if (!actual || actual->getValue() != kAxisOrientations[mirror ^ component]) {
+        matches = false;
+        break;
+      }
+    }
+    if (matches && gridYToDbu(row).v == yTop) {
+      return kAxisOrientations[mirror];
+    }
   }
   return {};
 }

@@ -152,6 +152,11 @@ class Grid
   std::optional<PhysOrientation> getSiteOrientation(GridX x,
                                                   GridY y,
                                                   std::string site_name) const;
+  // Match the complete master footprint against declared row sites. If a
+  // direction is required, validate that direction rather than choosing one.
+  std::optional<PhysOrientation> getPlacementSiteOrientation(
+      GridX x, GridY y, const PhysLibCell& master,
+      std::optional<PhysOrientation> required = std::nullopt) const;
   // std::pair<TechSite*, PhysOrientation> getShortestSite(GridX grid_x,
   //                                                       GridY grid_y);
 

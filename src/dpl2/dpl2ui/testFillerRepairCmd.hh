@@ -5,7 +5,13 @@
 #include <unl/nlCci.hh>
 #include <util/tclCommand.hh>
 
+#include <vector>
+
 namespace dpl2 {
+
+class DePlace;
+class Node;
+struct CellChangeRecord;
 
 // Exercises the checker overlay flow used by opto:
 //
@@ -55,6 +61,12 @@ class TestFillerRepairCmd : public uvTCL::CciCommand
   bool exec() override;
 
  private:
+  bool probeResize(DePlace& placement,
+                   const Node& old,
+                   Node& target,
+                   int diameter,
+                   std::vector<CellChangeRecord>& changes) const;
+
   eUNL::CciStringOption instOpt_;
   eUNL::CciStringOption masterOpt_;
   eUNL::CciStringOption diameterOpt_;

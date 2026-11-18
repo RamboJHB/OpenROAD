@@ -25,6 +25,12 @@ namespace ipl {
 
 constexpr Dbu ADJACENT_ROW_VERTICAL_SPACING = 1;
 
+// Fixed fillers still contribute to the measured implant layout.
+static bool canEditFiller(const Node& node)
+{
+    return !node.isFixed() && !node.isTerminal() && node.getGroup() == nullptr;
+}
+
 const LeafCellID* cellChangeLeafCellId(const CellChangeRecord& change)
 {
     return std::get_if<LeafCellID>(&change.cell_data_);
@@ -983,6 +989,15 @@ DiagVec ImplantLayerChecker::validateCheckRequest(
                  "target overlay does not resolve to a standard cell or filler"});
             return diagnostics;
         }
+        // Checking the actual committed node uses a self-overlay for
+        // measurement; it is not a request to remove the node.
+        if (replaced->isFiller() && request.cell != replaced
+            && !canEditFiller(*replaced)) {
+            diagnostics.push_back(
+                {"noneditable_filler_delete",
+                 makeMessage("cannot delete noneditable filler ", replaced->getId())});
+            return diagnostics;
+        }
         if (!replacedNodeIds.insert(replaced->getId()).second) {
             diagnostics.push_back(
                 {"duplicate_target_overlay",
@@ -1025,6 +1040,18 @@ DiagVec ImplantLayerChecker::validateCheckRequest(
         diagnostics.push_back(
             {"placement_out_of_grid", "temporary target is outside the grid"});
         return diagnostics;
+    }
+    const eLIB::PhysLibCell* physical = request.cell->getMaster()->getPhysLibCell();
+    if (!checksCommittedCell && physical != nullptr
+        && physical->getTechSite() != nullptr) {
+        const auto site = grid_->getPlacementSiteOrientation(
+            request.x, request.y, *physical,
+            physical->hasSitePattern() ? std::make_optional(request.orientation) : std::nullopt);
+        if (!site) {
+            diagnostics.push_back(
+                {"target_site_pattern_mismatch",
+                 "the temporary target does not match the placement site stack"});
+        }
     }
 
     return diagnostics;
@@ -2262,9 +2289,9 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
                 = physCell != nullptr ? physCell->getTechSite() : nullptr;
             std::optional<PhysOrientation> expected;
             if (site != nullptr) {
-                expected = grid_->getSiteOrientation(GridX{colId},
-                                                     GridY{rowId},
-                                                     site->getName());
+                expected = grid_->getPlacementSiteOrientation(
+                    GridX{colId}, GridY{rowId}, *physCell,
+                    physCell->hasSitePattern() ? std::make_optional(change.orientation_) : std::nullopt);
             } else {
                 // Portable checker fixtures have no PhysLibCell/site object.
                 // A released site is still occupied by a caller-deleted
@@ -2318,6 +2345,12 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
                  makeMessage("changed instance is not filler ", instanceId)});
             continue;
         }
+        if (!canEditFiller(*filler)) {
+            diagnostics.push_back(
+                {"noneditable_filler_replace",
+                 makeMessage("cannot replace noneditable filler ", instanceId)});
+            continue;
+        }
         if (change.orig_lib_cell_.isValid()
             && change.orig_lib_cell_ != filler->getMaster()->getDbMaster()) {
             diagnostics.push_back(
@@ -2343,6 +2376,17 @@ DiagVec ImplantLayerChecker::validateOverlayRequest(
             diagnostics.push_back(
                 {"replacement_footprint_mismatch",
                  makeMessage("replacement footprint mismatch ", instanceId)});
+        }
+        const eLIB::PhysLibCell* physical = replacementMaster->getPhysLibCell();
+        if (physical != nullptr && physical->getTechSite() != nullptr) {
+            const auto site = grid_->getPlacementSiteOrientation(
+                grid_->gridX(filler), grid_->gridSnapDownY(filler), *physical,
+                physical->hasSitePattern() ? std::make_optional(change.orientation_) : std::nullopt);
+            if (!site) {
+                diagnostics.push_back(
+                    {"replacement_filler_site_mismatch",
+                     makeMessage("filler replacement cannot use this site stack ", instanceId)});
+            }
         }
     }
 

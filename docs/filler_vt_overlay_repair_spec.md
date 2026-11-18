@@ -23,6 +23,18 @@ constraints. Target coverage containing empty sites and unrelated filler
 deletions are outside this contract. A removed old standard cell may be disjoint
 from the new target; every selected real filler must intersect the target.
 
+Fixed or otherwise noneditable fillers stay in the measured placement. They
+cannot be selected as target Deletes, used as pending swaps, or returned as
+filler Replaces. They block a candidate whose footprint overlaps them.
+
+Placement search and commit check the master across its whole site stack.
+For an explicit pattern, each child site's name, height, and composed
+orientation must match the corresponding row; a vertical mirror reverses
+the sequence. Without an explicit pattern, the named site is repeated as
+needed. A matching tall parent-site declaration can cover multiple Grid rows.
+The adapter for explicit patterns accepts ordered site/orientation pairs;
+unrecognized native UDM encodings are rejected until mapped at that boundary.
+
 ## Request and result
 
 The checker consumes this request directly, without a resolved-request layer:

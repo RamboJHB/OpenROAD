@@ -695,6 +695,72 @@ TEST_P(FillerRepairIntegrationTest,
   EXPECT_EQ(replaced->getMaster()->getId(), originalMaster);
 }
 
+TEST_P(FillerRepairIntegrationTest, FixedFillerCannotBeSwappedOrDeleted)
+{
+  const int utilization = GetParam();
+  ImplantLayerCheckerHelper helper;
+  initializeFixture(helper, input(utilization), utilization);
+  Network& network = *helper.getNetwork();
+  ImplantLayerChecker checker(helper.getGrid(), nullptr, &network);
+  helper.initChecker(checker);
+  Node* replaced = network.getNode(nodeId(1, 4));
+  Node* bridge = network.getNode(nodeId(1, 5));
+  ASSERT_NE(replaced, nullptr);
+  ASSERT_NE(bridge, nullptr);
+  ASSERT_TRUE(bridge->isFiller());
+  const Master* const originalMaster = bridge->getMaster();
+  Node temporary;
+  temporary.setId(replaced->getId());
+  temporary.setDbInst(replaced->getDbInst());
+  temporary.setMaster(network.getMaster(0));
+  temporary.setType(Node::CELL);
+  temporary.setWidth(replaced->getWidth());
+  temporary.setHeight(replaced->getHeight());
+
+  const CheckRequest swapRequest{&temporary, GridX{4}, GridY{1},
+                                 PhysOrientationE::MX, {deleteRecord(*replaced)}};
+  fillerRepair::FillerRepairEngine engine(checker);
+  const auto editable = engine.repair(swapRequest);
+  ASSERT_TRUE(editable.hasSolution);
+  ASSERT_EQ(editable.changes.size(), 1u);
+  ASSERT_EQ(editable.changes.front().op_, OpType::Replace);
+  ASSERT_EQ(editable.changes.front().cell_data_, CellData{bridge->getDbInst()});
+
+  // The same engine reads live editability; the necessary VT bridge is fixed.
+  bridge->setFixed(true);
+  const auto blocked = engine.repair(swapRequest);
+  EXPECT_FALSE(blocked.hasSolution);
+  EXPECT_TRUE(blocked.changes.empty());
+  const auto fixedSwap = checker.checkPlaceWithOverlays(
+      swapRequest, rect(0, 0, kColCount * kSiteWidth, kRowCount * kRowHeight),
+      {editable.changes});
+  ASSERT_EQ(fixedSwap.size(), 1u);
+  EXPECT_FALSE(fixedSwap.front().isLegal);
+  EXPECT_TRUE(hasDiagnostic(fixedSwap.front(), "noneditable_filler_replace"));
+
+  // A pending Replace from a previous probe must not bypass candidate checks.
+  CheckRequest pending = swapRequest;
+  pending.overlayChanges.push_back(editable.changes.front());
+  const auto pendingBlocked = engine.repair(pending);
+  EXPECT_FALSE(pendingBlocked.hasSolution);
+  EXPECT_TRUE(pendingBlocked.changes.empty());
+
+  // Even a caller-specified Delete cannot remove the fixed filler.
+  temporary.setId(bridge->getId());
+  temporary.setDbInst(bridge->getDbInst());
+  const CheckRequest deleteRequest{&temporary, GridX{5}, GridY{1},
+                                    PhysOrientationE::MX, {deleteRecord(*bridge)}};
+  const auto deleteBlocked = engine.repair(deleteRequest);
+  EXPECT_FALSE(deleteBlocked.hasSolution);
+  EXPECT_TRUE(deleteBlocked.changes.empty());
+  const auto fixedDelete = checker.checkDirect(deleteRequest);
+  EXPECT_FALSE(fixedDelete.isLegal);
+  EXPECT_TRUE(hasDiagnostic(fixedDelete, "noneditable_filler_delete"));
+  EXPECT_EQ(bridge->getMaster(), originalMaster);
+  EXPECT_EQ(helper.getGrid()->gridPixel(GridX{5}, GridY{1})->cell, bridge);
+  EXPECT_TRUE(bridge->isFiller());
+}
+
 TEST_P(FillerRepairIntegrationTest,
        MultipleFillerDeletesExactCoverAndNeverBecomeRepairCandidates)
 {

@@ -62,4 +62,9 @@ run_case() {
 
 run_case run_test_filler_repair.tcl DPL2_REAL_ODB_TEST_PASS
 run_case run_test_filler_resize.tcl DPL2_REAL_ODB_RESIZE_TEST_PASS
+# Rejected placement candidates must not reach the commit preflight.
+if grep -q '^ERROR: commit rejected' "${build_dir}/run_test_filler_resize.log"; then
+  echo "A rejected resize candidate reached commit" >&2
+  exit 1
+fi
 run_case run_test_filler_resize_nangate45.tcl DPL2_REAL_NANGATE45_RESIZE_TEST_PASS

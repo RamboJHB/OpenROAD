@@ -62,6 +62,7 @@ check_resize original_gap_neighbor GAP0 TL4 commit 0
 check_resize implant_width_violation DRC_UP0 TH4D reject 0
 check_resize original_implant_cell DRC_UP0 TL4 commit 0
 check_resize fixed_filler_in_target FIXUP0 TL4D reject 0
+check_resize search_around_fixed_filler FIXUP0 TL4D commit 2400
 check_resize original_fixed_filler_neighbor FIXUP0 TL4 commit 0
 check_resize fixed_standard_cell FIXED4 TL4D reject 0
 

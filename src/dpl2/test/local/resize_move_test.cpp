@@ -684,4 +684,140 @@ INSTANTIATE_TEST_SUITE_P(PlacementUtilizations, SingleHeightFillerRemovalTest,
       return "Utilization" + std::to_string(info.param);
     });
 
+TEST(DePlaceSitePatterns, ResizeRequiresTheDeclaredUpperSiteAndOrientation)
+{
+  fake_udm::DesignDb db;
+  db.coreSite.width_ = UvDist(1);
+  db.coreSite.height_ = UvDist(8);
+  eLIB::TechSite upperSite = db.coreSite;
+  upperSite.name_ = "upper";
+  const auto addMaster = [&](const std::string& name, int id, int width,
+                             int height, bool filler) -> eLIB::PhysLibCell& {
+    auto& master = db.addMaster(name, id, width, height, filler);
+    master.symmetry_ = 3;
+    return master;
+  };
+  const auto& standard = addMaster("STD", 0, 2, 8, false);
+  addMaster("FILL_LOWER", 1, 1, 8, true);
+  auto& filler = addMaster("FILL_UPPER", 2, 1, 8, true);
+  filler.site_ = &upperSite;
+  const auto& implicit = addMaster("STD_IMPLICIT", 3, 2, 16, false);
+  auto& explicitMaster = addMaster("STD_PATTERN", 4, 2, 16, false);
+  explicitMaster.site_patterns_ = {{&db.coreSite, PhysOrientationE::MX},
+                                   {&upperSite, PhysOrientationE::R0}};
+  auto& wrongDirection = addMaster("STD_BAD_DIRECTION", 5, 2, 16, false);
+  wrongDirection.site_patterns_ = {{&db.coreSite, PhysOrientationE::MX},
+                                    {&upperSite, PhysOrientationE::MX}};
+  for (int row = 0; row < 5; ++row) {
+    auto& physical = db.desMgr().addRow(0, row * 8, 1, 8, 20);
+    physical.site_ = row == 3 ? upperSite : db.coreSite;
+    physical.orient_ = row % 2 == 0 ? PhysOrientationE::MX : PhysOrientationE::R0;
+  }
+  const LeafCellID oldId(0, 100);
+  const LeafCellID firstFillerId(0, 101);
+  const LeafCellID secondFillerId(0, 102);
+  db.desMgr().addCell(oldId, &standard, 4, 16, PhysOrientationE::MX);
+  db.desMgr().addCell(firstFillerId, &filler, 4, 24, PhysOrientationE::R0);
+  db.desMgr().addCell(secondFillerId, &filler, 5, 24, PhysOrientationE::R0);
+  db.activate();
+  DePlace dp;
+  dp.getFillerSetting()->addFillerCell("FILL_LOWER FILL_UPPER");
+  dp.getNetwork()->updateFillerClassification(*dp.getFillerSetting());
+  dp.getPlacementDRC()->addChecker(DRCCheckerType::ImplantLayer,
+      std::make_unique<ipl::ImplantLayerChecker>(dp.getGrid(), &db.design, dp.getNetwork()));
+  const Node* const original = dp.getNetwork()->getNode(oldId);
+  ASSERT_NE(original, nullptr);
+  std::vector<CellChangeRecord> changes;
+  for (const auto* master : {&implicit, static_cast<const eLIB::PhysLibCell*>(&wrongDirection)}) {
+    SCOPED_TRACE(master->getLibCell().getName());
+    EXPECT_EQ(dp.findLeg(original, nullptr, 0, master->getLibCellId(), changes),
+              std::make_pair(-1, -1));
+    EXPECT_TRUE(changes.empty());
+    const std::vector<CellChangeRecord> forced{
+        {OpType::Replace, oldId, UvDist(4), UvDist(16), standard.getLibCellId(),
+         master->getLibCellId(), PhysOrientationE::MX},
+        {OpType::Delete, firstFillerId, UvDist(4), UvDist(24), filler.getLibCellId(),
+         filler.getLibCellId(), PhysOrientationE::R0},
+        {OpType::Delete, secondFillerId, UvDist(5), UvDist(24), filler.getLibCellId(),
+         filler.getLibCellId(), PhysOrientationE::R0}};
+    EXPECT_FALSE(dp.commit(forced));
+    ASSERT_EQ(dp.getNetwork()->getNode(oldId), original);
+    EXPECT_EQ(original->getHeight().v, 8);
+    EXPECT_TRUE(db.desMgr().getPhysCell(firstFillerId).isValid());
+    EXPECT_TRUE(db.desMgr().getPhysCell(secondFillerId).isValid());
+  }
+  ASSERT_EQ(dp.findLeg(original, nullptr, 0, explicitMaster.getLibCellId(), changes),
+            std::make_pair(4, 16));
+  ASSERT_EQ(changes.size(), 3u);
+  ASSERT_TRUE(dp.commit(changes));
+  ASSERT_EQ(dp.getNetwork()->getNode(oldId), original);
+  EXPECT_EQ(original->getHeight().v, 16);
+  EXPECT_EQ(original->getOrient(), PhysOrientationE::R0);
+  EXPECT_EQ(dp.getGrid()->gridPixel(GridX{5}, GridY{3})->cell, original);
+  EXPECT_FALSE(db.desMgr().getPhysCell(firstFillerId).isValid());
+  EXPECT_FALSE(db.desMgr().getPhysCell(secondFillerId).isValid());
+}
+
+TEST(DePlaceSitePatterns, AmbiguousPatternUsesAnOrientationAllowedByMasterSymmetry)
+{
+  fake_udm::DesignDb db;
+  db.coreSite.width_ = UvDist(1);
+  db.coreSite.height_ = UvDist(8);
+  auto& standard = db.addMaster("STD", 0, 2, 8, false);
+  auto& filler = db.addMaster("FILL", 1, 1, 8, true);
+  auto& tall = db.addMaster("STD_PATTERN", 2, 2, 16, false);
+  tall.symmetry_ = 2;  // Allows MY but not MX.
+  tall.site_patterns_ = {{&db.coreSite, PhysOrientationE::R0},
+                         {&db.coreSite, PhysOrientationE::R180}};
+  for (int row = 0; row < 5; ++row) {
+    auto& physical = db.desMgr().addRow(0, row * 8, 1, 8, 20);
+    physical.site_ = db.coreSite;
+    physical.orient_ = row == 2 ? PhysOrientationE::MY : PhysOrientationE::MX;
+  }
+  const LeafCellID oldId(0, 100);
+  db.desMgr().addCell(oldId, &standard, 4, 16, PhysOrientationE::MY);
+  db.desMgr().addCell(LeafCellID(0, 101), &filler, 4, 24, PhysOrientationE::MX);
+  db.desMgr().addCell(LeafCellID(0, 102), &filler, 5, 24, PhysOrientationE::MX);
+  db.activate();
+  DePlace dp;
+  dp.getFillerSetting()->addFillerCell("FILL");
+  dp.getNetwork()->updateFillerClassification(*dp.getFillerSetting());
+  dp.getPlacementDRC()->addChecker(DRCCheckerType::ImplantLayer,
+      std::make_unique<ipl::ImplantLayerChecker>(dp.getGrid(), &db.design, dp.getNetwork()));
+  const auto geometric = dp.getGrid()->getPlacementSiteOrientation(GridX{4}, GridY{2}, tall);
+  ASSERT_EQ(geometric, PhysOrientationE::MX);
+  std::vector<CellChangeRecord> changes;
+  ASSERT_TRUE(dp.isLegal(oldId, tall.getLibCellId(), changes));
+  ASSERT_EQ(changes.size(), 3u);
+  EXPECT_EQ(changes.back().orientation_, PhysOrientationE::MY);
+  ASSERT_TRUE(dp.commit(changes));
+  EXPECT_EQ(dp.getNetwork()->getNode(oldId)->getOrient(), PhysOrientationE::MY);
+}
+
+TEST(DePlaceSitePatterns, TallParentSiteDoesNotRequireTheSameNameOnTheUpperGridRow)
+{
+  fake_udm::DesignDb db;
+  db.coreSite.width_ = UvDist(1);
+  db.coreSite.height_ = UvDist(8);
+  eLIB::TechSite parent = db.coreSite;
+  parent.name_ = "parent";
+  parent.height_ = UvDist(16);
+  auto& master = db.addMaster("STD_PARENT", 0, 2, 16, false);
+  master.site_ = &parent;
+  for (int row = 0; row < 5; ++row) {
+    db.desMgr().addRow(0, row * 8, 1, 8, 10);
+  }
+  auto& parentRow = db.desMgr().addRow(10, 16, 1, 16, 2);
+  parentRow.site_ = parent;
+  db.activate();
+  DePlace dp;
+  ASSERT_FALSE(dp.getGrid()->getSiteOrientation(GridX{10}, GridY{3}, parent.getName()));
+  ASSERT_TRUE(dp.getGrid()->getPlacementSiteOrientation(GridX{10}, GridY{2}, master));
+  ASSERT_TRUE(dp.commit({{OpType::Add, std::string("TALL"), UvDist(10), UvDist(16),
+                          LibCellID(), master.getLibCellId(), PhysOrientationE::R0}}));
+  const Node* const added = dp.getGrid()->gridPixel(GridX{10}, GridY{2})->cell;
+  ASSERT_NE(added, nullptr);
+  EXPECT_EQ(dp.getGrid()->gridPixel(GridX{11}, GridY{3})->cell, added);
+}
+
 }  // namespace

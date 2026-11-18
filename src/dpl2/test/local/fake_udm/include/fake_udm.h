@@ -710,7 +710,8 @@ class PhysLibCell
   const std::vector<MacroEdge>& getEdgeTypeVec() const { return edges_; }
   int getSymmetry() const { return symmetry_; }
   bool hasSitePattern() const { return !site_patterns_.empty(); }
-  const std::vector<int>& getSitePatterns() const { return site_patterns_; }
+  const std::vector<std::pair<const TechSite*, eUTL::PhysOrientation>>&
+  getSitePatterns() const { return site_patterns_; }
 
   eUTL::UvDist width_;
   eUTL::UvDist height_;
@@ -721,7 +722,7 @@ class PhysLibCell
   std::vector<PhysLibPort*> ports_;
   std::vector<MacroEdge> edges_;
   int symmetry_ = 0;
-  std::vector<int> site_patterns_;
+  std::vector<std::pair<const TechSite*, eUTL::PhysOrientation>> site_patterns_;
   // Owned by value so getLibCell() can hand back a reference.
   std::shared_ptr<LibCell> lib_cell_;
 };
