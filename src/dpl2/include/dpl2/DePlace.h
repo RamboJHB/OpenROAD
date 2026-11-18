@@ -131,12 +131,20 @@ class DePlace {
   // Read-only probes append a complete transaction on success and leave
   // ccRecords unchanged on failure. Commit the returned batch without adding
   // target/filler operations again. Coordinates in records are core-relative.
-  // findLeg returns a named target Add; isLegal returns an identity-preserving
-  // target Replace. The checker/FR result itself contains only filler repairs.
-  std::pair<int, int> findLeg(eUNL::PinID startLoc, \
+  // Pin-anchored findLeg appends a named target Add. Both findLeg overloads
+  // return core-relative DBU coordinates, or (-1, -1) on failure.
+  std::pair<int, int> findLeg(eUNL::PinID startLoc,
                               eUNL::VoltageArea* va,
-                              int diameter, \
-                              LibCellID masterId, \
+                              int diameter,
+                              LibCellID masterId,
+                              std::vector<CellChangeRecord>& ccRecords);
+  // Probe a resize/move of a committed instance. The old Delete is virtual;
+  // success appends an identity-preserving Replace and the final filler edits.
+  // A zero diameter checks only the instance's original position.
+  std::pair<int, int> findLeg(const Node* inst,
+                              eUNL::VoltageArea* va,
+                              int diameter,
+                              LibCellID masterId,
                               std::vector<CellChangeRecord>& ccRecords);
   bool isLegal(LeafCellID instId, LibCellID masterId,
       std::vector<CellChangeRecord>& ccRecords);
@@ -239,6 +247,16 @@ class DePlace {
   // valid db instance id from the occupied origin site if any.
   void initTempNode(Node& cell, Master* master, const PhysLibCell& pcell,
                     const Point2D& origin) const;
+  // Search from a temporary Node's core-relative anchor. Result is in grid
+  // coordinates; the public overloads build their own Add/Replace records.
+  std::pair<int, int> findLegOrigin(Node& probe, eUNL::VoltageArea* va,
+                                   int diameter,
+                                   std::vector<CellChangeRecord>& trial,
+                                   const Node* replacedCell = nullptr);
+  std::pair<int, int> findLegToReplace(const Node* inst, eUNL::VoltageArea* va,
+                                      int diameter, LibCellID masterId,
+                                      std::vector<CellChangeRecord>& ccRecords,
+                                      bool tryDirectFirst);
 
   // Grid initialization
   void initGrid();

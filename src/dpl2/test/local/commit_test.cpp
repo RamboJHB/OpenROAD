@@ -328,6 +328,25 @@ TEST(DePlaceCommit, FindLegReturnsCompleteExactAndNonExactTransactions)
   }
 }
 
+TEST(DePlaceCommit, FindLegPinSearchStartsAtPinInShiftedCore)
+{
+  Fixture f(false, 1);
+  const int y = 4 * frt::kRowHeight;
+  ASSERT_TRUE(f.dp->commit({f.remove(142), f.add("F0", 3, 12, y),
+                           f.add("F1", 3, 14, y), f.add("F2", 3, 16, y)}));
+  const auto pinId = eUNL::PinID(0, 900);
+  f.design->desMgr()->addPin(eUNL::PhysPinID(pinId), 17 + 12, 20 + y);
+  const auto before = f.snapshot();
+  std::vector<CellChangeRecord> changes;
+  // Multiple fillers are in range, but the pin's site should be tried first.
+  EXPECT_EQ(f.dp->findLeg(pinId, nullptr, 4, eLIB::LibCellID(0, 16), changes),
+            (std::pair<int, int>{12, y}));
+  ASSERT_EQ(changes.size(), 2u);
+  EXPECT_EQ(changes.front().op_, OpType::Delete);
+  EXPECT_EQ(changes.back().op_, OpType::Add);
+  EXPECT_EQ(f.snapshot(), before);
+}
+
 TEST(DePlaceCommit, FindLegNamesAvoidLiveAndPendingAddsAndRemainDeterministic)
 {
   Fixture f;

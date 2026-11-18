@@ -82,116 +82,91 @@ bool DePlace::isLegal(LeafCellID instId, LibCellID masterId,
                       eUNL::VoltageArea* va, int diameter,
                       std::vector<CellChangeRecord>& changes)
 {
+  constexpr std::pair<int, int> notFound{-1, -1};
+  const Node* inst = network_ != nullptr ? network_->getNode(instId) : nullptr;
+  return findLegToReplace(inst, va, diameter, masterId, changes,
+                          /*tryDirectFirst=*/true) != notFound;
+}
+
+std::pair<int, int> DePlace::findLeg(const Node* inst, eUNL::VoltageArea* va,
+                                     int diameter, LibCellID masterId,
+                                     std::vector<CellChangeRecord>& ccRecords)
+{
+  return findLegToReplace(inst, va, diameter, masterId, ccRecords,
+                          /*tryDirectFirst=*/false);
+}
+
+std::pair<int, int> DePlace::findLegToReplace(
+    const Node* old, eUNL::VoltageArea* va, int diameter, LibCellID masterId,
+    std::vector<CellChangeRecord>& ccRecords, bool tryDirectFirst)
+{
+  constexpr std::pair<int, int> notFound{-1, -1};
   if (diameter < 0 || design_ == nullptr || network_ == nullptr
       || grid_ == nullptr || drc_engine_ == nullptr) {
-    return false;
+    return notFound;
   }
-  Node* const old = network_->getNode(instId);
   Master* const master = network_->getMaster(masterId);
-  if (old == nullptr || old->getMaster() == nullptr || old->isFiller()
+  if (old == nullptr || network_->getNode(old->getDbInst()) != old
+      || old->getMaster() == nullptr || old->isFiller()
       || old->isFixed() || old->isTerminal() || old->getGroup() != nullptr
       || master == nullptr || master->isFiller()
       || master->getPhysLibCell() == nullptr) {
-    return false;
+    return notFound;
   }
   const PhysLibCell& physical = *master->getPhysLibCell();
   if (physical.getTechSite() == nullptr || physical.getType().isBlock()
       || physical.getType().isPad() || physical.getType().isCover()
       || physical.getWidth().getStorage() <= 0
       || physical.getHeight().getStorage() <= 0) {
-    return false;
+    return notFound;
   }
 
   const GridX oldX = grid_->gridX(old);
   const GridY oldY = grid_->gridSnapDownY(old);
   Node probe;
-  initTempNode(probe, master, physical,
-               Point2D(UvDist(old->getLeft().v), UvDist(old->getBottom().v)));
+  const Point2D origin{UvDist(old->getLeft().v), UvDist(old->getBottom().v)};
+  initTempNode(probe, master, physical, origin);
   probe.setId(old->getId());
   probe.setDbInst(old->getDbInst());
-  const auto inVoltageArea = [&](GridX x, GridY y) {
-    if (va == nullptr) {
-      return true;
-    }
-    const UvDist xl(x.v * grid_->getSiteWidth().v
-                    + core_.getXL().getStorage());
-    const UvDist yl(grid_->gridYToDbu(y).v + core_.getYL().getStorage());
-    for (const Rect& rect : va->getRects()) {
-      if (xl >= rect.getXL() && yl >= rect.getYL()
-          && xl + physical.getWidth() <= rect.getXH()
-          && yl + physical.getHeight() <= rect.getYH()) {
-        return true;
-      }
-    }
-    return false;
-  };
 
-  const bool originalInArea = inVoltageArea(oldX, oldY);
   const bool sameFootprint
       = old->getWidth().v == physical.getWidth().getStorage()
         && old->getHeight().v == physical.getHeight().getStorage();
   std::vector<CellChangeRecord> trial;
-  std::pair<int, int> location{-1, -1};
-  // Preserve the original swap fast path: a legal unchanged footprint has no
-  // released area to prepare or retile.
-  if (sameFootprint && originalInArea
-      && canBePlaced(&probe, oldX, oldY, &trial, old)) {
-    location = {oldX.v, oldY.v};
-  } else {
+  auto location = notFound;
+  // isLegal's same-size swap need not prepare a removal if it fits in place.
+  if (tryDirectFirst && sameFootprint) {
+    location = findLegOrigin(probe, va, 0, trial, old);
+  }
+  if (location == notFound) {
     std::vector<CellChangeRecord> removed{
         {OpType::Delete, old->getDbInst(), UvDist(old->getLeft().v),
          UvDist(old->getBottom().v), old->getMaster()->getDbMaster(),
          old->getMaster()->getDbMaster(), old->getOrient()}};
-    std::vector<CellChangeRecord> pending;
     // This virtual removal layout is only a seed: the final target can make
     // an otherwise unfillable old footprint tileable.
-    drc_engine_->checkDRC(
-        nullptr, oldX, oldY, old->getOrient(), pending, removed);
-    trial = pending;
-    if (originalInArea && canBePlaced(&probe, oldX, oldY, &trial, old)) {
-      location = {oldX.v, oldY.v};
-    } else if (diameter > 0) {
-      const int64_t xl = int64_t{old->getLeft().v}
-                         + core_.getXL().getStorage();
-      const int64_t yl = int64_t{old->getBottom().v}
-                         + core_.getYL().getStorage();
-      const Rect search(UvDist(xl - diameter), UvDist(yl - diameter),
-                        UvDist(xl + physical.getWidth().getStorage() + diameter),
-                        UvDist(yl + physical.getHeight().getStorage() + diameter));
-      const auto searchRect = [&](const Rect& rect) {
-        trial = pending;
-        probe.setLeft(old->getLeft());
-        probe.setBottom(old->getBottom());
-        return legalCellInRect(rect, &probe, &trial, old);
-      };
-      if (va == nullptr) {
-        location = searchRect(search.overlap(core_, false));
-      } else {
-        for (const Rect& rect : va->getRects()) {
-          location = searchRect(search.overlap(rect, false).overlap(core_, false));
-          if (location != std::pair<int, int>{-1, -1}) {
-            break;
-          }
-        }
-      }
-    }
+    drc_engine_->checkDRC(nullptr, oldX, oldY, old->getOrient(), trial, removed);
+    probe.setLeft(old->getLeft());
+    probe.setBottom(old->getBottom());
+    location = findLegOrigin(probe, va, diameter, trial, old);
   }
-  if (location == std::pair<int, int>{-1, -1}) {
-    return false;
+  if (location == notFound) {
+    return notFound;
   }
   const GridX x{location.first};
   const GridY y{location.second};
   const auto orientation
       = grid_->getSiteOrientation(x, y, physical.getTechSite()->getName());
   if (!orientation.has_value()) {
-    return false;
+    return notFound;
   }
+  const int xUv = x.v * grid_->getSiteWidth().v;
+  const int yUv = grid_->gridYToDbu(y).v;
   trial.push_back({OpType::Replace, old->getDbInst(),
-                   UvDist(x.v * grid_->getSiteWidth().v),
-                   UvDist(grid_->gridYToDbu(y).v),
+                   UvDist(xUv), UvDist(yUv),
                    old->getMaster()->getDbMaster(), masterId, *orientation});
-  changes.insert(changes.end(), trial.begin(), trial.end());
-  return true;
+  ccRecords.insert(ccRecords.end(), trial.begin(), trial.end());
+  return {xUv, yUv};
 }
 
 /**
@@ -446,6 +421,77 @@ void DePlace::initTempNode(Node& cell, Master* master,
   }
 }
 
+std::pair<int, int> DePlace::findLegOrigin(
+    Node& probe, eUNL::VoltageArea* va, int diameter,
+    std::vector<CellChangeRecord>& trial, const Node* replacedCell)
+{
+  constexpr std::pair<int, int> notFound{-1, -1};
+  const DbuX anchorX = probe.getLeft();
+  const DbuY anchorY = probe.getBottom();
+  const UvDist width(probe.getWidth().v);
+  const UvDist height(probe.getHeight().v);
+  // The probe is core-relative, but the search rectangle and voltage areas
+  // are absolute. legalCellInRect converts its rectangle back to the grid.
+  if (replacedCell != nullptr) {
+    const GridX x = grid_->gridX(replacedCell);
+    const GridY y = grid_->gridSnapDownY(replacedCell);
+    const UvDist xl = core_.getXL() + UvDist(x.v * grid_->getSiteWidth().v);
+    const UvDist yl = core_.getYL() + UvDist(grid_->gridYToDbu(y).v);
+    bool inArea = va == nullptr;
+    if (va != nullptr) {
+      for (const Rect& rect : va->getRects()) {
+        if (xl >= rect.getXL() && yl >= rect.getYL()
+            && xl + width <= rect.getXH() && yl + height <= rect.getYH()) {
+          inArea = true;
+          break;
+        }
+      }
+    }
+    if (inArea && canBePlaced(&probe, x, y, &trial, replacedCell)) {
+      return {x.v, y.v};
+    }
+    if (diameter == 0) {
+      return notFound;
+    }
+  }
+
+  const UvDist xl = core_.getXL() + UvDist(anchorX.v);
+  const UvDist yl = core_.getYL() + UvDist(anchorY.v);
+  const UvDist extension(diameter);
+  const Rect search(xl - extension, yl - extension,
+                    xl + width + extension, yl + height + extension);
+  if (replacedCell == nullptr) {
+    std::ostringstream record;
+    record << "[findLeg] target master id=" << probe.getMaster()->getDbMaster().getValue()
+           << " w=" << width.getStorage() << " h=" << height.getStorage()
+           << " anchor origin=(" << xl.getStorage() << "," << yl.getStorage() << ")\n"
+           << "[findLeg] search rect xl=" << search.getXL().getStorage()
+           << " xh=" << search.getXH().getStorage()
+           << " yl=" << search.getYL().getStorage()
+           << " yh=" << search.getYH().getStorage()
+           << " diameter=" << diameter << "\n";
+    const auto message = record.str();
+    std::fwrite(message.data(), 1, message.size(), stdout);
+  }
+  const auto searchRect = [&](const Rect& rect) {
+    // Failed probes may move the temporary Node, but do not change trial.
+    // Each VA rectangle must start searching from the same origin.
+    probe.setLeft(anchorX);
+    probe.setBottom(anchorY);
+    return legalCellInRect(rect.overlap(core_, false), &probe, &trial, replacedCell);
+  };
+  if (va == nullptr) {
+    return searchRect(search);
+  }
+  for (const Rect& rect : va->getRects()) {
+    const auto position = searchRect(search.overlap(rect, false));
+    if (position != notFound) {
+      return position;
+    }
+  }
+  return notFound;
+}
+
 /**
  * @brief Find legal placement for a new cell at a specific pin's location.
  *
@@ -463,7 +509,7 @@ void DePlace::initTempNode(Node& cell, Master* master,
  * @param masterId  Target library cell master to place.
  * @param ccRecords [out] Appends the selected target Add, deleted fillers and
  *                  filler repair records; unchanged when no legal site exists.
- * @return The (left, bottom) UV coordinates of the found site,
+ * @return Core-relative (left, bottom) DBU coordinates of the found site,
  * or (-1, -1) on failure.
  */
 std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
@@ -472,72 +518,28 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
                                      LibCellID masterId,
                                      std::vector<CellChangeRecord>& ccRecords)
 {
-  const PhysLibCell& new_pcell_ = design_->getLibAcc().getPhysLibCell(masterId);
+  if (diameter < 0 || design_ == nullptr || desMgr_ == nullptr
+      || network_ == nullptr || grid_ == nullptr || drc_engine_ == nullptr) {
+    return {-1, -1};
+  }
+  Master* const master = network_->getMaster(masterId);
+  const PhysLibCell* physical = master != nullptr ? master->getPhysLibCell() : nullptr;
+  if (physical == nullptr || physical->getTechSite() == nullptr) {
+    return {-1, -1};
+  }
   const PhysPin& pin = desMgr_->getPhysPin(eUNL::PhysPinID(startLoc.asFlatPin()));
-  Point2D origin = (*pin.getTermIter().begin()).getOrigin();
+  const Point2D origin = (*pin.getTermIter().begin()).getOrigin();
 
-  // createNetwork imports every library master, including masters without a
-  // placed instance, before the single checker revision is constructed.
-  if (drc_engine_ == nullptr) {
-    return {-1, -1};
-  }
-  Master* const master = this->network_->getMaster(masterId);
-  if (master == nullptr) {
-    return {-1, -1};
-  }
-
-  // Build a throw-away Node (not inserted into the network, never painted).
   Node cell;
-  initTempNode(cell, master, new_pcell_, origin);
-
-  // Search box anchored at the cell origin (same as the original overload).
-  eUTL::Rect rect(eUTL::UvDist(cell.getLeft().v - diameter), \
-                  eUTL::UvDist(cell.getBottom().v - diameter), \
-                  eUTL::UvDist(cell.getLeft().v + cell.getWidth().v + diameter), \
-                  eUTL::UvDist(cell.getBottom().v + cell.getHeight().v + diameter));
-
-  std::ostringstream record;
-  record << "[findLeg] target master id=" << masterId.getValue()
-        // << " name=" << master->getMasterName()
-        << " w=" << new_pcell_.getWidth().getStorage()
-        << " h=" << new_pcell_.getHeight().getStorage()
-        << " anchor origin=(" << origin.getX().getStorage()
-        << "," << origin.getY().getStorage() << ")\n"
-        << "[findLeg] search rect xl=" << rect.getXL().getStorage()
-        << " xh=" << rect.getXH().getStorage()
-        << " yl=" << rect.getYL().getStorage()
-        << " yh=" << rect.getYH().getStorage()
-        << " diameter=" << diameter << "\n";
-  const auto message = record.str();
-  std::fwrite(message.data(), 1, message.size(), stdout);
-
-  // legalCellInRect() performs the search.  The temporary node is not placed
-  // / painted (setPlaced(false) above), so its unplaceCell() is a no-op and
-  // the node is never inserted into the grid or network; the rip-up fallback
-  // inside legalCellInRect() is disabled.
-  Node* search_cell = &cell;
-  std::pair<int, int> Coordinate{-1, -1};
-  // checkPixels() collects every target-intersecting filler Delete overlay.
-  // Only the accepted candidate publishes its Deletes and repair Add/Replaces.
-  // Keep the entire trial local until the target Add can also be returned.
+  initTempNode(cell, master, *physical,
+               Point2D{origin.getX() - core_.getXL(), origin.getY() - core_.getYL()});
   std::vector<CellChangeRecord> trial = ccRecords;
-  if (va == nullptr) {
-    Coordinate = legalCellInRect(rect, search_cell, &trial);
-  } else {
-    for (Rect va_rect : va->getRects()) {
-      Coordinate = legalCellInRect(rect.overlap(va_rect, false),
-          search_cell, &trial);
-      if (Coordinate != std::pair<int, int>{-1, -1}) {
-        break;
-      }
-    }
+  const auto [col, row] = findLegOrigin(cell, va, diameter, trial);
+  if (col == -1) {
+    return {-1, -1};
   }
-
-  if (Coordinate == std::pair<int, int>{-1, -1}) {
-    return Coordinate;
-  }
-  const auto orient = grid_->getSiteOrientation(GridX{Coordinate.first}, GridY{Coordinate.second},
-                                                new_pcell_.getTechSite()->getName());
+  const auto orient = grid_->getSiteOrientation(GridX{col}, GridY{row},
+                                                physical->getTechSite()->getName());
   if (!orient.has_value()) {
     return {-1, -1};
   }
@@ -555,19 +557,19 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
       names.insert(*name);
     }
   }
-  const std::string base = "DPL_STD_" + std::to_string(Coordinate.second) + "_"
-                           + std::to_string(Coordinate.first) + "_M"
+  const std::string base = "DPL_STD_" + std::to_string(row) + "_"
+                           + std::to_string(col) + "_M"
                            + std::to_string(masterId.getIndexValue());
   std::string name = base;
   for (size_t suffix = 1; names.count(name) != 0; ++suffix) {
     name = base + "_" + std::to_string(suffix);
   }
-  Coordinate = std::make_pair(Coordinate.first * grid_->getSiteWidth().v,
-                              grid_->gridYToDbu(GridY{Coordinate.second}).v);
-  trial.push_back(CellChangeRecord{OpType::Add, name, UvDist(Coordinate.first), UvDist(Coordinate.second),
-                                   LibCellID(), masterId, *orient});
+  const int xUv = col * grid_->getSiteWidth().v;
+  const int yUv = grid_->gridYToDbu(GridY{row}).v;
+  trial.push_back({OpType::Add, name, UvDist(xUv), UvDist(yUv),
+                   LibCellID(), masterId, *orient});
   ccRecords = std::move(trial);
-  return Coordinate;
+  return {xUv, yUv};
 }
 
 Rect DePlace::getCoreArea()

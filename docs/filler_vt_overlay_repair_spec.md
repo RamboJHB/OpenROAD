@@ -89,7 +89,8 @@ a subset of `D`.
 Same-footprint original-position checks first use the existing direct/swap
 path, without preparing a removal that would immediately be cancelled.
 For resize/move, DePlace prepares a virtual std-cell removal and refill,
-then reuses the findLeg diamond search. Each candidate supplies the old std
+then uses `findLegOrigin`, the search shared with pin-anchored insertion.
+Each replacement candidate supplies the old std
 Delete, preparation fillers, and real intersecting filler Deletes to FR.
 FR cancels the tentative Adds and rebuilds `D - T`; it does not emit Deletes
 for never-committed fillers. Preparation swaps are seeds that may be kept,
@@ -168,9 +169,17 @@ DePlace probes assemble complete transactions without mutating placement:
   diameter is strict original-position only. The outer relocation search is
   capped at 256 candidate sites per search rectangle. It appends one
   identity-preserving target `Replace` plus FR's complete filler transaction.
-- `findLeg` appends FR's complete filler transaction and one named target `Add`. Its target
+- `findLeg(const Node* inst, va, diameter, master, changes)` always starts with
+  a virtual removal of the live instance. It tries the original position, then
+  searches if the diameter is positive. Like `isLegal`, it appends the final
+  filler transaction and a target `Replace`, not a target `Delete` or `Add`.
+- `findLeg(pin, va, diameter, master, changes)` appends FR's complete filler
+  transaction and one named target `Add`. Its target
   name is `DPL_STD_<row>_<column>_M<LibCellID-index>` with a deterministic
   suffix for collisions with live names or pending Adds.
+
+Both `findLeg` overloads return core-relative DBU coordinates, or `(-1, -1)`
+on failure. The search box and optional voltage-area rectangles are absolute.
 
 Pass this batch to `DePlace::commit` without appending target/Delete operations
 again. Failure leaves the caller's output unchanged. An existing output prefix

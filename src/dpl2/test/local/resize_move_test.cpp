@@ -275,6 +275,16 @@ TEST(DePlaceResizeMove, SameFootprintSwapSkipsRemovalPreparation)
   fixture.expectNormalized(changes, 16, 8, 2);
   EXPECT_EQ(checker->removals, 1);
   EXPECT_EQ(fixture.snapshot(), before);
+
+  changes.clear();
+  // Unlike isLegal's fast path, explicit findLeg always prepares removal.
+  ASSERT_EQ(fixture.dp().findLeg(fixture.target(), nullptr, 0,
+                                eLIB::LibCellID(0, 2), changes),
+            std::make_pair(8, 2 * frt::kRowHeight));
+  fixture.expectNormalized(changes, 2, 8, 2);
+  EXPECT_EQ(changes.size(), 1u);
+  EXPECT_EQ(checker->removals, 2);
+  EXPECT_EQ(fixture.snapshot(), before);
 }
 
 TEST(DePlaceResizeMove, PartialMoveCancelsPendingFillersAndRetilesOldFootprint)
@@ -296,7 +306,7 @@ TEST(DePlaceResizeMove, PartialMoveCancelsPendingFillersAndRetilesOldFootprint)
   }
 }
 
-TEST(DePlaceResizeMove, DisjointSameRowMovePreservesInstanceAndPinBinding)
+TEST(DePlaceResizeMove, FindLegInstanceMovesAndShrinksWhilePreservingPinBinding)
 {
   ResizeMoveFixture fixture;
   Node* original = fixture.target();
@@ -309,8 +319,28 @@ TEST(DePlaceResizeMove, DisjointSameRowMovePreservesInstanceAndPinBinding)
   pin.setEdge(&net);
   net.addPin(&pin);
   auto destination = fixture.area(6, 2, 2);
-  std::vector<CellChangeRecord> changes;
-  ASSERT_TRUE(fixture.dp().isLegal(id, eLIB::LibCellID(0, 16), &destination, 4, changes));
+  const auto before = fixture.snapshot();
+  const auto failure = std::make_pair(-1, -1);
+  const eLIB::LibCellID narrower(0, 16);
+  const CellChangeRecord sentinel{OpType::Add, std::string("EXISTING_PENDING"),
+      eUTL::UvDist(0), eUTL::UvDist(0), eLIB::LibCellID(), narrower,
+      eUTL::PhysOrientationE::MX};
+  std::vector<CellChangeRecord> changes{sentinel};
+  // The only site inside the voltage area is two DBU from the old origin.
+  for (const int diameter : {0, 1}) {
+    SCOPED_TRACE(diameter);
+    EXPECT_EQ(fixture.dp().findLeg(original, &destination, diameter, narrower, changes),
+              failure);
+    ASSERT_EQ(changes.size(), 1u);
+    EXPECT_EQ(changes.front().cell_data_, sentinel.cell_data_);
+    EXPECT_EQ(changes.front().op_, sentinel.op_);
+    EXPECT_EQ(changes.front().new_lib_cell_, sentinel.new_lib_cell_);
+    EXPECT_EQ(fixture.snapshot(), before);
+  }
+  changes.clear();
+  ASSERT_EQ(fixture.dp().findLeg(original, &destination, 2, narrower, changes),
+            std::make_pair(6, 2 * frt::kRowHeight));
+  EXPECT_EQ(fixture.snapshot(), before);
   fixture.expectNormalized(changes, 16, 6, 2);
   ASSERT_TRUE(fixture.dp().commit(changes));
   ASSERT_EQ(fixture.target(), original);
@@ -324,6 +354,32 @@ TEST(DePlaceResizeMove, DisjointSameRowMovePreservesInstanceAndPinBinding)
   for (int x = 8; x < 12; ++x) {
     EXPECT_TRUE(fixture.dp().getGrid()->gridPixel(GridX{x}, GridY{2})->cell->isFiller());
   }
+  fixture.expectConsistent();
+}
+
+TEST(DePlaceResizeMove, FindLegInstanceGrowsAtOriginalSiteWithZeroDiameter)
+{
+  ResizeMoveFixture fixture;
+  const Node* const original = fixture.target();
+  const Node* const covered = fixture.dp().getGrid()->gridPixel(GridX{12}, GridY{2})->cell;
+  ASSERT_NE(covered, nullptr);
+  ASSERT_TRUE(covered->isFiller());
+  const auto deletedFiller = covered->getDbInst();
+  const auto before = fixture.snapshot();
+  std::vector<CellChangeRecord> changes;
+  ASSERT_EQ(fixture.dp().findLeg(original, nullptr, 0, eLIB::LibCellID(0, 9), changes),
+            std::make_pair(8, 2 * frt::kRowHeight));
+  EXPECT_EQ(fixture.snapshot(), before);
+  fixture.expectNormalized(changes, 9, 8, 2);
+  EXPECT_TRUE(std::any_of(changes.begin(), changes.end(), [&](const auto& change) {
+    return change.op_ == OpType::Delete && change.cell_data_ == CellData{deletedFiller};
+  }));
+  ASSERT_TRUE(fixture.dp().commit(changes));
+  EXPECT_EQ(fixture.target(), original);
+  EXPECT_EQ(fixture.dp().getNetwork()->getNode(deletedFiller), nullptr);
+  const Node* const addition = fixture.dp().getGrid()->gridPixel(GridX{13}, GridY{2})->cell;
+  ASSERT_NE(addition, nullptr);
+  EXPECT_TRUE(addition->isFiller());
   fixture.expectConsistent();
 }
 

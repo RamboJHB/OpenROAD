@@ -12,7 +12,7 @@ verification counts are available in Git history.
   stored placement.
 - `isLegal` supports master size up/down and movement, retaining the original
   standard-cell ID and connections. It prepares removal/refill virtually,
-  then reuses findLeg's diamond search. Buffer insertion replaces one or more intersecting
+  then uses the shared `findLegOrigin` search. Buffer insertion replaces one or more intersecting
   fillers; every target site must be covered by those selected fillers.
 - Same-footprint original-position probes retain the direct/swap fast path;
   removal preparation is deferred until that path fails or the footprint changes.
@@ -23,8 +23,8 @@ verification counts are available in Git history.
   FR owns cancellation/retiling of tentative preparation Adds and deduplication
   of real Deletes/swaps. No Delete is emitted for an uncommitted Add. The old
   std Delete is overlay-only. Failure returns no partial repair.
-- DePlace assembles complete transactions: `isLegal` appends the target
-  `Replace`; `findLeg` appends the target `Add` to FR's filler transaction.
+- DePlace assembles complete transactions: `isLegal` and `findLeg(Node*)`
+  append a target `Replace`; `findLeg(PinID)` appends a named target `Add`.
   Pass that result to `commit` once without
   appending the target or Deletes again.
 - Probes do not mutate DB, Grid or Network. An existing output-vector prefix
@@ -44,9 +44,12 @@ RepairOutcome repair(const ipl::CheckRequest& request) const;
 
 `isLegal(inst, master, changes)` now permits resizing at the original position.
 Use `isLegal(inst, master, va, diameter, changes)` to allow position search;
-`diameter` is a nonnegative DBU extension, zero forbids movement, and `va` uses
-absolute design coordinates. Records remain core-relative DBU. At most 256
-positions are tried per relocation search rectangle.
+use `findLeg(const Node* inst, va, diameter, master, changes)` to always run
+virtual removal preparation and get the final location along with the
+transaction. `diameter` is a nonnegative DBU extension, zero forbids movement
+for an existing instance, and `va` uses absolute design coordinates. Both
+`findLeg` overloads return core-relative DBU (matching the change records) or
+`(-1, -1)`. At most 256 positions are tried per relocation search rectangle.
 
 Removal preparation is `CheckRequest{nullptr, ..., {oldStdDelete}}`; only
 ImplantLayerChecker sees this intermediate request. A failed preparation does
@@ -220,10 +223,13 @@ initialization, before main, even for a minimal program. The installed Command
 Line Tools clang 21 with its matching SDK runs that program successfully;
 the ASan validation therefore uses that toolchain without changing xcode-select.
 
-Verification on 2026-10-24, complete default-target builds:
+Verification on 2026-11-18, complete default-target builds:
 
-- Normal: 485/485 passed with AppleClang 17.
-- ASan: 485/485 passed with Command Line Tools AppleClang 21.
+- Normal: 487/487 passed with AppleClang 17.
+- ASan: 487/487 passed with Command Line Tools AppleClang 21.
+- The new instance overload is covered by in-place growth, shrink and move,
+  original-position and search-radius limits, and identity/Pin preservation.
+  The pin overload is covered by a shifted-core search with multiple candidates.
 - Previous TSan validation (2026-10-20): 8/8 lifecycle/concurrent-probe tests
   passed with AppleClang 21 and
   a locally TSan-instrumented oneTBB 2023.0.0; no race suppressions were used.
