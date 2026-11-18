@@ -141,6 +141,11 @@ bool buildUdmProjection(odb::dbDatabase* database,
           master->getName(), nextMasterId++, master->getWidth(),
           master->getHeight(), master->isFiller());
       projected.type_ = toUdmMacroType(master);
+      // The local shim uses DePlace's legacy orientation codes: LEF X
+      // permits MX (3), and LEF Y permits MY (2).
+      projected.symmetry_ = master->getSymmetryX() ? 3
+                            : master->getSymmetryY() ? 2
+                            : master->getSymmetryR90() ? 5 : 0;
       if (master->getSite() != nullptr) {
         projected.site_ = &projection->coreSite;
       }

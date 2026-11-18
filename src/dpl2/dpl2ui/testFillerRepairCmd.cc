@@ -8,6 +8,7 @@
 #include <infrastructure/network.h>
 
 #include <algorithm>
+#include <cstdint>
 #include <exception>
 #include <iostream>
 #include <limits>
@@ -161,6 +162,12 @@ bool TestFillerRepairCmd::exec()
       = splitIdentifiers(instOpt_.getValue());
   const std::vector<std::string> masterIds
       = splitIdentifiers(masterOpt_.getValue());
+  const std::string diameterText = diameterOpt_.getValue();
+  int diameter = 0;
+  if (!diameterText.empty() && !parseNonNegativeInt(diameterText, diameter)) {
+    std::cout << "ERROR: -diameter must be a nonnegative integer in DBU\n";
+    return false;
+  }
   const bool removeOnly
       = masterOpt_.getValue().find_first_not_of(" \t\r\n\f\v") == std::string::npos;
   if (instanceIds.empty() || (!removeOnly && masterIds.size() != 1)) {
@@ -239,37 +246,56 @@ bool TestFillerRepairCmd::exec()
     left = replacedStd->getLeft().v;
     bottom = replacedStd->getBottom().v;
   }
-  if (removeOnly
+  const bool singleStd = overlays.size() == 1 && replacedStd != nullptr;
+  if (!diameterText.empty() && (removeOnly || !singleStd)) {
+    std::cout << "ERROR: -diameter requires one std instance and a target master\n";
+    return false;
+  }
+  const eLIB::PhysLibCell* targetCell
+      = targetMaster != nullptr ? targetMaster->getPhysLibCell() : nullptr;
+  const bool resize = singleStd && targetCell != nullptr
+                      && (!diameterText.empty()
+                          || replacedStd->getWidth().v != targetCell->getWidth().getStorage()
+                          || replacedStd->getHeight().v != targetCell->getHeight().getStorage());
+  const char* operation = removeOnly ? "remove" : resize ? "resize" : "place";
+  if ((removeOnly || resize)
       && (overlays.size() != 1 || replacedStd == nullptr
           || (!replacedStd->isStdCell() && replacedStd->getType() != Node::CELL)
           || replacedStd->isFixed() || replacedStd->isTerminal()
           || replacedStd->inGroup() || replacedStd->isBlock())) {
-    std::cout << "ERROR: removal requires one movable, ungrouped standard cell\n";
+    std::cout << "ERROR: removal/resize requires one movable, ungrouped standard cell\n";
     return false;
   }
-  const GridX x = grid->gridX(DbuX{left});
-  const GridY y = grid->gridSnapDownY(DbuY{bottom});
+  GridX x = grid->gridX(DbuX{left});
+  GridY y = grid->gridSnapDownY(DbuY{bottom});
   Node temporary;
   eUTL::PhysOrientation orientation = PhysOrientationE::R0;
   if (removeOnly) {
     orientation = replacedStd->getOrient();
   } else {
-    const eLIB::PhysLibCell& targetCell = *targetMaster->getPhysLibCell();
-    const eLIB::TechSite* targetSite = targetCell.getTechSite();
+    const eLIB::TechSite* targetSite = targetCell->getTechSite();
     if (targetSite == nullptr) {
       std::cout << "ERROR: target master has no placement site\n";
       return false;
     }
-    const auto siteOrientation = grid->getSiteOrientation(x, y, targetSite->getName());
-    if (!siteOrientation.has_value()) {
-      std::cout << "ERROR: target origin has no compatible site orientation\n";
+    if (!resize) {
+      const auto siteOrientation = grid->getSiteOrientation(x, y, targetSite->getName());
+      if (!siteOrientation.has_value()) {
+        std::cout << "ERROR: target origin has no compatible site orientation\n";
+        return false;
+      }
+      orientation = *siteOrientation;
+    } else if (targetMaster->isFiller() || targetCell->getType().isBlock()
+               || targetCell->getType().isPad() || targetCell->getType().isCover()
+               || targetCell->getWidth().getStorage() <= 0
+               || targetCell->getHeight().getStorage() <= 0) {
+      std::cout << "ERROR: resize requires a site-aligned standard-cell master\n";
       return false;
     }
-    orientation = *siteOrientation;
     temporary.setMaster(targetMaster);
     temporary.setType(targetMaster->isFiller() ? Node::FILLER : Node::CELL);
-    temporary.setWidth(DbuX{targetCell.getWidth().getStorage()});
-    temporary.setHeight(DbuY{targetCell.getHeight().getStorage()});
+    temporary.setWidth(DbuX{targetCell->getWidth().getStorage()});
+    temporary.setHeight(DbuY{targetCell->getHeight().getStorage()});
     temporary.setOrient(orientation);
     temporary.setFixed(false);
     temporary.setPlaced(false);
@@ -285,7 +311,7 @@ bool TestFillerRepairCmd::exec()
 
   std::vector<CellChangeRecord> overlayChanges;
   overlayChanges.reserve(overlays.size());
-  std::cout << "checker request: operation=" << (removeOnly ? "remove" : "place")
+  std::cout << "checker request: operation=" << operation
             << " targetMaster=" << (targetMaster != nullptr ? targetMaster->getId() : -1)
             << " overlays=" << overlays.size() << " origin=(" << left << ','
             << bottom << ")\n";
@@ -305,15 +331,50 @@ bool TestFillerRepairCmd::exec()
 
   std::vector<CellChangeRecord> changes;
   const Node* target = removeOnly ? nullptr : &temporary;
-  const bool accepted
-      = checker->check(target, x, y, orientation, changes, overlayChanges);
+  bool accepted = false;
+  if (resize) {
+    // Prepare a virtual deletion. Its filler edits seed candidate checks but
+    // do not need to succeed on their own: the final target may close the gap.
+    placementDrc->checkDRC(nullptr, x, y, replacedStd->getOrient(),
+                           changes, overlayChanges);
+    const Rect core = grid->getCore();
+    const int64_t xl = int64_t{core.getXL().getStorage()} + left;
+    const int64_t yl = int64_t{core.getYL().getStorage()} + bottom;
+    const Rect box(
+        UvDist(std::max<int64_t>(core.getXL().getStorage(), xl - diameter)),
+        UvDist(std::max<int64_t>(core.getYL().getStorage(), yl - diameter)),
+        UvDist(std::min<int64_t>(core.getXH().getStorage(),
+                                xl + targetCell->getWidth().getStorage() + diameter)),
+        UvDist(std::min<int64_t>(core.getYH().getStorage(),
+                                yl + targetCell->getHeight().getStorage() + diameter)));
+    // Keep this command independent of the public placement probe APIs.
+    const auto [col, row] = dePlace->legalCellInRect(
+        box, &temporary, &changes, replacedStd);
+    if (col < 0 || row < 0) {
+      std::cout << "NO REPAIR: operation=resize targetMaster="
+                << targetMaster->getId() << " diameter=" << diameter << '\n';
+      return false;
+    }
+    x = GridX{col};
+    y = GridY{row};
+    const auto siteOrientation = grid->getSiteOrientation(x, y, targetCell->getTechSite()->getName());
+    if (!siteOrientation.has_value()) {
+      return false;
+    }
+    orientation = *siteOrientation;
+    left = col * grid->getSiteWidth().v;
+    bottom = grid->gridYToDbu(y).v;
+    accepted = true;
+  } else {
+    accepted = checker->check(target, x, y, orientation, changes, overlayChanges);
+  }
   if (!changes.empty()
       && (setting == nullptr || !validFillerChanges(changes, *setting))) {
     std::cout << "ERROR: repair returned an invalid filler transaction record\n";
     return false;
   }
   std::cout << (accepted ? "LEGAL" : "NO REPAIR")
-            << ": operation=" << (removeOnly ? "remove" : "place")
+            << ": operation=" << operation
             << " targetMaster=" << (targetMaster != nullptr ? targetMaster->getId() : -1)
             << " overlays=" << overlays.size()
             << " fillerChanges=" << changes.size() << '\n';
@@ -373,9 +434,8 @@ bool TestFillerRepairCmd::exec()
     std::cout << "ERROR: commit rejected; placement was not changed\n";
     return false;
   }
-  std::cout << "COMMITTED: " << (removeOnly ? "std removal + " : "target + ")
-            << overlayChanges.size()
-            << " overlay(s) + " << changes.size() << " filler change(s)\n";
+  std::cout << "COMMITTED: operation=" << operation << " origin=(" << left << ','
+            << bottom << ") " << changes.size() << " filler change(s)\n";
   for (const auto& record : transaction) {
     const auto* id = std::get_if<eUNL::LeafCellID>(&record.cell_data_);
     Node* node = id != nullptr
@@ -394,7 +454,8 @@ bool TestFillerRepairCmd::exec()
               << design->getHierMgr()->getLeafCell(node->getDbInst()).getName()
               << " master=" << physical.getLibCell().getName()
               << " masterId=" << node->getMaster()->getId()
-              << " widthSites=" << grid->gridWidth(node).v << " origin=("
+              << " widthSites=" << grid->gridWidth(node).v
+              << " height=" << node->getHeight().v << " origin=("
               << node->getLeft().v << ',' << node->getBottom().v
               << ") orient=" << static_cast<int>(node->getOrient().getValue())
               << '\n';

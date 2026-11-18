@@ -176,6 +176,7 @@ class DePlace {
   friend class TestDePlaceCmd;
   friend class TestObjectsCmd;
   friend class TestPlacementDRCCmd;
+  friend class TestFillerRepairCmd;
   friend class TestIsLegalCmd;
   friend class TestFindLegCmd;
   friend class TestImplantCmd;

@@ -267,12 +267,22 @@ from about 482 to 81 microseconds/call. This is not a large-design benchmark.
 
 The test command also supports std removal/refill:
 `test_filler_repair -inst U1`, equivalently `-inst U1 -master {}`.
-An empty/whitespace master requests exactly one movable, ungrouped std cell;
-nonempty master keeps placement/swap semantics. The command submits a null
-target to ImplantLayerChecker and commits the old std Delete plus FR's refill
-once. It tests Implant/FR, not every registered DRC rule. Regression coverage
-includes repeated option use, invalid/fixed/grouped requests, failed calls
-without mutation, and complete one/two-row refill after removal.
+An empty master requests one movable, ungrouped std cell and commits the
+old std Delete plus FR's refill. For one std cell and a different-size
+master, `test_filler_repair -inst U1 -master M2H ?-diameter DBU?` prepares
+a virtual deletion and calls `legalCellInRect` directly, not either public
+`findLeg`. An explicit diameter also enables this path for same-size moves.
+Zero (the default) tests only the original position. A successful resize
+commits an ID-preserving Replace plus the final filler changes, not the
+virtual Delete. This branch runs the registered placement checkers;
+the original explicit-overlay path still calls ImplantLayerChecker directly.
+
+The local OpenROAD runner exercises a five-row LEF/DEF fixture with actual
+implant rules and only single-row fillers (18 positive/negative checks), plus
+a 1h→2h→1h round trip on the Nangate45 GCD DEF using a test-only double-height
+master. Nangate45 validates placement geometry, not implant DRC. Both use
+real OpenDB input but commit only to the local UDM projection. Normal and ASan
+each passed all 487 tests after the command change.
 
 ## Remaining destination work and limits
 
@@ -293,6 +303,11 @@ without mutation, and complete one/two-row refill after removal.
 - The local OpenROAD importer projects ODB into fake UDM. Its commits modify
   that projection, not the source ODB or a later write_def. Source-ODB writeback
   remains separate work.
+- The mixed-height fixture reproduces a fixed-filler mismatch: the probe can
+  propose deleting a fixed filler and report legal, then commit rejects the
+  transaction. Search should exclude noneditable fillers while keeping them as
+  DRC neighbors. The placement probe also checks target site compatibility
+  only on its first row. Verify upper-row and hybrid site patterns separately.
 - Placement over empty sites is outside the probe contract. Selected old std
   and real filler footprints must cover every target site. Padding-constrained
   tilings may fail safely instead of searching alternative padding-aware tilings.

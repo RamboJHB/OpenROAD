@@ -50,10 +50,16 @@ fi
 cmake -S "${repo_root}" -B "${build_dir}" "${cmake_args[@]}"
 cmake --build "${build_dir}" --target openroad -j "${DPL2_BUILD_JOBS:-4}"
 
-test_log="${build_dir}/dpl2-real-odb-test.log"
-(
-  cd "${repo_root}/src/dpl2/local/testdata"
-  "${build_dir}/src/openroad" run_test_filler_repair.tcl
-) | tee "${test_log}"
-grep -q "LEGAL: targetMaster=.* overlays=1" "${test_log}"
-grep -q "DPL2_REAL_ODB_TEST_PASS" "${test_log}"
+run_case() {
+  local script="$1" marker="$2"
+  local log="${build_dir}/${script%.tcl}.log"
+  (
+    cd "${repo_root}/src/dpl2/local/testdata"
+    "${build_dir}/src/openroad" -exit "${script}"
+  ) | tee "${log}"
+  grep -q "^${marker}$" "${log}"
+}
+
+run_case run_test_filler_repair.tcl DPL2_REAL_ODB_TEST_PASS
+run_case run_test_filler_resize.tcl DPL2_REAL_ODB_RESIZE_TEST_PASS
+run_case run_test_filler_resize_nangate45.tcl DPL2_REAL_NANGATE45_RESIZE_TEST_PASS

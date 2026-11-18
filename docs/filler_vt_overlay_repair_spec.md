@@ -191,9 +191,14 @@ returned filler transaction; they must not append the input filler Deletes.
 `test_filler_repair -inst U1` (or `-master {}`) tests removal of exactly one
 movable, ungrouped standard cell. It checks a null target with the old std
 Delete, then commits that Delete plus FR's refill transaction once. One- and
-two-row cells are supported. A nonempty `-master` keeps the placement/swap
-behavior. Invalid requests or failed repair/commit leave placement unchanged.
-This command exercises ImplantLayerChecker/FR, not the complete DRC checker set.
+two-row cells are supported. With one std instance and a different-size
+`-master`, or with explicit `-diameter`, the command makes a temporary resize
+target, probes removal, and calls `legalCellInRect` directly. The diameter is a
+nonnegative DBU search extension; its default of zero restricts the probe to
+the old origin. Only the final std `Replace` and FR changes are committed.
+The resize branch runs the registered placement checkers; removal, swaps
+without a search and explicit filler overlays use ImplantLayerChecker directly.
+Invalid requests or rejected plans do not commit partial changes.
 
 Before publishing success, DePlace checks final target/filler padded footprints
 together. A body-only tiling that conflicts with padding fails safely rather

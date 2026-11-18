@@ -1,0 +1,14 @@
+# Geometry-only companion for the real Nangate45 INV_X1.
+VERSION 5.6 ;
+BUSBITCHARS "[]" ;
+DIVIDERCHAR "/" ;
+
+MACRO INV_X1_DPL2_2H
+  CLASS CORE ;
+  ORIGIN 0 0 ;
+  SIZE 0.38 BY 2.8 ;
+  SYMMETRY X Y ;
+  SITE FreePDK45_38x28_10R_NP_162NW_34O ;
+END INV_X1_DPL2_2H
+
+END LIBRARY

@@ -705,7 +705,9 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   const auto before = f.snapshot();
   EXPECT_FALSE(command.run({"-inst", "I103", "-master", "BUF1"}, error));
   EXPECT_EQ(f.snapshot(), before);
-  EXPECT_FALSE(command.run({"-inst", "I122", "-master", "TH5"}, error));
+  EXPECT_FALSE(command.run({"-inst", "I122", "-master", "TL4D"}, error));
+  EXPECT_EQ(f.snapshot(), before);
+  EXPECT_FALSE(command.run({"-inst", "I122", "-master", "BUF2", "-diameter", "-1"}, error));
   EXPECT_EQ(f.snapshot(), before);
 
   // Removal mode accepts exactly one standard cell. Rejections must leave the
@@ -729,9 +731,7 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   EXPECT_FALSE(command.run({"-inst", "I110"}, error));
   f.node(110)->setGroup(nullptr);
   EXPECT_EQ(f.snapshot(), before);
-  const auto expectRefilled = [&](int id, int x, int row, int width, int height = 1) {
-    EXPECT_EQ(f.node(id), nullptr);
-    EXPECT_FALSE(f.design->desMgr()->getPhysCell(eUNL::LeafCellID(0, id)).isValid());
+  const auto expectFilled = [&](int x, int row, int width, int height = 1) {
     for (int r = row; r < row + height; ++r) {
       for (int col = x; col < x + width; ++col) {
         const Node* filler = f.dp->getGrid()->gridPixel(GridX{col}, GridY{r})->cell;
@@ -746,6 +746,11 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
     }
     f.consistent();
   };
+  const auto expectRefilled = [&](int id, int x, int row, int width, int height = 1) {
+    EXPECT_EQ(f.node(id), nullptr);
+    EXPECT_FALSE(f.design->desMgr()->getPhysCell(eUNL::LeafCellID(0, id)).isValid());
+    expectFilled(x, row, width, height);
+  };
   // Reuse the command after a populated -master option: omission must clear it.
   ASSERT_TRUE(command.run({"-inst", "I122", "-master", "BUF2"}, error));
   ASSERT_TRUE(command.run({"-inst", "I110"}, error));
@@ -755,17 +760,50 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   ASSERT_TRUE(command.run({"-inst", "I112", "-master", " \t\n "}, error));
   expectRefilled(112, 12, 1, 6);
 
-  // Prepare one two-row std cell through the real commit path, then remove it
-  // through the same command and verify both released rows are filled.
-  auto twoRow = f.remove(120);
-  twoRow.op_ = OpType::Replace;
-  twoRow.new_lib_cell_ = eLIB::LibCellID(0, 12);
-  ASSERT_TRUE(f.dp->commit({twoRow, f.remove(130),
+  // Give one single-row std cell two adjacent single-row fillers above it.
+  auto oneRow = f.remove(120);
+  oneRow.op_ = OpType::Replace;
+  oneRow.new_lib_cell_ = eLIB::LibCellID(0, 1);
+  ASSERT_TRUE(f.dp->commit({oneRow, f.remove(130),
       f.add("REMOVE_PREP_R2", 3, 4, 2 * frt::kRowHeight),
+      f.add("RESIZE_UPPER_LEFT", 3, 0, 3 * frt::kRowHeight,
+            eUTL::PhysOrientationE::R0),
+      f.add("RESIZE_UPPER_RIGHT", 3, 2, 3 * frt::kRowHeight,
+            eUTL::PhysOrientationE::R0),
       f.add("REMOVE_PREP_R3", 3, 4, 3 * frt::kRowHeight,
             eUTL::PhysOrientationE::R0)}));
-  f.consistent();
-  ASSERT_EQ(f.node(120)->getHeight().v, 2 * frt::kRowHeight);
+  expectFilled(0, 3, 4);
+  const Node* const original = f.node(120);
+  ASSERT_NE(original, nullptr);
+  const auto oldId = original->getDbInst();
+  const Node* const upperLeft = f.dp->getGrid()->gridPixel(GridX{0}, GridY{3})->cell;
+  const Node* const upperRight = f.dp->getGrid()->gridPixel(GridX{2}, GridY{3})->cell;
+  ASSERT_NE(upperLeft, nullptr);
+  ASSERT_NE(upperRight, nullptr);
+  ASSERT_NE(upperLeft, upperRight);
+  const auto upperLeftId = upperLeft->getDbInst();
+  const auto upperRightId = upperRight->getDbInst();
+  const auto expectResize = [&](int rows, int master) {
+    ASSERT_EQ(f.node(120), original);
+    EXPECT_EQ(original->getDbInst(), oldId);
+    EXPECT_EQ(original->getHeight().v, rows * frt::kRowHeight);
+    EXPECT_EQ(original->getMaster()->getDbMaster(), eLIB::LibCellID(0, master));
+    for (int row = 2; row < 2 + rows; ++row) {
+      for (int x = 0; x < 4; ++x) {
+        EXPECT_EQ(f.dp->getGrid()->gridPixel(GridX{x}, GridY{row})->cell, original);
+      }
+    }
+    f.consistent();
+  };
+  ASSERT_TRUE(command.run({"-inst", "I120", "-master", "TL4D"}, error));
+  expectResize(2, 12);
+  EXPECT_EQ(f.dp->getNetwork()->getNode(upperLeftId), nullptr);
+  EXPECT_EQ(f.dp->getNetwork()->getNode(upperRightId), nullptr);
+  ASSERT_TRUE(command.run({"-inst", "I120", "-master", "TL4"}, error));
+  expectResize(1, 1);
+  expectFilled(0, 3, 4);
+  ASSERT_TRUE(command.run({"-inst", "I120", "-master", "TL4D", "-diameter", "0"}, error));
+  expectResize(2, 12);
   ASSERT_TRUE(command.run({"-inst", "I120"}, error));
   expectRefilled(120, 0, 2, 4, 2);
   const auto afterRemovals = f.snapshot();
