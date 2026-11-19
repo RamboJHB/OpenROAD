@@ -1,4 +1,5 @@
-// Read-only resize/move probes followed by real DePlace commit, using fake UDM data.
+// Read-only resize/move probes and commits: std changes stay in Network/Grid,
+// while filler changes update the fake UDM as well.
 #include <PlacementDRC.h>
 #include <dpl2/DePlace.h>
 #include <drc/ImplantLayerChecker.h>
@@ -89,6 +90,7 @@ class ResizeMoveFixture
         DRCCheckerType::ImplantLayer,
         std::make_unique<ipl::ImplantLayerChecker>(
             dp_->getGrid(), design_->design(), dp_->getNetwork()));
+    originalStdUdm_ = standardUdmSnapshot();
   }
 
   DePlace& dp() { return *dp_; }
@@ -167,15 +169,18 @@ class ResizeMoveFixture
   }
   void expectConsistent()
   {
+    EXPECT_EQ(standardUdmSnapshot(), originalStdUdm_);
     for (const auto& [id, node] : dp_->getNetwork()->getNodes()) {
       EXPECT_EQ(node->getId(), id);
       EXPECT_EQ(dp_->getNetwork()->getNode(node->getDbInst()), node.get());
       const auto physical = design_->desMgr()->getPhysCell(node->getDbInst());
       ASSERT_TRUE(physical.isValid());
-      EXPECT_EQ(physical.getPhysMaster().getLibCellId(), node->getMaster()->getDbMaster());
-      EXPECT_EQ(physical.getOrigin().getX(), eUTL::UvDist(node->getLeft().v + offsetX_));
-      EXPECT_EQ(physical.getOrigin().getY(), eUTL::UvDist(node->getBottom().v + offsetY_));
-      EXPECT_EQ(physical.getOrient(), node->getOrient());
+      if (node->isFiller()) {
+        EXPECT_EQ(physical.getPhysMaster().getLibCellId(), node->getMaster()->getDbMaster());
+        EXPECT_EQ(physical.getOrigin().getX(), eUTL::UvDist(node->getLeft().v + offsetX_));
+        EXPECT_EQ(physical.getOrigin().getY(), eUTL::UvDist(node->getBottom().v + offsetY_));
+        EXPECT_EQ(physical.getOrient(), node->getOrient());
+      }
       const auto box = dp_->getGrid()->gridCovering(node.get());
       for (GridY y = box.ylo; y < box.yhi; ++y) {
         for (GridX x = box.xlo; x < box.xhi; ++x) {
@@ -196,6 +201,21 @@ class ResizeMoveFixture
   }
 
  private:
+  std::string standardUdmSnapshot() const
+  {
+    std::ostringstream out;
+    for (const auto& [id, cell] : design_->desMgr()->cells_) {
+      const Master* master = dp_->getNetwork()->getMaster(cell.master->getLibCellId());
+      if (master == nullptr || master->isFiller()) {
+        continue;
+      }
+      out << id.getIndexValue() << ',' << cell.valid << ',' << cell.name << ','
+          << cell.master->getLibCellId().getIndexValue() << ','
+          << cell.origin.getX().getStorage() << ',' << cell.origin.getY().getStorage() << ','
+          << static_cast<int>(cell.orient.getValue()) << ',' << static_cast<int>(cell.status) << ';';
+    }
+    return out.str();
+  }
   void addPhysical(int id, int master, int x, int row)
   {
     design_->desMgr()->addCell(eUNL::LeafCellID(0, id),
@@ -208,6 +228,7 @@ class ResizeMoveFixture
   std::unique_ptr<frt::E2ETestProvider> provider_;
   std::unique_ptr<frt::E2ETestDesign> design_;
   std::unique_ptr<DePlace> dp_;
+  std::string originalStdUdm_;
 };
 
 TEST(DePlaceResizeMove, OriginalPositionSupportsSizeDownAndSizeUp)
@@ -408,6 +429,74 @@ TEST(DePlaceResizeMove, CrossRowMoveUsesDestinationOrientationAndLiveChecker)
   fixture.expectConsistent();
 }
 
+TEST(DePlaceResizeMove, FailedCandidatesDoNotPublishTheirChangesOrOrientation)
+{
+  struct RejectFirstRow : DRCChecker
+  {
+    RejectFirstRow(Grid* grid, eUNL::Design* design) : DRCChecker(grid, design) {}
+    mutable bool rejectedMirrored = false;
+    mutable PhysOrientation acceptedOrientation{PhysOrientationE::R180};
+    bool check(const Node*, GridX, GridY y, const PhysOrientation&) const override
+    {
+      return y.v == 1;
+    }
+    bool check(const Node*, GridX, GridY y, const PhysOrientation& orientation,
+               std::vector<CellChangeRecord>& changes,
+               std::vector<CellChangeRecord>&) const override
+    {
+      if (y.v != 1) {
+        rejectedMirrored |= y.v == 0 && orientation == PhysOrientationE::MX;
+        changes.push_back({OpType::Add, std::string("REJECTED_CANDIDATE"), UvDist(0),
+            UvDist(0), LibCellID(), LibCellID(0, 18), orientation});
+        return false;
+      }
+      acceptedOrientation = orientation;
+      return true;
+    }
+  };
+  ResizeMoveFixture fixture;
+  auto gate = std::make_unique<RejectFirstRow>(fixture.dp().getGrid(), fixture.checker()->getDesign());
+  const auto* observed = gate.get();
+  fixture.dp().getPlacementDRC()->addChecker(DRCCheckerType::EdgeSpacing, std::move(gate));
+  const auto pin = eUNL::PinID(0, 900);
+  fixture.dp().getDesMgr()->addPin(eUNL::PhysPinID(pin), 35, 20);
+  const auto before = fixture.snapshot();
+  std::vector<CellChangeRecord> changes;
+  const auto location = fixture.dp().findLeg(pin, nullptr, 8, LibCellID(0, 18), changes);
+  ASSERT_NE(location, (std::pair<int, int>{-1, -1}));
+  EXPECT_TRUE(observed->rejectedMirrored);
+  EXPECT_EQ(observed->acceptedOrientation, PhysOrientationE::R0);
+  EXPECT_EQ(location.second, frt::kRowHeight);
+  ASSERT_FALSE(changes.empty());
+  EXPECT_EQ(changes.back().op_, OpType::Add);
+  EXPECT_EQ(changes.back().new_lib_cell_, LibCellID(0, 18));
+  EXPECT_EQ(changes.back().orientation_, observed->acceptedOrientation);
+  for (const auto& change : changes) {
+    if (const auto* name = std::get_if<std::string>(&change.cell_data_)) {
+      EXPECT_NE(*name, "REJECTED_CANDIDATE");
+    }
+  }
+  EXPECT_EQ(fixture.snapshot(), before);
+}
+
+TEST(DePlaceResizeMove, NewInsertionDoesNotTreatNetworkNodeZeroAsItsReplacement)
+{
+  ResizeMoveFixture fixture;
+  const Node* zero = fixture.dp().getNetwork()->getNode(0);
+  ASSERT_NE(zero, nullptr);
+  ASSERT_FALSE(zero->isFiller());
+  const auto origin = fixture.dp().getDesMgr()->getPhysCell(zero->getDbInst()).getOrigin();
+  const auto pin = eUNL::PinID(0, 900);
+  fixture.dp().getDesMgr()->addPin(eUNL::PhysPinID(pin), origin.getX().getStorage(), origin.getY().getStorage());
+  const auto before = fixture.snapshot();
+  std::vector<CellChangeRecord> changes;
+  EXPECT_EQ(fixture.dp().findLeg(pin, nullptr, 0, LibCellID(0, 18), changes),
+            (std::pair<int, int>{-1, -1}));
+  EXPECT_TRUE(changes.empty());
+  EXPECT_EQ(fixture.dp().getNetwork()->getNode(0), zero);
+  EXPECT_EQ(fixture.snapshot(), before);
+}
+
 TEST(DePlaceResizeMove, SupportsOneRowToTwoRowsAndTwoRowsToOneRow)
 {
   for (bool grow : {false, true}) {
@@ -474,6 +563,9 @@ TEST(DePlaceResizeMove, ImpossibleResizeAndBlockedSearchLeaveInputUntouched)
   EXPECT_FALSE(fixture.dp().isLegal(fixture.target()->getDbInst(), eLIB::LibCellID(0, 12), changes));
   ASSERT_EQ(changes.size(), 1u);
   EXPECT_EQ(changes.front().cell_data_, sentinel.cell_data_);
+  EXPECT_EQ(changes.front().orientation_, sentinel.orientation_);
+  EXPECT_EQ(changes.front().x_, sentinel.x_);
+  EXPECT_EQ(changes.front().y_, sentinel.y_);
   EXPECT_EQ(fixture.snapshot(), before);
   auto blocked = fixture.area(0, 0, 2);
   EXPECT_FALSE(fixture.dp().isLegal(fixture.target()->getDbInst(),
@@ -756,6 +848,8 @@ TEST(DePlaceSitePatterns, ResizeRequiresTheDeclaredUpperSiteAndOrientation)
   EXPECT_EQ(dp.getGrid()->gridPixel(GridX{5}, GridY{3})->cell, original);
   EXPECT_FALSE(db.desMgr().getPhysCell(firstFillerId).isValid());
   EXPECT_FALSE(db.desMgr().getPhysCell(secondFillerId).isValid());
+  EXPECT_EQ(db.desMgr().getPhysCell(oldId).getPhysMaster().getLibCellId(), standard.getLibCellId());
+  EXPECT_EQ(db.desMgr().getPhysCell(oldId).getOrient(), PhysOrientationE::MX);
 }
 
 TEST(DePlaceSitePatterns, AmbiguousPatternUsesAnOrientationAllowedByMasterSymmetry)
@@ -792,6 +886,7 @@ TEST(DePlaceSitePatterns, AmbiguousPatternUsesAnOrientationAllowedByMasterSymmet
   EXPECT_EQ(changes.back().orientation_, PhysOrientationE::MY);
   ASSERT_TRUE(dp.commit(changes));
   EXPECT_EQ(dp.getNetwork()->getNode(oldId)->getOrient(), PhysOrientationE::MY);
+  EXPECT_EQ(db.desMgr().getPhysCell(oldId).getPhysMaster().getLibCellId(), standard.getLibCellId());
 }
 
 TEST(DePlaceSitePatterns, TallParentSiteDoesNotRequireTheSameNameOnTheUpperGridRow)
@@ -813,11 +908,24 @@ TEST(DePlaceSitePatterns, TallParentSiteDoesNotRequireTheSameNameOnTheUpperGridR
   DePlace dp;
   ASSERT_FALSE(dp.getGrid()->getSiteOrientation(GridX{10}, GridY{3}, parent.getName()));
   ASSERT_TRUE(dp.getGrid()->getPlacementSiteOrientation(GridX{10}, GridY{2}, master));
+  // The upstream owner creates the UDM std instance; commit only imports its
+  // stable identity and updates Network/Grid, without changing UDM placement.
+  const LeafCellID addedId(0, 900);
+  db.desMgr().addCell(addedId, &master, 0, 0, PhysOrientationE::R0,
+                     eUNL::PhysObjStatus::UNKNOWN, "TALL");
+  ASSERT_EQ(dp.getNetwork()->getNode(addedId), nullptr);
+  const size_t physicalCount = db.desMgr().cells_.size();
   ASSERT_TRUE(dp.commit({{OpType::Add, std::string("TALL"), UvDist(10), UvDist(16),
                           LibCellID(), master.getLibCellId(), PhysOrientationE::R0}}));
   const Node* const added = dp.getGrid()->gridPixel(GridX{10}, GridY{2})->cell;
   ASSERT_NE(added, nullptr);
+  EXPECT_EQ(added->getDbInst(), addedId);
   EXPECT_EQ(dp.getGrid()->gridPixel(GridX{11}, GridY{3})->cell, added);
+  EXPECT_EQ(db.desMgr().cells_.size(), physicalCount);
+  const auto physical = db.desMgr().getPhysCell(addedId);
+  EXPECT_EQ(physical.getOrigin().getX(), UvDist(0));
+  EXPECT_EQ(physical.getOrigin().getY(), UvDist(0));
+  EXPECT_EQ(physical.getStatus(), eUNL::PhysObjStatus::UNKNOWN);
 }
 
 }  // namespace

@@ -7,8 +7,11 @@
 #include <infrastructure/Padding.h>
 #include <infrastructure/fillerSetting.h>
 #include <infrastructure/network.h>
+#include <tbb/task_arena.h>
 
 #include <cstdio>
+#include <cassert>
+#include <map>
 #include <set>
 #include <sstream>
 #include <string>
@@ -133,10 +136,11 @@ std::pair<int, int> DePlace::findLegToReplace(
       = old->getWidth().v == physical.getWidth().getStorage()
         && old->getHeight().v == physical.getHeight().getStorage();
   std::vector<CellChangeRecord> trial;
+  PhysOrientation rtOrient{PhysOrientationE::R0};
   auto location = notFound;
   // isLegal's same-size swap need not prepare a removal if it fits in place.
   if (tryDirectFirst && sameFootprint) {
-    location = findLegOrigin(probe, va, 0, trial, old);
+    location = findLegOrigin(probe, va, 0, trial, rtOrient);
   }
   if (location == notFound) {
     std::vector<CellChangeRecord> removed{
@@ -148,32 +152,28 @@ std::pair<int, int> DePlace::findLegToReplace(
     drc_engine_->checkDRC(nullptr, oldX, oldY, old->getOrient(), trial, removed);
     probe.setLeft(old->getLeft());
     probe.setBottom(old->getBottom());
-    location = findLegOrigin(probe, va, diameter, trial, old);
+    location = findLegOrigin(probe, va, diameter, trial, rtOrient);
   }
   if (location == notFound) {
     return notFound;
   }
   const GridX x{location.first};
   const GridY y{location.second};
-  const auto orientation = getLegalPlacementOrientation(x, y, physical);
-  if (!orientation.has_value()) {
-    return notFound;
-  }
   const int xUv = x.v * grid_->getSiteWidth().v;
   const int yUv = grid_->gridYToDbu(y).v;
   trial.push_back({OpType::Replace, old->getDbInst(),
                    UvDist(xUv), UvDist(yUv),
-                   old->getMaster()->getDbMaster(), masterId, *orientation});
+                   old->getMaster()->getDbMaster(), masterId, rtOrient});
   ccRecords.insert(ccRecords.end(), trial.begin(), trial.end());
   return {xUv, yUv};
 }
 
 /**
- * Apply a prevalidated Add/Replace/Delete batch. Record coordinates are core
- * relative, while UDM placement coordinates are absolute. Callers own DRC and
- * must serialize commits with placement readers. Invalid input is rejected
- * before any DB, Network or Grid mutation; this is not an undo journal for
- * allocation failures or unexpected UDM exceptions.
+ * Apply a prevalidated Add/Replace/Delete batch. Standard-cell changes update
+ * only Network/Grid; the caller owns their UDM transaction. Filler changes
+ * also update UDM. Coordinates are core-relative. Callers own DRC and must
+ * serialize commits with placement readers. Invalid input is rejected before
+ * mutation; this is not an undo journal for allocation/UDM exceptions.
  */
 bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
 {
@@ -185,9 +185,54 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
     return false;
   }
 
+  // The caller creates std instances in UDM before committing their placement.
+  // Resolve every requested name in one read-only pass; keep the public wire
+  // format unchanged and never allocate a synthetic database identity.
+  std::map<std::string, LeafCellID> standardAdds;
+  for (const auto& record : ccRecords) {
+    const Master* master = network_->getMaster(record.new_lib_cell_);
+    const auto* name = std::get_if<std::string>(&record.cell_data_);
+    if (record.op_ == OpType::Add && master != nullptr && !master->isFiller()
+        && name != nullptr && !name->empty()) {
+      standardAdds.emplace(*name, LeafCellID{});
+    }
+  }
+  if (!standardAdds.empty()) {
+    if (design_->getHierMgr() == nullptr) {
+      return false;
+    }
+    struct StandardAddVisitor : eUNL::UnlBaseVisitor<eUNL::PhysCell, LeafCellID>
+    {
+      const eUNL::HierManager* hierarchy;
+      std::map<std::string, LeafCellID>& names;
+      bool ambiguous = false;
+
+      StandardAddVisitor(const eUNL::HierManager* h, std::map<std::string, LeafCellID>& n)
+          : hierarchy(h), names(n) {}
+      bool filter(const eUNL::PhysCell& cell, const LeafCellID&) override { return cell.isValid(); }
+      eUNL::UnlIterStatus visit(const eUNL::PhysCell&, const LeafCellID& id) override
+      {
+        const auto found = names.find(hierarchy->getLeafCell(id).getName());
+        if (found != names.end()) {
+          ambiguous |= found->second.isValid();
+          found->second = id;
+        }
+        return eUNL::UnlIterStatus::CONTINUE;
+      }
+    } visitor(design_->getHierMgr(), standardAdds);
+    tbb::task_arena arena(1);
+    eLIB::PhysMacroUsageSet usages;
+    desMgr_->iterateAllPhysCells(arena, visitor, usages);
+    if (visitor.ambiguous) {
+      return false;
+    }
+  }
+
   eUNL::NlEditor editor(design_);
   struct Pending
   {
+    const CellChangeRecord* record = nullptr;
+    bool standard = false;
     Node* old = nullptr;
     Node proposed;
     std::unique_ptr<eUNL::UnlChange_addCell> add;
@@ -201,6 +246,7 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
   std::set<std::string> addedNames;
   for (const auto& record : ccRecords) {
     Pending entry;
+    entry.record = &record;
     if (record.op_ != OpType::Add) {
       const auto* id = std::get_if<LeafCellID>(&record.cell_data_);
       entry.old = id != nullptr ? network_->getNode(*id) : nullptr;
@@ -210,30 +256,36 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
           || !removedOccupants.insert(entry.old).second) {
         return false;
       }
-      const auto physical = desMgr_->getPhysCell(*id);
-      if (!physical.isValid()
-          || physical.getStatus() == PhysObjStatus::LOC_FIXED
-          || physical.getPhysMaster().getLibCellId()
-                 != entry.old->getMaster()->getDbMaster()
-          || physical.getOrigin().getX() - network_->getCore().getXL()
-                 != UvDist(entry.old->getLeft().v)
-          || physical.getOrigin().getY() - network_->getCore().getYL()
-                 != UvDist(entry.old->getBottom().v)
-          || physical.getOrient() != entry.old->getOrient()
-          || (record.orig_lib_cell_.isValid()
-              && record.orig_lib_cell_
-                     != entry.old->getMaster()->getDbMaster())) {
+      entry.standard = !entry.old->isFiller();
+      if (record.orig_lib_cell_.isValid()
+          && record.orig_lib_cell_ != entry.old->getMaster()->getDbMaster()) {
         return false;
+      }
+      // A previous std commit may intentionally differ from UDM. Network is
+      // authoritative for the next probe/commit; fillers remain DB-backed.
+      if (!entry.standard) {
+        const auto physical = desMgr_->getPhysCell(*id);
+        if (!physical.isValid()
+            || physical.getStatus() == PhysObjStatus::LOC_FIXED
+            || physical.getPhysMaster().getLibCellId()
+                   != entry.old->getMaster()->getDbMaster()
+            || physical.getOrigin().getX() - network_->getCore().getXL()
+                   != UvDist(entry.old->getLeft().v)
+            || physical.getOrigin().getY() - network_->getCore().getYL()
+                   != UvDist(entry.old->getBottom().v)
+            || physical.getOrient() != entry.old->getOrient()) {
+          return false;
+        }
       }
     }
     if (record.op_ == OpType::Delete) {
-      entry.remove = std::make_unique<eUNL::UnlChange_removeCell>(
-          &editor,
-          *design_,
-          eUNL::UnlChangePhaseE::PRE_CHANGE,
-          entry.old->getDbInst());
-      if (!entry.remove->feasible()) {
-        return false;
+      if (!entry.standard) {
+        entry.remove = std::make_unique<eUNL::UnlChange_removeCell>(
+            &editor, *design_, eUNL::UnlChangePhaseE::PRE_CHANGE,
+            entry.old->getDbInst());
+        if (!entry.remove->feasible()) {
+          return false;
+        }
       }
       pending.push_back(std::move(entry));
       continue;
@@ -245,6 +297,10 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
     if (master == nullptr || master->getPhysLibCell() == nullptr) {
       return false;
     }
+    if (record.op_ == OpType::Replace && entry.old->isFiller() != master->isFiller()) {
+      return false;
+    }
+    entry.standard = !master->isFiller();
     const PhysLibCell& physicalMaster = *master->getPhysLibCell();
     const auto orientation = record.orientation_;
     if (orientation != PhysOrientationE::R0
@@ -260,6 +316,9 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
     entry.proposed.setLeft(DbuX{record.x_.getStorage()});
     entry.proposed.setBottom(DbuY{record.y_.getStorage()});
     entry.proposed.setOrient(orientation);
+    if (record.op_ == OpType::Replace) {
+      entry.proposed.setDbInst(entry.old->getDbInst());
+    }
     if (physicalMaster.getType().isBlock() || physicalMaster.getType().isPad()
         || physicalMaster.getType().isCover()
         || entry.proposed.getWidth().v <= 0
@@ -276,19 +335,32 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
           || !addedNames.insert(*name).second) {
         return false;
       }
-      entry.add = std::make_unique<eUNL::UnlChange_addCell>(
-          &editor,
-          *design_,
-          eUNL::UnlChangePhaseE::PRE_CHANGE,
-          *name,
-          newModule,
-          origin,
-          orientation);
-      if (!entry.add->feasible()) {
-        return false;
+      if (entry.standard) {
+        const auto found = standardAdds.find(*name);
+        if (found == standardAdds.end() || !found->second.isValid()
+            || network_->getNode(found->second) != nullptr) {
+          return false;
+        }
+        const auto physical = desMgr_->getPhysCell(found->second);
+        if (!physical.isValid() || physical.getStatus() == PhysObjStatus::LOC_FIXED
+            || physical.getPhysMaster().getLibCellId() != record.new_lib_cell_) {
+          return false;
+        }
+        entry.proposed.setDbInst(found->second);
+      } else {
+        entry.add = std::make_unique<eUNL::UnlChange_addCell>(
+            &editor,
+            *design_,
+            eUNL::UnlChangePhaseE::PRE_CHANGE,
+            *name,
+            newModule,
+            origin,
+            orientation);
+        if (!entry.add->feasible()) {
+          return false;
+        }
       }
-    } else {
-      entry.proposed.setDbInst(entry.old->getDbInst());
+    } else if (!entry.standard) {
       const auto oldModule
           = design_->getLibAcc()
                 .getLibCell(entry.old->getMaster()->getDbMaster())
@@ -318,7 +390,7 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
   // batch. Do not let record order authorize overlap or overwrite reservations.
   std::set<Pixel*> claimed;
   for (auto& entry : pending) {
-    if (entry.remove != nullptr) {
+    if (entry.record->op_ == OpType::Delete) {
       continue;
     }
     const int64_t right
@@ -373,9 +445,19 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
 
   for (Node* old : removedOccupants) {
     grid_->erasePixel(old);
+    old->setPlaced(false);
   }
   for (auto& entry : pending) {
-    if (entry.remove != nullptr) {
+    if (entry.standard) {
+      // Every possible rejection was checked before the batch erased pixels.
+      auto standard = *entry.record;
+      if (standard.op_ == OpType::Add) {
+        standard.cell_data_ = entry.proposed.getDbInst();
+      }
+      const bool committed = commitStdCell(standard);
+      assert(committed);
+      (void) committed;
+    } else if (entry.remove != nullptr) {
       entry.remove->commit();
       network_->deleteNode(entry.old);
     } else if (entry.add != nullptr) {
@@ -390,6 +472,70 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
       grid_->paintPixel(entry.old);
     }
   }
+  return true;
+}
+
+bool DePlace::commitStdCell(const CellChangeRecord& cellChange)
+{
+  // commit() has preflighted the entire batch and resolved Add names to UDM IDs.
+  const auto* id = std::get_if<LeafCellID>(&cellChange.cell_data_);
+  if (id == nullptr || !id->isValid() || network_ == nullptr || grid_ == nullptr) {
+    return false;
+  }
+  Node* node = network_->getNode(*id);
+  if (cellChange.op_ != OpType::Add
+      && (node == nullptr || node->getMaster() == nullptr || node->isFiller()
+          || node->isFixed() || node->isTerminal() || node->getGroup() != nullptr
+          || (cellChange.orig_lib_cell_.isValid()
+              && cellChange.orig_lib_cell_ != node->getMaster()->getDbMaster()))) {
+    return false;
+  }
+  if (cellChange.op_ == OpType::Delete) {
+    if (node->isPlaced()) {
+      grid_->erasePixel(node);
+    }
+    network_->deleteNode(node);
+    return true;
+  }
+  Master* master = network_->getMaster(cellChange.new_lib_cell_);
+  if ((cellChange.op_ != OpType::Replace && cellChange.op_ != OpType::Add)
+      || master == nullptr || master->isFiller()
+      || master->getPhysLibCell() == nullptr) {
+    return false;
+  }
+  if (cellChange.op_ == OpType::Add) {
+    if (node != nullptr || desMgr_ == nullptr) {
+      return false;
+    }
+    const auto physical = desMgr_->getPhysCell(*id);
+    if (!physical.isValid() || physical.getStatus() == PhysObjStatus::LOC_FIXED
+        || physical.getPhysMaster().getLibCellId() != cellChange.new_lib_cell_) {
+      return false;
+    }
+    auto added = std::make_unique<Node>();
+    added->setId(-1);
+    added->setDbInst(*id);
+    node = added.get();
+    network_->addNode(std::move(added));
+  }
+  if (node->isPlaced()) {
+    grid_->erasePixel(node);
+  }
+  const PhysLibCell& physical = *master->getPhysLibCell();
+  node->setMaster(master);
+  node->setType(Node::CELL);
+  node->setWidth(DbuX{physical.getWidth().getStorage()});
+  node->setHeight(DbuY{physical.getHeight().getStorage()});
+  node->setLeft(DbuX{cellChange.x_.getStorage()});
+  node->setBottom(DbuY{cellChange.y_.getStorage()});
+  node->setOrigLeft(node->getLeft());
+  node->setOrigBottom(node->getBottom());
+  node->setOrient(cellChange.orientation_);
+  node->setBottomPower(master->getBottomPowerType());
+  node->setTopPower(master->getTopPowerType());
+  node->setPlaced(true);
+  node->setHold(false);
+  grid_->paintPixel(node);
   return true;
 }
 
@@ -413,6 +559,7 @@ void DePlace::initTempNode(Node& cell, Master* master,
 {
   // Throw-away Node, deliberately NOT inserted into the Network and never
   // painted onto the grid, so no in-memory placement state is mutated.
+  cell.setId(-1);
   cell.setMaster(master);
   cell.setType(master->isFiller() ? Node::FILLER : Node::CELL);
   cell.setWidth(DbuX{pcell.getWidth().getStorage()});
@@ -434,9 +581,14 @@ void DePlace::initTempNode(Node& cell, Master* master,
 
 std::pair<int, int> DePlace::findLegOrigin(
     Node& probe, eUNL::VoltageArea* va, int diameter,
-    std::vector<CellChangeRecord>& trial, const Node* replacedCell)
+    std::vector<CellChangeRecord>& trial, PhysOrientation& rtOrient)
 {
   constexpr std::pair<int, int> notFound{-1, -1};
+  const Node* replacedCell = network_->getNode(probe.getId());
+  if (replacedCell != nullptr
+      && (replacedCell->isFiller() || replacedCell->getDbInst() != probe.getDbInst())) {
+    replacedCell = nullptr;
+  }
   const DbuX anchorX = probe.getLeft();
   const DbuY anchorY = probe.getBottom();
   const UvDist width(probe.getWidth().v);
@@ -458,7 +610,7 @@ std::pair<int, int> DePlace::findLegOrigin(
         }
       }
     }
-    if (inArea && canBePlaced(&probe, x, y, &trial, replacedCell)) {
+    if (inArea && canBePlaced(&probe, x, y, trial, rtOrient)) {
       return {x.v, y.v};
     }
     if (diameter == 0) {
@@ -485,11 +637,7 @@ std::pair<int, int> DePlace::findLegOrigin(
     std::fwrite(message.data(), 1, message.size(), stdout);
   }
   const auto searchRect = [&](const Rect& rect) {
-    // Failed probes may move the temporary Node, but do not change trial.
-    // Each VA rectangle must start searching from the same origin.
-    probe.setLeft(anchorX);
-    probe.setBottom(anchorY);
-    return legalCellInRect(rect.overlap(core_, false), &probe, &trial, replacedCell);
+    return legalCellInRect(rect.overlap(core_, false), &probe, trial, rtOrient);
   };
   if (va == nullptr) {
     return searchRect(search);
@@ -545,12 +693,9 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   initTempNode(cell, master, *physical,
                Point2D{origin.getX() - core_.getXL(), origin.getY() - core_.getYL()});
   std::vector<CellChangeRecord> trial = ccRecords;
-  const auto [col, row] = findLegOrigin(cell, va, diameter, trial);
+  PhysOrientation rtOrient{PhysOrientationE::R0};
+  const auto [col, row] = findLegOrigin(cell, va, diameter, trial, rtOrient);
   if (col == -1) {
-    return {-1, -1};
-  }
-  const auto orient = getLegalPlacementOrientation(GridX{col}, GridY{row}, *physical);
-  if (!orient.has_value()) {
     return {-1, -1};
   }
   // A new std cell has no DB id yet. Reserve a deterministic request-local name
@@ -577,7 +722,7 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   const int xUv = col * grid_->getSiteWidth().v;
   const int yUv = grid_->gridYToDbu(GridY{row}).v;
   trial.push_back({OpType::Add, name, UvDist(xUv), UvDist(yUv),
-                   LibCellID(), masterId, *orient});
+                   LibCellID(), masterId, rtOrient});
   ccRecords = std::move(trial);
   return {xUv, yUv};
 }

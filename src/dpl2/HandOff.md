@@ -25,14 +25,24 @@ verification counts are available in Git history.
   std Delete is overlay-only. Failure returns no partial repair.
 - DePlace assembles complete transactions: `isLegal` and `findLeg(Node*)`
   append a target `Replace`; `findLeg(PinID)` appends a named target `Add`.
-  Pass that result to `commit` once without
-  appending the target or Deletes again.
+  Pass that result to `commit` once without appending the target or Deletes
+  again. For a std Add, first create its UDM instance using the returned name
+  and master; `commit` resolves that real ID and imports it into Network/Grid.
 - Probes do not mutate DB, Grid or Network. An existing output-vector prefix
   is preserved but is not a placement overlay for later probes. Independently
   accepted probes are not jointly DRC-validated.
-- `DePlace::commit` handles Add/Replace/Delete, preserves std-cell identity
-  for Replace, and synchronizes DB placement, Network lookup maps and Grid
-  occupancy/padding. It checks final occupancy and feasibility, not DRC.
+- `DePlace::commit` handles Add/Replace/Delete. `commitStdCell` changes only
+  Network lookup maps and Grid occupancy/padding, preserving the std Node and
+  DB ID on Replace and leaving std UDM untouched. Filler changes still update
+  UDM, Network and Grid. The whole batch is preflighted before mutation;
+  this checks final occupancy and feasibility, not DRC. A missing, ambiguous,
+  wrong-master or already imported std Add instance rejects the batch.
+  Replace preserves the std/filler classification; use Delete + Add to cross
+  that boundary.
+- Placement/search helpers use the destination's reference outputs
+  `ccRecords` and `rtOrient`, with no pointer overloads or `replacedCell`
+  argument. Only accepted candidates publish outputs. Replacement probes
+  carry the existing Node ID and DB ID; insertion probes have no Node ID.
 
 The engine API remains:
 
@@ -111,7 +121,9 @@ change. Ordinary placement commits do not require rebuilding them.
 Every repair reads current nodes, masters, coordinates, orientation, DB IDs
 and names through request-local placement caches. Concurrent read-only repairs
 are supported; DB/Grid/Network mutation must not overlap them. Commit must
-finish synchronizing all three before subsequent repair calls.
+finish before subsequent repair calls. Network/Grid are authoritative for std
+placement after a commit; the caller owns std UDM updates. Filler placement
+remains synchronized across UDM, Network and Grid.
 PlacementDRC's shared TBB arena is published once during setup and lives until
 process shutdown, rather than being deleted by an arbitrary PlacementDRC owner.
 
@@ -130,7 +142,8 @@ prefix does not already end in one. An empty or absent prefix uses
 A deterministic suffix avoids live-name and same-candidate Add collisions.
 DePlace findLeg uses `DPL_STD_<row>_<column>_M<LibCellID-index>`, also with
 collision suffixes. CellChangeRecord coordinates are core-relative DBU;
-commit converts them to absolute DB coordinates.
+filler commit converts them to absolute DB coordinates. The caller uses the
+same core offset when creating a std Add's UDM instance.
 
 ## Files to migrate
 
@@ -249,6 +262,21 @@ Verification on 2026-11-18, complete default-target builds:
 - Both builds compiled every default target, including commit/command tests,
   destination wiring and the migration-copy gate. `git diff --check` passed.
 
+Destination-interface verification on 2026-11-19 (Linux, GCC 13):
+
+- Complete Debug build: 501/501 tests passed, including both migration payload
+  suites, std UDM immutability, repeated resize/removal, caller-created std Add
+  identity/preflight checks, and command cleanup when filler commit rejects.
+- The Release OpenROAD binary built and ran all three local Tcl fixtures:
+  direct filler repair, 19 mixed-height positive/negative checks, and the
+  Nangate45 1h -> 2h -> 1h round trip. Source ODB snapshots stayed unchanged.
+- The local runner now links the FR OBJECT target directly at the executable,
+  avoiding static-library ordering failures. Its Nangate45 script uses the
+  same repository-root fallback as the other scripts when `info script` is empty.
+- Build-directory-only compatibility flags were needed for this environment's
+  fmt/GCC dependency versions; these are not part of the migration payload.
+  Sanitizer results above belong to the earlier revision, not this update.
+
 These results use the test-only fake UDM provider; they do not establish
 real UDM ABI compatibility or source-ODB writeback.
 
@@ -286,13 +314,16 @@ The local OpenROAD runner exercises a five-row LEF/DEF fixture with actual
 implant rules and only single-row fillers (19 positive/negative checks), plus
 a 1h→2h→1h round trip on the Nangate45 GCD DEF using a test-only double-height
 master. Nangate45 validates placement geometry, not implant DRC. Both use
-real OpenDB input but commit only to the local UDM projection.
+real OpenDB input. Std commits update Network/Grid only; filler commits also
+update the local UDM projection. The command creates a new std UDM instance
+as the caller before committing a std Add, removing it if commit rejects.
 In the mixed-height case, a fixed filler blocks the original candidate before
 commit, and an enlarged search finds a different place without editing it.
 
 ## Remaining destination work and limits
 
-- Map `DePlace::commit` Add/place operations to real UDM APIs. The local
+- Map filler `DePlace::commit` Add/place operations and caller-owned std Add
+  creation to real UDM APIs. The local
   `UnlChange_addCell/placeCell` signatures and error behavior are test
   contracts, not verified real UDM declarations. Confirm CellChangeRecord
   field/ID variants and preserve target connectivity on Replace. Local tests
@@ -303,12 +334,17 @@ commit, and an enlarged search finds a different place without editing it.
   not validate the missing checkers' interaction with filler changes. Those
   checkers must validate final fillers and real mixed Delete overlays read-only;
   removal-only preparation is routed exclusively to ImplantLayerChecker.
-- Provide the commit/read barrier and keep DB, Grid and Network synchronized.
+- Provide the commit/read barrier and coordinate caller-owned std UDM edits
+  with the authoritative Network/Grid placement and filler UDM changes.
   The preflight rejects ordinary invalid batches before mutation; commit has
   no rollback journal for allocation failures or unexpected UDM exceptions.
-- The local OpenROAD importer projects ODB into fake UDM. Its commits modify
-  that projection, not the source ODB or a later write_def. Source-ODB writeback
-  remains separate work.
+- Name generation scans live Network nodes. If the caller retains a removed
+  std instance only in UDM, a later generated-name collision can be rejected
+  by commit; callers must manage the corresponding UDM lifecycle.
+- The local OpenROAD importer projects ODB into fake UDM. Filler commits and
+  caller-owned std Add creation modify that projection, not the source ODB
+  or a later write_def. Std Replace/Delete commits change only Network/Grid.
+  Source-ODB writeback remains separate work.
 - The local site-stack adapter handles ordered TechSite/orientation pairs.
   The actual proprietary UDM pattern element type was not available;
   map any different representation in `normalizeSitePattern` in Grid.cpp.

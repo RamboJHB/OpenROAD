@@ -256,8 +256,11 @@ std::pair<int, int> DePlace::ripUpAndReplaceInRect(Node* target_cell,
   }
 
   // Try to place the target cell inside the target rect.
+  std::vector<CellChangeRecord> ccRecords;
+  eUTL::PhysOrientation rtOrient = target_cell->getOrient();
   const PixelPt pixel_pt = diamondSearch(
-      target_cell, start_pt.x, start_pt.y, x_min, x_max, y_min, y_max);
+      target_cell, start_pt.x, start_pt.y, x_min, x_max, y_min, y_max,
+      ccRecords, rtOrient);
   if (pixel_pt.pixel) {
     // placeCell(target_cell, pixel_pt.x, pixel_pt.y);
     return {pixel_pt.x.v, pixel_pt.y.v};
@@ -276,50 +279,9 @@ std::pair<int, int> DePlace::ripUpAndReplaceInRect(Node* target_cell,
 }
 
 /**
- * @brief Diamond BFS placement search with automatic bounds.
- *
- * Searches outward from (@p x, @p y) in Manhattan-distance order for the
- * first pixel that can legally host @p cell. Bounds are derived from
- * max_displacement_x_ and max_displacement_y_.
- *
- * @param cell Cell to place.
- * @param x   Starting grid X.
- * @param y   Starting grid Y.
- * @return PixelPt with valid pixel if found, empty PixelPt otherwise.
- */
-PixelPt DePlace::diamondSearch(const Node* cell,
-                               const GridX x,
-                               const GridY y,
-                               std::vector<CellChangeRecord>* fillerChanges,
-                               const Node* replacedCell) const
-{
-  // Diamond search limits.
-  GridX x_min = x - max_displacement_x_;
-  GridX x_max = x + max_displacement_x_;
-  GridY y_min = y - max_displacement_y_;
-  GridY y_max = y + max_displacement_y_;
-  // // Restrict search to group boundary.
-  // Group* group = cell->getGroup();
-  // if (group) {
-  //   const GridRect grid_boundary = grid_->gridWithin(group->getBBox());
-  //   const GridPt min = grid_boundary.closestPtInside({x_min, y_min});
-  //   const GridPt max = grid_boundary.closestPtInside({x_max, y_max});
-  //   x_min = min.x;
-  //   y_min = min.y;
-  //   x_max = max.x;
-  //   y_max = max.y;
-  // }
-
-  return diamondSearch(cell, x, y, x_min, x_max, y_min, y_max,
-                       fillerChanges, replacedCell);
-}
-
-/**
  * @brief Diamond BFS search with explicit bounds.
  *
- * Identical BFS logic to the two-argument overload, but the caller
- * controls the search area via x_min_in/x_max_in/y_min_in/y_max_in
- * instead of deriving bounds from max_displacement_ and group boundaries.
+ * Searches in Manhattan-distance order within the caller's bounds.
  *
  * @param cell The cell to place.
  * @param x Starting grid X coordinate.
@@ -330,16 +292,23 @@ PixelPt DePlace::diamondSearch(const Node* cell,
  * @param y_max_in Maximum grid Y (inclusive).
  * @return PixelPt with valid pixel if found, empty PixelPt otherwise.
  */
-PixelPt DePlace::diamondSearch(const Node* cell,
+PixelPt DePlace::diamondSearch(Node* cell,
                                const GridX x,
                                const GridY y,
                                const GridX x_min_in,
                                const GridX x_max_in,
                                const GridY y_min_in,
                                const GridY y_max_in,
-                               std::vector<CellChangeRecord>* fillerChanges,
-                               const Node* replacedCell) const
+                               std::vector<CellChangeRecord>& ccRecords,
+                               eUTL::PhysOrientation& rtOrient) const
 {
+  if (cell == nullptr || network_ == nullptr || grid_ == nullptr) {
+    return PixelPt();
+  }
+  const Node* liveCell = network_->getNode(cell->getId());
+  const bool repairProbe = liveCell != cell;
+  const bool replacement = repairProbe && liveCell != nullptr && !liveCell->isFiller()
+                           && liveCell->getDbInst() == cell->getDbInst();
   // Clip search limits to grid bounds.
   const GridX x_min = std::max(GridX{0}, x_min_in);
   const GridY y_min = std::max(GridY{0}, y_min_in);
@@ -378,14 +347,14 @@ PixelPt DePlace::diamondSearch(const Node* cell,
   int candidates = 0;
   while (!positionsHeap.empty()) {
     // Bound the outer relocation search as well as each individual FR search.
-    if (replacedCell != nullptr && candidates++ == 256) {
+    if (replacement && candidates++ == 256) {
       std::fputs("[isLegal search] candidate budget exhausted (256)\n", stdout);
       return PixelPt();
     }
     const GridPt nearest = positionsHeap.top().p;
     positionsHeap.pop();
-    const bool legal = canBePlaced(cell, nearest.x, nearest.y, fillerChanges, replacedCell);
-    if (fillerChanges != nullptr) {
+    const bool legal = canBePlaced(cell, nearest.x, nearest.y, ccRecords, rtOrient);
+    if (repairProbe) {
       std::printf("[findLeg BFS] try (%d,%d) -> %s\n", nearest.x.v, nearest.y.v,
                     legal ? "ACCEPT" : "reject");
     }
@@ -412,7 +381,7 @@ PixelPt DePlace::diamondSearch(const Node* cell,
                           .sequence = sequence++});
     }
   }
-  if (fillerChanges != nullptr) {
+  if (repairProbe) {
     std::printf("[findLeg BFS] exhausted %d enqueued candidate(s) in box "
                   "x=[%d,%d] y=[%d,%d], no legal site\n",
                   sequence, x_min.v, x_max.v, y_min.v, y_max.v);
@@ -440,18 +409,18 @@ int DePlace::calcDist(const GridPt& p1, const GridPt& p2) const
 /**
  * @brief Legalize a single cell into a specified target rect.
  *
- * Used during ECO to place a cell inside a designated region.
- * First tries diamond search within the target rect. If that fails,
- * falls back to rip-up-and-replace: unplaces cells already occupying
- * the rect, places the target cell, then re-places the displaced cells.
+ * Used during ECO to search inside a designated region. Temporary probes
+ * leave placement unchanged; failure does not rip up neighboring cells.
  *
  * @param cell The instance to legalize.
  * @param target_rect The target region in absolute (design) coordinates.
  * @return (grid_x, grid_y) of the placed cell, or (-1, -1) on failure.
  */
-std::pair<int, int> DePlace::legalCellInRect(const Rect& target_rect, Node* cell,
-                                             std::vector<CellChangeRecord>* fillerChanges,
-                                             const Node* replacedCell)
+std::pair<int, int> DePlace::legalCellInRect(
+    const Rect& target_rect,
+    Node* cell,
+    std::vector<CellChangeRecord>& ccRecords,
+    eUTL::PhysOrientation& rtOrient)
 {
   if (!cell) {
     // logger_->error(
@@ -498,7 +467,7 @@ std::pair<int, int> DePlace::legalCellInRect(const Rect& target_rect, Node* cell
 
   const PixelPt pixel_pt
       = diamondSearch((cell), start_pt.x, start_pt.y, x_min, x_max, y_min, y_max,
-                      fillerChanges, replacedCell);
+                      ccRecords, rtOrient);
 
   if (pixel_pt.pixel) {
     // placeCell((cell), pixel_pt.x, pixel_pt.y);
@@ -580,10 +549,12 @@ void DePlace::unplaceCell(Node* cell)
  * @return true if the placement is legal, false otherwise.
  */
 bool DePlace::canBePlaced(const Node* cell, GridX bin_x, GridY bin_y,
-                          std::vector<CellChangeRecord>* fillerChanges,
-                          const Node* replacedCell) const
+                          std::vector<CellChangeRecord>& ccRecords,
+                          eUTL::PhysOrientation& rtOrient) const
 {
-  if (bin_x.v < 0 || bin_y.v < 0 || bin_y >= grid_->getRowCount()) {
+  if (cell == nullptr || cell->getMaster() == nullptr || grid_ == nullptr
+      || network_ == nullptr || drc_engine_ == nullptr
+      || bin_x.v < 0 || bin_y.v < 0 || bin_y >= grid_->getRowCount()) {
     return false;
   }
 
@@ -591,10 +562,8 @@ bool DePlace::canBePlaced(const Node* cell, GridX bin_x, GridY bin_y,
   const GridY y_end
       = grid_->gridEndY(grid_->gridYToDbu(bin_y) + cell->getHeight());
 
-  // Repair probes admit the old standard cell and selected filler footprints.
-  // FR returns their complete filler transaction. Ordinary paths pass nullptr.
   return checkPixels(cell, bin_x, bin_y, x_end, y_end,
-                     fillerChanges, replacedCell);
+                     ccRecords, rtOrient);
 }
 
 /**
@@ -619,10 +588,22 @@ bool DePlace::checkPixels(const Node* cell,
                           const GridY y,
                           const GridX x_end,
                           const GridY y_end,
-                          std::vector<CellChangeRecord>* fillerChanges,
-                          const Node* replacedCell) const
+                          std::vector<CellChangeRecord>& ccRecords,
+                          eUTL::PhysOrientation& rtOrient) const
 {
-  if (x_end > grid_->getRowSiteCount() || y_end > grid_->getRowCount()) {
+  if (cell == nullptr || cell->getMaster() == nullptr || grid_ == nullptr
+      || network_ == nullptr || drc_engine_ == nullptr || x.v < 0 || y.v < 0
+      || x_end <= x || y_end <= y
+      || x_end > grid_->getRowSiteCount() || y_end > grid_->getRowCount()) {
+    return false;
+  }
+  // Temporary replacement probes carry the old instance's stable identity.
+  // An insertion probe has no Node ID; its DB ID is only a diagnostic anchor.
+  const Node* liveCell = network_->getNode(cell->getId());
+  const bool repairProbe = liveCell != cell;
+  const Node* replacedCell = repairProbe && liveCell != nullptr && !liveCell->isFiller()
+      && liveCell->getDbInst() == cell->getDbInst() ? liveCell : nullptr;
+  if (replacedCell != nullptr && (replacedCell->isFixed() || replacedCell->inGroup())) {
     return false;
   }
   // if (!checkRegionOverlap(cell, x, y, x_end, y_end)) {
@@ -637,7 +618,7 @@ bool DePlace::checkPixels(const Node* cell,
           || !pixel->is_valid
           || (cell->inGroup() && pixel->group != cell->getGroup())
           || (!cell->inGroup() && pixel->group)) {
-        if (fillerChanges != nullptr) {
+        if (repairProbe) {
           std::ostringstream record;
           record << "  [findLeg pixels] (" << x1.v << "," << y1.v << ") reject:";
           if (pixel == nullptr) {
@@ -671,7 +652,7 @@ bool DePlace::checkPixels(const Node* cell,
   const auto placementOrientation = master != nullptr
       ? getLegalPlacementOrientation(x, y, *master) : std::nullopt;
   if (!placementOrientation) {
-    if (fillerChanges != nullptr) {
+    if (repairProbe) {
       const auto site = master != nullptr
           ? grid_->getPlacementSiteOrientation(x, y, *master) : std::nullopt;
       if (site) {
@@ -686,11 +667,12 @@ bool DePlace::checkPixels(const Node* cell,
   }
   const auto orient = *placementOrientation;
 
-  std::vector<CellChangeRecord> ccRecords;
-  if (fillerChanges != nullptr) {
+  if (repairProbe) {
     // The pending removal layout is input to FR, never a mutation of Grid.
     // FR owns cancelling/retiling its Adds and merging actual filler Deletes.
-    setGridLoc(const_cast<Node*>(cell), x, y);
+    Node candidate = *cell;
+    setGridLoc(&candidate, x, y);
+    candidate.setOrient(orient);
     std::vector<Node*> replacedFillers;
     std::set<int> seenFillerIds;
     for (GridY y1 = y; y1 < y_end; ++y1) {
@@ -716,7 +698,7 @@ bool DePlace::checkPixels(const Node* cell,
               });
     std::vector<CellChangeRecord> overlayChanges;
     overlayChanges.reserve(replacedFillers.size()
-                            + (replacedCell != nullptr ? fillerChanges->size() + 1 : 0));
+                            + (replacedCell != nullptr ? ccRecords.size() + 1 : 0));
     if (replacedCell != nullptr) {
       overlayChanges.push_back(
           {OpType::Delete, replacedCell->getDbInst(),
@@ -724,7 +706,7 @@ bool DePlace::checkPixels(const Node* cell,
            replacedCell->getMaster()->getDbMaster(),
            replacedCell->getMaster()->getDbMaster(), replacedCell->getOrient()});
       overlayChanges.insert(overlayChanges.end(),
-                            fillerChanges->begin(), fillerChanges->end());
+                            ccRecords.begin(), ccRecords.end());
     }
     for (const Node* filler : replacedFillers) {
       if (filler == nullptr || filler->getMaster() == nullptr) {
@@ -739,7 +721,7 @@ bool DePlace::checkPixels(const Node* cell,
                            filler->getMaster()->getDbMaster(),
                            filler->getOrient()});
     }
-    const auto padded = grid_->gridCoveringPadded(cell);
+    const auto padded = grid_->gridCoveringPadded(&candidate);
     for (GridY row = padded.ylo; row < padded.yhi; ++row) {
       for (GridX col = padded.xlo; col < padded.xhi; ++col) {
         const Pixel* pixel = grid_->gridPixel(col, row);
@@ -755,9 +737,9 @@ bool DePlace::checkPixels(const Node* cell,
       }
     }
     std::vector<CellChangeRecord> accepted
-        = replacedCell != nullptr ? std::vector<CellChangeRecord>{} : *fillerChanges;
+        = replacedCell != nullptr ? std::vector<CellChangeRecord>{} : ccRecords;
     const size_t preservedPrefix = accepted.size();
-    if (!drc_engine_->checkDRC(cell, x, y, orient, accepted, overlayChanges)) {
+    if (!drc_engine_->checkDRC(&candidate, x, y, orient, accepted, overlayChanges)) {
       return false;
     }
     // Check the final padded layout, including newly tiled fillers. A valid
@@ -796,7 +778,7 @@ bool DePlace::checkPixels(const Node* cell,
       }
       return true;
     };
-    if (!claim(cell)) {
+    if (!claim(&candidate)) {
       return false;
     }
     for (size_t index = preservedPrefix; index < accepted.size(); ++index) {
@@ -824,10 +806,17 @@ bool DePlace::checkPixels(const Node* cell,
         return false;
       }
     }
-    *fillerChanges = std::move(accepted);
+    ccRecords = std::move(accepted);
+    rtOrient = orient;
     return true;
   }
-  return drc_engine_->checkDRC(cell, x, y, orient, ccRecords);
+  auto accepted = ccRecords;
+  const bool legal = drc_engine_->checkDRC(cell, x, y, orient, accepted);
+  if (legal) {
+    ccRecords = std::move(accepted);
+    rtOrient = orient;
+  }
+  return legal;
 }
 
 /**
@@ -942,9 +931,17 @@ bool DePlace::diamondMove(Node* cell)
  */
 bool DePlace::diamondMove(Node* cell, const GridPt& grid_pt)
 {
-  const PixelPt pixel_pt = diamondSearch(cell, grid_pt.x, grid_pt.y);
+  std::vector<CellChangeRecord> ccRecords;
+  eUTL::PhysOrientation rtOrient = cell->getOrient();
+  const PixelPt pixel_pt = diamondSearch(
+      cell, grid_pt.x, grid_pt.y, grid_pt.x - max_displacement_x_,
+      grid_pt.x + max_displacement_x_, grid_pt.y - max_displacement_y_,
+      grid_pt.y + max_displacement_y_, ccRecords, rtOrient);
   if (pixel_pt.pixel) {
-    placeCell(cell, pixel_pt.x, pixel_pt.y);
+    setGridLoc(cell, pixel_pt.x, pixel_pt.y);
+    cell->setOrient(rtOrient);
+    grid_->paintPixel(cell, pixel_pt.x, pixel_pt.y);
+    cell->setPlaced(true);
     return true;
   }
   return false;

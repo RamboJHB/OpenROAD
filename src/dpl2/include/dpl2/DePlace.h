@@ -155,6 +155,8 @@ class DePlace {
   bool isLegal(LeafCellID instId, LibCellID masterId,
       eUNL::VoltageArea* va, int diameter,
       std::vector<CellChangeRecord>& ccRecords);
+  // Std edits affect Network/Grid only. Before a named std Add, the caller
+  // creates its UDM instance with that name and master. Filler edits update UDM.
   bool commit(const std::vector<CellChangeRecord>& ccRecords);
   Rect getBoundingBox(const Rect& operableRect);
   PhysDesMgr* getDesMgr() {return desMgr_;};
@@ -204,9 +206,11 @@ class DePlace {
 
   // Placement methods
   bool canBePlaced(const Node* cell, GridX x, GridY y,
-                   std::vector<CellChangeRecord>* fillerChanges = nullptr,
-                   const Node* replacedCell = nullptr) const;
+                   std::vector<CellChangeRecord>& ccRecords,
+                   eUTL::PhysOrientation& rtOrient) const;
   bool moveHopeless(const Node* cell, GridX& grid_x, GridY& grid_y) const;
+  // Std-cell changes update only the in-memory Network + grid (never UDM).
+  bool commitStdCell(const CellChangeRecord& cellChange);
   bool diamondMove(Node* cell);
   bool diamondMove(Node* cell, const GridPt& grid_pt);
   void placeCell(Node* cell, const GridX x, const GridY y);
@@ -217,26 +221,23 @@ class DePlace {
                    GridY y,
                    GridX x_end,
                    GridY y_end,
-                   std::vector<CellChangeRecord>* fillerChanges = nullptr,
-                   const Node* replacedCell = nullptr) const;
+                   std::vector<CellChangeRecord>& ccRecords,
+                   eUTL::PhysOrientation& rtOrient) const;
   unsigned getMasterSymmetry(int symmetry) const;
   bool checkMasterSym(unsigned masterSym, eUTL::PhysOrientation cellOri) const;
   std::optional<PhysOrientation> getLegalPlacementOrientation(
       GridX x, GridY y, const PhysLibCell& master) const;
 
-  PixelPt diamondSearch(const Node* cell, GridX x, GridY y,
-                        std::vector<CellChangeRecord>* fillerChanges = nullptr,
-                        const Node* replacedCell = nullptr) const;
   // Search methods
-  PixelPt diamondSearch(const Node* cell,
+  PixelPt diamondSearch(Node* cell,
                         GridX x,
                         GridY y,
                         GridX x_min,
                         GridX x_max,
                         GridY y_min,
                         GridY y_max,
-                        std::vector<CellChangeRecord>* fillerChanges = nullptr,
-                        const Node* replacedCell = nullptr) const;
+                        std::vector<CellChangeRecord>& ccRecords,
+                        eUTL::PhysOrientation& rtOrient) const;
   int calcDist(const GridPt& p1, const GridPt& p2) const;
 
   // Rip-up and replace
@@ -244,8 +245,8 @@ class DePlace {
                                     const GridRect& target_grid_rect,
                                     const GridPt& start_pt);
   std::pair<int, int> legalCellInRect(const Rect& rect, Node* cell,
-                    std::vector<CellChangeRecord>* fillerChanges = nullptr,
-                    const Node* replacedCell = nullptr);
+                    std::vector<CellChangeRecord>& ccRecords,
+                    eUTL::PhysOrientation& rtOrient);
 
   // Read-only probe helpers (no in-memory placement mutation):
   // Initialize a throw-away stack Node for @p master at @p origin, binding a
@@ -257,7 +258,7 @@ class DePlace {
   std::pair<int, int> findLegOrigin(Node& probe, eUNL::VoltageArea* va,
                                    int diameter,
                                    std::vector<CellChangeRecord>& trial,
-                                   const Node* replacedCell = nullptr);
+                                   PhysOrientation& rtOrient);
   std::pair<int, int> findLegToReplace(const Node* inst, eUNL::VoltageArea* va,
                                       int diameter, LibCellID masterId,
                                       std::vector<CellChangeRecord>& ccRecords,

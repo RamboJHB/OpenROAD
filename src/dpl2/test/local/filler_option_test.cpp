@@ -391,6 +391,9 @@ TEST(FillerAvoidPattern, ReusedEngineReadsChangedNeighbourWidthAfterCommit)
   OptionFixture f("1:2", {{10, 0, 2}, {12, 0, 2}});
   EXPECT_FALSE(f.repair(0, 10, 0).hasSolution);
   Node* neighbour = f.dp->getNetwork()->getNode(f.fillerIds.at(1));
+  f.db.desMgr().addCell(eUNL::LeafCellID(0, 10000), &f.master("S1"),
+                        13 * f.siteWidth, 0, OptionFixture::orientation(0),
+                        eUNL::PhysObjStatus::PLACED, "NEW_STD");
   ASSERT_TRUE(f.dp->commit({{OpType::Replace,
                              neighbour->getDbInst(),
                              eUTL::UvDist(12 * f.siteWidth),
@@ -446,6 +449,9 @@ TEST(FillerRetileCommit, GeneratedNameRemainsUniqueAfterCommittedFillerMoves)
          f.master("S1").getLibCellId(),
          OptionFixture::orientation(2)}};
     changes.insert(changes.end(), repair.changes.begin(), repair.changes.end());
+    f.db.desMgr().addCell(eUNL::LeafCellID(0, targetName == "FIRST_TARGET" ? 10000 : 20000),
+                          &f.master("S1"), 11 * f.siteWidth, 2 * OptionFixture::kHeight,
+                          OptionFixture::orientation(2), eUNL::PhysObjStatus::PLACED, targetName);
     return f.dp->commit(changes);
   };
   const auto first = f.repair(0, 11, 2);
@@ -464,15 +470,17 @@ TEST(FillerRetileCommit, GeneratedNameRemainsUniqueAfterCommittedFillerMoves)
   Node* target = grid->gridPixel(GridX{11}, GridY{2})->cell;
   Node* movedStd = grid->gridPixel(GridX{20}, GridY{2})->cell;
   ASSERT_TRUE(generated->isFiller());
-  const auto reopenedId = movedStd->getDbInst();
   ASSERT_TRUE(f.dp->commit(
       {record(OpType::Delete, target, 11, target->getMaster()->getDbMaster()),
        record(OpType::Replace, generated, 20, generated->getMaster()->getDbMaster()),
-       record(OpType::Replace, movedStd, 10, f.master("F2").getLibCellId())}));
+       record(OpType::Delete, movedStd, 20, movedStd->getMaster()->getDbMaster()),
+       {OpType::Add, std::string("REOPENED_FILLER"), eUTL::UvDist(10 * f.siteWidth),
+        eUTL::UvDist(2 * OptionFixture::kHeight), eLIB::LibCellID(),
+        f.master("F2").getLibCellId(), OptionFixture::orientation(2)}}));
   // Reserve the first suffix too: names must be read from the current DB.
   const Node* other = grid->gridPixel(GridX{25}, GridY{2})->cell;
   f.db.desMgr().cells_.at(other->getDbInst()).name = originalName + "_1";
-  f.fillerIds[0] = reopenedId;
+  f.fillerIds[0] = grid->gridPixel(GridX{10}, GridY{2})->cell->getDbInst();
   const auto second = f.repair(0, 11, 2);
   ASSERT_TRUE(second.hasSolution);
   ASSERT_EQ(second.changes.size(), 2u);

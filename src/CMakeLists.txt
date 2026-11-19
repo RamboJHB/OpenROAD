@@ -333,7 +333,7 @@ target_link_libraries(openroad
 )
 
 if(BUILD_DPL2_LOCAL_TEST)
-  target_link_libraries(openroad dpl2_openroad_test)
+  target_link_libraries(openroad dpl2_openroad_test dpl2::fillerRepair)
   target_compile_definitions(openroad PRIVATE DPL2_LOCAL_TEST)
 endif()
 

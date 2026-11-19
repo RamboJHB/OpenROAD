@@ -1,5 +1,5 @@
-# Real OpenROAD LEF/DEF input; test_filler_repair commits to the local UDM
-# projection. The source ODB block stays unchanged throughout this test.
+# Real OpenROAD LEF/DEF input; std commits update Network/Grid only, while
+# fillers also update local UDM. The source ODB block stays unchanged.
 set here [file dirname [file normalize [info script]]]
 if {![file exists [file join $here filler_repair.lef]]} {
   set here [file normalize [file join [pwd] src dpl2 local testdata]]

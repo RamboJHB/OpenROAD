@@ -123,7 +123,24 @@ struct Fixture
             eLIB::LibCellID(0, master),
             orient};
   }
-  std::string snapshot()
+  void createStdAdds(const std::vector<CellChangeRecord>& changes)
+  {
+    eUNL::NlEditor editor(design->design());
+    for (const auto& change : changes) {
+      if (change.op_ != OpType::Add || dp->getNetwork()->getMaster(change.new_lib_cell_)->isFiller()) {
+        continue;
+      }
+      eUNL::UnlChange_addCell create(
+          &editor, *design->design(), eUNL::UnlChangePhaseE::PRE_CHANGE,
+          std::get<std::string>(change.cell_data_),
+          design->design()->getLibAcc().getLibCell(change.new_lib_cell_).getMaster(),
+          eUTL::Point2D(change.x_ + eUTL::UvDist(17), change.y_ + eUTL::UvDist(20)),
+          change.orientation_);
+      ASSERT_TRUE(create.feasible());
+      create.commit();
+    }
+  }
+  std::string databaseSnapshot()
   {
     std::ostringstream out;
     for (const auto& [id, cell] : design->desMgr()->cells_) {
@@ -134,6 +151,12 @@ struct Fixture
           << static_cast<int>(cell.orient.getValue()) << ','
           << static_cast<int>(cell.status) << ';';
     }
+    return out.str();
+  }
+  std::string snapshot()
+  {
+    std::ostringstream out;
+    out << databaseSnapshot();
     for (const auto& [id, cell] : dp->getNetwork()->getNodes()) {
       out << id << ',' << cell->getDbInst().getIndexValue() << ','
           << cell->getMaster()->getId() << ',' << cell->getLeft().v << ','
@@ -158,15 +181,14 @@ struct Fixture
       ASSERT_TRUE(dbIds.insert(cell->getDbInst().getIndexValue()).second);
       const auto physical = design->desMgr()->getPhysCell(cell->getDbInst());
       ASSERT_TRUE(physical.isValid());
-      EXPECT_EQ(physical.getPhysMaster().getLibCellId(),
-                cell->getMaster()->getDbMaster());
-      EXPECT_EQ(physical.getOrient(), cell->getOrient());
-      EXPECT_EQ(physical.getStatus(), eUNL::PhysObjStatus::PLACED);
       EXPECT_TRUE(cell->isPlaced());
-      EXPECT_EQ(physical.getOrigin().getX().getStorage(),
-                cell->getLeft().v + 17);
-      EXPECT_EQ(physical.getOrigin().getY().getStorage(),
-                cell->getBottom().v + 20);
+      if (cell->isFiller()) {
+        EXPECT_EQ(physical.getPhysMaster().getLibCellId(), cell->getMaster()->getDbMaster());
+        EXPECT_EQ(physical.getOrient(), cell->getOrient());
+        EXPECT_EQ(physical.getStatus(), eUNL::PhysObjStatus::PLACED);
+        EXPECT_EQ(physical.getOrigin().getX().getStorage(), cell->getLeft().v + 17);
+        EXPECT_EQ(physical.getOrigin().getY().getStorage(), cell->getBottom().v + 20);
+      }
       EXPECT_EQ(cell->isFiller(), cell->getMaster()->isFiller());
       const auto box = dp->getGrid()->gridCovering(cell.get());
       for (GridY y = box.ylo; y < box.yhi; ++y) {
@@ -176,7 +198,9 @@ struct Fixture
       }
     }
     for (const auto& [id, physical] : design->desMgr()->cells_) {
-      EXPECT_EQ(dp->getNetwork()->getNode(id) != nullptr, physical.valid);
+      if (dp->getNetwork()->getMaster(physical.master->getLibCellId())->isFiller()) {
+        EXPECT_EQ(dp->getNetwork()->getNode(id) != nullptr, physical.valid);
+      }
     }
     for (GridY y{0}; y < dp->getGrid()->getRowCount(); ++y) {
       for (GridX x{0}; x < dp->getGrid()->getRowSiteCount(); ++x) {
@@ -217,6 +241,151 @@ TEST(DePlaceCommit, DefaultConstructorInitializesGridBeforeChecker)
                                     master,
                                     target->getOrient()}}};
   EXPECT_TRUE(checker->checkDirect(request).isLegal);
+}
+
+TEST(DePlaceCommit, StdReplacementAndRemovalOnlyUpdateTheLivePlacement)
+{
+  Fixture f;
+  Node* original = f.node(122);
+  const auto id = original->getDbInst();
+  const auto udmBefore = f.databaseSnapshot();
+  for (int masterId : {2, 1, 2}) {
+    std::vector<CellChangeRecord> changes;
+    ASSERT_TRUE(f.dp->isLegal(id, eLIB::LibCellID(0, masterId), changes));
+    ASSERT_TRUE(f.dp->commit(changes));
+    EXPECT_EQ(f.node(122), original);
+    EXPECT_EQ(original->getMaster()->getDbMaster(), eLIB::LibCellID(0, masterId));
+    EXPECT_EQ(f.databaseSnapshot(), udmBefore);
+    f.consistent();
+  }
+  ASSERT_TRUE(f.dp->commit({f.remove(122)}));
+  EXPECT_EQ(f.node(122), nullptr);
+  EXPECT_EQ(f.databaseSnapshot(), udmBefore);
+  for (int col = 8; col < 12; ++col) {
+    EXPECT_EQ(f.dp->getGrid()->gridPixel(GridX{col}, GridY{2})->cell, nullptr);
+  }
+  f.consistent();
+}
+
+TEST(DePlaceCommit, MixedTransactionsKeepStdUdmUntouchedAndUpdateFillerUdm)
+{
+  Fixture f;
+  auto standard = f.remove(122);
+  standard.op_ = OpType::Replace;
+  standard.new_lib_cell_ = eLIB::LibCellID(0, 2);
+  auto filler = f.remove(103);
+  filler.op_ = OpType::Replace;
+  filler.new_lib_cell_ = eLIB::LibCellID(0, 4);
+  const auto before = f.snapshot();
+  EXPECT_FALSE(f.dp->commit({standard, filler, f.add("OUT_OF_BOUNDS", 3, 20, 0)}));
+  EXPECT_EQ(f.snapshot(), before);
+  ASSERT_TRUE(f.dp->commit({standard, filler}));
+  EXPECT_EQ(f.node(122)->getMaster()->getDbMaster(), eLIB::LibCellID(0, 2));
+  EXPECT_EQ(f.design->desMgr()->getPhysCell(eUNL::LeafCellID(0, 122)).getPhysMaster().getLibCellId(),
+            eLIB::LibCellID(0, 1));
+  EXPECT_EQ(f.design->desMgr()->getPhysCell(eUNL::LeafCellID(0, 103)).getPhysMaster().getLibCellId(),
+            eLIB::LibCellID(0, 4));
+  f.consistent();
+}
+
+TEST(DePlaceCommit, StdAddsBindCallerCreatedInstancesWithoutWritingUdm)
+{
+  Fixture f;
+  ASSERT_TRUE(f.dp->commit({f.remove(122)}));
+  const auto add = f.add("CALLER_STD", 1, 8, 2 * frt::kRowHeight);
+  f.createStdAdds({add});
+  auto& physical = f.design->desMgr()->cells_.rbegin()->second;
+  const auto id = f.design->desMgr()->cells_.rbegin()->first;
+  physical.origin = eUTL::Point2D(eUTL::UvDist(0), eUTL::UvDist(0));
+  physical.orient = eUTL::PhysOrientationE::R0;
+  physical.status = eUNL::PhysObjStatus::UNKNOWN;
+  const auto udmBefore = f.databaseSnapshot();
+  ASSERT_TRUE(f.dp->commit({add}));
+  Node* node = f.dp->getNetwork()->getNode(id);
+  ASSERT_NE(node, nullptr);
+  EXPECT_EQ(node->getLeft().v, 8);
+  EXPECT_EQ(node->getBottom().v, 2 * frt::kRowHeight);
+  EXPECT_EQ(node->getOrient(), add.orientation_);
+  EXPECT_EQ(f.databaseSnapshot(), udmBefore);
+  f.consistent();
+  std::vector<CellChangeRecord> changes;
+  ASSERT_TRUE(f.dp->isLegal(id, eLIB::LibCellID(0, 2), changes));
+  ASSERT_TRUE(f.dp->commit(changes));
+  EXPECT_EQ(node->getMaster()->getDbMaster(), eLIB::LibCellID(0, 2));
+  EXPECT_EQ(f.databaseSnapshot(), udmBefore);
+  const auto beforeRepeat = f.snapshot();
+  EXPECT_FALSE(f.dp->commit({add}));
+  EXPECT_EQ(f.snapshot(), beforeRepeat);
+  f.consistent();
+}
+
+TEST(DePlaceCommit, InvalidStdAddIdentitiesRejectTheWholeBatch)
+{
+  Fixture f;
+  auto replacement = f.remove(122);
+  replacement.op_ = OpType::Replace;
+  replacement.new_lib_cell_ = eLIB::LibCellID(0, 2);
+  const auto add = f.add("CALLER_STD", 18, 18, 0);
+  const std::vector<CellChangeRecord> changes{replacement, f.remove(103), add};
+  const auto reject = [&](const std::vector<CellChangeRecord>& batch) {
+    const auto before = f.snapshot();
+    EXPECT_FALSE(f.dp->commit(batch));
+    EXPECT_EQ(f.snapshot(), before);
+  };
+  reject(changes);  // Missing caller-created instance.
+  auto& physical = f.design->desMgr()->addCell(
+      eUNL::LeafCellID(0, 900), &f.design->design()->getLibAcc().getPhysLibCell(16),
+      0, 0, eUTL::PhysOrientationE::R0, eUNL::PhysObjStatus::UNKNOWN, "CALLER_STD");
+  reject(changes);  // Master does not match the requested std Add.
+  physical.master = &f.design->design()->getLibAcc().getPhysLibCell(18);
+  physical.status = eUNL::PhysObjStatus::LOC_FIXED;
+  reject(changes);
+  physical.status = eUNL::PhysObjStatus::UNKNOWN;
+  reject({replacement, f.remove(103), add, add});
+  reject({f.remove(103), f.add("I122", 1, 8, 2 * frt::kRowHeight)});
+  f.design->desMgr()->addCell(
+      eUNL::LeafCellID(0, 901), physical.master, 0, 0,
+      eUTL::PhysOrientationE::R0, eUNL::PhysObjStatus::UNKNOWN, "CALLER_STD");
+  reject(changes);  // Ambiguous names cannot silently choose an identity.
+}
+
+TEST(DePlaceCommit, StdMovesExchangeFootprintsWithoutErasingEarlierResults)
+{
+  Fixture f;
+  Node* first = f.node(110);
+  Node* second = f.node(112);
+  const auto udmBefore = f.databaseSnapshot();
+  for (int pass = 0; pass < 2; ++pass) {
+    auto a = f.remove(110);
+    auto b = f.remove(112);
+    a.op_ = b.op_ = OpType::Replace;
+    a.x_ = eUTL::UvDist(second->getLeft().v);
+    b.x_ = eUTL::UvDist(first->getLeft().v);
+    a.orientation_ = eUTL::PhysOrientationE::MY;
+    ASSERT_TRUE(f.dp->commit({a, b}));
+    EXPECT_EQ(f.node(110), first);
+    EXPECT_EQ(f.node(112), second);
+    EXPECT_EQ(first->getLeft().v, a.x_.getStorage());
+    EXPECT_EQ(second->getLeft().v, b.x_.getStorage());
+    EXPECT_EQ(first->getOrient(), a.orientation_);
+    EXPECT_EQ(f.databaseSnapshot(), udmBefore);
+    f.consistent();
+  }
+}
+
+TEST(DePlaceCommit, StdReplacementPreflightsInstancePadding)
+{
+  Fixture f;
+  f.dp->setPadding(f.node(122)->getDbInst(), 0, 1);
+  auto replacement = f.remove(122);
+  replacement.op_ = OpType::Replace;
+  replacement.new_lib_cell_ = eLIB::LibCellID(0, 2);
+  const auto before = f.snapshot();
+  EXPECT_FALSE(f.dp->commit({replacement}));
+  EXPECT_EQ(f.snapshot(), before);
+  ASSERT_TRUE(f.dp->commit({replacement, f.remove(123)}));
+  EXPECT_EQ(f.dp->getGrid()->gridPixel(GridX{12}, GridY{2})->padding_reserved_by, f.node(122));
+  f.consistent();
 }
 
 TEST(DePlaceCommit, IsLegalReturnsTheTargetAndFillerRepairsAsOneTransaction)
@@ -317,6 +486,7 @@ TEST(DePlaceCommit, FindLegReturnsCompleteExactAndNonExactTransactions)
       EXPECT_EQ(targetAdds, 1);
       EXPECT_EQ(deletes, 1);
       EXPECT_EQ(fillerAdds == 0, exact);
+      f.createStdAdds(changes);
       ASSERT_TRUE(f.dp->commit(changes));
       EXPECT_EQ(f.dp->getNetwork()->getNode(deletedId), nullptr);
       const auto* target = f.dp->getGrid()->gridPixel(GridX{position.first},
@@ -405,6 +575,7 @@ TEST(DePlaceCommit, FindLegMergesMultipleDeletesAndReusesTheCommittedGap)
   const int gapX = gap->x_.getStorage();
   const int gapY = gap->y_.getStorage();
   auto* checker = f.checker();
+  f.createStdAdds(changes);
   ASSERT_TRUE(f.dp->commit(changes));
   for (const auto id : deleted) {
     EXPECT_EQ(f.dp->getNetwork()->getNode(id), nullptr);
@@ -418,6 +589,7 @@ TEST(DePlaceCommit, FindLegMergesMultipleDeletesAndReusesTheCommittedGap)
   ASSERT_EQ(changes.size(), 2u);
   EXPECT_EQ(changes.front().op_, OpType::Delete);
   EXPECT_EQ(changes.front().cell_data_, CellData{gapId});
+  f.createStdAdds(changes);
   ASSERT_TRUE(f.dp->commit(changes));
   EXPECT_EQ(f.checker(), checker);
   EXPECT_EQ(f.dp->getNetwork()->getNode(gapId), nullptr);
@@ -475,6 +647,7 @@ TEST(DePlaceCommit, GapAddsAndSecondRepairUseTheSameLiveChecker)
   }), 1);
   auto transaction = changes;  // order-independent final-occupancy preflight
   transaction.push_back(f.add("NEW_STD", 18, 18, 0));
+  f.createStdAdds(transaction);
   ASSERT_TRUE(f.dp->commit(transaction));
   EXPECT_EQ(f.node(103), nullptr);
   EXPECT_EQ(f.dp->getNetwork()->getNode(oldNetworkId), nullptr);
@@ -498,6 +671,7 @@ TEST(DePlaceCommit, GapAddsAndSecondRepairUseTheSameLiveChecker)
   EXPECT_EQ(changes.front().cell_data_, CellData{gapId});
   transaction = changes;
   transaction.push_back(f.add("SECOND_STD", 18, 19, 0));
+  f.createStdAdds(transaction);
   ASSERT_TRUE(f.dp->commit(transaction));
   f.consistent();
   const auto before = f.snapshot();
@@ -525,6 +699,7 @@ TEST(DePlaceCommit, TwoRowDeletionCommitsTheEntireLShapedGap)
   ASSERT_FALSE(changes.empty());
   auto transaction = changes;
   transaction.push_back(f.add("NEW_STD", 18, 6, 2 * frt::kRowHeight));
+  f.createStdAdds(transaction);
   ASSERT_TRUE(f.dp->commit(transaction));
   EXPECT_EQ(f.node(121), nullptr);
   int fillerSites = 0;
@@ -562,6 +737,7 @@ TEST(DePlaceCommit, TwoRowDeletionCommitsTheEntireLShapedGap)
   transaction = changes;
   transaction.push_back(
       f.add("NEXT_STD", 18, 7, 3 * frt::kRowHeight, *orientation));
+  f.createStdAdds(transaction);
   ASSERT_TRUE(f.dp->commit(transaction));
   EXPECT_EQ(f.dp->getNetwork()->getNode(addedId), nullptr);
   f.consistent();
@@ -657,6 +833,51 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   static Fixture f(true);
   TestFillerRepairCmd command;
   std::string error;
+
+  // Force commit to reject only after the command creates its std UDM cell:
+  // FR sees Network names, while filler Add feasibility also sees UDM-only cells.
+  {
+    const auto before = f.snapshot();
+    const auto cellCount = f.design->desMgr()->cells_.size();
+    Node target = *f.node(103);
+    target.setMaster(f.dp->getNetwork()->getMaster(eLIB::LibCellID(0, 18)));
+    target.setType(Node::CELL);
+    target.setWidth(DbuX{1});
+    target.setPlaced(false);
+    std::vector<CellChangeRecord> overlays{f.remove(103)};
+    std::vector<CellChangeRecord> changes;
+    ASSERT_TRUE(f.checker()->check(
+        &target, GridX{18}, GridY{0}, target.getOrient(), changes, overlays));
+    const auto gap = std::find_if(changes.begin(), changes.end(), [](const auto& change) {
+      return change.op_ == OpType::Add;
+    });
+    ASSERT_NE(gap, changes.end());
+    EXPECT_EQ(f.snapshot(), before);
+    const auto collisionId = eUNL::LeafCellID(0, 900);
+    f.design->desMgr()->addCell(
+        collisionId, &f.design->design()->getLibAcc().getPhysLibCell(gap->new_lib_cell_),
+        0, 0, eUTL::PhysOrientationE::R0, eUNL::PhysObjStatus::UNKNOWN,
+        std::get<std::string>(gap->cell_data_));
+    ASSERT_EQ(f.dp->getNetwork()->getNode(collisionId), nullptr);
+    EXPECT_FALSE(command.run({"-inst", "I103", "-master", "BUF1"}, error));
+    auto& cells = f.design->desMgr()->cells_;
+    const auto created = std::find_if(cells.begin(), cells.end(), [](const auto& entry) {
+      return entry.second.name == "FR_TARGET_103_1";
+    });
+    ASSERT_NE(created, cells.end());
+    EXPECT_FALSE(created->second.valid);
+    EXPECT_EQ(created->second.master->getLibCellId(), eLIB::LibCellID(0, 18));
+    EXPECT_EQ(f.dp->getNetwork()->getNode(created->first), nullptr);
+    EXPECT_EQ(cells.size(), cellCount + 2);
+    EXPECT_TRUE(cells.at(collisionId).valid);
+    // Remove the deliberate collision and cleaned-up tombstone from the fixture;
+    // the full snapshot must still match every original UDM, Network and Grid entry.
+    cells.erase(created);
+    cells.erase(collisionId);
+    EXPECT_EQ(f.snapshot(), before);
+    f.consistent();
+  }
+
   const auto originalId = f.node(122)->getDbInst();
   ASSERT_TRUE(command.run({"-inst", "I122", "-master", "TH4"}, error));
   ASSERT_NE(f.node(122), nullptr);
@@ -748,7 +969,7 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   };
   const auto expectRefilled = [&](int id, int x, int row, int width, int height = 1) {
     EXPECT_EQ(f.node(id), nullptr);
-    EXPECT_FALSE(f.design->desMgr()->getPhysCell(eUNL::LeafCellID(0, id)).isValid());
+    EXPECT_TRUE(f.design->desMgr()->getPhysCell(eUNL::LeafCellID(0, id)).isValid());
     expectFilled(x, row, width, height);
   };
   // Reuse the command after a populated -master option: omission must clear it.

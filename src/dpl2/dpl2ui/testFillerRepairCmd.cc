@@ -188,20 +188,17 @@ bool TestFillerRepairCmd::probeResize(
       UvDist(std::min<int64_t>(core.getYH().getStorage(),
                               yl + physical.getHeight().getStorage() + diameter)));
   // The command checks its own temporary node through the lower-level search.
-  const auto [col, row] = placement.legalCellInRect(box, &target, &trial, &old);
+  eUTL::PhysOrientation rtOrient{eUTL::PhysOrientationE::R0};
+  const auto [col, row]
+      = placement.legalCellInRect(box, &target, trial, rtOrient);
   if (col < 0 || row < 0) {
     std::cout << "NO REPAIR: operation=resize targetMaster=" << master.getId()
               << " diameter=" << diameter << '\n';
     return false;
   }
-  const auto orientation = placement.getLegalPlacementOrientation(
-      GridX{col}, GridY{row}, physical);
-  if (!orientation.has_value()) {
-    return false;
-  }
   target.setLeft(DbuX{col * grid.getSiteWidth().v});
   target.setBottom(grid.gridYToDbu(GridY{row}));
-  target.setOrient(*orientation);
+  target.setOrient(rtOrient);
   changes = std::move(trial);
   return true;
 }
@@ -454,7 +451,32 @@ bool TestFillerRepairCmd::exec()
                                            orientation});
   }
   transaction.insert(transaction.end(), changes.begin(), changes.end());
+  // This command is the caller: it creates a std instance before DePlace
+  // imports its real ID. DePlace itself never changes std-cell UDM state.
+  eUNL::NlEditor editor(design);
+  std::unique_ptr<eUNL::UnlChange_addCell> standardAdd;
+  if (!transaction.empty() && transaction.front().op_ == OpType::Add
+      && !targetMaster->isFiller()) {
+    const auto& record = transaction.front();
+    standardAdd = std::make_unique<eUNL::UnlChange_addCell>(
+        &editor, *design, eUNL::UnlChangePhaseE::PRE_CHANGE,
+        std::get<std::string>(record.cell_data_),
+        design->getLibAcc().getLibCell(record.new_lib_cell_).getMaster(),
+        Point2D(record.x_ + grid->getCore().getXL(),
+                record.y_ + grid->getCore().getYL()), record.orientation_);
+    if (!standardAdd->feasible()) {
+      std::cout << "ERROR: cannot create the target std UDM instance\n";
+      return false;
+    }
+    standardAdd->commit();
+  }
   if (!dePlace->commit(transaction)) {
+    if (standardAdd != nullptr) {
+      eUNL::UnlChange_removeCell remove(
+          &editor, *design, eUNL::UnlChangePhaseE::PRE_CHANGE,
+          standardAdd->getCellId());
+      remove.commit();
+    }
     std::cout << "ERROR: commit rejected; placement was not changed\n";
     return false;
   }

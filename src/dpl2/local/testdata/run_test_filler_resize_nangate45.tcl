@@ -1,6 +1,9 @@
 # Geometry smoke on a real placed GCD. This Nangate45 LEF has no implant
 # layers; the controlled mixed-height smoke exercises implant DRC separately.
 set here [file dirname [file normalize [info script]]]
+if {![file exists [file join $here nangate45_resize_target.lef]]} {
+  set here [file normalize [file join [pwd] src dpl2 local testdata]]
+}
 set root [file normalize [file join $here ../../../..]]
 read_lef [file join $root test Nangate45 Nangate45.lef]
 read_lef -library [file join $here nangate45_resize_target.lef]
@@ -68,8 +71,8 @@ foreach master {INV_X1_DPL2_2H INV_X1} {
   if {[test_filler_repair -inst _281_ -master $master] ne "1"} {
     error "Nangate45 resize to $master did not commit"
   }
-  # Success applies only to the local UDM projection. This check does not
-  # exercise net handling or writeback in the destination database.
+  # Std edits apply to Network/Grid; fillers also update local UDM. This does
+  # not exercise net handling or writeback in the destination database.
   if {[nangate_resize_source_snapshot $block] ne $before} {
     error "Nangate45 resize to $master changed source ODB placement or connectivity"
   }
