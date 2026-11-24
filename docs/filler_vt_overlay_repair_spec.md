@@ -28,6 +28,8 @@ cannot be selected as target Deletes, used as pending swaps, or returned as
 filler Replaces. They block a candidate whose footprint overlaps them.
 
 Placement search and commit check the master across its whole site stack.
+Placement/search derives the proposed orientation from the destination site,
+subject to master symmetry; it never reuses the old UDM instance orientation.
 For an explicit pattern, each child site's name, height, and composed
 orientation must match the corresponding row; a vertical mirror reverses
 the sequence. Without an explicit pattern, the named site is repeated as
@@ -192,6 +194,10 @@ DePlace probes assemble complete transactions without mutating placement:
 
 Both `findLeg` overloads return core-relative DBU coordinates, or `(-1, -1)`
 on failure. The search box and optional voltage-area rectangles are absolute.
+The PinID overload takes its external anchor from UDM physical-pin geometry;
+the caller must keep that anchor current. An absent physical term fails without
+publishing changes. Instance resize/move starts from the live Network Node,
+not that pin geometry or the old UDM instance placement.
 
 Pass this batch to `DePlace::commit` without appending target/Delete operations
 again. Failure leaves the caller's output unchanged. An existing output prefix
@@ -205,7 +211,8 @@ movable, ungrouped standard cell. It checks a null target with the old std
 Delete, then commits that Delete plus FR's refill transaction once. One- and
 two-row cells are supported. With one std instance and a different-size
 `-master`, or with explicit `-diameter`, the command makes a temporary resize
-target, probes removal, and calls `legalCellInRect` directly. The diameter is a
+target, probes virtual removal directly with ImplantLayerChecker only, and
+calls `legalCellInRect` directly. The diameter is a
 nonnegative DBU search extension; its default of zero restricts the probe to
 the old origin. Only the final std `Replace` and FR changes are committed.
 The resize branch runs the registered placement checkers; removal, swaps
@@ -218,17 +225,34 @@ than returning a transaction that commit would reject.
 
 Records use core-relative coordinates; database origins are absolute.
 `DePlace::commit` preflights operation IDs, names, masters, geometry, final
-occupancy, reservations, and operation feasibility before mutation, then applies
-Add/Replace/Delete while updating DB, Network, and Grid. Replace preserves DB
-identity. Commit does not run DRC; callers own that validation. Invalid batches
+occupancy, reservations, and operation feasibility before mutation:
+
+- Standard-cell Add/Replace/Delete updates only Network and Grid. Replace
+  preserves the Node pointer and LeafCellID. For Add, the caller first creates
+  the named UDM instance with the requested master; commit resolves its real
+  identity without importing its position or orientation. Missing, ambiguous,
+  fixed, wrong-master or already imported instances are rejected.
+- Filler Add/Replace/Delete updates UDM, Network and Grid. Existing filler
+  pre-state must match across those objects. Replace cannot cross the
+  standard-cell/filler classification boundary.
+
+Commit does not run DRC; callers own that validation. Invalid batches
 are rejected before placement mutation, but this is not an undo journal for
 allocation failures or unexpected UDM exceptions. Fixed/group-owned cells and
 non-core changes are rejected. Destination UDM Add/placement signatures and
 error semantics still require verification. The local OpenROAD wire mutates
 its UDM projection rather than writing back to the source ODB block.
-The identity tests establish stable DB IDs, Node pointers, names and Pin/Edge
-references; fake UDM does not model logical nets. Real UDM size-cell port
-mapping and net connectivity require a destination regression.
+The caller owns standard-cell UDM lifecycle, master/placement updates and net
+connectivity. Local identity tests establish stable IDs, Node pointers and
+Pin/Edge references, not real UDM size-cell port mapping or logical-net behavior.
+
+After import, standard-cell coordinates, orientation and master come from
+Network; occupancy comes from Grid. Search starts, cell-pixel/boundary visitors
+and checker/engine snapshots must not refresh them from a retained UDM cell.
+Library overlap shapes are oriented using the Node and translated by its
+core-relative origin once. Placement helpers select the destination site's
+orientation before painting. UDM reads remain for initial import, static
+library/site/rule data, external pin anchors and filler synchronization.
 
 ## Lifetime and concurrency
 
@@ -242,9 +266,10 @@ Concurrent read-only checks and repairs use request-local search/oracle state.
 PlacementDRC publishes its process-lifetime shared TBB arena once during setup;
 destroying one PlacementDRC does not tear down another owner's worker arena.
 The owner must establish a barrier between placement readers and commits:
-UDM, Grid, and Network cannot change during a check/repair, and all three must
-describe the same committed revision before checks resume. Master catalogs,
-rules, row/site geometry, and filler settings stay static for the checker
+UDM, Grid, and Network cannot change during a check/repair. Network and Grid
+must describe the same committed placement; filler UDM must match them.
+Standard-cell UDM placement may intentionally lag and is not placement authority.
+Master catalogs, rules, row/site geometry, and filler settings stay static for the checker
 lifetime. Recreate the checker when those setup inputs change; ordinary
 placement commits do not require checker replacement.
 
@@ -268,5 +293,7 @@ orientation, complete filler transactions and unchanged Network/Grid state.
 The fake-UDM runtime also removes a two-row standard cell with only one-row-high
 filler masters, checking independent filling of both rows against real Grid site
 orientations. The database-free helper cannot supply that row/site context.
-Fake UDM testing does not establish destination ABI/link compatibility or
-source-ODB writeback.
+Runtime regressions cover stale/invalid standard-cell UDM geometry, moved and
+resized overlap shapes, shifted-core/padding coordinates, site-selected
+orientation and empty pin anchors. Fake UDM testing does not establish
+destination ABI/link compatibility or source-ODB writeback.

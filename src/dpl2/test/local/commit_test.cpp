@@ -15,6 +15,7 @@
 #include <sstream>
 #include <string>
 #include <testFillerRepairCmd.hh>
+#include <tuple>
 #include <vector>
 
 #include "E2ETestProvider.h"
@@ -442,6 +443,20 @@ TEST(DePlaceCommit, IsLegalPreservesExistingOutputAndDoesNotPublishRejectedChang
   EXPECT_EQ(f.snapshot(), before);
 }
 
+TEST(DePlaceCommit, MissingPinAnchorDoesNotPublishOrMutate)
+{
+  Fixture f;
+  const auto before = f.snapshot();
+  const auto sentinel = f.add("PENDING", 18, 19, 0);
+  std::vector<CellChangeRecord> changes{sentinel};
+  EXPECT_EQ(f.dp->findLeg(eUNL::PinID(0, 9999), nullptr, 0,
+                         eLIB::LibCellID(0, 18), changes),
+            (std::pair<int, int>{-1, -1}));
+  ASSERT_EQ(changes.size(), 1u);
+  EXPECT_EQ(changes.front().cell_data_, sentinel.cell_data_);
+  EXPECT_EQ(f.snapshot(), before);
+}
+
 TEST(DePlaceCommit, FindLegReturnsCompleteExactAndNonExactTransactions)
 {
   for (bool doubleHeight : {false, true}) {
@@ -833,6 +848,26 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   static Fixture f(true);
   TestFillerRepairCmd command;
   std::string error;
+  struct PlacementOnlyChecker : DRCChecker
+  {
+    PlacementOnlyChecker(Grid* grid, eUNL::Design* design) : DRCChecker(grid, design) {}
+    mutable int placements = 0;
+    mutable int removals = 0;
+    bool rejectFinal = false;
+    bool check(const Node* cell, GridX, GridY, const eUTL::PhysOrientation&) const override
+    {
+      cell != nullptr ? ++placements : ++removals;
+      return cell != nullptr && !rejectFinal;
+    }
+    bool check(const Node* cell, GridX x, GridY y, const eUTL::PhysOrientation& orient,
+               std::vector<CellChangeRecord>&, std::vector<CellChangeRecord>&) const override
+    {
+      return check(cell, x, y, orient);
+    }
+  };
+  auto validator = std::make_unique<PlacementOnlyChecker>(f.dp->getGrid(), f.design->design());
+  auto* placementOnly = validator.get();
+  f.dp->getPlacementDRC()->addChecker(DRCCheckerType::EdgeSpacing, std::move(validator));
 
   // Force commit to reject only after the command creates its std UDM cell:
   // FR sees Network names, while filler Add feasibility also sees UDM-only cells.
@@ -919,11 +954,20 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   EXPECT_EQ(f.node(122)->getMaster()->getDbMaster(), eLIB::LibCellID(0, 9));
   f.consistent();
   ASSERT_TRUE(command.run({"-inst", "I122", "-master", "BUF2"}, error));
+  EXPECT_GT(placementOnly->placements, 0);
+  EXPECT_EQ(placementOnly->removals, 0);
   EXPECT_EQ(f.node(122), originalStd);
   EXPECT_EQ(f.node(122)->getDbInst(), originalId);
   EXPECT_EQ(f.node(122)->getMaster()->getDbMaster(), eLIB::LibCellID(0, 16));
   f.consistent();
   const auto before = f.snapshot();
+  const int checkedPlacements = placementOnly->placements;
+  placementOnly->rejectFinal = true;
+  EXPECT_FALSE(command.run({"-inst", "I122", "-master", "BUF2", "-diameter", "0"}, error));
+  placementOnly->rejectFinal = false;
+  EXPECT_GT(placementOnly->placements, checkedPlacements);
+  EXPECT_EQ(placementOnly->removals, 0);
+  EXPECT_EQ(f.snapshot(), before);
   EXPECT_FALSE(command.run({"-inst", "I103", "-master", "BUF1"}, error));
   EXPECT_EQ(f.snapshot(), before);
   EXPECT_FALSE(command.run({"-inst", "I122", "-master", "TL4D"}, error));
@@ -1102,5 +1146,90 @@ TEST(DePlaceCommit, BlockedOrReservedFinalSitesAreNotOverwritten)
   before = f.snapshot();
   EXPECT_FALSE(f.dp->commit({f.remove(103), f.add("A", 3, 18, 0)}));
   EXPECT_EQ(f.snapshot(), before);
+}
+
+TEST(GridRuntimeGeometry, StdPixelsAndBoundaryFollowNodeAfterUdmBecomesStale)
+{
+  Fixture f;
+  Node* node = f.node(122);
+  ASSERT_NE(node, nullptr);
+  Grid& grid = *f.dp->getGrid();
+  const auto oldPhysical = f.design->desMgr()->getPhysCell(node->getDbInst());
+  ASSERT_NE(oldPhysical.getPhysMaster().getLibCellId(), eLIB::LibCellID(0, 17));
+  node->setMaster(f.dp->getNetwork()->getMaster(eLIB::LibCellID(0, 17)));
+  node->setWidth(DbuX{2});
+  node->setHeight(DbuY{2 * frt::kRowHeight});
+  node->setLeft(DbuX{12});
+  node->setBottom(DbuY{frt::kRowHeight});
+  node->setOrient(eUTL::PhysOrientationE::R0);
+  f.dp->setPadding(node->getDbInst(), 1, 2);
+  // Neither placement nor validity of the retained std PhysCell is authority.
+  f.design->desMgr()->cells_.at(node->getDbInst()).valid = false;
+
+  std::set<Pixel*> body;
+  std::set<Pixel*> padding;
+  grid.visitCellPixels(node, true, [&](Pixel* pixel, bool padded) {
+    (padded ? padding : body).insert(pixel);
+  });
+  std::set<Pixel*> expectedBody;
+  std::set<Pixel*> expectedPadding;
+  for (int row : {1, 2}) {
+    for (int col = 11; col < 16; ++col) {
+      (col >= 12 && col < 14 ? expectedBody : expectedPadding)
+          .insert(grid.gridPixel(GridX{col}, GridY{row}));
+    }
+  }
+  EXPECT_EQ(body, expectedBody);
+  EXPECT_EQ(padding, expectedPadding);
+
+  std::set<std::tuple<int, int, int>> boundary;
+  grid.visitCellBoundaryPixels(*node, [&](Pixel*, int edge, GridX x, GridY y) {
+    boundary.emplace(x.v, y.v, edge);
+  });
+  const std::set<std::tuple<int, int, int>> expectedBoundary{
+      {12, 1, 1}, {13, 1, 1}, {12, 2, 2}, {13, 2, 2},
+      {12, 1, 3}, {12, 2, 3}, {13, 1, 4}, {13, 2, 4}};
+  EXPECT_EQ(boundary, expectedBoundary);
+}
+
+TEST(GridRuntimeGeometry, LibraryOverlapRectUsesLiveNodeOriginExactlyOnce)
+{
+  Fixture f;
+  Node* node = f.node(122);
+  Grid& grid = *f.dp->getGrid();
+  auto& tech = const_cast<eLIB::TechLib&>(f.design->desMgr()->getTopTech());
+  constexpr int overlapLayer = 100;
+  tech.addLayer("GRID_TEST_OVERLAP", false, overlapLayer).is_overlap_ = true;
+  auto& physical = const_cast<eLIB::PhysLibCell&>(
+      f.design->design()->getLibAcc().getPhysLibCell(9));
+  physical.obs_.emplace_back();
+  physical.obs_.back().shapes_[eLIB::TechLayerRelativeID(overlapLayer)].emplace_back(
+      eLIB::TechShape::RECT,
+      eUTL::Rect(eUTL::UvDist(1), eUTL::UvDist(0),
+                  eUTL::UvDist(3), eUTL::UvDist(frt::kRowHeight)));
+  node->setMaster(f.dp->getNetwork()->getMaster(eLIB::LibCellID(0, 9)));
+  node->setWidth(DbuX{5});
+  node->setHeight(DbuY{frt::kRowHeight});
+  node->setLeft(DbuX{12});
+  node->setBottom(DbuY{frt::kRowHeight});
+  node->setOrient(eUTL::PhysOrientationE::R0);
+  f.design->desMgr()->cells_.at(node->getDbInst()).valid = false;
+
+  std::set<Pixel*> visited;
+  grid.visitCellPixels(node, false, [&](Pixel* pixel, bool padded) {
+    EXPECT_FALSE(padded);
+    visited.insert(pixel);
+  });
+  const std::set<Pixel*> expected{
+      grid.gridPixel(GridX{13}, GridY{1}), grid.gridPixel(GridX{14}, GridY{1})};
+  EXPECT_EQ(visited, expected);
+  std::set<std::tuple<int, int, int>> boundary;
+  grid.visitCellBoundaryPixels(*node, [&](Pixel*, int edge, GridX x, GridY y) {
+    boundary.emplace(x.v, y.v, edge);
+  });
+  const std::set<std::tuple<int, int, int>> expectedBoundary{
+      {13, 1, 1}, {14, 1, 1}, {13, 1, 2}, {14, 1, 2},
+      {13, 1, 3}, {14, 1, 4}};
+  EXPECT_EQ(boundary, expectedBoundary);
 }
 }  // namespace

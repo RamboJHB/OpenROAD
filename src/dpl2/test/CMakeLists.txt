@@ -158,7 +158,8 @@ dpl2_configure_chain_target(dpl2_fr_deplace_compile_check delivered)
 # its option framework; the commit executable also links and runs this object
 # without the destination's Tcl registration layer.
 add_library(dpl2_fr_command_compile_check OBJECT
-    "${CMAKE_CURRENT_LIST_DIR}/../dpl2ui/testFillerRepairCmd.cc")
+    "${CMAKE_CURRENT_LIST_DIR}/../dpl2ui/testFillerRepairCmd.cc"
+    "${CMAKE_CURRENT_LIST_DIR}/../dpl2ui/testCmd.cc")
 target_include_directories(
   dpl2_fr_command_compile_check
   PRIVATE "${CMAKE_CURRENT_LIST_DIR}/../dpl2ui"

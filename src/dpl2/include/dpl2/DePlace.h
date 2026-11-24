@@ -209,8 +209,6 @@ class DePlace {
                    std::vector<CellChangeRecord>& ccRecords,
                    eUTL::PhysOrientation& rtOrient) const;
   bool moveHopeless(const Node* cell, GridX& grid_x, GridY& grid_y) const;
-  // Std-cell changes update only the in-memory Network + grid (never UDM).
-  bool commitStdCell(const CellChangeRecord& cellChange);
   bool diamondMove(Node* cell);
   bool diamondMove(Node* cell, const GridPt& grid_pt);
   void placeCell(Node* cell, const GridX x, const GridY y);

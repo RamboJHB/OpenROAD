@@ -23,6 +23,38 @@
 
 namespace dpl2 {
 
+namespace {
+
+template <typename Visitor>
+bool visitOverlapRects(const Node& cell, const PhysDesMgr* desMgr,
+                       const Visitor& visitor)
+{
+  const Master* master = cell.getMaster();
+  const PhysLibCell* physical = master != nullptr ? master->getPhysLibCell() : nullptr;
+  if (physical == nullptr || desMgr == nullptr) {
+    return false;
+  }
+  bool haveObstructions = false;
+  for (const PhysLibObs& obstruction : physical->getObstruction()) {
+    // The library provides oriented, master-local shapes. Node placement is
+    // core-relative and may deliberately differ from the retained UDM cell.
+    for (const auto& [layer, shapes] : obstruction.getShapes(cell.getOrient())) {
+      if (!desMgr->getTopTech().getTechLayer(layer).isOverlap()) {
+        continue;
+      }
+      haveObstructions = true;
+      for (const TechShape& shape : shapes) {
+        Rect rect = shape.getRect();
+        rect.move(UvDist(cell.getLeft().v), UvDist(cell.getBottom().v));
+        visitor(rect);
+      }
+    }
+  }
+  return haveObstructions;
+}
+
+}  // namespace
+
 PixelPt::PixelPt(Pixel* pixel1, GridX grid_x, GridY grid_y)
     : pixel(pixel1), x(grid_x), y(grid_y)
 {
@@ -730,42 +762,19 @@ void Grid::visitCellPixels(
     bool padded,
     const std::function<void(Pixel* pixel, bool padded)>& visitor) const
 {
-  if (cell == nullptr || desMgr_ == nullptr || !visitor) {
+  if (cell == nullptr || !visitor) {
     return;
   }
-  const Master* networkMaster = cell->getMaster();
-  if (networkMaster == nullptr || networkMaster->getPhysLibCell() == nullptr) {
-    return;
-  }
-  const PhysCell& inst = desMgr_->getPhysCell(cell->getDbInst());
-  if (!inst.isValid()) {
-    return;
-  }
-  auto obstructions = networkMaster->getPhysLibCell()->getObstruction();
-  bool have_obstructions = false;
-  const Rect core = getCore();
-
-  for (const PhysLibObs& lib_obs : obstructions) {
-    const auto& tech_obs = lib_obs.getShapes(inst.getOrient());
-    for (const auto& obs : tech_obs) {
-      if (desMgr_->getTopTech().getTechLayer(obs.first).isOverlap()) {
-        have_obstructions = true;
-        for (const TechShape& obstruction : obs.second) {
-          Rect rect = obstruction.getRect();
-          rect.move(-core.getXL(), -core.getYL());
-          GridRect grid_rect = gridCovering(rect);
-          for (GridX x = grid_rect.xlo; x < grid_rect.xhi; x++) {
-            for (GridY y = grid_rect.ylo; y < grid_rect.yhi; y++) {
-              Pixel* pixel = gridPixel(x, y);
-              if (pixel) {
-                visitor(pixel, false);
-              }
-            }
-          }
+  const bool have_obstructions = visitOverlapRects(*cell, desMgr_, [&](const Rect& rect) {
+    const auto box = gridCovering(rect);
+    for (GridX x = box.xlo; x < box.xhi; ++x) {
+      for (GridY y = box.ylo; y < box.yhi; ++y) {
+        if (Pixel* pixel = gridPixel(x, y)) {
+          visitor(pixel, false);
         }
       }
     }
-  }
+  });
   if (!have_obstructions) {
     const auto grid_box = gridCovering(cell);
     auto pad_left = padded && padding_ != nullptr ? padding_->padLeft(cell)
@@ -794,12 +803,7 @@ void Grid::visitCellBoundaryPixels(
         void(Pixel* pixel, int edgeDirection, GridX x, GridY y)>& visitor)
 const
 {
-  if (desMgr_ == nullptr || !visitor || cell.getMaster() == nullptr
-      || cell.getMaster()->getPhysLibCell() == nullptr) {
-    return;
-  }
-  const PhysCell& inst = desMgr_->getPhysCell(cell.getDbInst());
-  if (!inst.isValid()) {
+  if (!visitor) {
     return;
   }
 
@@ -829,24 +833,10 @@ const
     }
   };
 
-  auto obstructions = cell.getMaster()->getPhysLibCell()->getObstruction();
-  bool have_obstructions = false;
-  const Rect core = getCore();
-
-  for (const PhysLibObs& lib_obs : obstructions) {
-    const auto& layer_obs = lib_obs.getShapes(inst.getOrient());
-    for (const auto& obs : layer_obs) {
-      if (desMgr_->getTopTech().getTechLayer(obs.first).isOverlap()) {
-        have_obstructions = true;
-        for (const TechShape& obstruction : obs.second) {
-          Rect rect = obstruction.getRect();
-          rect.move(-core.getXL(), -core.getYL());
-          GridRect grid_rect = gridCovering(rect);
-          visit(grid_rect.xlo, grid_rect.xhi, grid_rect.ylo, grid_rect.yhi);
-        }
-      }
-    }
-  }
+  const bool have_obstructions = visitOverlapRects(cell, desMgr_, [&](const Rect& rect) {
+    const auto box = gridCovering(rect);
+    visit(box.xlo, box.xhi, box.ylo, box.yhi);
+  });
   if (!have_obstructions) {
     const auto grid_rect = gridCovering(&cell);
     // debugPrint(logger_,

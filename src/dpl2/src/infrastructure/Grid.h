@@ -128,6 +128,8 @@ class Grid
                         GridX grid_x_end,
                         GridY grid_y_end);
   void erasePixel(Node* cell);
+  // Visit the live Node/master geometry and committed Node orientation.
+  // UDM contributes only immutable library/technology data, never placement.
   void visitCellPixels(
       Node* cell,
       bool padded,

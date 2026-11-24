@@ -1,30 +1,20 @@
-#include <testEcoFlowCmd.hh>
+#include "testCmd.hh"
 
 #include <dpl2/DePlace.h>
-#include <util.hh>
-#include <infrastructure/fillerSetting.h>
+#include <infrastructure/Grid.h>
 #include <infrastructure/network.h>
 
-// UDM
-#include <phys/fpManager.hh>
-#include <phys/physDesMgr.hh>
-#include <phys/physHier.hh>
-#include <util/iter.hh>
-#include <util/assert.h>
-
 #include <iostream>
-#include <sstream>
-#include <set>
-#include <map>
+#include <string>
+#include <vector>
 
 using namespace eUNL;
 
 namespace dpl2 {
 
 // -----------------------------------------------------------------------------
-// FakeDrcFixer -- local helper that finds DRC-violating cells and swaps them
-// to an alternative libcell of the same type (same function prefix, same
-// height, same bottom/top power type).
+// FakeDrcFixer -- command-local harness. Alternative master selection remains
+// a placeholder; accepted changes use DePlace's complete transaction.
 // -----------------------------------------------------------------------------
 class TestEcoFlowCmd::FakeDrcFixer
 {
@@ -41,7 +31,7 @@ class TestEcoFlowCmd::FakeDrcFixer
 
     for (auto& [nodeId, node] : de_place_->getNetwork()->getNodes()) {
       (void) nodeId;
-      if (node->isFixed()) {
+      if (node->isFixed() || node->isFiller()) {
         continue;
       }
       LeafCellID cellId = node->getDbInst();
@@ -63,7 +53,10 @@ class TestEcoFlowCmd::FakeDrcFixer
 
         if (newLcId.isValid()) {
           if (de_place_->isLegal(cellId, newLcId, fcRecord)) {
-            persistSwap(cellId, currentLcId, newLcId, fcRecord);
+            if (!de_place_->commit(fcRecord)) {
+              std::cout << "    -> Commit rejected\n";
+              continue;
+            }
             violations_fixed++;
             std::cout << "    -> Fixed: swapped to " <<
               getLibCellName(newLcId) << " fcRecord: " << fcRecord.size() << "\n";
@@ -76,15 +69,13 @@ class TestEcoFlowCmd::FakeDrcFixer
         std::cout << "    -> No suitable alternative found\n";
       }
     }
+
+    std::cout << "  Violations found: " << violations_found
+              << ", fixed: " << violations_fixed << ", checked: " << checked << "\n";
+    return violations_fixed;
   }
 
-  std::cout << "  Violations found: " << violations_found
-        << ", fixed: " << violations_fixed << ", checked: " <<
-        checked << "\n";
-  return violations_fixed;
-}
-
-private:
+ private:
   DePlace* de_place_;
   eUNL::Design* design_;
 
@@ -94,43 +85,10 @@ private:
     return pcell.getLibCell().getName();
   }
 
-  // Extract the function-name prefix by stripping the trailing size/strength
-  // suffix (e.g. "INV_X16" -> "INV", "AND2_X4" -> "AND2").
-  static std::string functionPrefix(const std::string& name)
-  {
-    size_t pos = name.rfind('_');
-    if (pos != std::string::npos && pos > 0) {
-      return name.substr(0, pos);
-    }
-    return name;
-  }
-
-  // Find a libcell with the same type key as `currentLcId`
-  // but a different LibCellID.
-  // !! todo: find a new alternative lib cell
+  // Placeholder: no alternative-master search is implemented by this command.
   LibCellID findSameTypeLibCell(LibCellID currentLcId)
   {
     return currentLcId;
-  }
-
-  // Persist the libcell swap in the DePlace internal cache
-  // !! not commit to udm
-  void persistSwap(LeafCellID cellId, LibCellID origLcId,
-      LibCellID newLcId, const std::vector<CellChangeRecord>& fcRecord)
-  {
-    const PhysLibCell& newPhysCell = design_->getLibAcc().getPhysLibCell(newLcId);
-    Node* cell = de_place_->getNetwork()->getNode(cellId);
-
-    de_place_->unplaceCell(cell);
-    de_place_->getNetwork()->addMaster(
-        newPhysCell,
-        *de_place_->getFillerSetting(),
-        de_place_->getGrid(),
-        de_place_->edge_type_table_.get());
-    de_place_->getNetwork()->updateNode(cell, de_place_->getDesMgr(), newPhysCell);
-    de_place_->placeCell(cell,
-                         de_place_->getGrid()->gridX(cell),
-                         de_place_->getGrid()->gridSnapDownY(cell));
   }
 };
 

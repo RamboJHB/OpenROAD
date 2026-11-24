@@ -12,6 +12,9 @@ namespace dpl2 {
 class DePlace;
 class Node;
 struct CellChangeRecord;
+namespace ipl {
+class ImplantLayerChecker;
+}
 
 // Exercises the checker overlay flow used by opto:
 //
@@ -62,6 +65,7 @@ class TestFillerRepairCmd : public uvTCL::CciCommand
 
  private:
   bool probeResize(DePlace& placement,
+                   const ipl::ImplantLayerChecker& checker,
                    const Node& old,
                    Node& target,
                    int diameter,

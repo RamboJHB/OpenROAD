@@ -31,7 +31,7 @@ verification counts are available in Git history.
 - Probes do not mutate DB, Grid or Network. An existing output-vector prefix
   is preserved but is not a placement overlay for later probes. Independently
   accepted probes are not jointly DRC-validated.
-- `DePlace::commit` handles Add/Replace/Delete. `commitStdCell` changes only
+- `DePlace::commit` handles Add/Replace/Delete. Standard-cell changes update only
   Network lookup maps and Grid occupancy/padding, preserving the std Node and
   DB ID on Replace and leaving std UDM untouched. Filler changes still update
   UDM, Network and Grid. The whole batch is preflighted before mutation;
@@ -43,6 +43,14 @@ verification counts are available in Git history.
   `ccRecords` and `rtOrient`, with no pointer overloads or `replacedCell`
   argument. Only accepted candidates publish outputs. Replacement probes
   carry the existing Node ID and DB ID; insertion probes have no Node ID.
+- Runtime placement reads use Network Node coordinates/master/orientation and
+  Grid occupancy. Initial-location and overlap pixel/boundary visitors no longer
+  read retained std UDM placement. New placement orientation comes from the
+  destination site/site pattern before Grid painting. Overlap library shapes
+  are translated by the Node's core-relative origin exactly once.
+- Std commit applies the already preflighted proposal directly; the redundant
+  second commit/UDM-validation path was removed. `addFillerNode` delegates to
+  the common import path instead of duplicating it.
 
 The engine API remains:
 
@@ -60,6 +68,9 @@ transaction. `diameter` is a nonnegative DBU extension, zero forbids movement
 for an existing instance, and `va` uses absolute design coordinates. Both
 `findLeg` overloads return core-relative DBU (matching the change records) or
 `(-1, -1)`. At most 256 positions are tried per relocation search rectangle.
+The PinID overload deliberately uses an external UDM physical-pin anchor;
+callers must keep it current. Missing terms fail without publishing output.
+No verified pin-to-live-Node/current-master mapping API is present in this tree.
 
 Removal preparation is `CheckRequest{nullptr, ..., {oldStdDelete}}`; only
 ImplantLayerChecker sees this intermediate request. A failed preparation does
@@ -160,6 +171,7 @@ and compiles the copy under its destination directory name.
 | `DePlace.h/.cpp`, `Place.cpp` | Temporary-node probes, complete transaction assembly and commit |
 | `dbToOpendp.cpp` | Full master import and checker initialization after Grid setup |
 | `infrastructure/network.h/.cpp`, `Objects.h` | Stable IDs/maps, filler classification and CellChangeRecord wire |
+| `infrastructure/Grid.h/.cpp` | Full site-stack orientation checks and Node-based runtime overlap geometry |
 | `infrastructure/fillerSetting.h/.cpp` | Configured master IDs/order/prefix and site-width avoid patterns |
 | `dpl2ui/testFillerRepairCmd.cc/.hh` | Optional direct checker/commit test command |
 | `drc/ImplantLayerCheckerHelper.h/.cpp` | Required by the helper-based integration GoogleTest and dump replay |
@@ -185,6 +197,18 @@ collection; the parent provides GoogleTest and its executable.
 
 ## Verification
 
+Validated on 2026-11-24 with complete default-target builds:
+
+- Normal (AppleClang 17): 505/505 tests passed.
+- ASan (Command Line Tools AppleClang 21): 505/505 tests passed.
+- Four new regressions cover stale/invalid std UDM geometry, translated overlap
+  shapes, live placement seeds/site orientation and missing physical-pin terms.
+- The command regression verifies that only ImplantLayerChecker sees virtual
+  removal, while final validation still runs other checkers and rejects without mutation.
+- Both builds include commit/command tests, destination wiring and migration
+  parity/compile gates. The legacy ECO command is now compile-checked too.
+- `git diff --check` passed; no checker goldens or repair algorithms changed.
+
 Run the complete CMake build, which includes the commit/command executable
 and compile-only destination wiring as well as the planner/checker tests.
 These are the commands used for this validation; the explicit ASan compiler
@@ -193,16 +217,16 @@ and SDK paths apply to the current macOS host:
 ```bash
 cmake -S src/dpl2/test -B src/dpl2/test/build/doc-sync-normal \
   -DCMAKE_BUILD_TYPE=Debug -DDPL2_TEST_USE_FAKE_UDM=ON -DDPL2_ENABLE_ASAN=OFF
-cmake --build src/dpl2/test/build/doc-sync-normal --parallel 6
-ctest --test-dir src/dpl2/test/build/doc-sync-normal --output-on-failure --parallel 6
+cmake --build src/dpl2/test/build/doc-sync-normal --parallel 4
+ctest --test-dir src/dpl2/test/build/doc-sync-normal --output-on-failure --parallel 4
 
 cmake -S src/dpl2/test -B src/dpl2/test/build/doc-sync-asan-clang21 \
   -DCMAKE_BUILD_TYPE=Debug -DDPL2_TEST_USE_FAKE_UDM=ON -DDPL2_ENABLE_ASAN=ON \
   -DCMAKE_CXX_COMPILER=/Library/Developer/CommandLineTools/usr/bin/clang++ \
   -DCMAKE_OSX_SYSROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk \
   -DCMAKE_OSX_DEPLOYMENT_TARGET=26.0
-cmake --build src/dpl2/test/build/doc-sync-asan-clang21 --parallel 6
-ctest --test-dir src/dpl2/test/build/doc-sync-asan-clang21 --output-on-failure --parallel 6
+cmake --build src/dpl2/test/build/doc-sync-asan-clang21 --parallel 4
+ctest --test-dir src/dpl2/test/build/doc-sync-asan-clang21 --output-on-failure --parallel 4
 ```
 
 The gate covers planner/internal cases, unchanged checker golden expectations,
@@ -236,89 +260,28 @@ initialization, before main, even for a minimal program. The installed Command
 Line Tools clang 21 with its matching SDK runs that program successfully;
 the ASan validation therefore uses that toolchain without changing xcode-select.
 
-Verification on 2026-11-18, complete default-target builds:
+The runtime regression gate also covers std UDM immutability, repeated
+resize/removal, caller-created std Add identity/preflight, stale or invalid
+std UDM geometry, live overlap-shape translation, shifted-core/padding
+coordinates, destination-site orientation and absent physical-pin anchors.
+Checker/engine algorithms and destination checker golden expectations are
+unchanged by this audit. The two fillerRepair implementation copies remain
+identical and are both compiled.
 
-- Normal: 493/493 passed with AppleClang 17.
-- ASan: 493/493 passed with Command Line Tools AppleClang 21.
-- Fixed-filler regressions cover automatic and explicit edits at 50/75/90%.
-  Site-stack tests cover mismatched upper sites, mismatched orientations,
-  legal mixed child sites, a tall parent spanning two Grid rows, and choosing
-  a symmetry-allowed orientation when a pattern matches multiple directions.
-- The new instance overload is covered by in-place growth, shrink and move,
-  original-position and search-radius limits, and identity/Pin preservation.
-  The pin overload is covered by a shifted-core search with multiple candidates.
-- Previous TSan validation (2026-10-20): 8/8 lifecycle/concurrent-probe tests
-  passed with AppleClang 21 and
-  a locally TSan-instrumented oneTBB 2023.0.0; no race suppressions were used.
-  The four-worker concurrent probe also passed 20 repeated runs.
-  The uninstrumented Homebrew TBB reports scheduler races even for the atomic
-  counter control test, so it is not used for the TSan verdict.
-- Coverage includes checker old/new-region validation, DePlace resize/move,
-  height changes, pending transaction normalization, identity/Pin references,
-  padding and concurrent probes. This update adds 15 removal-retiler cases in
-  each internal/planner suite, 9 remove-only engine integration cases, and
-  3 real-infra/fake-UDM cases for two-row std cells with only single-row fillers.
-  Migration tests exercise 50/75/90% utilization. Engine/checker code is unchanged.
-- Both builds compiled every default target, including commit/command tests,
-  destination wiring and the migration-copy gate. `git diff --check` passed.
+The local OpenROAD fixtures cover direct repair, 19 mixed-height checks with
+implant rules, and a Nangate45 1h -> 2h -> 1h placement round trip. The latest
+recorded fixture run is 2026-11-19; it is not a native UDM run. The local wire
+updates only its UDM projection for fillers, not source ODB/write_def.
+Historical performance and TSan measurements are retained in Git history,
+not treated as validation of this revision.
 
-Destination-interface verification on 2026-11-19 (Linux, GCC 13):
-
-- Complete Debug build: 501/501 tests passed, including both migration payload
-  suites, std UDM immutability, repeated resize/removal, caller-created std Add
-  identity/preflight checks, and command cleanup when filler commit rejects.
-- The Release OpenROAD binary built and ran all three local Tcl fixtures:
-  direct filler repair, 19 mixed-height positive/negative checks, and the
-  Nangate45 1h -> 2h -> 1h round trip. Source ODB snapshots stayed unchanged.
-- The local runner now links the FR OBJECT target directly at the executable,
-  avoiding static-library ordering failures. Its Nangate45 script uses the
-  same repository-root fallback as the other scripts when `info script` is empty.
-- Build-directory-only compatibility flags were needed for this environment's
-  fmt/GCC dependency versions; these are not part of the migration payload.
-  Sanitizer results above belong to the earlier revision, not this update.
-
-These results use the test-only fake UDM provider; they do not establish
-real UDM ABI compatibility or source-ODB writeback.
-
-Review corrections on 2026-10-20:
-
-- Generate the final filler transaction before other DRC validators; reject
-  validator edits and publish nothing on failure, regardless of registry order.
-- Keep the shared TBB arena alive across PlacementDRC owner destruction.
-- Use candidate-local committed baselines/guards: a candidate checked alone,
-  batched, or reordered must have the same result.
-- Probe coherent VT tilings before a poor seed spends the shared search budget;
-  cache those snapshots. A width-12 removal with unit fillers now reaches the
-  independently verified all-LVT solution without exhausting 2048 candidates.
-- Retain the same-footprint fast path and emit probe logs as complete stdio
-  records rather than formatting a shared ostream from multiple callers.
-
-Small Debug microbenchmark (21 nodes, five rows, FR_VERBOSE=0; 500 warmups and
-500 timed calls per path, excluding setup): same-footprint isLegal decreased
-from about 482 to 81 microseconds/call. This is not a large-design benchmark.
-
-The test command also supports std removal/refill:
-`test_filler_repair -inst U1`, equivalently `-inst U1 -master {}`.
-An empty master requests one movable, ungrouped std cell and commits the
-old std Delete plus FR's refill. For one std cell and a different-size
-master, `test_filler_repair -inst U1 -master M2H ?-diameter DBU?` uses
-`TestFillerRepairCmd::probeResize` to prepare a virtual deletion and call
-`legalCellInRect` directly, not either public `findLeg`. An explicit diameter
-also enables this path for same-size moves.
-Zero (the default) tests only the original position. A successful resize
-commits an ID-preserving Replace plus the final filler changes, not the
-virtual Delete. This branch runs the registered placement checkers;
-the original explicit-overlay path still calls ImplantLayerChecker directly.
-
-The local OpenROAD runner exercises a five-row LEF/DEF fixture with actual
-implant rules and only single-row fillers (19 positive/negative checks), plus
-a 1h→2h→1h round trip on the Nangate45 GCD DEF using a test-only double-height
-master. Nangate45 validates placement geometry, not implant DRC. Both use
-real OpenDB input. Std commits update Network/Grid only; filler commits also
-update the local UDM projection. The command creates a new std UDM instance
-as the caller before committing a std Add, removing it if commit rejects.
-In the mixed-height case, a fixed filler blocks the original candidate before
-commit, and an enlarged search finds a different place without editing it.
+`test_filler_repair -inst U1 ?-master {}?` checks std removal/refill.
+With `-master M2H ?-diameter DBU?`, resize uses `probeResize`: virtual removal
+calls ImplantLayerChecker directly; final placement uses `legalCellInRect`
+and the full registered checker set, not the public `findLeg`. Diameter defaults to zero
+(original position only); an explicit diameter also enables same-size moves.
+The command creates caller-owned std Add instances before commit and removes
+them if the batch rejects. Std Replace/Delete leaves UDM untouched.
 
 ## Remaining destination work and limits
 

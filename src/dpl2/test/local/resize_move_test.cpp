@@ -22,6 +22,37 @@
 
 #include "E2ETestProvider.h"
 
+namespace dpl2 {
+class TestDePlaceCmd
+{
+ public:
+  static void assertPlacementHelpers(DePlace& dp, Node* cell)
+  {
+    const GridPt expected{dp.getGrid()->gridX(cell), dp.getGrid()->gridSnapDownY(cell)};
+    const auto expectedOrientation = cell->getOrient();
+    const auto runtime = dp.initialLocation(cell, false);
+    EXPECT_EQ(runtime.x, cell->getLeft());
+    EXPECT_EQ(runtime.y, cell->getBottom());
+    const auto runtimeGrid = dp.legalGridPt(cell, false);
+    EXPECT_EQ(runtimeGrid.x, expected.x);
+    EXPECT_EQ(runtimeGrid.y, expected.y);
+    const auto top = dp.legalPt(cell, DbuPt{cell->getLeft(), DbuY{1000}});
+    EXPECT_EQ(top.x, cell->getLeft());
+    EXPECT_EQ(top.y, dp.getGrid()->gridYToDbu(dp.getGrid()->getRowCount()) - cell->getHeight());
+    dp.setPadding(cell->getDbInst(), 2, 0);
+    const auto padded = dp.initialLocation(cell, true);
+    EXPECT_EQ(padded.x, cell->getLeft() - gridToDbu(GridX{2}, dp.getGrid()->getSiteWidth()));
+    EXPECT_EQ(padded.y, cell->getBottom());
+    dp.setPadding(cell->getDbInst(), 0, 0);
+
+    dp.unplaceCell(cell);
+    cell->setOrient(PhysOrientationE::MX);
+    dp.placeCell(cell, expected.x, expected.y);
+    EXPECT_EQ(cell->getOrient(), expectedOrientation);
+  }
+};
+}  // namespace dpl2
+
 namespace {
 using namespace dpl2;
 namespace frt = dpl2::fillerRepair::test;
@@ -426,6 +457,38 @@ TEST(DePlaceResizeMove, CrossRowMoveUsesDestinationOrientationAndLiveChecker)
   fixture.expectNormalized(changes, 16, 6, 1);
   ASSERT_TRUE(fixture.dp().commit(changes));
   EXPECT_EQ(fixture.checker(), checker);
+  fixture.expectConsistent();
+}
+
+TEST(DePlaceResizeMove, PlacementHelpersUseRuntimeOriginAndSiteOrientationAfterStdMove)
+{
+  ResizeMoveFixture fixture(ResizeMoveFixture::Layout::SingleHeight, true, true);
+  DePlace& dp = fixture.dp();
+  Node* const cell = fixture.target();
+  const auto id = cell->getDbInst();
+  const auto originalPhysical = dp.getDesMgr()->getPhysCell(id);
+  const auto originalOrigin = originalPhysical.getOrigin();
+  const auto originalOrientation = originalPhysical.getOrient();
+  ASSERT_EQ(originalOrientation, PhysOrientationE::MX);
+
+  auto destination = fixture.area(6, 1, 4);
+  std::vector<CellChangeRecord> changes;
+  ASSERT_TRUE(dp.isLegal(id, cell->getMaster()->getDbMaster(), &destination, 12, changes));
+  ASSERT_TRUE(dp.commit(changes));
+  ASSERT_EQ(cell->getLeft(), DbuX{6});
+  ASSERT_EQ(cell->getBottom(), DbuY{frt::kRowHeight});
+  ASSERT_EQ(cell->getOrient(), PhysOrientationE::R0);
+
+  // Std commits deliberately leave UDM at its old row/orientation. Neither
+  // legalization seeds nor later placement may fall back to that stale state.
+  const auto beforeHelpers = fixture.snapshot();
+  TestDePlaceCmd::assertPlacementHelpers(dp, cell);
+  EXPECT_EQ(fixture.snapshot(), beforeHelpers);
+
+  const auto physical = dp.getDesMgr()->getPhysCell(id);
+  EXPECT_EQ(physical.getOrigin().getX(), originalOrigin.getX());
+  EXPECT_EQ(physical.getOrigin().getY(), originalOrigin.getY());
+  EXPECT_EQ(physical.getOrient(), originalOrientation);
   fixture.expectConsistent();
 }
 

@@ -376,32 +376,7 @@ void Network::addNode(LeafCellID cellId, const PhysDesMgr* desMgr)
 
 void Network::addFillerNode(LeafCellID cellId, const PhysDesMgr* desMgr)
 {
-  Node ndi;
-  const int id = next_node_id_++;
-  const PhysCell& inst = desMgr->getPhysCell(cellId);
-  ndi.setId(id);
-  ndi.setDbInst(cellId);
-  ndi.setType(Node::FILLER);
-  auto master = getMaster(inst.getPhysMaster().getLibCellId());
-  ndi.setMaster(master);
-  ndi.setType(master->isFiller() ? Node::FILLER : Node::CELL);
-  ndi.setFixed(inst.getStatus() == eUNL::PhysObjStatus::LOC_FIXED);
-  ndi.setPlaced(inst.getStatus() == eUNL::PhysObjStatus::PLACED);
-
-  ndi.setOrient(inst.getOrient());
-  ndi.setHeight(DbuY{inst.getPhysMaster().getHeight().getStorage()});
-  ndi.setWidth(DbuX{inst.getPhysMaster().getWidth().getStorage()});
-  ndi.setOrigLeft(DbuX{(inst.getOrigin().getX().getStorage() -
-      core_.getXL().getStorage())});
-  ndi.setOrigBottom(DbuY{(inst.getOrigin().getY().getStorage() -
-      core_.getYL().getStorage())});
-
-  ndi.setLeft(ndi.getOrigLeft());
-  ndi.setBottom(ndi.getOrigBottom());
-  ndi.setBottomPower(master->getBottomPowerType());
-  ndi.setTopPower(master->getTopPowerType());
-  nodes_.emplace(id, std::make_unique<Node>(ndi));
-  inst_to_node_idx_[cellId] = id;
+  addNode(cellId, desMgr);
 }
 
 Node* Network::addNode(LibCellID lcId, DbuX x, DbuY y, const eUNL::Design* design)

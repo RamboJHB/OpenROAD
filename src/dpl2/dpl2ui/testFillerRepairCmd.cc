@@ -158,6 +158,7 @@ void printRejectedRequest(const ipl::CheckResult& result)
 
 bool TestFillerRepairCmd::probeResize(
     DePlace& placement,
+    const ipl::ImplantLayerChecker& checker,
     const Node& old,
     Node& target,
     int diameter,
@@ -170,12 +171,8 @@ bool TestFillerRepairCmd::probeResize(
   std::vector<CellChangeRecord> trial;
   // The virtual deletion seeds the search. Failure to refill the whole old
   // footprint here need not reject a target that will cover part of it.
-  placement.getPlacementDRC()->checkDRC(nullptr,
-                                        grid.gridX(&old),
-                                        grid.gridSnapDownY(&old),
-                                        old.getOrient(),
-                                        trial,
-                                        removals);
+  checker.check(nullptr, grid.gridX(&old), grid.gridSnapDownY(&old),
+                old.getOrient(), trial, removals);
 
   const Rect core = grid.getCore();
   const int64_t xl = int64_t{core.getXL().getStorage()} + old.getLeft().v;
@@ -379,7 +376,7 @@ bool TestFillerRepairCmd::exec()
   const Node* target = removeOnly ? nullptr : &temporary;
   bool accepted = false;
   if (resize) {
-    if (!probeResize(*dePlace, *replacedStd, temporary, diameter, changes)) {
+    if (!probeResize(*dePlace, *checker, *replacedStd, temporary, diameter, changes)) {
       return false;
     }
     left = temporary.getLeft().v;

@@ -26,7 +26,7 @@ class Network
   std::map<int, std::unique_ptr<Master>>& getMasters() { return masters_; }
   const std::map<int, std::unique_ptr<Master>>& getMasters() const
   { return masters_; }
-  // For creating and adding cells.
+  // UDM import, also used after committing a filler Add.
   void addNode(LeafCellID cellId, const PhysDesMgr* desMgr);
   void addFillerNode(LeafCellID cellId, const PhysDesMgr* desMgr);
   Node* addNode(LibCellID lcId, DbuX x, DbuY y, const eUNL::Design* design);
@@ -57,6 +57,7 @@ class Network
     return ret;
   }
 
+  // Explicit UDM refresh after a filler commit, not a std placement update.
   bool updateNode(Node* ndi,
                   const PhysDesMgr* desMgr,
                   const PhysLibCell& physLibCell);

@@ -10,7 +10,6 @@
 #include <tbb/task_arena.h>
 
 #include <cstdio>
-#include <cassert>
 #include <map>
 #include <set>
 #include <sstream>
@@ -325,10 +324,6 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
         || entry.proposed.getHeight().v <= 0) {
       return false;
     }
-    const Point2D origin(record.x_ + network_->getCore().getXL(),
-                         record.y_ + network_->getCore().getYL());
-    const auto newModule
-        = design_->getLibAcc().getLibCell(record.new_lib_cell_).getMaster();
     if (record.op_ == OpType::Add) {
       const auto* name = std::get_if<std::string>(&record.cell_data_);
       if (name == nullptr || name->empty()
@@ -353,8 +348,9 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
             *design_,
             eUNL::UnlChangePhaseE::PRE_CHANGE,
             *name,
-            newModule,
-            origin,
+            design_->getLibAcc().getLibCell(record.new_lib_cell_).getMaster(),
+            Point2D(record.x_ + network_->getCore().getXL(),
+                    record.y_ + network_->getCore().getYL()),
             orientation);
         if (!entry.add->feasible()) {
           return false;
@@ -371,13 +367,14 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
           eUNL::UnlChangePhaseE::PRE_CHANGE,
           entry.old->getDbInst(),
           oldModule,
-          newModule);
+          design_->getLibAcc().getLibCell(record.new_lib_cell_).getMaster());
       entry.place = std::make_unique<eUNL::UnlChange_placeCell>(
           &editor,
           *design_,
           eUNL::UnlChangePhaseE::PRE_CHANGE,
           entry.old->getDbInst(),
-          origin,
+          Point2D(record.x_ + network_->getCore().getXL(),
+                  record.y_ + network_->getCore().getYL()),
           orientation);
       if (!entry.swap->feasible() || !entry.place->feasible()) {
         return false;
@@ -449,14 +446,34 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
   }
   for (auto& entry : pending) {
     if (entry.standard) {
-      // Every possible rejection was checked before the batch erased pixels.
-      auto standard = *entry.record;
-      if (standard.op_ == OpType::Add) {
-        standard.cell_data_ = entry.proposed.getDbInst();
+      // The batch is already validated. Never refresh a std Node from UDM:
+      // its caller-owned physical instance may still have the old placement.
+      if (entry.record->op_ == OpType::Delete) {
+        network_->deleteNode(entry.old);
+        continue;
       }
-      const bool committed = commitStdCell(standard);
-      assert(committed);
-      (void) committed;
+      Node* node = entry.old;
+      if (entry.record->op_ == OpType::Add) {
+        auto added = std::make_unique<Node>(entry.proposed);
+        added->setId(-1);
+        node = added.get();
+        network_->addNode(std::move(added));
+      } else {
+        node->setMaster(entry.proposed.getMaster());
+        node->setWidth(entry.proposed.getWidth());
+        node->setHeight(entry.proposed.getHeight());
+        node->setLeft(entry.proposed.getLeft());
+        node->setBottom(entry.proposed.getBottom());
+        node->setOrient(entry.proposed.getOrient());
+      }
+      node->setType(Node::CELL);
+      node->setOrigLeft(node->getLeft());
+      node->setOrigBottom(node->getBottom());
+      node->setBottomPower(node->getMaster()->getBottomPowerType());
+      node->setTopPower(node->getMaster()->getTopPowerType());
+      node->setPlaced(true);
+      node->setHold(false);
+      grid_->paintPixel(node);
     } else if (entry.remove != nullptr) {
       entry.remove->commit();
       network_->deleteNode(entry.old);
@@ -475,79 +492,6 @@ bool DePlace::commit(const std::vector<CellChangeRecord>& ccRecords)
   return true;
 }
 
-bool DePlace::commitStdCell(const CellChangeRecord& cellChange)
-{
-  // commit() has preflighted the entire batch and resolved Add names to UDM IDs.
-  const auto* id = std::get_if<LeafCellID>(&cellChange.cell_data_);
-  if (id == nullptr || !id->isValid() || network_ == nullptr || grid_ == nullptr) {
-    return false;
-  }
-  Node* node = network_->getNode(*id);
-  if (cellChange.op_ != OpType::Add
-      && (node == nullptr || node->getMaster() == nullptr || node->isFiller()
-          || node->isFixed() || node->isTerminal() || node->getGroup() != nullptr
-          || (cellChange.orig_lib_cell_.isValid()
-              && cellChange.orig_lib_cell_ != node->getMaster()->getDbMaster()))) {
-    return false;
-  }
-  if (cellChange.op_ == OpType::Delete) {
-    if (node->isPlaced()) {
-      grid_->erasePixel(node);
-    }
-    network_->deleteNode(node);
-    return true;
-  }
-  Master* master = network_->getMaster(cellChange.new_lib_cell_);
-  if ((cellChange.op_ != OpType::Replace && cellChange.op_ != OpType::Add)
-      || master == nullptr || master->isFiller()
-      || master->getPhysLibCell() == nullptr) {
-    return false;
-  }
-  if (cellChange.op_ == OpType::Add) {
-    if (node != nullptr || desMgr_ == nullptr) {
-      return false;
-    }
-    const auto physical = desMgr_->getPhysCell(*id);
-    if (!physical.isValid() || physical.getStatus() == PhysObjStatus::LOC_FIXED
-        || physical.getPhysMaster().getLibCellId() != cellChange.new_lib_cell_) {
-      return false;
-    }
-    auto added = std::make_unique<Node>();
-    added->setId(-1);
-    added->setDbInst(*id);
-    node = added.get();
-    network_->addNode(std::move(added));
-  }
-  if (node->isPlaced()) {
-    grid_->erasePixel(node);
-  }
-  const PhysLibCell& physical = *master->getPhysLibCell();
-  node->setMaster(master);
-  node->setType(Node::CELL);
-  node->setWidth(DbuX{physical.getWidth().getStorage()});
-  node->setHeight(DbuY{physical.getHeight().getStorage()});
-  node->setLeft(DbuX{cellChange.x_.getStorage()});
-  node->setBottom(DbuY{cellChange.y_.getStorage()});
-  node->setOrigLeft(node->getLeft());
-  node->setOrigBottom(node->getBottom());
-  node->setOrient(cellChange.orientation_);
-  node->setBottomPower(master->getBottomPowerType());
-  node->setTopPower(master->getTopPowerType());
-  node->setPlaced(true);
-  node->setHold(false);
-  grid_->paintPixel(node);
-  return true;
-}
-
-/**
- * @brief Compute the bounding box of an operable region.
- *
- * Currently a stub — returns an empty/default Rect.
- * TODO: Implement actual bounding-box computation over @p operableRect.
- *
- * @param operableRect  Input region to compute the bounding box for.
- * @return The bounding box as a Rect.
- */
 Rect DePlace::getBoundingBox(const Rect& operableRect)
 {
   return grid_->getBoundingBox(operableRect);
@@ -687,7 +631,11 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
     return {-1, -1};
   }
   const PhysPin& pin = desMgr_->getPhysPin(eUNL::PhysPinID(startLoc.asFlatPin()));
-  const Point2D origin = (*pin.getTermIter().begin()).getOrigin();
+  const auto& terms = pin.getTermIter();
+  if (terms.begin() == terms.end()) {
+    return {-1, -1};
+  }
+  const Point2D origin = (*terms.begin()).getOrigin();
 
   Node cell;
   initTempNode(cell, master, *physical,

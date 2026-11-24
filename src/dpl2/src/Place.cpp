@@ -32,8 +32,8 @@ bool canReplaceFiller(const Node* node)
 /**
  * @brief Computes the initial (pre-legalization) location of a cell.
  *
- * Returns the cell's origin in core-relative coordinates, taken from its
- * physical instance. When @p padded is true, adjusts X to account for
+ * Returns the cell's current Network origin in core-relative coordinates.
+ * When @p padded is true, adjusts X to account for
  * the left-side padding value.
  *
  * @param cell   Cell whose initial location is queried.
@@ -42,15 +42,10 @@ bool canReplaceFiller(const Node* node)
  */
 DbuPt DePlace::initialLocation(const Node* cell, const bool padded) const
 {
-  const PhysCell& inst = desMgr_->getPhysCell(cell->getDbInst());
-  Point2D origin = inst.getOrigin();
-  DbuPt loc;
-  loc.x =(DbuX)(origin.getX() - core_.getXL()).getStorage();
+  DbuPt loc{cell->getLeft(), cell->getBottom()};
   if (padded) {
-    loc.x =(DbuX)(origin.getX().getStorage()) - gridToDbu(padding_->padLeft(cell),
-        grid_->getSiteWidth());
+    loc.x -= gridToDbu(padding_->padLeft(cell), grid_->getSiteWidth());
   }
-  loc.y = (DbuY)(origin.getY() - core_.getYL()).getStorage();
   return loc;
 }
 
@@ -77,8 +72,9 @@ DbuPt DePlace::legalPt(const Node* cell, const DbuPt& pt) const
   const DbuX legal_x{gridToDbu(grid_x, site_width)};
   // Align to row
   const DbuY core_y
-      = std::clamp(pt.y, DbuY{0}, DbuY{core_.getYH().getStorage()} -
-      cell->getHeight());
+      = std::clamp(pt.y, DbuY{0},
+                   DbuY{(core_.getYH() - core_.getYL()).getStorage()}
+                       - cell->getHeight());
   const GridY grid_y = grid_->gridRoundY(core_y);
   DbuY legal_y = grid_->gridYToDbu(grid_y);
   return {legal_x, legal_y};
@@ -87,7 +83,7 @@ DbuPt DePlace::legalPt(const Node* cell, const DbuPt& pt) const
 /**
  * @brief Legalize a cell to the nearest valid grid point.
  *
- * Uses the cell's current physical location as the starting point,
+ * Uses the cell's current Network location as the starting point,
  * then applies moveHopeless and nearestBlockEdge strategies to avoid
  * fixed/blocked pixels. If @p padded is true, the initial location is
  * offset by the cell's left padding.
@@ -185,7 +181,7 @@ DbuPt DePlace::nearestBlockEdge(const Node* cell,
 }
 
 /**
- * @brief Get a legal grid point for a cell from its physical location.
+ * @brief Get a legal grid point for a cell from its Network location.
  *
  * Uses the cell's current origin (optionally padded) as the target,
  * legalizes, and snaps to grid.
@@ -513,9 +509,9 @@ void DePlace::placeCell(Node* cell, const GridX x, const GridY y)
   const auto orientation = getLegalPlacementOrientation(
       x, y, *cell->getMaster()->getPhysLibCell()).value();
   setGridLoc(cell, x, y);
+  cell->setOrient(orientation);
   grid_->paintPixel(cell, x, y);
   cell->setPlaced(true);
-  cell->setOrient(orientation);
 }
 
 /**
