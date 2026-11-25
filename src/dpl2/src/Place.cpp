@@ -21,14 +21,6 @@
 #include <fstream>
 namespace dpl2 {
 
-namespace {
-bool canReplaceFiller(const Node* node)
-{
-  return node->isFiller() && node->getDbInst().isValid()
-         && !node->isFixed() && !node->isTerminal() && node->getGroup() == nullptr;
-}
-}  // namespace
-
 /**
  * @brief Computes the initial (pre-legalization) location of a cell.
  *
@@ -593,7 +585,12 @@ bool DePlace::checkPixels(const Node* cell,
       || x_end > grid_->getRowSiteCount() || y_end > grid_->getRowCount()) {
     return false;
   }
-  // Temporary replacement probes carry the old instance's stable identity.
+  // [FRPORT] This predicate is local so copying checkPixels needs no extra helper.
+  const auto canReplaceFiller = [](const Node* node) {
+    return node != nullptr && node->isFiller() && node->getDbInst().isValid()
+           && !node->isFixed() && !node->isTerminal() && node->getGroup() == nullptr;
+  };
+  // [FRPORT] Temporary replacement probes carry the old instance's stable identity.
   // An insertion probe has no Node ID; its DB ID is only a diagnostic anchor.
   const Node* liveCell = network_->getNode(cell->getId());
   const bool repairProbe = liveCell != cell;
@@ -645,8 +642,28 @@ bool DePlace::checkPixels(const Node* cell,
   }
 
   const PhysLibCell* master = cell->getMaster()->getPhysLibCell();
-  const auto placementOrientation = master != nullptr
-      ? getLegalPlacementOrientation(x, y, *master) : std::nullopt;
+  // [FRPORT] Select the full site-stack orientation here; no new class helper
+  // is needed when transplanting this function.
+  auto placementOrientation = master != nullptr
+      ? grid_->getPlacementSiteOrientation(x, y, *master) : std::nullopt;
+  if (placementOrientation) {
+    const unsigned symmetry = getMasterSymmetry(static_cast<int>(master->getSymmetry()));
+    if (!checkMasterSym(symmetry, *placementOrientation)) {
+      placementOrientation.reset();
+      if (master->hasSitePattern()) {
+        constexpr std::array<PhysOrientationE, 4> orientations{
+            PhysOrientationE::R0, PhysOrientationE::MX, PhysOrientationE::MY,
+            PhysOrientationE::R180};
+        for (const PhysOrientation alternative : orientations) {
+          if (checkMasterSym(symmetry, alternative)
+              && grid_->getPlacementSiteOrientation(x, y, *master, alternative)) {
+            placementOrientation = alternative;
+            break;
+          }
+        }
+      }
+    }
+  }
   if (!placementOrientation) {
     if (repairProbe) {
       const auto site = master != nullptr
@@ -664,7 +681,7 @@ bool DePlace::checkPixels(const Node* cell,
   const auto orient = *placementOrientation;
 
   if (repairProbe) {
-    // The pending removal layout is input to FR, never a mutation of Grid.
+    // [FRPORT] The pending removal layout is input to FR, never a mutation of Grid.
     // FR owns cancelling/retiling its Adds and merging actual filler Deletes.
     Node candidate = *cell;
     setGridLoc(&candidate, x, y);
@@ -735,10 +752,11 @@ bool DePlace::checkPixels(const Node* cell,
     std::vector<CellChangeRecord> accepted
         = replacedCell != nullptr ? std::vector<CellChangeRecord>{} : ccRecords;
     const size_t preservedPrefix = accepted.size();
+    // [FRPORT] Validate the final target/fillers through every registered checker.
     if (!drc_engine_->checkDRC(&candidate, x, y, orient, accepted, overlayChanges)) {
       return false;
     }
-    // Check the final padded layout, including newly tiled fillers. A valid
+    // [FRPORT] Check the final padded layout, including newly tiled fillers. A valid
     // body-only overlay must not publish a transaction commit would reject.
     std::set<const Node*> removedOwners;
     if (replacedCell != nullptr) {

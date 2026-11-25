@@ -81,10 +81,17 @@ one identity-preserving std Replace and the site orientation. Failure leaves
 both the caller's change prefix and orientation unchanged. Preparation stays
 request-local, calls ImplantLayerChecker only and may fail without blocking
 the final target. The probe never registers or modifies library masters.
-Port the DePlace header declarations and shared `findLegToReplace` together,
-not just the public thin wrapper. The destination's `checkPixels` must match
+The public LeafCellID `findLeg` contains the resize transaction directly;
+there is no additional resize helper to migrate. `isLegal` keeps its original
+same-footprint fast path, then delegates to that public API on failure.
+`checkPixels` keeps editable-filler and site-orientation selection inside its
+body, with no extra helper declaration to port. Concrete `[FRPORT]` comments
+mark these changes in the three destination functions.
+The destination's `checkPixels` must match
 this branch's temporary-Node ID/LeafCellID replacement recognition and internal
 overlay assembly; it must not require old std Deletes in the caller's output prefix.
+It still requires the existing Grid site-stack/padding APIs and symmetry
+checks. Preserve any destination-specific pixel checks not present in this branch.
 
 Removal preparation is `CheckRequest{nullptr, ..., {oldStdDelete}}`; only
 ImplantLayerChecker sees this intermediate request. A failed preparation does
@@ -213,9 +220,11 @@ collection; the parent provides GoogleTest and its executable.
 
 Validated on 2026-11-25 with complete default-target builds:
 
-- Normal (AppleClang 17): 510/510 tests passed.
-- ASan (Command Line Tools AppleClang 21): 510/510 tests passed.
-- Five new regressions cover the destination resize entry and shared search.
+- Normal (AppleClang 17): 511/511 tests passed.
+- ASan (Command Line Tools AppleClang 21): 511/511 tests passed.
+- Six focused regressions cover the destination resize entry, shared search
+  and fast-path rejection without a valid radius/Implant checker. Node-pointer
+  and LeafCellID entry results are compared on successful and rejected probes.
   Existing regressions cover stale/invalid std UDM geometry, translated overlap
   shapes, live placement seeds/site orientation and missing physical-pin terms.
 - The command regression verifies that only ImplantLayerChecker sees virtual

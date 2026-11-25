@@ -87,8 +87,35 @@ bool DePlace::isLegal(LeafCellID instId, LibCellID masterId,
   constexpr std::pair<int, int> notFound{-1, -1};
   PhysOrientation orientation{PhysOrientationE::R0};
   const Node* inst = network_ != nullptr ? network_->getNode(instId) : nullptr;
-  return findLegToReplace(inst, va, diameter, masterId, changes,
-                          /*tryDirectFirst=*/true, orientation) != notFound;
+  Master* const master = network_ != nullptr ? network_->getMaster(masterId) : nullptr;
+  const PhysLibCell* physical = master != nullptr ? master->getPhysLibCell() : nullptr;
+  // Keep the same-footprint fast path without a second resize implementation.
+  if (diameter >= 0 && design_ != nullptr && grid_ != nullptr && drc_engine_ != nullptr
+      && drc_engine_->getChecker(DRCCheckerType::ImplantLayer) != nullptr
+      && inst != nullptr && network_->getNode(inst->getDbInst()) == inst
+      && inst->getMaster() != nullptr && !inst->isFiller() && !inst->isFixed()
+      && !inst->isTerminal() && inst->getGroup() == nullptr
+      && master != nullptr && !master->isFiller() && physical != nullptr
+      && physical->getTechSite() != nullptr && !physical->getType().isBlock()
+      && !physical->getType().isPad() && !physical->getType().isCover()
+      && physical->getWidth().getStorage() > 0 && physical->getHeight().getStorage() > 0
+      && inst->getWidth().v == physical->getWidth().getStorage()
+      && inst->getHeight().v == physical->getHeight().getStorage()) {
+    const Point2D origin{UvDist(inst->getLeft().v), UvDist(inst->getBottom().v)};
+    Node probe;
+    initTempNode(probe, master, *physical, origin);
+    probe.setId(inst->getId());
+    probe.setDbInst(inst->getDbInst());
+    std::vector<CellChangeRecord> trial;
+    const auto position = findLegAtOrigin(origin, &probe, va, 0, trial, orientation);
+    if (position != notFound) {
+      trial.push_back({OpType::Replace, instId, UvDist(position.first), UvDist(position.second),
+                       inst->getMaster()->getDbMaster(), masterId, orientation});
+      changes.insert(changes.end(), trial.begin(), trial.end());
+      return true;
+    }
+  }
+  return findLeg(instId, va, diameter, masterId, changes, orientation) != notFound;
 }
 
 std::pair<int, int> DePlace::findLeg(const Node* inst, eUNL::VoltageArea* va,
@@ -110,16 +137,7 @@ std::pair<int, int> DePlace::findLeg(eUNL::LeafCellID instId,
                                     std::vector<CellChangeRecord>& ccRecords,
                                     eUTL::PhysOrientation& rtOrient)
 {
-  const Node* inst = network_ != nullptr ? network_->getNode(instId) : nullptr;
-  return findLegToReplace(inst, va, diameter, masterId, ccRecords,
-                          /*tryDirectFirst=*/false, rtOrient);
-}
-
-std::pair<int, int> DePlace::findLegToReplace(
-    const Node* old, eUNL::VoltageArea* va, int diameter, LibCellID masterId,
-    std::vector<CellChangeRecord>& ccRecords, bool tryDirectFirst,
-    PhysOrientation& rtOrient)
-{
+  // [FRPORT] Resize stays in this destination API; no extra resize helper.
   constexpr std::pair<int, int> notFound{-1, -1};
   if (diameter < 0 || design_ == nullptr || network_ == nullptr
       || grid_ == nullptr || drc_engine_ == nullptr) {
@@ -129,6 +147,8 @@ std::pair<int, int> DePlace::findLegToReplace(
   if (implant == nullptr) {
     return notFound;
   }
+  const Node* old = network_->getNode(instId);
+  // [FRPORT] Masters are imported before checker setup; a probe never adds one.
   Master* const master = network_->getMaster(masterId);
   if (old == nullptr || network_->getNode(old->getDbInst()) != old
       || old->getMaster() == nullptr || old->isFiller()
@@ -150,34 +170,26 @@ std::pair<int, int> DePlace::findLegToReplace(
   Node probe;
   const Point2D origin{UvDist(old->getLeft().v), UvDist(old->getBottom().v)};
   initTempNode(probe, master, physical, origin);
+  // [FRPORT] Identify replacement by both IDs, not caller-prefix Deletes.
   probe.setId(old->getId());
   probe.setDbInst(old->getDbInst());
 
-  const bool sameFootprint
-      = old->getWidth().v == physical.getWidth().getStorage()
-        && old->getHeight().v == physical.getHeight().getStorage();
   std::vector<CellChangeRecord> trial;
   PhysOrientation chosenOrientation{PhysOrientationE::R0};
-  auto location = notFound;
-  // isLegal's same-size swap need not prepare a removal if it fits in place.
-  if (tryDirectFirst && sameFootprint) {
-    location = findLegAtOrigin(origin, &probe, va, 0, trial, chosenOrientation);
+  std::vector<CellChangeRecord> removed{
+      {OpType::Delete, old->getDbInst(), UvDist(old->getLeft().v),
+       UvDist(old->getBottom().v), old->getMaster()->getDbMaster(),
+       old->getMaster()->getDbMaster(), old->getOrient()}};
+  // [FRPORT] Preparation is local and Implant-only. Failure is not final:
+  // the target can cover sites that cannot be refilled by themselves.
+  if (!implant->check(nullptr, oldX, oldY, old->getOrient(), trial, removed)) {
+    trial.clear();
   }
-  if (location == notFound) {
-    std::vector<CellChangeRecord> removed{
-        {OpType::Delete, old->getDbInst(), UvDist(old->getLeft().v),
-         UvDist(old->getBottom().v), old->getMaster()->getDbMaster(),
-         old->getMaster()->getDbMaster(), old->getOrient()}};
-    // This virtual removal layout is only a seed: the final target can make
-    // an otherwise unfillable old footprint tileable.
-    if (!implant->check(nullptr, oldX, oldY, old->getOrient(), trial, removed)) {
-      trial.clear();
-    }
-    location = findLegAtOrigin(origin, &probe, va, diameter, trial, chosenOrientation);
-  }
+  const auto location = findLegAtOrigin(origin, &probe, va, diameter, trial, chosenOrientation);
   if (location == notFound) {
     return notFound;
   }
+  // [FRPORT] Publish only the final filler transaction and same-ID Replace.
   trial.push_back({OpType::Replace, old->getDbInst(),
                    UvDist(location.first), UvDist(location.second),
                    old->getMaster()->getDbMaster(), masterId, chosenOrientation});
@@ -551,7 +563,7 @@ std::pair<int, int> DePlace::findLegAtOrigin(
       || network_ == nullptr || grid_ == nullptr || diameter < 0) {
     return notFound;
   }
-  // Search a request-local copy; even a placed input must not be unpainted by
+  // [FRPORT] Search a request-local copy; even a placed input must not be unpainted by
   // legalCellInRect. The supplied origin is core-relative and authoritative.
   Node probe = *search_cell;
   probe.setLeft(DbuX{origin.getX().getStorage()});
@@ -564,6 +576,7 @@ std::pair<int, int> DePlace::findLegAtOrigin(
   }
   const UvDist width(probe.getWidth().v);
   const UvDist height(probe.getHeight().v);
+  // [FRPORT] Convert Grid results to core-relative DBU exactly once.
   const auto toDbu = [&](std::pair<int, int> position) {
     return position == notFound ? notFound
         : std::make_pair(position.first * grid_->getSiteWidth().v,
@@ -574,6 +587,7 @@ std::pair<int, int> DePlace::findLegAtOrigin(
   if (replacedCell != nullptr) {
     const GridX x = grid_->gridX(&probe);
     const GridY y = grid_->gridSnapDownY(&probe);
+    // [FRPORT] A zero-radius replacement cannot snap to a different site.
     const bool aligned = x.v * grid_->getSiteWidth().v == probe.getLeft().v
                          && grid_->gridYToDbu(y) == probe.getBottom();
     const UvDist xl = core_.getXL() + UvDist(x.v * grid_->getSiteWidth().v);
@@ -598,7 +612,7 @@ std::pair<int, int> DePlace::findLegAtOrigin(
 
   const int64_t xl = int64_t{core_.getXL().getStorage()} + probe.getLeft().v;
   const int64_t yl = int64_t{core_.getYL().getStorage()} + probe.getBottom().v;
-  // Widen before adding diameter, and clip before converting back to UvDist.
+  // [FRPORT] Search/VA rectangles are absolute; widen and clip before UvDist conversion.
   const Rect search(
       UvDist(std::max<int64_t>(core_.getXL().getStorage(), xl - diameter)),
       UvDist(std::max<int64_t>(core_.getYL().getStorage(), yl - diameter)),

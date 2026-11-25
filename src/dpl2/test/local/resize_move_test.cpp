@@ -59,6 +59,11 @@ class TestDePlaceCmd
   {
     return dp.findLegAtOrigin(origin, cell, nullptr, 0, changes, orientation);
   }
+
+  static void clearPlacementCheckers(DePlace& dp)
+  {
+    dp.drc_engine_ = std::make_unique<PlacementDRC>(dp.getGrid());
+  }
 };
 }  // namespace dpl2
 
@@ -380,6 +385,37 @@ TEST(DePlaceResizeMove, SameFootprintSwapSkipsRemovalPreparation)
   EXPECT_EQ(fixture.snapshot(), before);
 }
 
+TEST(DePlaceResizeMove, SameFootprintFastPathRejectsNegativeRadiusAndMissingImplantChecker)
+{
+  ResizeMoveFixture fixture;
+  Node* const original = fixture.target();
+  const auto id = original->getDbInst();
+  const LibCellID master(0, 2);
+  const auto prefix = callerOnlyPrefix();
+  const auto before = fixture.snapshot();
+  std::vector<CellChangeRecord> control;
+  ASSERT_TRUE(fixture.dp().isLegal(id, master, control));
+  EXPECT_EQ(fixture.snapshot(), before);
+  std::vector<CellChangeRecord> changes{prefix};
+  EXPECT_FALSE(fixture.dp().isLegal(id, master, nullptr, -1, changes));
+  ASSERT_EQ(changes.size(), 1u);
+  expectSameRecord(changes.front(), prefix);
+  EXPECT_EQ(fixture.snapshot(), before);
+
+  TestDePlaceCmd::clearPlacementCheckers(fixture.dp());
+  EXPECT_EQ(fixture.dp().getPlacementDRC()->getChecker(DRCCheckerType::ImplantLayer), nullptr);
+  EXPECT_FALSE(fixture.dp().isLegal(id, master, changes));
+  PhysOrientation orientation{PhysOrientationE::R180};
+  EXPECT_EQ(fixture.dp().findLeg(id, nullptr, 0, master, changes, orientation),
+            (std::pair<int, int>{-1, -1}));
+  EXPECT_EQ(orientation, PhysOrientationE::R180);
+  EXPECT_EQ(fixture.dp().findLeg(original, nullptr, 0, master, changes),
+            (std::pair<int, int>{-1, -1}));
+  ASSERT_EQ(changes.size(), 1u);
+  expectSameRecord(changes.front(), prefix);
+  EXPECT_EQ(fixture.snapshot(), before);
+}
+
 TEST(DePlaceResizeMove, PartialMoveCancelsPendingFillersAndRetilesOldFootprint)
 {
   for (bool shifted : {false, true}) {
@@ -500,6 +536,14 @@ TEST(DePlaceResizeMove, FindLegByIdResizesAtOriginAndPreservesCallerPrefix)
     expectSameRecord(changes.front(), prefix);
     const std::vector<CellChangeRecord> transaction(changes.begin() + 1, changes.end());
     fixture.expectNormalized(transaction, scenario.master, 8, 2);
+    std::vector<CellChangeRecord> legacy{prefix};
+    ASSERT_EQ(fixture.dp().findLeg(original, nullptr, 0, LibCellID(0, scenario.master), legacy),
+              std::make_pair(8, 2 * frt::kRowHeight));
+    ASSERT_EQ(legacy.size(), changes.size());
+    for (size_t index = 0; index < changes.size(); ++index) {
+      expectSameRecord(legacy[index], changes[index]);
+    }
+    EXPECT_EQ(fixture.snapshot(), before);
     ASSERT_TRUE(fixture.dp().commit(transaction));
     EXPECT_EQ(fixture.target(), original);
     fixture.expectConsistent();
@@ -559,6 +603,11 @@ TEST(DePlaceResizeMove, FindLegByIdFailuresPreservePlacementPrefixAndOrientation
     EXPECT_EQ(orientation, PhysOrientationE::R180);
     ASSERT_EQ(changes.size(), 1u);
     expectSameRecord(changes.front(), prefix);
+    std::vector<CellChangeRecord> legacy{prefix};
+    EXPECT_EQ(fixture.dp().findLeg(fixture.dp().getNetwork()->getNode(instance), area,
+        diameter, master, legacy), (std::pair<int, int>{-1, -1}));
+    ASSERT_EQ(legacy.size(), 1u);
+    expectSameRecord(legacy.front(), prefix);
     EXPECT_EQ(fixture.snapshot(), before);
   };
   auto displaced = fixture.area(6, 2, 2);

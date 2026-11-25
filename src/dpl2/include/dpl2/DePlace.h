@@ -266,10 +266,6 @@ class DePlace {
                                       int diameter,
                                       std::vector<CellChangeRecord>& ccRecords,
                                       eUTL::PhysOrientation& rtOrient);
-  std::pair<int, int> findLegToReplace(const Node* inst, eUNL::VoltageArea* va,
-                                      int diameter, LibCellID masterId,
-                                      std::vector<CellChangeRecord>& ccRecords,
-                                      bool tryDirectFirst, PhysOrientation& rtOrient);
 
   // Grid initialization
   void initGrid();

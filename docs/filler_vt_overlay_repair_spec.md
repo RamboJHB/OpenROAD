@@ -189,6 +189,9 @@ DePlace probes assemble complete transactions without mutating placement:
   filler transaction and a target `Replace`, not a target `Delete` or `Add`.
   `rtOrient` is the accepted destination-site orientation, published only on
   success. The older Node-pointer overload delegates to this same path.
+  The LeafCellID entry contains its transaction logic directly; no additional
+  resize helper is required. `isLegal` retains the same-footprint fast path,
+  then calls this entry for removal preparation and search.
 - `findLeg(pin, va, diameter, master, changes)` appends FR's complete filler
   transaction and one named target `Add`. Its target
   name is `DPL_STD_<row>_<column>_M<LibCellID-index>` with a deterministic
