@@ -235,6 +235,13 @@ the old origin. Only the final std `Replace` and FR changes are committed.
 The resize branch runs the registered placement checkers; removal, swaps
 without a search and explicit filler overlays use ImplantLayerChecker directly.
 Invalid requests or rejected plans do not commit partial changes.
+Command output separates simulation-only input overlays, pending resize
+preparation, the final filler summary, the complete commit transaction and
+the applied result. Each record explicitly names Delete/Add/Replace and
+STD/FILLER, with before/after master, geometry and orientation. Pending Adds
+are not counted as committed records; Replace is not labelled as a generic
+swap. The log states that std Replace/Delete leave UDM unchanged, while filler
+operations synchronize UDM/Network/Grid and the command creates std Adds in UDM.
 
 Before publishing success, DePlace checks final target/filler padded footprints
 together. A body-only tiling that conflicts with padding fails safely rather

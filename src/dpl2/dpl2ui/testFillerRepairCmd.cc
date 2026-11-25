@@ -113,22 +113,90 @@ bool validFillerChanges(const std::vector<CellChangeRecord>& changes,
       });
 }
 
-void printChanges(const std::vector<CellChangeRecord>& changes)
+void printChanges(const char* phase,
+                  const std::vector<CellChangeRecord>& changes,
+                  const ipl::ImplantLayerChecker& checker,
+                  bool details = true,
+                  bool simulation = false)
 {
-  for (const CellChangeRecord& change : changes) {
-    if (change.op_ == OpType::Add) {
-      const auto* name = std::get_if<std::string>(&change.cell_data_);
-      std::cout << "    add=" << (name != nullptr ? *name : "<invalid>")
-                << " master=" << change.new_lib_cell_.getIndexValue()
-                << " origin=(" << change.x_.getStorage() << ','
-                << change.y_.getStorage() << ") orient="
-                << static_cast<int>(change.orientation_.getValue()) << '\n';
-      continue;
+  size_t deletes = 0;
+  size_t adds = 0;
+  size_t replaces = 0;
+  for (const auto& change : changes) {
+    deletes += change.op_ == OpType::Delete;
+    adds += change.op_ == OpType::Add;
+    replaces += change.op_ == OpType::Replace;
+  }
+  std::cout << "\n[test_filler_repair] ===== " << phase << " =====\n"
+            << "  summary: records=" << changes.size() << " Delete=" << deletes
+            << " Add=" << adds << " Replace=" << replaces << '\n';
+  if (!details) {
+    return;
+  }
+  Network& network = *checker.getNetwork();
+  const Grid& grid = *checker.getGrid();
+  const auto* hierarchy = checker.getDesign()->getHierMgr();
+  const auto orientationName = [](PhysOrientation orientation) {
+    if (orientation == PhysOrientationE::R0) return "R0";
+    if (orientation == PhysOrientationE::R180) return "R180";
+    if (orientation == PhysOrientationE::MX) return "MX";
+    if (orientation == PhysOrientationE::MY) return "MY";
+    return "OTHER";
+  };
+  const auto state = [&](const char* label, const Master* master, LibCellID libId,
+                         UvDist x, UvDist y, PhysOrientation orientation) {
+    const auto* physical = master != nullptr ? master->getPhysLibCell() : nullptr;
+    std::cout << "      " << label << " master: libId=" << libId.getIndexValue()
+              << " networkId=" << (master != nullptr ? master->getId() : -1)
+              << " name=" << (physical != nullptr ? physical->getLibCell().getName() : "<unknown>")
+              << '\n'
+              << "        origin(core DBU)=(" << x.getStorage() << ',' << y.getStorage() << ')';
+    if (physical != nullptr) {
+      Node footprint;
+      footprint.setLeft(DbuX{x.getStorage()});
+      footprint.setBottom(DbuY{y.getStorage()});
+      footprint.setWidth(DbuX{physical->getWidth().getStorage()});
+      footprint.setHeight(DbuY{physical->getHeight().getStorage()});
+      const auto box = grid.gridCovering(&footprint);
+      std::cout << " size(DBU)=" << footprint.getWidth().v << 'x' << footprint.getHeight().v
+                << " sites/rows=" << (box.xhi - box.xlo).v << 'x' << (box.yhi - box.ylo).v;
     }
+    std::cout << " orient=" << orientationName(orientation)
+              << '(' << static_cast<int>(orientation.getValue()) << ")\n";
+  };
+  for (size_t index = 0; index < changes.size(); ++index) {
+    const auto& change = changes[index];
+    const bool add = change.op_ == OpType::Add;
+    const bool remove = change.op_ == OpType::Delete;
     const auto* id = std::get_if<eUNL::LeafCellID>(&change.cell_data_);
-    std::cout << "    filler=" << (id != nullptr ? id->getIndexValue() : -1)
-              << " master=" << change.orig_lib_cell_.getIndexValue() << " -> "
-              << change.new_lib_cell_.getIndexValue() << '\n';
+    const Node* old = !add && id != nullptr ? network.getNode(*id) : nullptr;
+    const Master* before = add ? nullptr : old != nullptr ? old->getMaster()
+                                                          : network.getMaster(change.orig_lib_cell_);
+    const Master* after = !remove ? network.getMaster(change.new_lib_cell_) : nullptr;
+    const bool filler = add ? after != nullptr && after->isFiller()
+                            : old != nullptr ? old->isFiller() : before != nullptr && before->isFiller();
+    const auto* name = std::get_if<std::string>(&change.cell_data_);
+    std::cout << "  [" << index + 1 << "] op=" << (add ? "ADD" : remove ? "DELETE" : "REPLACE")
+              << " kind=" << (filler ? "FILLER" : "STD") << '\n'
+              << "      name=" << (add ? (name != nullptr ? *name : "<invalid>")
+                  : old != nullptr && hierarchy != nullptr
+                        ? hierarchy->getLeafCell(old->getDbInst()).getName() : "<unknown>") << '\n'
+              << "      nodeId=" << (old != nullptr ? old->getId() : -1)
+              << " leafId=" << (id != nullptr ? id->getIndexValue() : -1) << '\n';
+    if (add) {
+      std::cout << "      before: <no instance; ID assigned when the instance is created>\n";
+    } else {
+      state("before", before, change.orig_lib_cell_,
+            old != nullptr ? UvDist(old->getLeft().v) : change.x_,
+            old != nullptr ? UvDist(old->getBottom().v) : change.y_,
+            old != nullptr ? old->getOrient() : change.orientation_);
+    }
+    if (remove) {
+      std::cout << (simulation ? "      after: <hidden in this simulated overlay; NOT COMMITTED>\n"
+                              : "      after: <removed from final placement>\n");
+    } else {
+      state("after", after, change.new_lib_cell_, change.x_, change.y_, change.orientation_);
+    }
   }
 }
 
@@ -169,10 +237,18 @@ bool TestFillerRepairCmd::probeResize(
   const eLIB::PhysLibCell& physical = *master.getPhysLibCell();
   std::vector<CellChangeRecord> removals{deleteRecord(old)};
   std::vector<CellChangeRecord> trial;
+  std::cout << "\n[test_filler_repair] ===== REMOVAL PREPARATION BEGIN =====\n"
+            << "  simulation only: pending records are NOT COMMITTED\n";
   // The virtual deletion seeds the search. Failure to refill the whole old
   // footprint here need not reject a target that will cover part of it.
-  checker.check(nullptr, grid.gridX(&old), grid.gridSnapDownY(&old),
-                old.getOrient(), trial, removals);
+  const bool prepared = checker.check(nullptr, grid.gridX(&old), grid.gridSnapDownY(&old),
+                                      old.getOrient(), trial, removals);
+  printChanges("REMOVAL PREPARATION (PENDING; DO NOT COMMIT)", trial, checker, true, true);
+  std::cout << "  preparation status=" << (prepared ? "READY" : "NO SEED") << '\n'
+            << "  These records are search-overlay input, not the final commit list.\n"
+            << "  Pending Adds are discarded/re-tiled; pending Replaces are merged as seeds.\n"
+            << "\n[test_filler_repair] ===== FINAL PLACEMENT CHECK BEGIN =====\n"
+            << "  validators: full registered checker set\n";
 
   const Rect core = grid.getCore();
   const int64_t xl = int64_t{core.getXL().getStorage()} + old.getLeft().v;
@@ -191,6 +267,9 @@ bool TestFillerRepairCmd::probeResize(
   if (col < 0 || row < 0) {
     std::cout << "NO REPAIR: operation=resize targetMaster=" << master.getId()
               << " diameter=" << diameter << '\n';
+    std::cout << "\n[test_filler_repair] ===== COMMIT RESULT =====\n"
+              << "  committed: records=0\n"
+              << "  status=NOT_COMMITTED; preparation records were not committed\n";
     return false;
   }
   target.setLeft(DbuX{col * grid.getSiteWidth().v});
@@ -354,23 +433,17 @@ bool TestFillerRepairCmd::exec()
 
   std::vector<CellChangeRecord> overlayChanges;
   overlayChanges.reserve(overlays.size());
-  std::cout << "checker request: operation=" << operation
-            << " targetMaster=" << (targetMaster != nullptr ? targetMaster->getId() : -1)
-            << " overlays=" << overlays.size() << " origin=(" << left << ','
-            << bottom << ")\n";
+  std::cout << "\n[test_filler_repair] ===== REQUEST =====\n"
+            << "  operation=" << operation << '\n'
+            << "  targetMaster=" << (targetMaster != nullptr ? targetMaster->getId() : -1) << '\n'
+            << "  origin(core DBU)=(" << left << ',' << bottom << ")\n"
+            << "  origin(grid column,row)=(" << x.v << ',' << y.v << ")\n"
+            << "  Delete=remove from layout; Add=create in layout; Replace=keep ID/update master+placement\n";
   for (const Node* node : overlays) {
     overlayChanges.push_back(deleteRecord(*node));
-    std::cout << "    overlay delete: cellId=" << node->getId()
-              << " dbId=" << node->getDbInst().getIndexValue() << " name="
-              << design->getHierMgr()->getLeafCell(node->getDbInst()).getName()
-              << " master="
-              << node->getMaster()->getPhysLibCell()->getLibCell().getName()
-              << " masterId=" << node->getMaster()->getId()
-              << " widthSites=" << grid->gridWidth(node).v << " origin=("
-              << node->getLeft().v << ',' << node->getBottom().v
-              << ") orient=" << static_cast<int>(node->getOrient().getValue())
-              << " kind=" << (node->isFiller() ? "filler" : "std") << '\n';
   }
+  printChanges("INPUT OVERLAY (SIMULATION ONLY)", overlayChanges, *checker, true, true);
+  std::cout << "  Input Deletes describe the checker snapshot; they are NOT COMMITTED here.\n";
 
   std::vector<CellChangeRecord> changes;
   const Node* target = removeOnly ? nullptr : &temporary;
@@ -384,6 +457,8 @@ bool TestFillerRepairCmd::exec()
     orientation = temporary.getOrient();
     accepted = true;
   } else {
+    std::cout << "\n[test_filler_repair] ===== FINAL CHECK BEGIN =====\n"
+              << "  validator: ImplantLayerChecker\n";
     accepted = checker->check(target, x, y, orientation, changes, overlayChanges);
   }
   if (!changes.empty()
@@ -396,11 +471,20 @@ bool TestFillerRepairCmd::exec()
             << " targetMaster=" << (targetMaster != nullptr ? targetMaster->getId() : -1)
             << " overlays=" << overlays.size()
             << " fillerChanges=" << changes.size() << '\n';
-  printChanges(changes);
+  printChanges("FINAL FILLER CHANGES", changes, *checker, false);
+  if (accepted) {
+    std::cout << "  This is the final FR result, not preparation records.\n"
+              << "  Accepted record details appear once in FINAL COMMIT TRANSACTION.\n";
+  } else {
+    std::cout << "  No accepted FR plan; no final transaction will be committed.\n";
+  }
   if (!accepted) {
     const ipl::CheckRequest request{
         target, x, y, orientation, overlayChanges};
     printRejectedRequest(checker->checkDirect(request));
+    std::cout << "\n[test_filler_repair] ===== COMMIT RESULT =====\n"
+              << "  committed: records=0\n"
+              << "  status=NOT_COMMITTED; no accepted transaction\n";
     return false;
   }
 
@@ -448,6 +532,11 @@ bool TestFillerRepairCmd::exec()
                                            orientation});
   }
   transaction.insert(transaction.end(), changes.begin(), changes.end());
+  printChanges("FINAL COMMIT TRANSACTION", transaction, *checker);
+  std::cout << "  Only this complete list is committed once. Do not add overlay/pending records again.\n"
+            << "  FILLER Delete/Add/Replace: UDM + Network + Grid\n"
+            << "  STD REPLACE/DELETE: UDM unchanged; caller-owned\n"
+            << "  STD ADD: this command creates UDM first; DePlace imports its ID into Network/Grid\n";
   // This command is the caller: it creates a std instance before DePlace
   // imports its real ID. DePlace itself never changes std-cell UDM state.
   eUNL::NlEditor editor(design);
@@ -463,6 +552,9 @@ bool TestFillerRepairCmd::exec()
                 record.y_ + grid->getCore().getYL()), record.orientation_);
     if (!standardAdd->feasible()) {
       std::cout << "ERROR: cannot create the target std UDM instance\n";
+      std::cout << "\n[test_filler_repair] ===== COMMIT RESULT =====\n"
+                << "  committed: records=0\n"
+                << "  status=NOT_COMMITTED; target std creation is infeasible\n";
       return false;
     }
     standardAdd->commit();
@@ -474,34 +566,59 @@ bool TestFillerRepairCmd::exec()
           standardAdd->getCellId());
       remove.commit();
     }
-    std::cout << "ERROR: commit rejected; placement was not changed\n";
+    std::cout << "\n[test_filler_repair] ===== COMMIT RESULT =====\n"
+              << "  committed: records=0\n"
+              << "  status=REJECTED; no placement transaction committed\n";
+    if (standardAdd != nullptr) {
+      std::cout << "  Caller-created std UDM instance was removed; UDM may retain its ID/tombstone.\n";
+    }
+    std::cout << "ERROR: commit rejected; Network/Grid placement was not changed\n";
     return false;
   }
-  std::cout << "COMMITTED: operation=" << operation << " origin=(" << left << ','
-            << bottom << ") " << changes.size() << " filler change(s)\n";
+  std::cout << "\n[test_filler_repair] ===== COMMIT RESULT =====\n"
+            << "  committed: records=" << transaction.size() << '\n'
+            << "COMMITTED: operation=" << operation << " origin(core DBU)=(" << left << ','
+            << bottom << ")\n"
+            << "  final filler records=" << changes.size() << '\n'
+            << "  Finalized FR records only; preparation is not counted separately.\n";
   for (const auto& record : transaction) {
     const auto* id = std::get_if<eUNL::LeafCellID>(&record.cell_data_);
+    if (record.op_ == OpType::Delete) {
+      const Master* master = network->getMaster(record.orig_lib_cell_);
+      const bool filler = master != nullptr && master->isFiller();
+      std::cout << "    op=DELETE kind=" << (filler ? "FILLER" : "STD")
+                << " leafId=" << (id != nullptr ? id->getIndexValue() : -1) << '\n'
+                << "      removed from " << (filler ? "UDM + Network + Grid" : "Network + Grid; UDM unchanged")
+                << '\n';
+      continue;
+    }
     Node* node = id != nullptr
                      ? network->getNode(*id)
                      : findNode(*network,
                                 *design,
                                 std::get<std::string>(record.cell_data_));
-    if (record.op_ == OpType::Delete) {
-      std::cout << "    delete dbId=" << id->getIndexValue() << '\n';
+    if (node == nullptr || node->getMaster() == nullptr
+        || node->getMaster()->getPhysLibCell() == nullptr) {
+      std::cout << "    WARNING: committed record was not found in Network\n";
       continue;
     }
     const auto& physical = *node->getMaster()->getPhysLibCell();
-    std::cout << "    " << (record.op_ == OpType::Add ? "add" : "swap")
-              << " cellId=" << node->getId()
-              << " dbId=" << node->getDbInst().getIndexValue() << " name="
-              << design->getHierMgr()->getLeafCell(node->getDbInst()).getName()
-              << " master=" << physical.getLibCell().getName()
-              << " masterId=" << node->getMaster()->getId()
-              << " widthSites=" << grid->gridWidth(node).v
-              << " height=" << node->getHeight().v << " origin=("
+    std::cout << "    op=" << (record.op_ == OpType::Add ? "ADD" : "REPLACE")
+              << " kind=" << (node->isFiller() ? "FILLER" : "STD") << '\n'
+              << "      name=" << design->getHierMgr()->getLeafCell(node->getDbInst()).getName() << '\n'
+              << "      nodeId=" << node->getId() << " leafId=" << node->getDbInst().getIndexValue() << '\n'
+              << "      master=" << physical.getLibCell().getName()
+              << " networkId=" << node->getMaster()->getId() << '\n'
+              << "      widthSites=" << grid->gridWidth(node).v
+              << " height(DBU)=" << node->getHeight().v << " origin(core DBU)=("
               << node->getLeft().v << ',' << node->getBottom().v
               << ") orient=" << static_cast<int>(node->getOrient().getValue())
               << '\n';
+    if (!node->isFiller()) {
+      std::cout << (record.op_ == OpType::Add
+                        ? "      UDM std instance created by command; Network/Grid imported\n"
+                        : "      UDM std master/placement unchanged; caller-owned\n");
+    }
   }
   return true;
 }

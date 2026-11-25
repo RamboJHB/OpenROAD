@@ -229,6 +229,8 @@ Validated on 2026-11-25 with complete default-target builds:
   shapes, live placement seeds/site orientation and missing physical-pin terms.
 - The command regression verifies that only ImplantLayerChecker sees virtual
   removal, while final validation still runs other checkers and rejects without mutation.
+  Captured output also verifies explicit operation/kind labels, pending versus
+  final counts, zero committed records on rejection and caller-owned std UDM state.
 - Both builds include commit/command tests, destination wiring and migration
   parity/compile gates. The legacy ECO command is now compile-checked too.
 - `git diff --check` passed; no checker goldens or repair algorithms changed.
@@ -312,6 +314,13 @@ and the full registered checker set, not the public `findLeg`. Diameter defaults
 (original position only); an explicit diameter also enables same-size moves.
 The command creates caller-owned std Add instances before commit and removes
 them if the batch rejects. Std Replace/Delete leaves UDM untouched.
+Its output labels INPUT OVERLAY as simulation-only and resize PREPARATION as
+pending/DO NOT COMMIT, then prints a final filler summary and one detailed
+FINAL COMMIT TRANSACTION. Records use explicit DELETE/ADD/REPLACE and
+STD/FILLER labels with old/new state. COMMIT RESULT counts only the final
+transaction and identifies actual UDM versus Network/Grid effects. A Replace
+is not called a swap, and a failed caller-created std Add rollback may retain
+a UDM ID/tombstone rather than restoring the UDM byte-for-byte.
 
 ## Remaining destination work and limits
 

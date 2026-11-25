@@ -848,6 +848,67 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   static Fixture f(true);
   TestFillerRepairCmd command;
   std::string error;
+  std::string output;
+  const auto runCaptured = [&](const std::vector<std::string>& args) {
+    ::testing::internal::CaptureStdout();
+    const bool accepted = command.run(args, error);
+    output = ::testing::internal::GetCapturedStdout();
+    return accepted;
+  };
+  const auto section = [](const std::string& log, const char* phase) {
+    const std::string marker = std::string("[test_filler_repair] ===== ") + phase + " =====";
+    const auto begin = log.find(marker);
+    EXPECT_NE(begin, std::string::npos) << phase;
+    if (begin == std::string::npos) {
+      return std::string{};
+    }
+    const auto end = log.find("\n[test_filler_repair] ===== ", begin + marker.size());
+    return log.substr(begin, end == std::string::npos ? end : end - begin);
+  };
+  const auto readCount = [](const std::string& text, const char* field) {
+    const auto begin = text.find(field);
+    EXPECT_NE(begin, std::string::npos) << field;
+    size_t value = 0;
+    if (begin != std::string::npos) {
+      std::istringstream number(text.substr(begin + std::string(field).size()));
+      number >> value;
+      EXPECT_FALSE(number.fail()) << field;
+    }
+    return value;
+  };
+  const auto occurrences = [](const std::string& text, const char* token) {
+    size_t count = 0;
+    for (size_t next = text.find(token); next != std::string::npos;
+         next = text.find(token, next + std::string(token).size())) {
+      ++count;
+    }
+    return count;
+  };
+  const auto expectCommittedOutput = [&](const char* stdOperation) {
+    section(output, "INPUT OVERLAY (SIMULATION ONLY)");
+    const auto fillers = section(output, "FINAL FILLER CHANGES");
+    EXPECT_EQ(fillers.find("op="), std::string::npos);
+    const auto transaction = section(output, "FINAL COMMIT TRANSACTION");
+    const size_t records = readCount(transaction, "summary: records=");
+    size_t operations = 0;
+    for (const auto& [field, token] : {std::pair{" Delete=", "op=DELETE "},
+                                     std::pair{" Add=", "op=ADD "},
+                                     std::pair{" Replace=", "op=REPLACE "}}) {
+      const size_t count = readCount(transaction, field);
+      EXPECT_EQ(occurrences(transaction, token), count);
+      operations += count;
+    }
+    EXPECT_EQ(operations, records);
+    EXPECT_EQ(records, readCount(fillers, "summary: records=") + 1);
+    EXPECT_EQ(occurrences(transaction, "kind=STD"), 1u);
+    EXPECT_NE(transaction.find(stdOperation), std::string::npos);
+    EXPECT_EQ(transaction.find("op=SWAP"), std::string::npos);
+    EXPECT_EQ(transaction.find("swap"), std::string::npos);
+    EXPECT_NE(output.find("STD REPLACE/DELETE: UDM unchanged; caller-owned"), std::string::npos);
+    const auto result = section(output, "COMMIT RESULT");
+    EXPECT_EQ(readCount(result, "committed: records="), records);
+    return transaction;
+  };
   struct PlacementOnlyChecker : DRCChecker
   {
     PlacementOnlyChecker(Grid* grid, eUNL::Design* design) : DRCChecker(grid, design) {}
@@ -914,13 +975,16 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   }
 
   const auto originalId = f.node(122)->getDbInst();
-  ASSERT_TRUE(command.run({"-inst", "I122", "-master", "TH4"}, error));
+  ASSERT_TRUE(runCaptured({"-inst", "I122", "-master", "TH4"}));
+  expectCommittedOutput("op=REPLACE kind=STD");
   ASSERT_NE(f.node(122), nullptr);
   EXPECT_EQ(f.node(122)->getDbInst(), originalId);
   EXPECT_EQ(f.node(122)->getMaster()->getDbMaster(), eLIB::LibCellID(0, 2));
   f.consistent();
 
-  ASSERT_TRUE(command.run({"-inst", "I103", "-master", "BUF1"}, error));
+  ASSERT_TRUE(runCaptured({"-inst", "I103", "-master", "BUF1"}));
+  const auto insertionLog = expectCommittedOutput("op=ADD kind=STD");
+  EXPECT_NE(insertionLog.find("op=DELETE kind=FILLER"), std::string::npos);
   EXPECT_EQ(f.node(103), nullptr);
   const Node* inserted = f.dp->getGrid()->gridPixel(GridX{18}, GridY{0})->cell;
   ASSERT_NE(inserted, nullptr);
@@ -963,7 +1027,9 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   const auto before = f.snapshot();
   const int checkedPlacements = placementOnly->placements;
   placementOnly->rejectFinal = true;
-  EXPECT_FALSE(command.run({"-inst", "I122", "-master", "BUF2", "-diameter", "0"}, error));
+  EXPECT_FALSE(runCaptured({"-inst", "I122", "-master", "BUF2", "-diameter", "0"}));
+  EXPECT_EQ(readCount(section(output, "COMMIT RESULT"), "committed: records="), 0u);
+  EXPECT_EQ(output.find("[test_filler_repair] ===== FINAL COMMIT TRANSACTION ====="), std::string::npos);
   placementOnly->rejectFinal = false;
   EXPECT_GT(placementOnly->placements, checkedPlacements);
   EXPECT_EQ(placementOnly->removals, 0);
@@ -1018,7 +1084,8 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   };
   // Reuse the command after a populated -master option: omission must clear it.
   ASSERT_TRUE(command.run({"-inst", "I122", "-master", "BUF2"}, error));
-  ASSERT_TRUE(command.run({"-inst", "I110"}, error));
+  ASSERT_TRUE(runCaptured({"-inst", "I110"}));
+  expectCommittedOutput("op=DELETE kind=STD");
   expectRefilled(110, 0, 1, 6);
   ASSERT_TRUE(command.run({"-inst", "I111", "-master", ""}, error));
   expectRefilled(111, 6, 1, 6);
@@ -1064,7 +1131,16 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   expectResize(2, 12);
   EXPECT_EQ(f.dp->getNetwork()->getNode(upperLeftId), nullptr);
   EXPECT_EQ(f.dp->getNetwork()->getNode(upperRightId), nullptr);
-  ASSERT_TRUE(command.run({"-inst", "I120", "-master", "TL4"}, error));
+  ASSERT_TRUE(runCaptured({"-inst", "I120", "-master", "TL4"}));
+  const auto pending = section(output, "REMOVAL PREPARATION (PENDING; DO NOT COMMIT)");
+  const size_t pendingRecords = readCount(pending, "summary: records=");
+  EXPECT_GT(pendingRecords, 0u);
+  EXPECT_NE(pending.find("Pending Adds are discarded/re-tiled; pending Replaces are merged as seeds."),
+            std::string::npos);
+  const auto resizeLog = expectCommittedOutput("op=REPLACE kind=STD");
+  const auto result = section(output, "COMMIT RESULT");
+  EXPECT_NE(readCount(result, "committed: records="),
+            pendingRecords + readCount(resizeLog, "summary: records="));
   expectResize(1, 1);
   expectFilled(0, 3, 4);
   ASSERT_TRUE(command.run({"-inst", "I120", "-master", "TL4D", "-diameter", "0"}, error));
