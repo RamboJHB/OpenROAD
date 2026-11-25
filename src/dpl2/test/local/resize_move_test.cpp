@@ -13,11 +13,13 @@
 #include <algorithm>
 #include <array>
 #include <latch>
+#include <limits>
 #include <memory>
 #include <set>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include "E2ETestProvider.h"
@@ -49,6 +51,13 @@ class TestDePlaceCmd
     cell->setOrient(PhysOrientationE::MX);
     dp.placeCell(cell, expected.x, expected.y);
     EXPECT_EQ(cell->getOrient(), expectedOrientation);
+  }
+
+  static std::pair<int, int> probeAtOrigin(
+      DePlace& dp, const Point2D& origin, Node* cell,
+      std::vector<CellChangeRecord>& changes, PhysOrientation& orientation)
+  {
+    return dp.findLegAtOrigin(origin, cell, nullptr, 0, changes, orientation);
   }
 };
 }  // namespace dpl2
@@ -149,18 +158,35 @@ class ResizeMoveFixture
           << ',' << physical.master->getLibCellId().getIndexValue() << ','
           << physical.origin.getX().getStorage() << ','
           << physical.origin.getY().getStorage() << ','
-          << static_cast<int>(physical.orient.getValue()) << ';';
+          << static_cast<int>(physical.orient.getValue()) << ','
+          << static_cast<int>(physical.status) << ';';
+    }
+    for (const auto& [id, master] : dp_->getNetwork()->getMasters()) {
+      out << id << ',' << master.get() << ',' << master->getDbMaster().getIndexValue()
+          << ',' << master->getPhysLibCell() << ',' << master->isFiller() << ','
+          << master->isMultiRow() << ',' << master->getPins().size() << ';';
+      for (const auto& edge : master->getEdges()) {
+        const auto& box = edge.getBBox();
+        out << edge.getEdgeType() << ',' << box.getXL().getStorage() << ','
+            << box.getYL().getStorage() << ',' << box.getXH().getStorage() << ','
+            << box.getYH().getStorage() << ';';
+      }
     }
     for (const auto& [id, node] : dp_->getNetwork()->getNodes()) {
       out << id << ',' << node->getDbInst().getIndexValue() << ','
           << node->getMaster()->getDbMaster().getIndexValue() << ','
           << node->getLeft().v << ',' << node->getBottom().v << ','
-          << static_cast<int>(node->getOrient().getValue()) << ';';
+          << node->getWidth().v << ',' << node->getHeight().v << ','
+          << static_cast<int>(node->getOrient().getValue()) << ','
+          << node->getType() << ',' << node->isFixed() << ',' << node->isPlaced()
+          << ',' << node->isHold() << ',' << node->getGroup() << ';';
     }
     for (GridY y{0}; y < dp_->getGrid()->getRowCount(); ++y) {
       for (GridX x{0}; x < dp_->getGrid()->getRowSiteCount(); ++x) {
         const Pixel* pixel = dp_->getGrid()->gridPixel(x, y);
-        out << pixel->cell << ',' << pixel->padding_reserved_by << ',' << pixel->util << ';';
+        out << pixel->cell << ',' << pixel->padding_reserved_by << ',' << pixel->util
+            << ',' << pixel->group << ',' << pixel->is_valid << ',' << pixel->is_hopeless
+            << ',' << static_cast<unsigned>(pixel->blocked_layers) << ';';
       }
     }
     return out.str();
@@ -261,6 +287,21 @@ class ResizeMoveFixture
   std::unique_ptr<DePlace> dp_;
   std::string originalStdUdm_;
 };
+
+CellChangeRecord callerOnlyPrefix()
+{
+  // This deliberately invalid placement must never become a search overlay.
+  return {OpType::Add, std::string("CALLER_PREFIX_NOT_AN_OVERLAY"), UvDist(1000),
+          UvDist(2000), LibCellID(0, 999), LibCellID(0, 999), PhysOrientationE::R180};
+}
+
+void expectSameRecord(const CellChangeRecord& actual, const CellChangeRecord& expected)
+{
+  EXPECT_EQ(std::tie(actual.op_, actual.cell_data_, actual.x_, actual.y_,
+                      actual.orig_lib_cell_, actual.new_lib_cell_, actual.orientation_),
+            std::tie(expected.op_, expected.cell_data_, expected.x_, expected.y_,
+                      expected.orig_lib_cell_, expected.new_lib_cell_, expected.orientation_));
+}
 
 TEST(DePlaceResizeMove, OriginalPositionSupportsSizeDownAndSizeUp)
 {
@@ -433,6 +474,261 @@ TEST(DePlaceResizeMove, FindLegInstanceGrowsAtOriginalSiteWithZeroDiameter)
   ASSERT_NE(addition, nullptr);
   EXPECT_TRUE(addition->isFiller());
   fixture.expectConsistent();
+}
+
+TEST(DePlaceResizeMove, FindLegByIdResizesAtOriginAndPreservesCallerPrefix)
+{
+  using Layout = ResizeMoveFixture::Layout;
+  struct Scenario { Layout layout; int master; };
+  for (const auto scenario : {Scenario{Layout::SingleHeight, 16},
+                             Scenario{Layout::SingleHeight, 9},
+                             Scenario{Layout::GrowHeight, 12},
+                             Scenario{Layout::DoubleHeight, 1}}) {
+    SCOPED_TRACE(scenario.master);
+    ResizeMoveFixture fixture(scenario.layout);
+    Node* const original = fixture.target();
+    const auto before = fixture.snapshot();
+    const auto prefix = callerOnlyPrefix();
+    std::vector<CellChangeRecord> changes{prefix};
+    PhysOrientation orientation{PhysOrientationE::R180};
+    ASSERT_EQ(fixture.dp().findLeg(original->getDbInst(), nullptr, 0,
+        LibCellID(0, scenario.master), changes, orientation),
+        std::make_pair(8, 2 * frt::kRowHeight));
+    EXPECT_EQ(orientation, PhysOrientationE::MX);
+    EXPECT_EQ(fixture.snapshot(), before);
+    ASSERT_GT(changes.size(), 1u);
+    expectSameRecord(changes.front(), prefix);
+    const std::vector<CellChangeRecord> transaction(changes.begin() + 1, changes.end());
+    fixture.expectNormalized(transaction, scenario.master, 8, 2);
+    ASSERT_TRUE(fixture.dp().commit(transaction));
+    EXPECT_EQ(fixture.target(), original);
+    fixture.expectConsistent();
+  }
+}
+
+TEST(DePlaceResizeMove, FindLegByIdMovesPartiallyOrAcrossRowsWithoutChangingIdentity)
+{
+  for (const bool crossRow : {false, true}) {
+    SCOPED_TRACE(crossRow);
+    ResizeMoveFixture fixture(ResizeMoveFixture::Layout::SingleHeight, true, crossRow);
+    Node* const original = fixture.target();
+    Edge net;
+    Pin pin;
+    pin.setNode(original);
+    pin.setEdge(&net);
+    net.addPin(&pin);
+    const int x = crossRow ? 6 : 10;
+    const int row = crossRow ? 1 : 2;
+    const int master = crossRow ? 16 : 1;
+    auto destination = fixture.area(x, row, crossRow ? 2 : 4);
+    const auto before = fixture.snapshot();
+    const auto prefix = callerOnlyPrefix();
+    std::vector<CellChangeRecord> changes{prefix};
+    PhysOrientation orientation{PhysOrientationE::R180};
+    ASSERT_EQ(fixture.dp().findLeg(original->getDbInst(), &destination,
+        crossRow ? 12 : 4, LibCellID(0, master), changes, orientation),
+        std::make_pair(x, row * frt::kRowHeight));
+    EXPECT_EQ(orientation, crossRow ? PhysOrientationE::R0 : PhysOrientationE::MX);
+    EXPECT_EQ(fixture.snapshot(), before);
+    ASSERT_GT(changes.size(), 1u);
+    expectSameRecord(changes.front(), prefix);
+    const std::vector<CellChangeRecord> transaction(changes.begin() + 1, changes.end());
+    fixture.expectNormalized(transaction, master, x, row);
+    ASSERT_TRUE(fixture.dp().commit(transaction));
+    EXPECT_EQ(fixture.target(), original);
+    EXPECT_EQ(pin.getNode(), original);
+    EXPECT_EQ(pin.getEdge(), &net);
+    ASSERT_EQ(net.getPins().size(), 1u);
+    EXPECT_EQ(net.getPins().front(), &pin);
+    fixture.expectConsistent();
+  }
+}
+
+TEST(DePlaceResizeMove, FindLegByIdFailuresPreservePlacementPrefixAndOrientation)
+{
+  ResizeMoveFixture fixture;
+  const auto id = fixture.target()->getDbInst();
+  const auto prefix = callerOnlyPrefix();
+  auto checkFailure = [&](LeafCellID instance, eUNL::VoltageArea* area,
+                          int diameter, LibCellID master) {
+    const auto before = fixture.snapshot();
+    std::vector<CellChangeRecord> changes{prefix};
+    PhysOrientation orientation{PhysOrientationE::R180};
+    EXPECT_EQ(fixture.dp().findLeg(instance, area, diameter, master, changes, orientation),
+              (std::pair<int, int>{-1, -1}));
+    EXPECT_EQ(orientation, PhysOrientationE::R180);
+    ASSERT_EQ(changes.size(), 1u);
+    expectSameRecord(changes.front(), prefix);
+    EXPECT_EQ(fixture.snapshot(), before);
+  };
+  auto displaced = fixture.area(6, 2, 2);
+  for (const int diameter : {0, 1}) {
+    SCOPED_TRACE(diameter);
+    checkFailure(id, &displaced, diameter, LibCellID(0, 16));
+  }
+  auto blocked = fixture.area(0, 0, 2);
+  checkFailure(id, &blocked, 24, LibCellID(0, 16));
+  eUNL::VoltageArea empty;
+  checkFailure(id, &empty, 24, LibCellID(0, 16));
+  checkFailure(id, nullptr, 0, LibCellID(0, 12));
+  checkFailure(id, nullptr, -1, LibCellID(0, 16));
+  checkFailure(id, nullptr, 0, LibCellID(0, 999));
+  checkFailure(id, nullptr, 0, LibCellID(0, 3));
+  checkFailure(LeafCellID(0, 999), nullptr, 0, LibCellID(0, 16));
+  fixture.target()->setFixed(true);
+  checkFailure(id, nullptr, 0, LibCellID(0, 16));
+}
+
+TEST(DePlaceResizeMove, FindLegByIdRetriesFinalTargetAfterRemovalRefillFails)
+{
+  ResizeMoveFixture fixture(ResizeMoveFixture::Layout::OddWidth, true, false,
+                            "FL2 FH2 FS2");
+  const Node* const original = fixture.target();
+  const auto before = fixture.snapshot();
+  std::vector<CellChangeRecord> removal{
+      {OpType::Delete, original->getDbInst(), UvDist(original->getLeft().v),
+       UvDist(original->getBottom().v), original->getMaster()->getDbMaster(),
+       original->getMaster()->getDbMaster(), original->getOrient()}};
+  std::vector<CellChangeRecord> prepared;
+  EXPECT_FALSE(fixture.checker()->check(nullptr, GridX{8}, GridY{2},
+      original->getOrient(), prepared, removal));
+  EXPECT_TRUE(prepared.empty());
+  EXPECT_EQ(fixture.snapshot(), before);
+
+  const auto prefix = callerOnlyPrefix();
+  std::vector<CellChangeRecord> changes{prefix};
+  PhysOrientation orientation{PhysOrientationE::R180};
+  ASSERT_EQ(fixture.dp().findLeg(original->getDbInst(), nullptr, 0,
+      LibCellID(0, 9), changes, orientation), std::make_pair(8, 2 * frt::kRowHeight));
+  EXPECT_EQ(orientation, PhysOrientationE::MX);
+  EXPECT_EQ(fixture.snapshot(), before);
+  ASSERT_EQ(changes.size(), 2u);
+  expectSameRecord(changes.front(), prefix);
+  fixture.expectNormalized({changes.back()}, 9, 8, 2);
+  ASSERT_TRUE(fixture.dp().commit({changes.back()}));
+  fixture.expectConsistent();
+}
+
+TEST(DePlaceResizeMove, FindLegEntriesUseDbuUnitsAndExplicitOriginsOnNonUnitSites)
+{
+  constexpr int siteWidth = 114;
+  constexpr int rowHeight = 480;
+  constexpr int offsetX = 17;
+  constexpr int offsetY = 20;
+  fake_udm::DesignDb db;
+  db.coreSite.name_ = "core";
+  db.coreSite.width_ = UvDist(siteWidth);
+  db.coreSite.height_ = UvDist(rowHeight);
+  auto& filler1 = db.addMaster("FILL1", 0, siteWidth, rowHeight, true);
+  auto& filler2 = db.addMaster("FILL2", 1, 2 * siteWidth, rowHeight, true);
+  auto& standard1 = db.addMaster("STD1", 2, siteWidth, rowHeight, false);
+  auto& standard2 = db.addMaster("STD2", 3, 2 * siteWidth, rowHeight, false);
+  for (auto* master : {&filler1, &filler2, &standard1, &standard2}) {
+    master->symmetry_ = 3;
+  }
+  const LeafCellID targetId(0, 900);
+  for (int row = 0; row < 5; ++row) {
+    const PhysOrientation orientation = row % 2 == 0 ? PhysOrientationE::MX : PhysOrientationE::R0;
+    auto& physicalRow = db.desMgr().addRow(offsetX, offsetY + row * rowHeight,
+                                           siteWidth, rowHeight, 12 * siteWidth);
+    physicalRow.site_.name_ = db.coreSite.name_;
+    physicalRow.orient_ = orientation;
+    for (int col = 0; col < 12; col += 2) {
+      const bool target = row == 2 && col == 4;
+      db.desMgr().addCell(target ? targetId : LeafCellID(0, 100 + row * 12 + col),
+          target ? &standard2 : &filler2, offsetX + col * siteWidth,
+          offsetY + row * rowHeight, orientation, eUNL::PhysObjStatus::PLACED,
+          target ? "TARGET_STD2" : "FILL_" + std::to_string(row) + "_" + std::to_string(col));
+    }
+  }
+  const eUNL::PinID pinId(0, 901);
+  db.desMgr().addPin(eUNL::PhysPinID(pinId), offsetX + 8 * siteWidth, offsetY + rowHeight);
+  db.activate();
+  DePlace dp;
+  dp.getFillerSetting()->addFillerCell("FILL1 FILL2");
+  dp.getNetwork()->updateFillerClassification(*dp.getFillerSetting());
+  dp.getPlacementDRC()->addChecker(DRCCheckerType::ImplantLayer,
+      std::make_unique<ipl::ImplantLayerChecker>(dp.getGrid(), &db.design, dp.getNetwork()));
+  Node* const original = dp.getNetwork()->getNode(targetId);
+  ASSERT_NE(original, nullptr);
+  ASSERT_TRUE(original->isPlaced());
+  ASSERT_EQ(dp.getGrid()->getSiteWidth(), DbuX{siteWidth});
+  ASSERT_EQ(db.desMgr().cells_.size(), 30u);
+  const auto snapshot = [&] {
+    std::ostringstream state;
+    for (const auto& [id, cell] : db.desMgr().cells_) {
+      state << id.getIndexValue() << ',' << cell.valid << ',' << cell.master << ','
+            << cell.origin.getX().getStorage() << ',' << cell.origin.getY().getStorage()
+            << ',' << static_cast<int>(cell.orient.getValue()) << ',' << static_cast<int>(cell.status) << ';';
+    }
+    for (const auto& [id, master] : dp.getNetwork()->getMasters()) {
+      state << id << ',' << master.get() << ',' << master->isFiller() << ';';
+    }
+    for (const auto& [id, node] : dp.getNetwork()->getNodes()) {
+      state << id << ',' << node.get() << ',' << node->getMaster() << ',' << node->getLeft().v
+            << ',' << node->getBottom().v << ',' << static_cast<int>(node->getOrient().getValue())
+            << ',' << node->isPlaced() << ';';
+    }
+    for (GridY row{0}; row < dp.getGrid()->getRowCount(); ++row) {
+      for (GridX col{0}; col < dp.getGrid()->getRowSiteCount(); ++col) {
+        const Pixel* pixel = dp.getGrid()->gridPixel(col, row);
+        state << pixel->cell << ',' << pixel->padding_reserved_by << ',' << pixel->util
+              << ',' << pixel->is_valid << ';';
+      }
+    }
+    return state.str();
+  };
+  const auto before = snapshot();
+  eUNL::VoltageArea destination;
+  destination.getRects().emplace_back(UvDist(offsetX + 8 * siteWidth), UvDist(offsetY + rowHeight),
+      UvDist(offsetX + 9 * siteWidth), UvDist(offsetY + 2 * rowHeight));
+  const auto prefix = callerOnlyPrefix();
+  std::vector<CellChangeRecord> changes{prefix};
+  PhysOrientation orientation{PhysOrientationE::R180};
+  ASSERT_EQ(dp.findLeg(targetId, &destination, std::numeric_limits<int>::max(),
+      standard1.getLibCellId(), changes, orientation), std::make_pair(8 * siteWidth, rowHeight));
+  EXPECT_EQ(orientation, PhysOrientationE::R0);
+  expectSameRecord(changes.front(), prefix);
+  const auto target = std::find_if(changes.begin() + 1, changes.end(), [&](const auto& change) {
+    return change.op_ == OpType::Replace && change.cell_data_ == CellData{targetId};
+  });
+  ASSERT_NE(target, changes.end());
+  EXPECT_EQ(target->x_, UvDist(8 * siteWidth));
+  EXPECT_EQ(target->y_, UvDist(rowHeight));
+  EXPECT_EQ(target->orientation_, PhysOrientationE::R0);
+  EXPECT_EQ(snapshot(), before);
+
+  changes.clear();
+  ASSERT_EQ(dp.findLeg(pinId, nullptr, 0, standard1.getLibCellId(), changes),
+            std::make_pair(8 * siteWidth, rowHeight));
+  ASSERT_FALSE(changes.empty());
+  EXPECT_EQ(changes.back().op_, OpType::Add);
+  EXPECT_EQ(changes.back().new_lib_cell_, standard1.getLibCellId());
+  EXPECT_EQ(changes.back().x_, UvDist(8 * siteWidth));
+  EXPECT_EQ(changes.back().y_, UvDist(rowHeight));
+  EXPECT_EQ(changes.back().orientation_, PhysOrientationE::R0);
+  EXPECT_EQ(snapshot(), before);
+
+  changes.clear();
+  orientation = PhysOrientationE::R180;
+  ASSERT_EQ(TestDePlaceCmd::probeAtOrigin(dp, Point2D(UvDist(2 * siteWidth), UvDist(3 * rowHeight)),
+      original, changes, orientation), std::make_pair(2 * siteWidth, 3 * rowHeight));
+  EXPECT_EQ(orientation, PhysOrientationE::R0);
+  EXPECT_EQ(snapshot(), before);
+  for (const Point2D& origin : {Point2D(UvDist(2 * siteWidth + 1), UvDist(3 * rowHeight)),
+                               Point2D(UvDist(-1), UvDist(3 * rowHeight)),
+                               Point2D(UvDist(2 * siteWidth), UvDist(3 * rowHeight + 1))}) {
+    SCOPED_TRACE(::testing::Message() << origin.getX().getStorage() << ','
+                                    << origin.getY().getStorage());
+    changes = {prefix};
+    orientation = PhysOrientationE::R180;
+    EXPECT_EQ(TestDePlaceCmd::probeAtOrigin(dp, origin, original, changes, orientation),
+              (std::pair<int, int>{-1, -1}));
+    ASSERT_EQ(changes.size(), 1u);
+    expectSameRecord(changes.front(), prefix);
+    EXPECT_EQ(orientation, PhysOrientationE::R180);
+    EXPECT_EQ(snapshot(), before);
+  }
 }
 
 TEST(DePlaceResizeMove, CrossRowMoveUsesDestinationOrientationAndLiveChecker)
@@ -668,15 +964,23 @@ TEST(DePlaceResizeMove, ConcurrentProbesKeepRemovalAndFinalTransactionsRequestLo
   const auto id = fixture.target()->getDbInst();
   auto destination = fixture.area(10, 2, 4);
   std::array<std::vector<CellChangeRecord>, 4> changes;
+  std::array<PhysOrientation, 4> orientations;
+  orientations.fill(PhysOrientationE::R180);
   std::array<bool, 4> accepted{};
   std::array<std::thread, 4> workers;
   std::latch start(4);
   for (size_t index = 0; index < workers.size(); ++index) {
     workers[index] = std::thread([&, index] {
       start.arrive_and_wait();
-      accepted[index] = index % 2 == 0
-          ? fixture.dp().isLegal(id, eLIB::LibCellID(0, 16), changes[index])
-          : fixture.dp().isLegal(id, eLIB::LibCellID(0, 1), &destination, 4, changes[index]);
+      if (index < 2) {
+        accepted[index] = index == 0
+            ? fixture.dp().isLegal(id, eLIB::LibCellID(0, 16), changes[index])
+            : fixture.dp().isLegal(id, eLIB::LibCellID(0, 1), &destination, 4, changes[index]);
+      } else {
+        accepted[index] = fixture.dp().findLeg(id, index == 2 ? nullptr : &destination,
+            index == 2 ? 0 : 4, LibCellID(0, index == 2 ? 16 : 1), changes[index],
+            orientations[index]) != std::pair<int, int>{-1, -1};
+      }
     });
   }
   for (auto& worker : workers) {
@@ -688,6 +992,13 @@ TEST(DePlaceResizeMove, ConcurrentProbesKeepRemovalAndFinalTransactionsRequestLo
     ASSERT_TRUE(accepted[index]);
     fixture.expectNormalized(changes[index], index % 2 == 0 ? 16 : 1,
                               index % 2 == 0 ? 8 : 10, 2);
+    if (index >= 2) {
+      EXPECT_EQ(orientations[index], PhysOrientationE::MX);
+      const auto target = std::find_if(changes[index].begin(), changes[index].end(),
+          [&](const auto& record) { return record.cell_data_ == CellData{id}; });
+      ASSERT_NE(target, changes[index].end());
+      EXPECT_EQ(target->orientation_, orientations[index]);
+    }
     const auto& reference = changes[index % 2];
     ASSERT_EQ(changes[index].size(), reference.size());
     for (size_t record = 0; record < reference.size(); ++record) {

@@ -12,7 +12,7 @@ verification counts are available in Git history.
   stored placement.
 - `isLegal` supports master size up/down and movement, retaining the original
   standard-cell ID and connections. It prepares removal/refill virtually,
-  then uses the shared `findLegOrigin` search. Buffer insertion replaces one or more intersecting
+  then uses the shared `findLegAtOrigin` search. Buffer insertion replaces one or more intersecting
   fillers; every target site must be covered by those selected fillers.
 - Same-footprint original-position probes retain the direct/swap fast path;
   removal preparation is deferred until that path fails or the footprint changes.
@@ -23,7 +23,7 @@ verification counts are available in Git history.
   FR owns cancellation/retiling of tentative preparation Adds and deduplication
   of real Deletes/swaps. No Delete is emitted for an uncommitted Add. The old
   std Delete is overlay-only. Failure returns no partial repair.
-- DePlace assembles complete transactions: `isLegal` and `findLeg(Node*)`
+- DePlace assembles complete transactions: `isLegal` and `findLeg(LeafCellID, ..., rtOrient)`
   append a target `Replace`; `findLeg(PinID)` appends a named target `Add`.
   Pass that result to `commit` once without appending the target or Deletes
   again. For a std Add, first create its UDM instance using the returned name
@@ -62,15 +62,29 @@ RepairOutcome repair(const ipl::CheckRequest& request) const;
 
 `isLegal(inst, master, changes)` now permits resizing at the original position.
 Use `isLegal(inst, master, va, diameter, changes)` to allow position search;
-use `findLeg(const Node* inst, va, diameter, master, changes)` to always run
+use `findLeg(instId, va, diameter, master, changes, rtOrient)` to always run
 virtual removal preparation and get the final location along with the
 transaction. `diameter` is a nonnegative DBU extension, zero forbids movement
-for an existing instance, and `va` uses absolute design coordinates. Both
-`findLeg` overloads return core-relative DBU (matching the change records) or
+for an existing instance, and `va` uses absolute design coordinates. All
+`findLeg` entry points return core-relative DBU (matching the change records) or
 `(-1, -1)`. At most 256 positions are tried per relocation search rectangle.
 The PinID overload deliberately uses an external UDM physical-pin anchor;
 callers must keep it current. Missing terms fail without publishing output.
 No verified pin-to-live-Node/current-master mapping API is present in this tree.
+
+The destination-named `findLegAtOrigin(origin, Node*, va, diameter, changes,
+rtOrient)` is the only shared search. It uses the supplied core-relative origin, searches a local Node
+copy and returns core-relative DBU, with a single Grid-to-DBU conversion.
+The Node-pointer resize overload is only a compatibility delegate to the
+LeafCellID entry. Successful resize publishes final filler operations plus
+one identity-preserving std Replace and the site orientation. Failure leaves
+both the caller's change prefix and orientation unchanged. Preparation stays
+request-local, calls ImplantLayerChecker only and may fail without blocking
+the final target. The probe never registers or modifies library masters.
+Port the DePlace header declarations and shared `findLegToReplace` together,
+not just the public thin wrapper. The destination's `checkPixels` must match
+this branch's temporary-Node ID/LeafCellID replacement recognition and internal
+overlay assembly; it must not require old std Deletes in the caller's output prefix.
 
 Removal preparation is `CheckRequest{nullptr, ..., {oldStdDelete}}`; only
 ImplantLayerChecker sees this intermediate request. A failed preparation does
@@ -197,11 +211,12 @@ collection; the parent provides GoogleTest and its executable.
 
 ## Verification
 
-Validated on 2026-11-24 with complete default-target builds:
+Validated on 2026-11-25 with complete default-target builds:
 
-- Normal (AppleClang 17): 505/505 tests passed.
-- ASan (Command Line Tools AppleClang 21): 505/505 tests passed.
-- Four new regressions cover stale/invalid std UDM geometry, translated overlap
+- Normal (AppleClang 17): 510/510 tests passed.
+- ASan (Command Line Tools AppleClang 21): 510/510 tests passed.
+- Five new regressions cover the destination resize entry and shared search.
+  Existing regressions cover stale/invalid std UDM geometry, translated overlap
   shapes, live placement seeds/site orientation and missing physical-pin terms.
 - The command regression verifies that only ImplantLayerChecker sees virtual
   removal, while final validation still runs other checkers and rejects without mutation.
@@ -267,6 +282,12 @@ coordinates, destination-site orientation and absent physical-pin anchors.
 Checker/engine algorithms and destination checker golden expectations are
 unchanged by this audit. The two fillerRepair implementation copies remain
 identical and are both compiled.
+Destination-entry tests additionally cover size up/down, 1h/2h transitions,
+partial/disjoint moves, caller-prefix isolation, failure orientation preservation,
+removal-preparation failure followed by final success, and concurrent calls
+through both isLegal and the LeafCellID entry. A five-row, six-cells-per-row
+114-DBU-site fixture checks shifted-core coordinates, INT_MAX radius clipping,
+PinID result units and explicit/unaligned/negative search origins without mutation.
 
 The local OpenROAD fixtures cover direct repair, 19 mixed-height checks with
 implant rules, and a Nangate45 1h -> 2h -> 1h placement round trip. The latest

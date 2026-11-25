@@ -9,10 +9,10 @@ modify UDM, Grid, Network, Nodes, or fillerSetting.
 
 Supported target forms:
 
-- `isLegal`: replace one committed standard cell with a larger, smaller, or
+- `isLegal` / `findLeg(LeafCellID, ..., rtOrient)`: replace one committed standard cell with a larger, smaller, or
   same-size master, at its original position or a searched position. The old
   instance ID and connections are preserved.
-- `findLeg` / buffer insertion: place a temporary standard cell over one or
+- `findLeg(PinID, ...)` / buffer insertion: place a temporary standard cell over one or
   more selected committed fillers. Every target site must be covered by those
   fillers, and every selected filler must intersect the target. Selected
   fillers may extend outside the target.
@@ -103,7 +103,7 @@ a subset of `D`.
 Same-footprint original-position checks first use the existing direct/swap
 path, without preparing a removal that would immediately be cancelled.
 For resize/move, DePlace prepares a virtual std-cell removal and refill,
-then uses `findLegOrigin`, the search shared with pin-anchored insertion.
+then uses `findLegAtOrigin`, the search shared with pin-anchored insertion.
 Each replacement candidate supplies the old std
 Delete, preparation fillers, and real intersecting filler Deletes to FR.
 FR cancels the tentative Adds and rebuilds `D - T`; it does not emit Deletes
@@ -183,21 +183,35 @@ DePlace probes assemble complete transactions without mutating placement:
   diameter is strict original-position only. The outer relocation search is
   capped at 256 candidate sites per search rectangle. It appends one
   identity-preserving target `Replace` plus FR's complete filler transaction.
-- `findLeg(const Node* inst, va, diameter, master, changes)` always starts with
+- `findLeg(instId, va, diameter, master, changes, rtOrient)` always starts with
   a virtual removal of the live instance. It tries the original position, then
   searches if the diameter is positive. Like `isLegal`, it appends the final
   filler transaction and a target `Replace`, not a target `Delete` or `Add`.
+  `rtOrient` is the accepted destination-site orientation, published only on
+  success. The older Node-pointer overload delegates to this same path.
 - `findLeg(pin, va, diameter, master, changes)` appends FR's complete filler
   transaction and one named target `Add`. Its target
   name is `DPL_STD_<row>_<column>_M<LibCellID-index>` with a deterministic
   suffix for collisions with live names or pending Adds.
 
-Both `findLeg` overloads return core-relative DBU coordinates, or `(-1, -1)`
+All `findLeg` overloads return core-relative DBU coordinates, or `(-1, -1)`
 on failure. The search box and optional voltage-area rectangles are absolute.
 The PinID overload takes its external anchor from UDM physical-pin geometry;
 the caller must keep that anchor current. An absent physical term fails without
 publishing changes. Instance resize/move starts from the live Network Node,
 not that pin geometry or the old UDM instance placement.
+
+`findLegAtOrigin(origin, temp, va, diameter, changes, rtOrient)` is the sole
+shared search implementation. `origin` and its result are core-relative DBU;
+search rectangles and voltage areas are absolute DBU. It searches a local Node
+copy, converts Grid coordinates to DBU once, and clips widened search bounds to
+the core. An empty voltage area or negative diameter cannot publish success.
+A zero-radius replacement probe must use an aligned origin; it cannot silently
+snap to a different site.
+The replacement probe carries the old Node ID and LeafCellID; no
+`isRemovedByChanges` helper is needed. Old std Deletes stay in the internal
+overlay. Probe-time master registration is forbidden: masters must already be
+imported before checker/engine setup.
 
 Pass this batch to `DePlace::commit` without appending target/Delete operations
 again. Failure leaves the caller's output unchanged. An existing output prefix

@@ -10,7 +10,6 @@
 #include <tbb/task_arena.h>
 
 #include <cstdio>
-#include <iterator>
 #include <map>
 #include <set>
 #include <sstream>
@@ -86,17 +85,22 @@ bool DePlace::isLegal(LeafCellID instId, LibCellID masterId,
                       std::vector<CellChangeRecord>& changes)
 {
   constexpr std::pair<int, int> notFound{-1, -1};
+  PhysOrientation orientation{PhysOrientationE::R0};
   const Node* inst = network_ != nullptr ? network_->getNode(instId) : nullptr;
   return findLegToReplace(inst, va, diameter, masterId, changes,
-                          /*tryDirectFirst=*/true) != notFound;
+                          /*tryDirectFirst=*/true, orientation) != notFound;
 }
 
 std::pair<int, int> DePlace::findLeg(const Node* inst, eUNL::VoltageArea* va,
                                      int diameter, LibCellID masterId,
                                      std::vector<CellChangeRecord>& ccRecords)
 {
-  return findLegToReplace(inst, va, diameter, masterId, ccRecords,
-                          /*tryDirectFirst=*/false);
+  if (inst == nullptr || network_ == nullptr
+      || network_->getNode(inst->getDbInst()) != inst) {
+    return {-1, -1};
+  }
+  PhysOrientation orientation{PhysOrientationE::R0};
+  return findLeg(inst->getDbInst(), va, diameter, masterId, ccRecords, orientation);
 }
 
 std::pair<int, int> DePlace::findLeg(eUNL::LeafCellID instId,
@@ -106,110 +110,23 @@ std::pair<int, int> DePlace::findLeg(eUNL::LeafCellID instId,
                                     std::vector<CellChangeRecord>& ccRecords,
                                     eUTL::PhysOrientation& rtOrient)
 {
-  Node* cell = this->network_->getNode(instId);
-  if (cell == nullptr || cell->isFixed()) {
-    return {-1, -1};
-  }
-  const PhysLibCell& new_pcell_ = design_->getLibAcc().getPhysLibCell(masterId);
-  const size_t rollback_size = ccRecords.size();
-  std::vector<CellChangeRecord> overlayChange = {};
-
-  // 1) The planned delete: records only, no network mutation.
-  overlayChange.push_back(CellChangeRecord{
-      OpType::Delete, instId, UvDist{cell->getLeft().v}, UvDist{cell->getBottom().v},
-      LibCellID(), LibCellID(), cell->getOrient()});
-
-  // 2) Back-fill the released site so the implant-layer rule stays legal.
-  //    The filler-insertion computation is owned by the implant layer's
-  //    removal path (not by DePlace): check(nullptr, ...) computes the
-  //    back-fill/repair records and appends them to ccRecords.  No
-  //    network/grid mutation happens here.
-  if (!drc_engine_->getChecker(DRCCheckerType::ImplantLayer)->check(nullptr,
-      GridX{0}, GridY{0}, eUTL::PhysOrientationE::R0, ccRecords, overlayChange)) {
-    ccRecords.resize(rollback_size);  // implant layer found no legal fill
-    return {-1, -1};
-  }
-
-  // 2b) Publish the planned deletes (the ECO instance being removed, plus any
-  //     filler the implant checker flagged for removal in overlayChange) into
-  //     ccRecords BEFORE the site search.  The search (diamondSearch /
-  //     checkPixels / the implant overlay DRC) treats every ccRecords Delete
-  //     as already-removed via DRCChecker::isRemovedByChanges(): without these
-  //     records the deleted std cell would be mistaken for an ordinary
-  //     blocking std cell and the search would reject every site it used to
-  //     occupy.  The rollback below rescues ccRecords to rollback_size, so the
-  //     records published here are undone together with any probe records.
-  ccRecords.insert(ccRecords.end(),
-                   std::make_move_iterator(overlayChange.begin()),
-                   std::make_move_iterator(overlayChange.end()));
-  // 3) Target master + search, identical to findLeg().
-  const Point2D origin(UvDist{cell->getLeft().v}, UvDist{cell->getBottom().v});
-  Master* master = this->network_->addMaster(new_pcell_, *filler_setting_,
-      this->grid_.get(), this->edge_type_table_.get());
-  Node target;
-  initTempNode(target, master, new_pcell_, origin);
-
-  std::pair<int, int> result =
-      findLegAtOrigin(origin, &target, va, diameter, ccRecords, rtOrient);
-  if (result == std::pair<int, int>{-1, -1}) {
-    // Roll back every record appended by this call so the caller's list
-    // stays exactly as it was before the failed attempt.
-    ccRecords.resize(rollback_size);
-    return result;
-  }
-
-  return result;
-}
-
-std::pair<int, int> DePlace::findLegAtOrigin(const Point2D& origin,
-                                            Node* search_cell,
-                                            eUNL::VoltageArea* va,
-                                            int diameter,
-                                            std::vector<CellChangeRecord>& ccRecords,
-                                            eUTL::PhysOrientation& rtOrient)
-{
-  eUTL::Rect rect(eUTL::UvDist(search_cell->getLeft().v - diameter),
-                  eUTL::UvDist(search_cell->getBottom().v - diameter),
-                  eUTL::UvDist(search_cell->getLeft().v + search_cell->getWidth().v
-                    + diameter),
-                  eUTL::UvDist(search_cell->getBottom().v +
-                    search_cell->getHeight().v + diameter));
-
-  // Value-initialize to the {-1, -1} failure sentinel: with a voltage area
-  // whose rect list is empty the loop below never runs, and a default (0, 0)
-  // would be indistinguishable from a real site at the core origin.
-  std::pair<int, int> Coordinate{-1, -1};
-  if (va == nullptr) {
-    Coordinate = legalCellInRect(rect, search_cell, ccRecords, rtOrient);
-  } else {
-    for (Rect va_rect : va->getRects()) {
-      Coordinate = legalCellInRect(rect.overlap(va_rect, false), search_cell,
-          ccRecords, rtOrient);
-      if (Coordinate != std::pair<int, int>{-1, -1}) {
-        break;
-      }
-    }
-  }
-
-  // No post-filter here: the overlay DRC runs inside checkPixels() at the end
-  // of every candidate-site test during the search, so a non-{-1,-1}
-  // coordinate is already DRC-clean against the real neighbours.  ccRecords is
-  // the caller-supplied filler change list passed through unchanged.
-  if (Coordinate != std::pair<int, int>{-1, -1}) {
-    Coordinate = std::make_pair(Coordinate.first * grid_->getSiteWidth().v,
-                                grid_->gridYToDbu(GridY{Coordinate.second}).v);
-  }
-
-  return Coordinate;
+  const Node* inst = network_ != nullptr ? network_->getNode(instId) : nullptr;
+  return findLegToReplace(inst, va, diameter, masterId, ccRecords,
+                          /*tryDirectFirst=*/false, rtOrient);
 }
 
 std::pair<int, int> DePlace::findLegToReplace(
     const Node* old, eUNL::VoltageArea* va, int diameter, LibCellID masterId,
-    std::vector<CellChangeRecord>& ccRecords, bool tryDirectFirst)
+    std::vector<CellChangeRecord>& ccRecords, bool tryDirectFirst,
+    PhysOrientation& rtOrient)
 {
   constexpr std::pair<int, int> notFound{-1, -1};
   if (diameter < 0 || design_ == nullptr || network_ == nullptr
       || grid_ == nullptr || drc_engine_ == nullptr) {
+    return notFound;
+  }
+  const DRCChecker* implant = drc_engine_->getChecker(DRCCheckerType::ImplantLayer);
+  if (implant == nullptr) {
     return notFound;
   }
   Master* const master = network_->getMaster(masterId);
@@ -240,11 +157,11 @@ std::pair<int, int> DePlace::findLegToReplace(
       = old->getWidth().v == physical.getWidth().getStorage()
         && old->getHeight().v == physical.getHeight().getStorage();
   std::vector<CellChangeRecord> trial;
-  PhysOrientation rtOrient{PhysOrientationE::R0};
+  PhysOrientation chosenOrientation{PhysOrientationE::R0};
   auto location = notFound;
   // isLegal's same-size swap need not prepare a removal if it fits in place.
   if (tryDirectFirst && sameFootprint) {
-    location = findLegOrigin(probe, va, 0, trial, rtOrient);
+    location = findLegAtOrigin(origin, &probe, va, 0, trial, chosenOrientation);
   }
   if (location == notFound) {
     std::vector<CellChangeRecord> removed{
@@ -253,23 +170,20 @@ std::pair<int, int> DePlace::findLegToReplace(
          old->getMaster()->getDbMaster(), old->getOrient()}};
     // This virtual removal layout is only a seed: the final target can make
     // an otherwise unfillable old footprint tileable.
-    drc_engine_->checkDRC(nullptr, oldX, oldY, old->getOrient(), trial, removed);
-    probe.setLeft(old->getLeft());
-    probe.setBottom(old->getBottom());
-    location = findLegOrigin(probe, va, diameter, trial, rtOrient);
+    if (!implant->check(nullptr, oldX, oldY, old->getOrient(), trial, removed)) {
+      trial.clear();
+    }
+    location = findLegAtOrigin(origin, &probe, va, diameter, trial, chosenOrientation);
   }
   if (location == notFound) {
     return notFound;
   }
-  const GridX x{location.first};
-  const GridY y{location.second};
-  const int xUv = x.v * grid_->getSiteWidth().v;
-  const int yUv = grid_->gridYToDbu(y).v;
   trial.push_back({OpType::Replace, old->getDbInst(),
-                   UvDist(xUv), UvDist(yUv),
-                   old->getMaster()->getDbMaster(), masterId, rtOrient});
+                   UvDist(location.first), UvDist(location.second),
+                   old->getMaster()->getDbMaster(), masterId, chosenOrientation});
   ccRecords.insert(ccRecords.end(), trial.begin(), trial.end());
-  return {xUv, yUv};
+  rtOrient = chosenOrientation;
+  return location;
 }
 
 /**
@@ -628,25 +542,40 @@ void DePlace::initTempNode(Node& cell, Master* master,
   }
 }
 
-std::pair<int, int> DePlace::findLegOrigin(
-    Node& probe, eUNL::VoltageArea* va, int diameter,
+std::pair<int, int> DePlace::findLegAtOrigin(
+    const Point2D& origin, Node* search_cell, eUNL::VoltageArea* va, int diameter,
     std::vector<CellChangeRecord>& trial, PhysOrientation& rtOrient)
 {
   constexpr std::pair<int, int> notFound{-1, -1};
+  if (search_cell == nullptr || search_cell->getMaster() == nullptr
+      || network_ == nullptr || grid_ == nullptr || diameter < 0) {
+    return notFound;
+  }
+  // Search a request-local copy; even a placed input must not be unpainted by
+  // legalCellInRect. The supplied origin is core-relative and authoritative.
+  Node probe = *search_cell;
+  probe.setLeft(DbuX{origin.getX().getStorage()});
+  probe.setBottom(DbuY{origin.getY().getStorage()});
+  probe.setPlaced(false);
   const Node* replacedCell = network_->getNode(probe.getId());
   if (replacedCell != nullptr
       && (replacedCell->isFiller() || replacedCell->getDbInst() != probe.getDbInst())) {
     replacedCell = nullptr;
   }
-  const DbuX anchorX = probe.getLeft();
-  const DbuY anchorY = probe.getBottom();
   const UvDist width(probe.getWidth().v);
   const UvDist height(probe.getHeight().v);
+  const auto toDbu = [&](std::pair<int, int> position) {
+    return position == notFound ? notFound
+        : std::make_pair(position.first * grid_->getSiteWidth().v,
+                          grid_->gridYToDbu(GridY{position.second}).v);
+  };
   // The probe is core-relative, but the search rectangle and voltage areas
   // are absolute. legalCellInRect converts its rectangle back to the grid.
   if (replacedCell != nullptr) {
-    const GridX x = grid_->gridX(replacedCell);
-    const GridY y = grid_->gridSnapDownY(replacedCell);
+    const GridX x = grid_->gridX(&probe);
+    const GridY y = grid_->gridSnapDownY(&probe);
+    const bool aligned = x.v * grid_->getSiteWidth().v == probe.getLeft().v
+                         && grid_->gridYToDbu(y) == probe.getBottom();
     const UvDist xl = core_.getXL() + UvDist(x.v * grid_->getSiteWidth().v);
     const UvDist yl = core_.getYL() + UvDist(grid_->gridYToDbu(y).v);
     bool inArea = va == nullptr;
@@ -659,24 +588,27 @@ std::pair<int, int> DePlace::findLegOrigin(
         }
       }
     }
-    if (inArea && canBePlaced(&probe, x, y, trial, rtOrient)) {
-      return {x.v, y.v};
+    if (aligned && inArea && canBePlaced(&probe, x, y, trial, rtOrient)) {
+      return toDbu({x.v, y.v});
     }
     if (diameter == 0) {
       return notFound;
     }
   }
 
-  const UvDist xl = core_.getXL() + UvDist(anchorX.v);
-  const UvDist yl = core_.getYL() + UvDist(anchorY.v);
-  const UvDist extension(diameter);
-  const Rect search(xl - extension, yl - extension,
-                    xl + width + extension, yl + height + extension);
+  const int64_t xl = int64_t{core_.getXL().getStorage()} + probe.getLeft().v;
+  const int64_t yl = int64_t{core_.getYL().getStorage()} + probe.getBottom().v;
+  // Widen before adding diameter, and clip before converting back to UvDist.
+  const Rect search(
+      UvDist(std::max<int64_t>(core_.getXL().getStorage(), xl - diameter)),
+      UvDist(std::max<int64_t>(core_.getYL().getStorage(), yl - diameter)),
+      UvDist(std::min<int64_t>(core_.getXH().getStorage(), xl + probe.getWidth().v + diameter)),
+      UvDist(std::min<int64_t>(core_.getYH().getStorage(), yl + probe.getHeight().v + diameter)));
   if (replacedCell == nullptr) {
     std::ostringstream record;
     record << "[findLeg] target master id=" << probe.getMaster()->getDbMaster().getValue()
            << " w=" << width.getStorage() << " h=" << height.getStorage()
-           << " anchor origin=(" << xl.getStorage() << "," << yl.getStorage() << ")\n"
+           << " anchor origin=(" << xl << "," << yl << ")\n"
            << "[findLeg] search rect xl=" << search.getXL().getStorage()
            << " xh=" << search.getXH().getStorage()
            << " yl=" << search.getYL().getStorage()
@@ -686,7 +618,7 @@ std::pair<int, int> DePlace::findLegOrigin(
     std::fwrite(message.data(), 1, message.size(), stdout);
   }
   const auto searchRect = [&](const Rect& rect) {
-    return legalCellInRect(rect.overlap(core_, false), &probe, trial, rtOrient);
+    return toDbu(legalCellInRect(rect, &probe, trial, rtOrient));
   };
   if (va == nullptr) {
     return searchRect(search);
@@ -742,15 +674,17 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   }
   const Point2D origin = (*terms.begin()).getOrigin();
 
+  const Point2D anchor{origin.getX() - core_.getXL(), origin.getY() - core_.getYL()};
   Node cell;
-  initTempNode(cell, master, *physical,
-               Point2D{origin.getX() - core_.getXL(), origin.getY() - core_.getYL()});
+  initTempNode(cell, master, *physical, anchor);
   std::vector<CellChangeRecord> trial = ccRecords;
   PhysOrientation rtOrient{PhysOrientationE::R0};
-  const auto [col, row] = findLegOrigin(cell, va, diameter, trial, rtOrient);
-  if (col == -1) {
+  const auto position = findLegAtOrigin(anchor, &cell, va, diameter, trial, rtOrient);
+  if (position == std::pair<int, int>{-1, -1}) {
     return {-1, -1};
   }
+  const int col = grid_->gridX(DbuX{position.first}).v;
+  const int row = grid_->gridSnapDownY(DbuY{position.second}).v;
   // A new std cell has no DB id yet. Reserve a deterministic request-local name
   // against both live instances and pending Adds, including generated fillers.
   std::set<std::string> names;
@@ -772,12 +706,10 @@ std::pair<int, int> DePlace::findLeg(eUNL::PinID startLoc,
   for (size_t suffix = 1; names.count(name) != 0; ++suffix) {
     name = base + "_" + std::to_string(suffix);
   }
-  const int xUv = col * grid_->getSiteWidth().v;
-  const int yUv = grid_->gridYToDbu(GridY{row}).v;
-  trial.push_back({OpType::Add, name, UvDist(xUv), UvDist(yUv),
+  trial.push_back({OpType::Add, name, UvDist(position.first), UvDist(position.second),
                    LibCellID(), masterId, rtOrient});
   ccRecords = std::move(trial);
-  return {xUv, yUv};
+  return position;
 }
 
 Rect DePlace::getCoreArea()
