@@ -10,6 +10,7 @@
 #include <tbb/task_arena.h>
 
 #include <cstdio>
+#include <iterator>
 #include <map>
 #include <set>
 #include <sstream>
@@ -96,6 +97,110 @@ std::pair<int, int> DePlace::findLeg(const Node* inst, eUNL::VoltageArea* va,
 {
   return findLegToReplace(inst, va, diameter, masterId, ccRecords,
                           /*tryDirectFirst=*/false);
+}
+
+std::pair<int, int> DePlace::findLeg(eUNL::LeafCellID instId,
+                                    eUNL::VoltageArea* va,
+                                    int diameter,
+                                    LibCellID masterId,
+                                    std::vector<CellChangeRecord>& ccRecords,
+                                    eUTL::PhysOrientation& rtOrient)
+{
+  Node* cell = this->network_->getNode(instId);
+  if (cell == nullptr || cell->isFixed()) {
+    return {-1, -1};
+  }
+  const PhysLibCell& new_pcell_ = design_->getLibAcc().getPhysLibCell(masterId);
+  const size_t rollback_size = ccRecords.size();
+  std::vector<CellChangeRecord> overlayChange = {};
+
+  // 1) The planned delete: records only, no network mutation.
+  overlayChange.push_back(CellChangeRecord{
+      OpType::Delete, instId, UvDist{cell->getLeft().v}, UvDist{cell->getBottom().v},
+      LibCellID(), LibCellID(), cell->getOrient()});
+
+  // 2) Back-fill the released site so the implant-layer rule stays legal.
+  //    The filler-insertion computation is owned by the implant layer's
+  //    removal path (not by DePlace): check(nullptr, ...) computes the
+  //    back-fill/repair records and appends them to ccRecords.  No
+  //    network/grid mutation happens here.
+  if (!drc_engine_->getChecker(DRCCheckerType::ImplantLayer)->check(nullptr,
+      GridX{0}, GridY{0}, eUTL::PhysOrientationE::R0, ccRecords, overlayChange)) {
+    ccRecords.resize(rollback_size);  // implant layer found no legal fill
+    return {-1, -1};
+  }
+
+  // 2b) Publish the planned deletes (the ECO instance being removed, plus any
+  //     filler the implant checker flagged for removal in overlayChange) into
+  //     ccRecords BEFORE the site search.  The search (diamondSearch /
+  //     checkPixels / the implant overlay DRC) treats every ccRecords Delete
+  //     as already-removed via DRCChecker::isRemovedByChanges(): without these
+  //     records the deleted std cell would be mistaken for an ordinary
+  //     blocking std cell and the search would reject every site it used to
+  //     occupy.  The rollback below rescues ccRecords to rollback_size, so the
+  //     records published here are undone together with any probe records.
+  ccRecords.insert(ccRecords.end(),
+                   std::make_move_iterator(overlayChange.begin()),
+                   std::make_move_iterator(overlayChange.end()));
+  // 3) Target master + search, identical to findLeg().
+  const Point2D origin(UvDist{cell->getLeft().v}, UvDist{cell->getBottom().v});
+  Master* master = this->network_->addMaster(new_pcell_, *filler_setting_,
+      this->grid_.get(), this->edge_type_table_.get());
+  Node target;
+  initTempNode(target, master, new_pcell_, origin);
+
+  std::pair<int, int> result =
+      findLegAtOrigin(origin, &target, va, diameter, ccRecords, rtOrient);
+  if (result == std::pair<int, int>{-1, -1}) {
+    // Roll back every record appended by this call so the caller's list
+    // stays exactly as it was before the failed attempt.
+    ccRecords.resize(rollback_size);
+    return result;
+  }
+
+  return result;
+}
+
+std::pair<int, int> DePlace::findLegAtOrigin(const Point2D& origin,
+                                            Node* search_cell,
+                                            eUNL::VoltageArea* va,
+                                            int diameter,
+                                            std::vector<CellChangeRecord>& ccRecords,
+                                            eUTL::PhysOrientation& rtOrient)
+{
+  eUTL::Rect rect(eUTL::UvDist(search_cell->getLeft().v - diameter),
+                  eUTL::UvDist(search_cell->getBottom().v - diameter),
+                  eUTL::UvDist(search_cell->getLeft().v + search_cell->getWidth().v
+                    + diameter),
+                  eUTL::UvDist(search_cell->getBottom().v +
+                    search_cell->getHeight().v + diameter));
+
+  // Value-initialize to the {-1, -1} failure sentinel: with a voltage area
+  // whose rect list is empty the loop below never runs, and a default (0, 0)
+  // would be indistinguishable from a real site at the core origin.
+  std::pair<int, int> Coordinate{-1, -1};
+  if (va == nullptr) {
+    Coordinate = legalCellInRect(rect, search_cell, ccRecords, rtOrient);
+  } else {
+    for (Rect va_rect : va->getRects()) {
+      Coordinate = legalCellInRect(rect.overlap(va_rect, false), search_cell,
+          ccRecords, rtOrient);
+      if (Coordinate != std::pair<int, int>{-1, -1}) {
+        break;
+      }
+    }
+  }
+
+  // No post-filter here: the overlay DRC runs inside checkPixels() at the end
+  // of every candidate-site test during the search, so a non-{-1,-1}
+  // coordinate is already DRC-clean against the real neighbours.  ccRecords is
+  // the caller-supplied filler change list passed through unchanged.
+  if (Coordinate != std::pair<int, int>{-1, -1}) {
+    Coordinate = std::make_pair(Coordinate.first * grid_->getSiteWidth().v,
+                                grid_->gridYToDbu(GridY{Coordinate.second}).v);
+  }
+
+  return Coordinate;
 }
 
 std::pair<int, int> DePlace::findLegToReplace(

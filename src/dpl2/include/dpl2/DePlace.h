@@ -148,6 +148,12 @@ class DePlace {
                               int diameter,
                               LibCellID masterId,
                               std::vector<CellChangeRecord>& ccRecords);
+  std::pair<int, int> findLeg(eUNL::LeafCellID instId,
+                              eUNL::VoltageArea* va,
+                              int diameter,
+                              LibCellID masterId,
+                              std::vector<CellChangeRecord>& ccRecords,
+                              eUTL::PhysOrientation& rtOrient);
   bool isLegal(LeafCellID instId, LibCellID masterId,
       std::vector<CellChangeRecord>& ccRecords);
   // diameter is the DBU search-box extension around the old origin; zero
@@ -257,6 +263,12 @@ class DePlace {
                                    int diameter,
                                    std::vector<CellChangeRecord>& trial,
                                    PhysOrientation& rtOrient);
+  std::pair<int, int> findLegAtOrigin(const Point2D& origin,
+                                      Node* search_cell,
+                                      eUNL::VoltageArea* va,
+                                      int diameter,
+                                      std::vector<CellChangeRecord>& ccRecords,
+                                      eUTL::PhysOrientation& rtOrient);
   std::pair<int, int> findLegToReplace(const Node* inst, eUNL::VoltageArea* va,
                                       int diameter, LibCellID masterId,
                                       std::vector<CellChangeRecord>& ccRecords,
