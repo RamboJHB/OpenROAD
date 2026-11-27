@@ -8,9 +8,9 @@
 // PlacementView and feeds the pure search through a request-local RepairOracle.
 //
 // repair() accepts an optional temporary standard cell, one old standard-cell
-// Delete and/or filler Deletes. A null target prepares standard-cell removal.
-// Pending filler Adds are rebuilt around the final target; pending Replaces
-// seed the existing swap planner. The result is the complete filler transaction
+// Delete and/or filler Deletes. A null target requests standard-cell removal.
+// Each request tiles the released sites around its final target and repairs
+// surrounding fillers. The result is the complete filler transaction
 // (Delete/Add/Replace), excluding the old standard-cell Delete.
 // UDM, Grid and Network come out exactly as they went in; committing is the
 // caller's decision.

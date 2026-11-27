@@ -165,8 +165,6 @@ std::pair<int, int> DePlace::findLeg(eUNL::LeafCellID instId,
     return notFound;
   }
 
-  const GridX oldX = grid_->gridX(old);
-  const GridY oldY = grid_->gridSnapDownY(old);
   Node probe;
   const Point2D origin{UvDist(old->getLeft().v), UvDist(old->getBottom().v)};
   initTempNode(probe, master, physical, origin);
@@ -176,15 +174,7 @@ std::pair<int, int> DePlace::findLeg(eUNL::LeafCellID instId,
 
   std::vector<CellChangeRecord> trial;
   PhysOrientation chosenOrientation{PhysOrientationE::R0};
-  std::vector<CellChangeRecord> removed{
-      {OpType::Delete, old->getDbInst(), UvDist(old->getLeft().v),
-       UvDist(old->getBottom().v), old->getMaster()->getDbMaster(),
-       old->getMaster()->getDbMaster(), old->getOrient()}};
-  // [FRPORT] Preparation is local and Implant-only. Failure is not final:
-  // the target can cover sites that cannot be refilled by themselves.
-  if (!implant->check(nullptr, oldX, oldY, old->getOrient(), trial, removed)) {
-    trial.clear();
-  }
+  // [FRPORT] Each candidate repairs the final target and all released sites.
   const auto location = findLegAtOrigin(origin, &probe, va, diameter, trial, chosenOrientation);
   if (location == notFound) {
     return notFound;

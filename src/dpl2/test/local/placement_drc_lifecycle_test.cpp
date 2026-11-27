@@ -263,9 +263,7 @@ TEST(PlacementDRCLifecycleTest, ValidatorsSeeFinalCandidateAndOnlyRealDeletes)
   CellChangeRecord old;
   old.op_ = OpType::Delete;
   old.cell_data_ = eUNL::LeafCellID(0, 42);
-  CellChangeRecord pendingSwap = old;
-  pendingSwap.op_ = OpType::Replace;
-  std::vector<CellChangeRecord> overlay{old, namedAdd("TENTATIVE"), pendingSwap};
+  std::vector<CellChangeRecord> overlay{old};
   drc.addChecker(DRCCheckerType::Padding,
       std::make_unique<TransactionChecker>(&grid, [&](auto& changes, auto& deletes) {
         EXPECT_EQ(changes.size(), 1u);
@@ -278,7 +276,7 @@ TEST(PlacementDRCLifecycleTest, ValidatorsSeeFinalCandidateAndOnlyRealDeletes)
   drc.addChecker(DRCCheckerType::ImplantLayer,
       std::make_unique<TransactionChecker>(&grid, [&](auto& changes, auto& raw) {
         EXPECT_TRUE(changes.empty());
-        EXPECT_EQ(raw.size(), 3u);
+        EXPECT_EQ(raw.size(), 1u);
         changes.push_back(final);
         return true;
       }));
@@ -289,7 +287,7 @@ TEST(PlacementDRCLifecycleTest, ValidatorsSeeFinalCandidateAndOnlyRealDeletes)
   ASSERT_EQ(changes.size(), 2u);
   EXPECT_EQ(changes.front().cell_data_, prefix.cell_data_);
   EXPECT_EQ(changes.back().cell_data_, final.cell_data_);
-  EXPECT_EQ(overlay.size(), 3u);
+  EXPECT_EQ(overlay.size(), 1u);
 }
 
 TEST(PlacementDRCLifecycleTest, ValidatorCannotMutateTheAcceptedTransaction)

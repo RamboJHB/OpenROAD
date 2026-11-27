@@ -334,55 +334,109 @@ TEST(DePlaceResizeMove, OriginalPositionSupportsSizeDownAndSizeUp)
   }
 }
 
-TEST(DePlaceResizeMove, SameFootprintSwapSkipsRemovalPreparation)
+struct FinalCandidateChecker : DRCChecker
 {
-  struct CountingChecker : DRCChecker
+  FinalCandidateChecker(Grid* grid, eUNL::Design* design, Network* network, eUNL::LeafCellID oldId)
+      : DRCChecker(grid, design), checker(grid, design, network), oldId(oldId) {}
+  ipl::ImplantLayerChecker checker;
+  eUNL::LeafCellID oldId;
+  mutable int removals = 0;
+  mutable int placements = 0;
+  bool rejectOrigin = false;
+  mutable bool rejectedCompletePlan = false;
+  bool check(const Node* node, GridX x, GridY y, const PhysOrientation& orientation) const override
   {
-    CountingChecker(Grid* grid, eUNL::Design* design, Network* network)
-        : DRCChecker(grid, design), checker(grid, design, network) {}
-    ipl::ImplantLayerChecker checker;
-    mutable int removals = 0;
-    bool check(const Node* node, GridX x, GridY y,
-                const eUTL::PhysOrientation& orientation) const override
-    {
-      return checker.check(node, x, y, orientation);
+    return checker.check(node, x, y, orientation);
+  }
+  bool check(const Node* node, GridX x, GridY y, const PhysOrientation& orientation,
+             std::vector<CellChangeRecord>& changes, std::vector<CellChangeRecord>& overlays) const override
+  {
+    removals += node == nullptr;
+    placements += node != nullptr;
+    EXPECT_TRUE(changes.empty());
+    EXPECT_TRUE(std::all_of(overlays.begin(), overlays.end(), [](const auto& record) {
+      return record.op_ == OpType::Delete && std::holds_alternative<eUNL::LeafCellID>(record.cell_data_);
+    }));
+    EXPECT_EQ(std::count_if(overlays.begin(), overlays.end(), [&](const auto& record) {
+      return record.cell_data_ == CellData{oldId};
+    }), 1);
+    const bool legal = checker.check(node, x, y, orientation, changes, overlays);
+    if (legal && rejectOrigin && x == GridX{8} && y == GridY{2}) {
+      rejectedCompletePlan = !changes.empty();
+      return false;
     }
-    bool check(const Node* node, GridX x, GridY y,
-                const eUTL::PhysOrientation& orientation,
-                std::vector<CellChangeRecord>& changes,
-                std::vector<CellChangeRecord>& overlays) const override
-    {
-      removals += node == nullptr;
-      return checker.check(node, x, y, orientation, changes, overlays);
+    return legal;
+  }
+};
+
+TEST(DePlaceResizeMove, ResizeChecksOnlyFinalCandidatesAndCommitsCompleteCoverage)
+{
+  using Layout = ResizeMoveFixture::Layout;
+  struct Case { Layout layout; int master; int x; int diameter; };
+  for (const auto& test : {Case{Layout::SingleHeight, 2, 8, 0}, {Layout::SingleHeight, 16, 8, 0},
+                          {Layout::SingleHeight, 9, 8, 0}, {Layout::DoubleHeight, 1, 8, 0},
+                          {Layout::GrowHeight, 12, 8, 0}, {Layout::SingleHeight, 1, 10, 4},
+                          {Layout::SingleHeight, 16, 6, 2}}) {
+    for (bool find : {false, true}) {
+      SCOPED_TRACE(::testing::Message() << "master=" << test.master << " x=" << test.x << " find=" << find);
+      ResizeMoveFixture fixture(test.layout);
+      auto counted = std::make_unique<FinalCandidateChecker>(fixture.dp().getGrid(),
+          fixture.checker()->getDesign(), fixture.dp().getNetwork(), fixture.target()->getDbInst());
+      auto* const checker = counted.get();
+      fixture.dp().getPlacementDRC()->addChecker(DRCCheckerType::ImplantLayer, std::move(counted));
+      const auto* master = fixture.dp().getNetwork()->getMaster(LibCellID(0, test.master));
+      auto destination = fixture.area(test.x, 2, master->getPhysLibCell()->getWidth().getStorage(),
+                                     master->getPhysLibCell()->getHeight().getStorage() / frt::kRowHeight);
+      const auto before = fixture.snapshot();
+      const auto prefix = callerOnlyPrefix();
+      std::vector<CellChangeRecord> changes{prefix};
+      if (find) {
+        PhysOrientation orientation{PhysOrientationE::R180};
+        ASSERT_EQ(fixture.dp().findLeg(fixture.target()->getDbInst(), &destination, test.diameter,
+                                      LibCellID(0, test.master), changes, orientation),
+                  std::make_pair(test.x, 2 * frt::kRowHeight));
+        EXPECT_EQ(orientation, PhysOrientationE::MX);
+      } else {
+        ASSERT_TRUE(fixture.dp().isLegal(fixture.target()->getDbInst(), LibCellID(0, test.master),
+                                        &destination, test.diameter, changes));
+      }
+      EXPECT_EQ(checker->removals, 0);
+      EXPECT_EQ(checker->placements, 1);
+      EXPECT_EQ(fixture.snapshot(), before);
+      expectSameRecord(changes.front(), prefix);
+      changes.erase(changes.begin());
+      fixture.expectNormalized(changes, test.master, test.x, 2);
+      ASSERT_TRUE(fixture.dp().commit(changes));
+      fixture.expectConsistent();
     }
-  };
+  }
+}
+
+TEST(DePlaceResizeMove, RejectedResizeCandidateDoesNotSeedTheNextCandidate)
+{
   ResizeMoveFixture fixture;
-  auto counted = std::make_unique<CountingChecker>(fixture.dp().getGrid(),
-      fixture.checker()->getDesign(), fixture.dp().getNetwork());
+  auto counted = std::make_unique<FinalCandidateChecker>(fixture.dp().getGrid(),
+      fixture.checker()->getDesign(), fixture.dp().getNetwork(), fixture.target()->getDbInst());
   auto* const checker = counted.get();
+  checker->rejectOrigin = true;
   fixture.dp().getPlacementDRC()->addChecker(DRCCheckerType::ImplantLayer, std::move(counted));
   const auto before = fixture.snapshot();
-  std::vector<CellChangeRecord> changes;
-  ASSERT_TRUE(fixture.dp().isLegal(fixture.target()->getDbInst(), eLIB::LibCellID(0, 2), changes));
-  fixture.expectNormalized(changes, 2, 8, 2);
-  ASSERT_EQ(changes.size(), 1u);
+  const auto prefix = callerOnlyPrefix();
+  std::vector<CellChangeRecord> changes{prefix};
+  PhysOrientation orientation{PhysOrientationE::R180};
+  const auto location = fixture.dp().findLeg(fixture.target()->getDbInst(), nullptr, 2,
+                                            LibCellID(0, 16), changes, orientation);
+  ASSERT_NE(location, (std::pair<int, int>{-1, -1}));
+  EXPECT_NE(location, std::make_pair(8, 2 * frt::kRowHeight));
   EXPECT_EQ(checker->removals, 0);
+  EXPECT_GT(checker->placements, 1);
+  EXPECT_TRUE(checker->rejectedCompletePlan);
   EXPECT_EQ(fixture.snapshot(), before);
-  changes.clear();
-  ASSERT_TRUE(fixture.dp().isLegal(fixture.target()->getDbInst(), eLIB::LibCellID(0, 16), changes));
-  fixture.expectNormalized(changes, 16, 8, 2);
-  EXPECT_EQ(checker->removals, 1);
-  EXPECT_EQ(fixture.snapshot(), before);
-
-  changes.clear();
-  // Unlike isLegal's fast path, explicit findLeg always prepares removal.
-  ASSERT_EQ(fixture.dp().findLeg(fixture.target(), nullptr, 0,
-                                eLIB::LibCellID(0, 2), changes),
-            std::make_pair(8, 2 * frt::kRowHeight));
-  fixture.expectNormalized(changes, 2, 8, 2);
-  EXPECT_EQ(changes.size(), 1u);
-  EXPECT_EQ(checker->removals, 2);
-  EXPECT_EQ(fixture.snapshot(), before);
+  expectSameRecord(changes.front(), prefix);
+  changes.erase(changes.begin());
+  fixture.expectNormalized(changes, 16, location.first, location.second / frt::kRowHeight);
+  ASSERT_TRUE(fixture.dp().commit(changes));
+  fixture.expectConsistent();
 }
 
 TEST(DePlaceResizeMove, SameFootprintFastPathRejectsNegativeRadiusAndMissingImplantChecker)
@@ -416,7 +470,7 @@ TEST(DePlaceResizeMove, SameFootprintFastPathRejectsNegativeRadiusAndMissingImpl
   EXPECT_EQ(fixture.snapshot(), before);
 }
 
-TEST(DePlaceResizeMove, PartialMoveCancelsPendingFillersAndRetilesOldFootprint)
+TEST(DePlaceResizeMove, PartialMoveRetilesOldFootprintInFinalRepair)
 {
   for (bool shifted : {false, true}) {
     SCOPED_TRACE(shifted);
@@ -628,7 +682,7 @@ TEST(DePlaceResizeMove, FindLegByIdFailuresPreservePlacementPrefixAndOrientation
   checkFailure(id, nullptr, 0, LibCellID(0, 16));
 }
 
-TEST(DePlaceResizeMove, FindLegByIdRetriesFinalTargetAfterRemovalRefillFails)
+TEST(DePlaceResizeMove, FindLegByIdSucceedsWhenStandaloneRemovalCannotRefill)
 {
   ResizeMoveFixture fixture(ResizeMoveFixture::Layout::OddWidth, true, false,
                             "FL2 FH2 FS2");
@@ -1006,7 +1060,7 @@ TEST(DePlaceResizeMove, RefillInsideTargetPaddingIsRejectedBeforePublishingChang
   }
 }
 
-TEST(DePlaceResizeMove, ConcurrentProbesKeepRemovalAndFinalTransactionsRequestLocal)
+TEST(DePlaceResizeMove, ConcurrentProbesKeepFinalTransactionsRequestLocal)
 {
   ResizeMoveFixture fixture;
   const auto before = fixture.snapshot();

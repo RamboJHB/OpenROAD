@@ -726,6 +726,29 @@ TEST_P(FillerRepairIntegrationTest, FixedFillerCannotBeSwappedOrDeleted)
   ASSERT_EQ(editable.changes.front().op_, OpType::Replace);
   ASSERT_EQ(editable.changes.front().cell_data_, CellData{bridge->getDbInst()});
 
+  checker.setFillerRepairEnabled(true);
+  for (const OpType operation : {OpType::Add, OpType::Replace}) {
+    SCOPED_TRACE(static_cast<int>(operation));
+    CheckRequest invalid = swapRequest;
+    CellChangeRecord extra = editable.changes.front();
+    extra.op_ = operation;
+    if (operation == OpType::Add) {
+      extra.cell_data_ = std::string("UNEXPECTED_FILLER");
+      extra.orig_lib_cell_ = LibCellID();
+    }
+    invalid.overlayChanges.push_back(extra);
+    const auto rejected = engine.repair(invalid);
+    EXPECT_FALSE(rejected.hasSolution);
+    EXPECT_TRUE(rejected.changes.empty());
+    FillerChanges output{extra};
+    EXPECT_FALSE(checker.check(&temporary, invalid.x, invalid.y, invalid.orientation,
+                              output, invalid.overlayChanges));
+    ASSERT_EQ(output.size(), 1u);
+    EXPECT_EQ(output.front().cell_data_, extra.cell_data_);
+    EXPECT_EQ(output.front().op_, extra.op_);
+    EXPECT_EQ(bridge->getMaster(), originalMaster);
+  }
+
   // The same engine reads live editability; the necessary VT bridge is fixed.
   bridge->setFixed(true);
   const auto blocked = engine.repair(swapRequest);
@@ -737,13 +760,6 @@ TEST_P(FillerRepairIntegrationTest, FixedFillerCannotBeSwappedOrDeleted)
   ASSERT_EQ(fixedSwap.size(), 1u);
   EXPECT_FALSE(fixedSwap.front().isLegal);
   EXPECT_TRUE(hasDiagnostic(fixedSwap.front(), "noneditable_filler_replace"));
-
-  // A pending Replace from a previous probe must not bypass candidate checks.
-  CheckRequest pending = swapRequest;
-  pending.overlayChanges.push_back(editable.changes.front());
-  const auto pendingBlocked = engine.repair(pending);
-  EXPECT_FALSE(pendingBlocked.hasSolution);
-  EXPECT_TRUE(pendingBlocked.changes.empty());
 
   // Even a caller-specified Delete cannot remove the fixed filler.
   temporary.setId(bridge->getId());
@@ -1386,20 +1402,11 @@ TEST_P(FillerRepairIntegrationTest,
   EXPECT_EQ(resized.front().op_, OpType::Delete);
   EXPECT_EQ(resized.front().cell_data_, CellData{rightFiller->getDbInst()});
 
-  // Prepare removal, then place the narrower target at a disjoint wide filler.
-  // The pending Add is recomputed by FR together with the newly released site.
-  FillerChanges preparation;
-  std::vector<CellChangeRecord> removal{deleteRecord(*replaced)};
-  ASSERT_TRUE(checker.check(nullptr, GridX{0}, GridY{0}, PhysOrientationE::R0,
-                            preparation, removal));
-  ASSERT_EQ(countChanges(preparation, OpType::Add), 1u);
-
+  // Directly move the narrower target; refill both the old site and the destination gap.
   temporary.setMaster(network.getMaster(0));
   temporary.setWidth(DbuX{kSiteWidth});
   request.x = GridX{3};
   request.overlayChanges = {deleteRecord(*replaced), deleteRecord(*wideFiller)};
-  request.overlayChanges.insert(request.overlayChanges.end(),
-                                 preparation.begin(), preparation.end());
   FillerChanges moved;
   ASSERT_TRUE(checker.check(&temporary, request.x, request.y,
                             request.orientation, moved,
@@ -1734,84 +1741,89 @@ TEST_P(FillerRepairIntegrationTest, EngineDoesNotCacheAbsenceOfPlacedFillers)
 
 TEST_P(FillerRepairIntegrationTest, NonExactRepairReturnsVerifiedAddAndSwap)
 {
-  const int utilization = GetParam();
-  auto data = nonExactInput(utilization);
-  int ruleId = 0;
-  for (int layer = 0; layer < 6; ++layer) {
-    // The new F2 target plus its added neighbor cover only two sites. The
-    // three-site rule forces a swap of the surviving filler on its right.
-    data.rules.emplace_back(ruleId++,
-                            RuleSource::Width,
-                            layer,
-                            (layer == 1 || layer == 4 ? 3 : 2) * kSiteWidth);
-    data.rules.emplace_back(
-        ruleId++, RuleSource::Spacing, layer, 2 * kSiteWidth);
-  }
-  data.masters[6] = master(6, 2, true, 2 * kSiteWidth);
-  for (auto& placed : data.placedInsts) {
-    if (placed.masterId != 6) {
-      placed.masterId = placed.isFiller ? 3 : 0;
-      if (placed.rowId == 1 && placed.colId == 5) {
-        placed.masterId = 5;
+  for (bool removeStd : {false, true}) {
+    SCOPED_TRACE(removeStd);
+    const int utilization = GetParam();
+    auto data = nonExactInput(utilization);
+    int ruleId = 0;
+    for (int layer = 0; layer < 6; ++layer) {
+      // The new F2 target plus its added neighbor cover only two sites. The
+      // three-site rule forces a swap of the surviving filler on its right.
+      data.rules.emplace_back(ruleId++,
+                              RuleSource::Width,
+                              layer,
+                              (layer == 1 || layer == 4 ? 3 : 2) * kSiteWidth);
+      data.rules.emplace_back(
+          ruleId++, RuleSource::Spacing, layer, 2 * kSiteWidth);
+    }
+    data.masters[6] = master(6, 2, !removeStd, 2 * kSiteWidth);
+    for (auto& placed : data.placedInsts) {
+      if (placed.masterId == 6) {
+        placed.isFiller = !removeStd;
+      } else {
+        placed.masterId = placed.isFiller ? 3 : 0;
+        if (placed.rowId == 1 && placed.colId == 5) {
+          placed.masterId = 5;
+        }
       }
     }
+    ImplantLayerCheckerHelper helper;
+    initializeFixture(helper, data, utilization);
+    ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
+    helper.initChecker(checker);
+    Network& network = *helper.getNetwork();
+    const Node* removed = network.getNode(nodeId(1, 3));
+    ASSERT_NE(removed, nullptr);
+    Node temporary;
+    temporary.setId(removed->getId());
+    temporary.setDbInst(removed->getDbInst());
+    temporary.setMaster(network.getMaster(1));
+    temporary.setType(Node::CELL);
+    temporary.setWidth(DbuX{kSiteWidth});
+    temporary.setHeight(DbuY{kRowHeight});
+    temporary.setLeft(DbuX{4 * kSiteWidth});
+    temporary.setBottom(DbuY{kRowHeight});
+    temporary.setOrient(PhysOrientationE::MX);
+    const CheckRequest request{&temporary,
+                               GridX{4},
+                               GridY{1},
+                               PhysOrientationE::MX,
+                               {deleteRecord(*removed)}};
+    const auto fullGuard
+        = rect(0, 0, kColCount * kSiteWidth, kRowCount * kRowHeight - 1);
+    const CellChangeRecord seed{OpType::Add,
+                                std::string("SEED_FILLER"),
+                                UvDist(3 * kSiteWidth),
+                                UvDist(kRowHeight),
+                                eLIB::LibCellID(0, 0),
+                                network.getMaster(4)->getDbMaster(),
+                                PhysOrientationE::MX};
+    const auto seedCheck
+        = checker.checkPlaceWithOverlays(request, fullGuard, {{seed}});
+    ASSERT_EQ(seedCheck.size(), 1u);
+    ASSERT_FALSE(seedCheck.front().isLegal);
+    ASSERT_FALSE(seedCheck.front().violations.empty());
+    fillerRepair::FillerRepairEngine engine(checker);
+    const auto result = engine.repair(request);
+    ASSERT_TRUE(result.hasSolution);
+    EXPECT_EQ(std::count_if(result.changes.begin(),
+                            result.changes.end(),
+                            [](const auto& c) { return c.op_ == OpType::Add; }),
+              1);
+    EXPECT_GT(
+        std::count_if(result.changes.begin(),
+                      result.changes.end(),
+                      [](const auto& c) { return c.op_ == OpType::Replace; }),
+        0);
+    EXPECT_EQ(countChanges(result.changes, OpType::Delete), removeStd ? 0u : 1u);
+    const auto checked
+        = checker.checkPlaceWithOverlays(
+            request, fullGuard, {candidateChanges(result.changes)});
+    ASSERT_EQ(checked.size(), 1u);
+    EXPECT_TRUE(checked.front().isLegal);
+    EXPECT_EQ(removed->getMaster()->getId(), 6);
+    EXPECT_EQ(network.getNode(nodeId(1, 5))->getMaster()->getId(), 5);
   }
-  ImplantLayerCheckerHelper helper;
-  initializeFixture(helper, data, utilization);
-  ImplantLayerChecker checker(helper.getGrid(), nullptr, helper.getNetwork());
-  helper.initChecker(checker);
-  Network& network = *helper.getNetwork();
-  const Node* removed = network.getNode(nodeId(1, 3));
-  ASSERT_NE(removed, nullptr);
-  Node temporary;
-  temporary.setId(removed->getId());
-  temporary.setDbInst(removed->getDbInst());
-  temporary.setMaster(network.getMaster(1));
-  temporary.setType(Node::CELL);
-  temporary.setWidth(DbuX{kSiteWidth});
-  temporary.setHeight(DbuY{kRowHeight});
-  temporary.setLeft(DbuX{4 * kSiteWidth});
-  temporary.setBottom(DbuY{kRowHeight});
-  temporary.setOrient(PhysOrientationE::MX);
-  const CheckRequest request{&temporary,
-                             GridX{4},
-                             GridY{1},
-                             PhysOrientationE::MX,
-                             {deleteRecord(*removed)}};
-  const auto fullGuard
-      = rect(0, 0, kColCount * kSiteWidth, kRowCount * kRowHeight - 1);
-  const CellChangeRecord seed{OpType::Add,
-                              std::string("SEED_FILLER"),
-                              UvDist(3 * kSiteWidth),
-                              UvDist(kRowHeight),
-                              eLIB::LibCellID(0, 0),
-                              network.getMaster(4)->getDbMaster(),
-                              PhysOrientationE::MX};
-  const auto seedCheck
-      = checker.checkPlaceWithOverlays(request, fullGuard, {{seed}});
-  ASSERT_EQ(seedCheck.size(), 1u);
-  ASSERT_FALSE(seedCheck.front().isLegal);
-  ASSERT_FALSE(seedCheck.front().violations.empty());
-  fillerRepair::FillerRepairEngine engine(checker);
-  const auto result = engine.repair(request);
-  ASSERT_TRUE(result.hasSolution);
-  EXPECT_EQ(std::count_if(result.changes.begin(),
-                          result.changes.end(),
-                          [](const auto& c) { return c.op_ == OpType::Add; }),
-            1);
-  EXPECT_GT(
-      std::count_if(result.changes.begin(),
-                    result.changes.end(),
-                    [](const auto& c) { return c.op_ == OpType::Replace; }),
-      0);
-  EXPECT_EQ(countChanges(result.changes, OpType::Delete), 1u);
-  const auto checked
-      = checker.checkPlaceWithOverlays(
-          request, fullGuard, {candidateChanges(result.changes)});
-  ASSERT_EQ(checked.size(), 1u);
-  EXPECT_TRUE(checked.front().isLegal);
-  EXPECT_EQ(removed->getMaster()->getId(), 6);
-  EXPECT_EQ(network.getNode(nodeId(1, 5))->getMaster()->getId(), 5);
 }
 
 TEST_P(FillerRepairIntegrationTest, RetilingCanChangeTheSeedAddMasterInPlace)
@@ -1960,15 +1972,7 @@ TEST_P(FillerRepairIntegrationTest, CoherentVtSeedPreventsWideRemovalBudgetStarv
   ASSERT_EQ(verified.size(), 1u);
   ASSERT_TRUE(verified.front().isLegal);
   fillerRepair::FillerRepairEngine engine(checker);
-  const CheckRequest removal{nullptr, GridX{0}, GridY{0}, PhysOrientationE::R0,
-                             {deleteRecord(*oldCell)}};
-  const auto prepared = engine.repair(removal);
-  ASSERT_TRUE(prepared.hasSolution);
-  ASSERT_EQ(countChanges(prepared.changes, OpType::Add), oldWidth);
-  CheckRequest finalRequest = request;
-  finalRequest.overlayChanges.insert(finalRequest.overlayChanges.end(),
-                                      prepared.changes.begin(), prepared.changes.end());
-  const auto repaired = engine.repair(finalRequest);
+  const auto repaired = engine.repair(request);
   ASSERT_TRUE(repaired.hasSolution);
   EXPECT_EQ(countChanges(repaired.changes, OpType::Delete), 1u);
   EXPECT_EQ(countChanges(repaired.changes, OpType::Add), oldWidth);

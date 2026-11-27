@@ -225,9 +225,8 @@ struct OverlapInfo
 };
 
 // Public pre-commit wire. Delete overlays name at most one old std cell plus
-// target-intersecting fillers. Public repair calls may also carry staged filler
-// Add/Replace records; the internal batch oracle receives normalized Deletes.
-// A null cell with one old std Delete prepares its removal/refill transaction.
+// target-intersecting fillers. Filler Add/Replace records are repair outputs.
+// A null cell with one old std Delete requests its removal/refill transaction.
 struct CheckRequest
 {
     const Node* cell = nullptr;

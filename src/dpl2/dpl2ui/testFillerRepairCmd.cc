@@ -226,7 +226,6 @@ void printRejectedRequest(const ipl::CheckResult& result)
 
 bool TestFillerRepairCmd::probeResize(
     DePlace& placement,
-    const ipl::ImplantLayerChecker& checker,
     const Node& old,
     Node& target,
     int diameter,
@@ -235,19 +234,9 @@ bool TestFillerRepairCmd::probeResize(
   const Grid& grid = *placement.getGrid();
   const Master& master = *target.getMaster();
   const eLIB::PhysLibCell& physical = *master.getPhysLibCell();
-  std::vector<CellChangeRecord> removals{deleteRecord(old)};
   std::vector<CellChangeRecord> trial;
-  std::cout << "\n[test_filler_repair] ===== REMOVAL PREPARATION BEGIN =====\n"
-            << "  simulation only: pending records are NOT COMMITTED\n";
-  // The virtual deletion seeds the search. Failure to refill the whole old
-  // footprint here need not reject a target that will cover part of it.
-  const bool prepared = checker.check(nullptr, grid.gridX(&old), grid.gridSnapDownY(&old),
-                                      old.getOrient(), trial, removals);
-  printChanges("REMOVAL PREPARATION (PENDING; DO NOT COMMIT)", trial, checker, true, true);
-  std::cout << "  preparation status=" << (prepared ? "READY" : "NO SEED") << '\n'
-            << "  These records are search-overlay input, not the final commit list.\n"
-            << "  Pending Adds are discarded/re-tiled; pending Replaces are merged as seeds.\n"
-            << "\n[test_filler_repair] ===== FINAL PLACEMENT CHECK BEGIN =====\n"
+  std::cout << "\n[test_filler_repair] ===== FINAL PLACEMENT CHECK BEGIN =====\n"
+            << "  Each candidate repairs the final target and real Delete footprints.\n"
             << "  validators: full registered checker set\n";
 
   const Rect core = grid.getCore();
@@ -269,7 +258,7 @@ bool TestFillerRepairCmd::probeResize(
               << " diameter=" << diameter << '\n';
     std::cout << "\n[test_filler_repair] ===== COMMIT RESULT =====\n"
               << "  committed: records=0\n"
-              << "  status=NOT_COMMITTED; preparation records were not committed\n";
+              << "  status=NOT_COMMITTED\n";
     return false;
   }
   target.setLeft(DbuX{col * grid.getSiteWidth().v});
@@ -449,7 +438,7 @@ bool TestFillerRepairCmd::exec()
   const Node* target = removeOnly ? nullptr : &temporary;
   bool accepted = false;
   if (resize) {
-    if (!probeResize(*dePlace, *checker, *replacedStd, temporary, diameter, changes)) {
+    if (!probeResize(*dePlace, *replacedStd, temporary, diameter, changes)) {
       return false;
     }
     left = temporary.getLeft().v;
@@ -473,7 +462,7 @@ bool TestFillerRepairCmd::exec()
             << " fillerChanges=" << changes.size() << '\n';
   printChanges("FINAL FILLER CHANGES", changes, *checker, false);
   if (accepted) {
-    std::cout << "  This is the final FR result, not preparation records.\n"
+    std::cout << "  This is the final FR result.\n"
               << "  Accepted record details appear once in FINAL COMMIT TRANSACTION.\n";
   } else {
     std::cout << "  No accepted FR plan; no final transaction will be committed.\n";
@@ -533,7 +522,7 @@ bool TestFillerRepairCmd::exec()
   }
   transaction.insert(transaction.end(), changes.begin(), changes.end());
   printChanges("FINAL COMMIT TRANSACTION", transaction, *checker);
-  std::cout << "  Only this complete list is committed once. Do not add overlay/pending records again.\n"
+  std::cout << "  Only this complete list is committed once. Do not append input overlays again.\n"
             << "  FILLER Delete/Add/Replace: UDM + Network + Grid\n"
             << "  STD REPLACE/DELETE: UDM unchanged; caller-owned\n"
             << "  STD ADD: this command creates UDM first; DePlace imports its ID into Network/Grid\n";
@@ -580,7 +569,7 @@ bool TestFillerRepairCmd::exec()
             << "COMMITTED: operation=" << operation << " origin(core DBU)=(" << left << ','
             << bottom << ")\n"
             << "  final filler records=" << changes.size() << '\n'
-            << "  Finalized FR records only; preparation is not counted separately.\n";
+            << "  Finalized FR records from this candidate.\n";
   for (const auto& record : transaction) {
     const auto* id = std::get_if<eUNL::LeafCellID>(&record.cell_data_);
     if (record.op_ == OpType::Delete) {

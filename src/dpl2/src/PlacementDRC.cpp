@@ -68,8 +68,7 @@ bool PlacementDRC::checkDRC(const Node* cell,
   const DRCChecker* implant = getChecker(DRCCheckerType::ImplantLayer);
   std::vector<CellChangeRecord> trial;
   if (cell == nullptr) {
-    // Removal is tentative filler preparation. Every checker still runs on
-    // the final non-null placement before its transaction is published.
+    // Standalone removal has no target placement; Implant fills its footprint.
     if (implant == nullptr
         || !implant->check(nullptr, x, y, orient, trial, overlayChanges)) {
       return false;
@@ -83,11 +82,6 @@ bool PlacementDRC::checkDRC(const Node* cell,
     if (!implant->check(cell, x, y, orient, trial, overlayChanges)) {
       return false;
     }
-    std::vector<CellChangeRecord> removals;
-    std::copy_if(overlayChanges.begin(), overlayChanges.end(),
-                 std::back_inserter(removals), [](const auto& change) {
-                   return change.op_ == OpType::Delete;
-                 });
     const auto sameRecord = [](const auto& a, const auto& b) {
       return std::tie(a.op_, a.cell_data_, a.x_, a.y_, a.orig_lib_cell_,
                        a.new_lib_cell_, a.orientation_)
@@ -103,11 +97,11 @@ bool PlacementDRC::checkDRC(const Node* cell,
         continue;
       }
       auto verified = trial;
-      auto input = removals;
+      auto input = overlayChanges;
       if (!checker->check(cell, x, y, orient, verified, input)) {
         return false;
       }
-      if (!unchanged(verified, trial) || !unchanged(input, removals)) {
+      if (!unchanged(verified, trial) || !unchanged(input, overlayChanges)) {
         std::fputs("[dpl2][drc] rejected: checker modified the finalized filler transaction\n", stdout);
         return false;
       }

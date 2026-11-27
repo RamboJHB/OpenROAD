@@ -1132,15 +1132,10 @@ TEST(TestFillerRepairCommand, CommitsTargetOverlaysAndFillersThenRunsAgain)
   EXPECT_EQ(f.dp->getNetwork()->getNode(upperLeftId), nullptr);
   EXPECT_EQ(f.dp->getNetwork()->getNode(upperRightId), nullptr);
   ASSERT_TRUE(runCaptured({"-inst", "I120", "-master", "TL4"}));
-  const auto pending = section(output, "REMOVAL PREPARATION (PENDING; DO NOT COMMIT)");
-  const size_t pendingRecords = readCount(pending, "summary: records=");
-  EXPECT_GT(pendingRecords, 0u);
-  EXPECT_NE(pending.find("Pending Adds are discarded/re-tiled; pending Replaces are merged as seeds."),
-            std::string::npos);
+  EXPECT_EQ(output.find("REMOVAL PREPARATION"), std::string::npos);
   const auto resizeLog = expectCommittedOutput("op=REPLACE kind=STD");
   const auto result = section(output, "COMMIT RESULT");
-  EXPECT_NE(readCount(result, "committed: records="),
-            pendingRecords + readCount(resizeLog, "summary: records="));
+  EXPECT_EQ(readCount(result, "committed: records="), readCount(resizeLog, "summary: records="));
   expectResize(1, 1);
   expectFilled(0, 3, 4);
   ASSERT_TRUE(command.run({"-inst", "I120", "-master", "TL4D", "-diameter", "0"}, error));

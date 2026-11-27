@@ -897,21 +897,21 @@ bool ImplantLayerChecker::check(const Node* node,
     request.y = y;
     request.orientation = orient;
     request.overlayChanges = overlayChanges;
-    const bool hasPendingFillers = std::any_of(
+    if (std::any_of(
         overlayChanges.begin(), overlayChanges.end(), [](const auto& change) {
             return change.op_ != OpType::Delete;
+        })) {
+        return false;
+    }
+    const CheckResult direct = checkDirect(request);
+    const bool deletesFillers = std::any_of(overlayChanges.begin(), overlayChanges.end(),
+        [this](const CellChangeRecord& change) {
+            const LeafCellID* id = cellChangeLeafCellId(change);
+            const Node* old = id != nullptr ? network_->getNode(*id) : nullptr;
+            return old != nullptr && old->isFiller();
         });
-    if (!hasPendingFillers) {
-        const CheckResult direct = checkDirect(request);
-        const bool deletesFillers = std::any_of(overlayChanges.begin(), overlayChanges.end(),
-            [this](const CellChangeRecord& change) {
-                const LeafCellID* id = cellChangeLeafCellId(change);
-                const Node* old = id != nullptr ? network_->getNode(*id) : nullptr;
-                return old != nullptr && old->isFiller();
-            });
-        if (direct.isLegal && !deletesFillers && isExactCover(request)) {
-            return true;
-        }
+    if (direct.isLegal && !deletesFillers && isExactCover(request)) {
+        return true;
     }
     if (!enableFillerRepair_.load(std::memory_order_acquire)) {
         return false;

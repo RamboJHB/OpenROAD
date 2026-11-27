@@ -24,7 +24,7 @@ deletions are outside this contract. A removed old standard cell may be disjoint
 from the new target; every selected real filler must intersect the target.
 
 Fixed or otherwise noneditable fillers stay in the measured placement. They
-cannot be selected as target Deletes, used as pending swaps, or returned as
+cannot be selected as target Deletes or returned as
 filler Replaces. They block a candidate whose footprint overlaps them.
 
 Placement search and commit check the master across its whole site stack.
@@ -59,10 +59,9 @@ temporary target at the request placement.
 
 Real removal overlays are `OpType::Delete` records carrying unique committed
 `LeafCellID`s: at most one old standard cell, plus intersecting fillers. A null
-`cell` with exactly one standard-cell Delete prepares removal-only refill.
-The repair-capable entry also accepts tentative filler Add/Replace records
-from that preparation step; FR normalizes them before invoking its checker
-oracle. The checker checks
+`cell` with exactly one standard-cell Delete requests standalone removal/refill.
+Repair inputs contain only real Deletes; Add/Replace records are final repair
+outputs and are rejected in input overlays. The checker checks
 the target form, registered masters, original-master consistency when supplied,
 grid ownership, legal target sites, and complete target coverage. Coverage is
 a site-set containment test, not an area comparison: a larger deleted area
@@ -87,7 +86,7 @@ bind, update, precheck, adapter, or numeric-request API.
 ## Repair behavior
 
 Let `D` be all sites owned by the old standard cell and selected deleted fillers,
-and `T` the target sites (empty for removal-only preparation). Require `T` to be
+and `T` the target sites (empty for standalone removal). Require `T` to be
 a subset of `D`.
 
 - Exact cover (`D == T`) uses the existing surrounding-filler swap search.
@@ -101,16 +100,13 @@ a subset of `D`.
   Every accepted batch passes `ImplantLayerChecker::checkPlaceWithOverlays`.
 
 Same-footprint original-position checks first use the existing direct/swap
-path, without preparing a removal that would immediately be cancelled.
-For resize/move, DePlace prepares a virtual std-cell removal and refill,
-then uses `findLegAtOrigin`, the search shared with pin-anchored insertion.
-Each replacement candidate supplies the old std
-Delete, preparation fillers, and real intersecting filler Deletes to FR.
-FR cancels the tentative Adds and rebuilds `D - T`; it does not emit Deletes
-for never-committed fillers. Preparation swaps are seeds that may be kept,
-changed, or cancelled. Duplicate real-cell operations and no-op swaps are
-removed internally. Preparation failure does not preclude a valid final target.
-Nothing is removed, painted, or committed between the two steps.
+path. Resize/move uses `findLegAtOrigin`, the search shared with pin-anchored
+insertion. Each replacement candidate supplies its final target, the old std
+Delete, and real intersecting filler Deletes to FR with an empty result vector.
+FR directly tiles `D - T` and repairs surrounding fillers; there is no preceding
+removal repair and no intermediate filler transaction. A whole old footprint
+that cannot be tiled independently does not preclude a legal final target.
+Nothing is removed, painted, or committed during candidate checks.
 
 Resized/moved/removal overlays are compared against the committed placement
 over both old and new regions, including surrounding swap effects. A hole
@@ -166,8 +162,7 @@ DePlace::isLegal / findLeg
 The ordinary direct-check overload does not repair. The explicit overlay
 overload runs ImplantLayerChecker first, independent of registration order,
 then gives each remaining checker the finalized filler transaction and real
-Delete overlays. Tentative preparation Add/Replace records do not reach those
-validators. They must not edit either vector; edits or rejection fail the whole
+Delete overlays. Validators must not edit either vector; edits or rejection fail the whole
 probe without publishing output. Existing caller output is preserved but is
 not part of the candidate being validated. ImplantLayerChecker constructs its engine once with `std::call_once`
 when repair is needed and enabled; checker-helper use disables repair.
@@ -183,15 +178,15 @@ DePlace probes assemble complete transactions without mutating placement:
   diameter is strict original-position only. The outer relocation search is
   capped at 256 candidate sites per search rectangle. It appends one
   identity-preserving target `Replace` plus FR's complete filler transaction.
-- `findLeg(instId, va, diameter, master, changes, rtOrient)` always starts with
-  a virtual removal of the live instance. It tries the original position, then
-  searches if the diameter is positive. Like `isLegal`, it appends the final
+- `findLeg(instId, va, diameter, master, changes, rtOrient)` tries the original
+  position, then searches if the diameter is positive. Every candidate checks
+  and repairs the final layout directly. Like `isLegal`, it appends the final
   filler transaction and a target `Replace`, not a target `Delete` or `Add`.
   `rtOrient` is the accepted destination-site orientation, published only on
   success. The older Node-pointer overload delegates to this same path.
   The LeafCellID entry contains its transaction logic directly; no additional
   resize helper is required. `isLegal` retains the same-footprint fast path,
-  then calls this entry for removal preparation and search.
+  then calls this entry for resize/move search.
 - `findLeg(pin, va, diameter, master, changes)` appends FR's complete filler
   transaction and one named target `Add`. Its target
   name is `DPL_STD_<row>_<column>_M<LibCellID-index>` with a deterministic
@@ -235,12 +230,11 @@ the old origin. Only the final std `Replace` and FR changes are committed.
 The resize branch runs the registered placement checkers; removal, swaps
 without a search and explicit filler overlays use ImplantLayerChecker directly.
 Invalid requests or rejected plans do not commit partial changes.
-Command output separates simulation-only input overlays, pending resize
-preparation, the final filler summary, the complete commit transaction and
+Command output separates simulation-only input overlays, final placement
+checks, the final filler summary, the complete commit transaction and
 the applied result. Each record explicitly names Delete/Add/Replace and
-STD/FILLER, with before/after master, geometry and orientation. Pending Adds
-are not counted as committed records; Replace is not labelled as a generic
-swap. The log states that std Replace/Delete leave UDM unchanged, while filler
+STD/FILLER, with before/after master, geometry and orientation. Only the final
+transaction is counted as committed; Replace is not labelled as a generic swap. The log states that std Replace/Delete leave UDM unchanged, while filler
 operations synchronize UDM/Network/Grid and the command creates std Adds in UDM.
 
 Before publishing success, DePlace checks final target/filler padded footprints
@@ -305,8 +299,9 @@ one/two-row masters, rotation, exact/non-exact multi-filler coverage, released-s
 tiling, Add-plus-Swap repair, configured order/avoid patterns, bounded failure,
 engine reuse after commits, concurrency, unchanged checker goldens, and probe
 non-mutation. Resize/move tests include partial/disjoint moves, shifted core
-coordinates, one/two-row height changes, pending Add cancellation, preparation
-failure followed by final success, padding rejection, and preserved Node/DB
+coordinates, one/two-row height changes, direct final repair without removal
+prechecks, success when standalone removal is unfillable, rejection of staged
+Add/Replace inputs, padding rejection, and preserved Node/DB
 identity and pin/edge bindings after commit. Integration fixtures cover 50%, 75%, and 90% occupied sites;
 internal cases also exercise larger mixed-width standard-cell/filler layouts.
 Removal-specific internal cases verify exact one/two-row released-site filling,

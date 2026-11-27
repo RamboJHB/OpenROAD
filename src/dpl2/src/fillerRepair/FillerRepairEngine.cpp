@@ -180,8 +180,7 @@ struct LayoutMasterOption
   eUTL::PhysOrientation orientation{eUTL::PhysOrientationE::R0};
 };
 
-// A request-local filler: a negative id names an uncommitted Add; a real id
-// carries a preparation swap that may be kept, replaced, or cancelled.
+// A request-local filler Add with a negative id until commit.
 struct LayoutAddition
 {
   InstanceId instanceId = -1;
@@ -287,9 +286,6 @@ class LayoutPlacementView final : public PlacementView
       appendToRows(target_instance_, masterInfo(target_.masterId));
     }
     for (const LayoutAddition& addition : additions_) {
-      if (addition.instanceId >= 0) {
-        removed_.insert(addition.instanceId);
-      }
       synthetic_.emplace(addition.instanceId, addition.placed);
       appendToRows(addition.placed, masterInfo(addition.placed.masterId));
     }
@@ -1493,16 +1489,13 @@ RepairOutcome FillerRepairEngine::Impl::repair(
 
   const RequestPlacementView view(*this);
   ipl::CheckRequest request = input;
-  request.overlayChanges.clear();
   std::set<InstanceId> overlayInstanceIds;
   ipl::FillerChanges fillerDeletes;
-  std::map<InstanceId, CellChangeRecord> pendingReplaces;
   InstanceId oldStdId = -1;
   for (const CellChangeRecord& overlay : input.overlayChanges) {
-    // Preparation Adds are a tentative tiling of the real Delete footprints.
-    // Rebuild D-T below so partially consumed Adds need no temporary identity.
-    if (overlay.op_ == OpType::Add) {
-      continue;
+    if (overlay.op_ != OpType::Delete) {
+      skip("InvalidOverlay", "repair input must contain only real Delete records");
+      return result;
     }
     const eUNL::LeafCellID* cellId = cellChangeRecordLeafCellId(overlay);
     if (cellId == nullptr) {
@@ -1522,16 +1515,10 @@ RepairOutcome FillerRepairEngine::Impl::repair(
            cat("overlay requests changing noneditable filler ", id));
       return result;
     }
-    if (overlay.op_ == OpType::Replace && placed->isFiller) {
-      pendingReplaces.insert_or_assign(id, overlay);
-      continue;
-    }
-    if (overlay.op_ != OpType::Delete
-        || !overlayInstanceIds.insert(id).second) {
+    if (!overlayInstanceIds.insert(id).second) {
       skip("InvalidOverlay", cat("invalid or duplicate Delete node ", id));
       return result;
     }
-    request.overlayChanges.push_back(overlay);
     if (placed->isFiller) {
       fillerDeletes.push_back(overlay);
     } else if (oldStdId < 0) {
@@ -1754,53 +1741,6 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     exactCover = deletedSites == targetSites;
   }
 
-  // Keep preparation swaps as seeds. A target that consumes one of those
-  // fillers supersedes the swap with its Delete; later planner swaps replace
-  // the seed by LeafCellID rather than appending a second record.
-  std::vector<LayoutAddition> replacementSeeds;
-  ipl::FillerChanges fixedReplacements;
-  for (const auto& [id, change] : pendingReplaces) {
-    if (overlayInstanceIds.count(id) != 0) {
-      continue;
-    }
-    const PlacedInstance* placed = view.instance(id);
-    const MasterId newId = network_->getMasterId(change.new_lib_cell_);
-    const MasterInfo* oldMaster = masterInfo(placed->masterId);
-    const MasterInfo* newMaster = masterInfo(newId);
-    if (oldMaster == nullptr || newMaster == nullptr || !newMaster->isFiller
-        || oldMaster->width != newMaster->width
-        || oldMaster->height != newMaster->height) {
-      skip("InvalidPendingFillerSwap",
-           cat("preparation swap for filler ", id,
-               " must preserve its footprint"));
-      return result;
-    }
-    LayoutAddition seed;
-    seed.instanceId = id;
-    seed.placed = *placed;
-    seed.placed.masterId = newId;
-    seed.placed.orientation = toPlannerOrient(change.orientation_);
-    seed.record = change;
-    seed.masterOptions.push_back({newId, change.orientation_});
-    for (const MasterId candidate : candidate_catalog_.candidates(newId)) {
-      seed.masterOptions.push_back({candidate, change.orientation_});
-    }
-    if (std::none_of(seed.masterOptions.begin(), seed.masterOptions.end(),
-                     [&](const auto& option) {
-                       return option.masterId == placed->masterId;
-                     })) {
-      seed.masterOptions.push_back(
-          {placed->masterId, network_->getNode(id)->getOrient()});
-    }
-    fixedReplacements.push_back(change);
-    replacementSeeds.push_back(std::move(seed));
-    const Region seedGuard = snapshotGuard(
-        TargetPlace{id, newId, placed->rowId, placed->x, placed->orientation});
-    influence.x.xl = std::min(influence.x.xl, seedGuard.x.xl);
-    influence.x.xh = std::max(influence.x.xh, seedGuard.x.xh);
-    influence.rowLo = std::min(influence.rowLo, seedGuard.rowLo);
-    influence.rowHi = std::max(influence.rowHi, seedGuard.rowHi);
-  }
   const auto finish = [&](ipl::FillerChanges changes,
                           const std::string& status) {
     std::erase_if(changes, [&](const CellChangeRecord& change) {
@@ -1832,9 +1772,8 @@ RepairOutcome FillerRepairEngine::Impl::repair(
               {"guard", show(influence)}});
 
   LayoutPlacementView effectiveView(
-      view, target, overlayInstanceIds, replacementSeeds, placement_, hasTarget);
-  RequestOracle oracle(
-      *this, request, effectiveView, checkerRequests, fixedReplacements);
+      view, target, overlayInstanceIds, {}, placement_, hasTarget);
+  RequestOracle oracle(*this, request, effectiveView, checkerRequests);
   if (!releasedSites.empty()) {
     std::string addedFillerNamePrefix = "FILLER_REPAIR_";
     if (const fillerSetting* setting = network_->getFillerSetting();
@@ -2070,7 +2009,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
 
       const auto seedLayout = [&](const std::vector<size_t>& assignment) {
         std::vector<LayoutAddition> seededAdditions = additions;
-        ipl::FillerChanges fixed = fixedReplacements;
+        ipl::FillerChanges fixed;
         for (size_t index = 0; index < seededAdditions.size(); ++index) {
           LayoutAddition& addition = seededAdditions[index];
           const LayoutMasterOption& option
@@ -2082,9 +2021,6 @@ RepairOutcome FillerRepairEngine::Impl::repair(
           addition.record.orientation_ = option.orientation;
           fixed.push_back(addition.record);
         }
-        seededAdditions.insert(seededAdditions.end(),
-                               replacementSeeds.begin(),
-                               replacementSeeds.end());
         return std::make_pair(std::move(seededAdditions), std::move(fixed));
       };
       const auto snapshotLayout = [&](RequestOracle& layoutOracle) {
@@ -2240,7 +2176,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
   if (snapshot.violations.empty()) {
-    return finish(fixedReplacements, "no additional filler change needed");
+    return finish({}, "no additional filler change needed");
   }
   if (!candidate_catalog_.hasCompatibleCandidate()) {
     const CandidateStats& stats = candidate_catalog_.aggregateStats();
@@ -2269,8 +2205,7 @@ RepairOutcome FillerRepairEngine::Impl::repair(
     return result;
   }
 
-  return finish(mergeFillerChanges(fixedReplacements, planned.changes),
-                "solution");
+  return finish(planned.changes, "solution");
 }
 
 FillerRepairEngine::FillerRepairEngine(const ipl::ImplantLayerChecker& checker)

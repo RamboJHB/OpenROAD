@@ -681,8 +681,7 @@ bool DePlace::checkPixels(const Node* cell,
   const auto orient = *placementOrientation;
 
   if (repairProbe) {
-    // [FRPORT] The pending removal layout is input to FR, never a mutation of Grid.
-    // FR owns cancelling/retiling its Adds and merging actual filler Deletes.
+    // [FRPORT] Repair the candidate against real Delete footprints from Grid.
     Node candidate = *cell;
     setGridLoc(&candidate, x, y);
     candidate.setOrient(orient);
@@ -710,16 +709,13 @@ bool DePlace::checkPixels(const Node* cell,
                 return left->getId() < right->getId();
               });
     std::vector<CellChangeRecord> overlayChanges;
-    overlayChanges.reserve(replacedFillers.size()
-                            + (replacedCell != nullptr ? ccRecords.size() + 1 : 0));
+    overlayChanges.reserve(replacedFillers.size() + (replacedCell != nullptr ? 1 : 0));
     if (replacedCell != nullptr) {
       overlayChanges.push_back(
           {OpType::Delete, replacedCell->getDbInst(),
            UvDist(replacedCell->getLeft().v), UvDist(replacedCell->getBottom().v),
            replacedCell->getMaster()->getDbMaster(),
            replacedCell->getMaster()->getDbMaster(), replacedCell->getOrient()});
-      overlayChanges.insert(overlayChanges.end(),
-                            ccRecords.begin(), ccRecords.end());
     }
     for (const Node* filler : replacedFillers) {
       if (filler == nullptr || filler->getMaster() == nullptr) {
